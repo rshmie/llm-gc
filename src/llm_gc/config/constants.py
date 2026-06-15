@@ -1,0 +1,42 @@
+""" Application's default configuration values as constants """
+
+from llm_gc import __version__
+
+APP_NAME = "llm-gc"
+APP_VERSION = __version__
+
+DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_CONTEXT_WINDOW = 128_000
+DEFAULT_GC_THRESHOLD = 0.7
+DEFAULT_SWEEP_STRATEGY = "threshold"
+DEFAULT_KEEP_THRESHOLD = 0.7
+DEFAULT_ARCHIVE_THRESHOLD = 0.3
+DEFAULT_MIN_COMPACTABLE_TOKENS = 30
+DEFAULT_LAST_N_TURNS_TO_KEEP = 5
+
+# A regex pattern to match capital words, numbers including decimals, code fragments, and URLs for token density scoring
+DENSITY_SCORER_PATTERN = r'\b[A-Z][a-zA-Z]+\b|\b\d+\.?\d*\b|`[^`]+`|https?://\S+'
+
+# A regex pattern to identify decision-making language in messages which includes common phrases indicating explicit decisions, conclusions/resolution, commitments
+DECISION_SCORER_PATTERN = (r'\b(?:keep|delete|summarize|uncertain|concluded|chose|settled on|we agreed|go with|the plan is|'
+                           r'let\'s go with|let\'s use|we\'ll go with|we\'ll use|decided to|decision is|going to use|going with|'
+                           r'the answer is|concluded that|settled on|final choice|in conclusion|to summarize|the solution is|'
+                           r'I will use|we should use|stick with|switching to)\b')
+
+# A regex pattern to identify reference language in messages which includes common phrases indicating reference to previous points, reiteration, or emphasis on earlier statements
+REFERENCE_SCORER_PATTERN = (r'\b(?:as I mentioned|as you said|like you said|as we discussed|like we discussed|as I said|like I said|as mentioned|as noted|as we said|as we mentioned|as we noted|'
+                            r'earlier|previously|before|going back to|back to your point|back to what you said|referring back to|'
+                            r'to reiterate|to repeat|as noted|referring to|regarding what)\b')
+
+def get_default_config() -> dict[str, str | int | float]:
+    return {
+        "app_name": APP_NAME,
+        "app_version": APP_VERSION,
+        "model": DEFAULT_MODEL,
+        "context_window": DEFAULT_CONTEXT_WINDOW,
+        "gc_threshold": DEFAULT_GC_THRESHOLD,
+        "sweep_strategy": DEFAULT_SWEEP_STRATEGY,
+        "keep_threshold": DEFAULT_KEEP_THRESHOLD,
+        "min_compactable_tokens": DEFAULT_MIN_COMPACTABLE_TOKENS,
+        "last_n_turns_to_keep": DEFAULT_LAST_N_TURNS_TO_KEEP,
+    }
