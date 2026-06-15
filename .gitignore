@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# Environment secrets
+.env
+
+# Claude Code config (personal, not project)
+.claude/
+
+# Not ready to track yet
+doc/
+benchmarks/
+
+# UV
+uv.lock
