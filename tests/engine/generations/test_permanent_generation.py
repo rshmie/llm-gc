@@ -127,6 +127,23 @@ class TestContradictionDetection:
 
         assert len(superseded_events) == 0
 
+    def test_raw_entries_under_same_label_do_not_supersede_each_other(self):
+        # Verbatim fallbacks all share the "__raw__" sentinel label. They are not
+        # assertions and must never supersede one another, or the no-information-loss
+        # guarantee would leak (all but the latest would be dropped from active view).
+        perm_gen = _make_permanent_gen()
+        raw1 = _make_entry("Thanks for the help", topic_label="__raw__",
+                           message_turn=1, knowledge_type=KnowledgeType.RAW)
+        raw2 = _make_entry("Sounds good to me", topic_label="__raw__",
+                           message_turn=2, knowledge_type=KnowledgeType.RAW)
+
+        perm_gen.add_knowledge_entry(raw1)
+        perm_gen.add_knowledge_entry(raw2)
+
+        active = perm_gen.get_all_active_entries()
+        assert len(active) == 2
+        assert all(e.knowledge_status == KnowledgeStatus.ACTIVE for e in active)
+
 
 class TestGetByTopic:
     def test_returns_empty_list_for_unknown_topic(self):

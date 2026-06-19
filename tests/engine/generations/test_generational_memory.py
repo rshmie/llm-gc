@@ -3,6 +3,7 @@ from llm_gc.engine.generations.permanent_generation import PermanentGeneration
 from llm_gc.events import EventBus, EventType
 from llm_gc.extraction import KnowledgeExtractor
 from llm_gc.models import Message
+from llm_gc.models.knowledge_entry import KnowledgeType
 
 
 def _make_message(content: str, turn_index: int = 1) -> Message:
@@ -215,3 +216,72 @@ class TestGetters:
 
         permanent = gen_mem.get_permanent_gen()
         assert len(permanent) >= 1
+
+
+class TestArchiveVerbatimFallback:
+    """The guarantee: every archived turn leaves exactly one trace.
+
+    When conservative extraction finds no knowledge in a turn, archival must not
+    drop it silently. The turn's content is preserved verbatim as a RAW
+    KnowledgeEntry, so removing it from active context never loses information.
+    """
+
+    def test_archive_without_extractable_knowledge_keeps_verbatim_raw_entry(self):
+        gen_mem = _make_generational_memory(max_young_gen_size=2)
+
+        # None of these match the extractor's fact/decision/preference patterns.
+        msg1 = _make_message("Thanks for the help", turn_index=1)
+        msg2 = _make_message("Sounds good to me", turn_index=2)
+        msg3 = _make_message("Talk soon", turn_index=3)
+
+        gen_mem.add_message_turn(msg1)
+        gen_mem.add_message_turn(msg2)
+        gen_mem.add_message_turn(msg3)  # promotes msg1 into old gen
+
+        gen_mem.archive_message(msg1)
+
+        permanent = gen_mem.get_permanent_gen()
+        assert len(permanent) == 1
+        raw_entry = permanent[0]
+        assert raw_entry.knowledge_type == KnowledgeType.RAW
+        assert raw_entry.content == "Thanks for the help"  # verbatim, not interpreted
+        assert raw_entry.topic_label == "__raw__"
+        assert raw_entry.message_turn == 1
+
+    def test_archive_with_extractable_knowledge_adds_no_raw_entry(self):
+        gen_mem = _make_generational_memory(max_young_gen_size=2)
+
+        msg1 = _make_message("The database is PostgreSQL", turn_index=1)
+        msg2 = _make_message("Sounds good to me", turn_index=2)
+        msg3 = _make_message("Talk soon", turn_index=3)
+
+        gen_mem.add_message_turn(msg1)
+        gen_mem.add_message_turn(msg2)
+        gen_mem.add_message_turn(msg3)  # promotes msg1 into old gen
+
+        gen_mem.archive_message(msg1)
+
+        permanent = gen_mem.get_permanent_gen()
+        assert len(permanent) >= 1
+        assert all(e.knowledge_type != KnowledgeType.RAW for e in permanent)
+        assert any("PostgreSQL" in e.content for e in permanent)
+
+    def test_two_unextractable_archives_both_survive_as_active(self):
+        # max young size 1 so each new message promotes the previous into old gen.
+        gen_mem = _make_generational_memory(max_young_gen_size=1)
+
+        msg1 = _make_message("Thanks for the help", turn_index=1)
+        msg2 = _make_message("Sounds good to me", turn_index=2)
+        msg3 = _make_message("Talk soon", turn_index=3)
+
+        gen_mem.add_message_turn(msg1)
+        gen_mem.add_message_turn(msg2)  # promotes msg1 into old gen
+        gen_mem.add_message_turn(msg3)  # promotes msg2 into old gen
+
+        gen_mem.archive_message(msg1)
+        gen_mem.archive_message(msg2)
+
+        permanent = gen_mem.get_permanent_gen()
+        assert len(permanent) == 2  # neither raw entry superseded the other
+        assert all(e.knowledge_type == KnowledgeType.RAW for e in permanent)
+        assert {e.content for e in permanent} == {"Thanks for the help", "Sounds good to me"}

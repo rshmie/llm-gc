@@ -2,7 +2,8 @@ from dataclasses import replace
 
 from llm_gc.events import EventBus, Event, EventType
 from llm_gc.models import KnowledgeEntry
-from llm_gc.models.knowledge_entry import KnowledgeStatus
+from llm_gc.models.knowledge_entry import KnowledgeStatus, KnowledgeType
+
 
 class PermanentGeneration:
     """Stores extracted knowledge entries from archived conversation turns.
@@ -16,7 +17,10 @@ class PermanentGeneration:
         self.event_bus = event_bus
 
     def add_knowledge_entry(self, knowledge_entry: KnowledgeEntry) -> None:
-        superseded_entries = self._handle_knowledge_contradiction(knowledge_entry)
+        if knowledge_entry.knowledge_type != KnowledgeType.RAW:
+            superseded_entries = self._handle_knowledge_contradiction(knowledge_entry)
+        else:
+            superseded_entries = []
         self._knowledge_entries.setdefault(knowledge_entry.topic_label, []).append(knowledge_entry)
         self.event_bus.emit(Event(event_type=EventType.KNOWLEDGE_ENTRY_ADDED, data={"knowledge_entry": knowledge_entry}))
         if superseded_entries:

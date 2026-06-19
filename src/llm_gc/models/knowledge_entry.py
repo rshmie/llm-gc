@@ -7,6 +7,7 @@ class KnowledgeType(Enum):
     FACT = "fact"
     DECISION = "decision"
     PREFERENCE = "preference"
+    RAW = "raw"
 
 class KnowledgeStatus(Enum):
     """Lifecycle status of a knowledge entry in permanent generation."""

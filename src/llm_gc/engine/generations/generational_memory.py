@@ -4,6 +4,7 @@ from llm_gc.engine.generations.permanent_generation import PermanentGeneration
 from llm_gc.events import EventBus, Event, EventType
 from llm_gc.extraction import KnowledgeExtractor
 from llm_gc.models import Message, KnowledgeEntry
+from llm_gc.models.knowledge_entry import KnowledgeType
 
 
 class GenerationalMemory:
@@ -30,6 +31,13 @@ class GenerationalMemory:
 
     def archive_message(self, message: Message) -> None:
         extracted_knowledge_entries = self.knowledge_extractor.extract_knowledge(message=message, message_turn=message.turn_index)
+        # If extracted entry is empty build verbatim content to prevent information loss
+        if not extracted_knowledge_entries:
+            extracted_knowledge_entries = [KnowledgeEntry(message_turn=message.turn_index,
+                                                          content=message.content,
+                                                          topic_label="__raw__",
+                                                          knowledge_type=KnowledgeType.RAW)]
+
         for entry in extracted_knowledge_entries:
             self.permanent_generation.add_knowledge_entry(entry)
 
