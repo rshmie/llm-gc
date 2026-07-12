@@ -93,6 +93,59 @@ LLM-GC borrows principles from garbage collection — a concept pioneered in Lis
 | Observability from day one | Every GC component emits structured events — visualizer, logger, benchmarks all consume the same metrics bus |
 | Hallucination risk heuristic | Composite score from waste %, decision burial depth, token proximity to limit — not a black box |
 
+## Installation
+
+> The steps below set up a local development environment to build and test LLM-GC. This is
+> what works today. The end-user install (`pip install llm-gc`, the proxy, the SDK wrapper) is
+> the target experience once the project ships — see [Planned Usage](#planned-usage) below.
+
+### Prerequisites
+
+- **Python 3.13+**
+- **[uv](https://docs.astral.sh/uv/)** — the dependency and virtual environment manager this
+  project uses
+
+Install `uv` if you don't have it:
+
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# or via Homebrew
+brew install uv
+```
+
+(See the [uv installation guide](https://docs.astral.sh/uv/getting-started/installation/) for
+Windows and other options.)
+
+### Setup
+
+```bash
+# 1. Clone the repository
+git clone git@github.com:rshmie/llm-gc.git
+cd llm-gc
+
+# 2. Install dependencies (creates .venv automatically, installs the
+#    project in editable mode, and resolves the dev extras: pytest, ruff)
+uv sync --extra dev
+
+# 3. Activate the virtual environment
+source .venv/bin/activate
+
+# 4. Verify the setup
+pytest
+```
+
+If the test suite passes, the environment is ready.
+
+### Everyday commands
+
+```bash
+uv sync --extra dev   # re-sync .venv after pulling changes to pyproject.toml
+pytest                # run the test suite
+ruff check .          # lint
+```
+
 ## Planned Usage
 
 ### With Claude Code (primary use case)
