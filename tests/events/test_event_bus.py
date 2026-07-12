@@ -43,3 +43,28 @@ def test_wrong_event_type():
 
     bus.emit(Event(event_type=EventType.GC_FINISHED, data={"gc_run_id": 2}))
     assert len(received) == 0
+
+
+def test_emit_does_not_raise_when_subscriber_throws():
+    bus = EventBus()
+    def bad_subscriber(event: Event):
+        raise ValueError("boom")
+    bus.subscribe(EventType.TOKEN_COUNT, bad_subscriber)
+
+    bus.emit(Event(event_type=EventType.TOKEN_COUNT, data={"count": 1}))  # must not raise
+
+
+def test_emit_calls_remaining_subscribers_after_one_throws():
+    bus = EventBus()
+    received = []
+    def bad_subscriber(event: Event):
+        raise ValueError("boom")
+    def good_subscriber(event: Event):
+        received.append(event)
+
+    bus.subscribe(EventType.TOKEN_COUNT, bad_subscriber)
+    bus.subscribe(EventType.TOKEN_COUNT, good_subscriber)
+
+    bus.emit(Event(event_type=EventType.TOKEN_COUNT, data={"count": 1}))
+
+    assert len(received) == 1
