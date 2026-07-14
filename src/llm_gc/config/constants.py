@@ -13,6 +13,7 @@ DEFAULT_KEEP_THRESHOLD = 0.7
 DEFAULT_ARCHIVE_THRESHOLD = 0.3
 DEFAULT_MIN_COMPACTABLE_TOKENS = 30
 DEFAULT_LAST_N_TURNS_TO_KEEP = 5
+DEFAULT_MAX_RECENT_TRANSITIONS = 20
 
 # A regex pattern to match capital words, numbers including decimals, code fragments, and URLs for token density scoring
 DENSITY_SCORER_PATTERN = r'\b[A-Z][a-zA-Z]+\b|\b\d+\.?\d*\b|`[^`]+`|https?://\S+'

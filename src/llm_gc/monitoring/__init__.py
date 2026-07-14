@@ -1,9 +1,4 @@
-"""Context-health monitoring — the data source of the visibility layer.
+from llm_gc.monitoring.context_health import ContextHealth
+from llm_gc.monitoring.context_health_monitor import ContextHealthMonitor
 
-Holds ``ContextHealthMonitor`` (a continuous, passive subscriber on the event
-bus) and the ``ContextHealth`` snapshot it exposes. This package has no web
-dependencies; the dashboard that renders these signals lives in
-``llm_gc.visualizer``.
-
-See ``doc/visibility/overview.md`` for the design and its rationale.
-"""
+__all__ = ["ContextHealth", "ContextHealthMonitor"]
