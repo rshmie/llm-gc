@@ -14,6 +14,8 @@ DEFAULT_ARCHIVE_THRESHOLD = 0.3
 DEFAULT_MIN_COMPACTABLE_TOKENS = 30
 DEFAULT_LAST_N_TURNS_TO_KEEP = 5
 DEFAULT_MAX_RECENT_TRANSITIONS = 20
+# Port for the context-health dashboard (spec section: Dashboard). The proxy itself will use 9900.
+DEFAULT_DASHBOARD_PORT = 9901
 
 # A regex pattern to match capital words, numbers including decimals, code fragments, and URLs for token density scoring
 DENSITY_SCORER_PATTERN = r'\b[A-Z][a-zA-Z]+\b|\b\d+\.?\d*\b|`[^`]+`|https?://\S+'

@@ -1,6 +1,6 @@
 # LLM-GC: Garbage Collection for LLM Context
 
-> **Status:** Work in progress — currently in early development (Phase 0: project setup). Nothing is installable yet.
+> **Status:** Work in progress — the core engine is built and tested: relevance scoring, three-tier sweep classification, generational memory with knowledge extraction, the full GC pipeline behind `GarbageCollector.collect()`, a context-health monitor, and a first dashboard scaffold (`python -m llm_gc.visualizer` → http://localhost:9901). The transparent proxy and real-time visualizer are still in development; nothing is pip-installable yet.
 
 If you've spent 50+ turns in a Claude Code session, you've probably noticed the model starts forgetting things. The database you agreed on, the auth approach you picked, the thing you explicitly said *not* to do — it's all still in the conversation, but buried under 130K tokens of old file reads, stale command outputs, and resolved debugging context. The model either hallucinates a wrong answer or tells you "I don't have that context."
 
@@ -54,14 +54,13 @@ Right now, developers have no data:
 
 LLM-GC's Context Visualizer solves this. Every GC component already computes rich internal state — relevance scores, generation classifications, waste percentages, decision tracking. Instead of using that data only internally, the visualizer **exposes it to the developer** as a live dashboard:
 
-- **Context Health Score** — Overall 0-100 session health, updated every turn
-- **Hallucination Risk Indicator** — Computed from measurable signals: context waste, decision burial depth, proximity to context limit. Not a guess — every factor is visible and explainable
-- **Decision Survival Map** — Every key decision tracked: alive (young gen), compressed (old gen), preserved (permanent gen), or lost
-- **Turn Relevance Heatmap** — Every message color-coded by current relevance
-- **Generation State View** — Visual of what's in each generation and token usage
-- **Post-Session Analysis** — After a session ends: full timeline of when quality peaked, when it degraded, which decisions survived, where the danger zones were
+- **Named signals, no aggregate score** — token budget pressure, what the last GC pass actually did (including when it was bypassed or failed — an unhealthy pass is visible, never hidden), and the transformation ratio. Each signal is named for what it literally measures; nothing looks more authoritative than its math supports
+- **Generation lifecycle & transitions timeline** — where every turn lives right now (young / old / permanent) and the last N promote / archive / supersede events — including the moment a newer fact contradicted and superseded an older one, which no current-state view can ever show
+- **Decision Survival Map** *(planned)* — Every key decision tracked: alive (young gen), compressed (old gen), preserved (permanent gen), or lost
+- **Turn Relevance Heatmap** *(planned)* — Every message color-coded by current relevance
+- **Post-Session Analysis** *(planned)* — After a session ends: full timeline of when quality peaked, when it degraded, which decisions survived, where the danger zones were
 
-The hallucination risk starts as a heuristic (v1, computed from GC signals) and evolves into a trained ML predictor (v2, Phase 11-12). Most tools optimize context silently. LLM-GC shows you what's happening and lets YOU decide if the AI's output is trustworthy right now.
+There is deliberately **no single "health score" or "hallucination risk" number**. A number labelled "risk" claims an accuracy no heuristic can back without ground-truth hallucination labels — and a dishonest number is a new black box, which is the opposite of the point. If the planned learned predictor (Phases 11-12) can be defensibly grounded in real labels, an aggregate ships *alongside* the signals; until then, the signals do the part that can be done honestly, and you do the part that can't yet be automated honestly. **Aggregation is earned, not assumed.** Most tools optimize context silently. LLM-GC shows you what's happening and lets YOU decide if the AI's output is trustworthy right now.
 
 ## The GC Analogy
 
@@ -91,7 +90,7 @@ LLM-GC borrows principles from garbage collection — a concept pioneered in Lis
 |---|---|
 | Epistemic transparency | Developer sees context health, hallucination risk, decision survival — AI provides data, human provides judgment |
 | Observability from day one | Every GC component emits structured events — visualizer, logger, benchmarks all consume the same metrics bus |
-| Hallucination risk heuristic | Composite score from waste %, decision burial depth, token proximity to limit — not a black box |
+| Signals, not scores | Named, individually-explainable health signals (budget pressure, GC breakdown, generation lifecycle); an aggregated risk number ships only if it can be grounded in real hallucination labels |
 
 ## Installation
 
@@ -137,6 +136,20 @@ pytest
 ```
 
 If the test suite passes, the environment is ready.
+
+### Try the dashboard scaffold
+
+The first visible surface of the visualizer already runs today:
+
+```bash
+python -m llm_gc.visualizer
+# open http://localhost:9901
+```
+
+Click **"Run GC now"** — each click feeds a batch of synthetic conversation
+turns through the real GC pipeline and updates every signal live: token
+budget pressure, the last pass's KEEP/COMPACT/ARCHIVE breakdown, generation
+lifecycle, and the promote/archive/supersede transitions timeline.
 
 ### Everyday commands
 
@@ -201,7 +214,7 @@ client = Anthropic()
 - Session tracking
 - Configurable strategies and thresholds
 - Transparent proxy for Claude Code (zero-config)
-- **Real-time context health dashboard** (hallucination risk, decision survival, waste metrics)
+- **Real-time context health dashboard** (named health signals, generation lifecycle, decision survival)
 - **Post-session analysis** (session timeline, degradation curve, GC effectiveness report)
 
 **Does not handle (not our problem):**
@@ -265,7 +278,8 @@ visualizer:
   port: 9901                 # web dashboard port
   realtime: true             # WebSocket live updates
   post_session_report: true  # generate analysis when session ends
-  hallucination_risk: true   # compute and display risk heuristic
+  # signals only — an aggregated risk display ships only if the learned
+  # predictor (Phases 11-12) can ground it in real hallucination labels
 ```
 
 ## GC Strategies
