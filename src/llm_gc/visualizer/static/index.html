@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM-GC — Context Health</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page:           #f9f9f7;
+    --surface:        #fcfcfb;
+    --ink:            #0b0b0b;
+    --ink-secondary:  #52514e;
+    --ink-muted:      #898781;
+    --hairline:       #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --young:          #2a78d6;   /* categorical slot 1: young gen / KEEP */
+    --old:            #1baf7a;   /* slot 2: old gen / COMPACT / promoted */
+    --archive:        #eda100;   /* slot 3: archived */
+    --superseded:     #4a3aa7;   /* slot 5: superseded knowledge */
+    --meter-track:    #cde2fb;   /* lighter step of the meter's own ramp */
+    --status-good:    #0ca30c;
+    --status-warning: #fab219;
+    --status-critical:#d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --page:           #0d0d0d;
+      --surface:        #1a1a19;
+      --ink:            #ffffff;
+      --ink-secondary:  #c3c2b7;
+      --ink-muted:      #898781;
+      --hairline:       #2c2c2a;
+      --baseline:       #383835;
+      --border:         rgba(255,255,255,0.10);
+      --young:          #3987e5;
+      --old:            #199e70;
+      --archive:        #c98500;
+      --superseded:     #9085e9;
+      --meter-track:    #0d366b;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--page); color: var(--ink);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 24px; max-width: 1080px; margin: 0 auto;
+  }
+  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+  header h1 { font-size: 18px; font-weight: 650; }
+  header .sub { color: var(--ink-muted); font-size: 13px; flex: 1; }
+  button#run-gc {
+    background: var(--surface); color: var(--ink); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 16px; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button#run-gc:hover { border-color: var(--baseline); }
+  button#run-gc:disabled { opacity: 0.5; cursor: wait; }
+  #poll-note { color: var(--ink-muted); font-size: 12px; }
+
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); margin-bottom: 12px; }
+  .panel, .tile {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px;
+  }
+  .tile .label { color: var(--ink-secondary); font-size: 13px; margin-bottom: 6px; }
+  .tile .value { font-size: 28px; font-weight: 600; }
+  .tile .caption { color: var(--ink-muted); font-size: 12px; margin-top: 6px; }
+  .empty { color: var(--ink-muted); }
+
+  /* meter: fill carries severity; track is a lighter step of the same ramp */
+  .meter { position: relative; height: 8px; border-radius: 4px; background: var(--meter-track); margin-top: 10px; overflow: hidden; }
+  .meter .fill { height: 100%; border-radius: 4px; background: var(--young); transition: width .3s; }
+  .meter .tick { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--baseline); }
+
+  .chip { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; }
+  .chip .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+
+  /* stacked breakdown bar: <=24px thick, 2px surface gaps, rounded data-ends */
+  .stack { display: flex; height: 20px; gap: 2px; margin: 10px 0 8px; }
+  .stack .seg { min-width: 3px; }
+  .stack .seg:first-child { border-radius: 4px 0 0 4px; }
+  .stack .seg:last-child { border-radius: 0 4px 4px 0; }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; color: var(--ink-secondary); font-size: 13px; }
+  .legend .chip { font-weight: 500; }
+
+  .two-col { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; margin-bottom: 12px; }
+  @media (max-width: 760px) { .two-col { grid-template-columns: 1fr; } }
+  .panel h2 { font-size: 14px; font-weight: 650; margin-bottom: 10px; }
+  .panel h3 { font-size: 12px; font-weight: 600; color: var(--ink-secondary); margin: 12px 0 6px; }
+
+  .tier-row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .tier { flex: 1; min-width: 120px; border: 1px solid var(--hairline); border-radius: 8px; padding: 10px 12px; }
+  .tier .count { font-size: 22px; font-weight: 600; }
+  .tier .meta { color: var(--ink-muted); font-size: 12px; }
+  .turns { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
+  .turns span { font-size: 11px; padding: 1px 6px; border-radius: 4px; color: var(--ink); }
+
+  ul.plain { list-style: none; }
+  ul.plain li { display: flex; align-items: baseline; gap: 8px; padding: 6px 0; border-top: 1px solid var(--hairline); }
+  ul.plain li:first-child { border-top: none; }
+  .who { color: var(--ink-muted); font-size: 12px; min-width: 52px; font-variant-numeric: tabular-nums; }
+  .when { color: var(--ink-muted); font-size: 12px; margin-left: auto; font-variant-numeric: tabular-nums; }
+  .topic { color: var(--ink-secondary); }
+</style>
+</head>
+<body>
+<header>
+  <h1>LLM-GC — Context Health</h1>
+  <span class="sub">one local demo session · signals only, no aggregate score</span>
+  <span id="poll-note">connecting…</span>
+  <button id="run-gc">Run GC now</button>
+</header>
+
+<div class="grid">
+  <div class="tile" id="tile-budget">
+    <div class="label">Token budget</div>
+    <div class="value empty">—</div>
+    <div class="meter" hidden><div class="fill"></div><div class="tick"></div></div>
+    <div class="caption">no GC pass yet</div>
+  </div>
+  <div class="tile" id="tile-ratio">
+    <div class="label">Transformation ratio</div>
+    <div class="value empty">—</div>
+    <div class="caption">not measured yet</div>
+  </div>
+  <div class="tile" id="tile-last-run">
+    <div class="label">Last GC pass</div>
+    <div class="value empty">—</div>
+    <div class="caption">never ran</div>
+  </div>
+</div>
+
+<div class="two-col">
+  <div class="panel" id="panel-breakdown">
+    <h2>Last pass breakdown</h2>
+    <div class="empty">Nothing swept yet.</div>
+  </div>
+  <div class="panel" id="panel-lifecycle">
+    <h2>Generation lifecycle</h2>
+    <div class="tier-row"></div>
+    <h3>Permanent knowledge (active)</h3>
+    <ul class="plain" id="knowledge-list"><li class="empty">No knowledge extracted yet.</li></ul>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Recent transitions</h2>
+  <ul class="plain" id="transitions-list"><li class="empty">No transitions yet.</li></ul>
+</div>
+
+<script>
+"use strict";
+const TIER_COLORS = { young: "var(--young)", old: "var(--old)", archive: "var(--archive)" };
+const TRANSITION_STYLE = {
+  promoted:   { color: "var(--old)",        text: "promoted · young → old" },
+  archived:   { color: "var(--archive)",    text: "archived · knowledge extracted" },
+  superseded: { color: "var(--superseded)", text: "superseded" },
+};
+const STATUS_STYLE = {
+  completed:                { color: "var(--status-good)",     icon: "✓", text: "completed" },
+  bypassed_below_threshold: { color: "var(--ink-muted)",       icon: "–", text: "bypassed (below threshold)" },
+  bypassed_on_error:        { color: "var(--status-critical)", icon: "✕", text: "bypassed (error)" },
+};
+let demoConfig = null;
+
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const chip = (color, label) =>
+  `<span class="chip"><span class="dot" style="background:${color}"></span>${esc(label)}</span>`;
+const at = (ts) => new Date(ts * 1000).toLocaleTimeString();
+
+function renderBudget(budget) {
+  const tile = document.getElementById("tile-budget");
+  if (!budget) return;
+  tile.querySelector(".value").textContent = `${budget.current_tokens} / ${budget.context_window}`;
+  tile.querySelector(".value").classList.remove("empty");
+  tile.querySelector(".caption").textContent =
+    `pressure ${budget.pressure_ratio.toFixed(2)} · at turn ${budget.current_msg_turn_index}`;
+  const meter = tile.querySelector(".meter");
+  meter.hidden = false;
+  const fill = meter.querySelector(".fill");
+  fill.style.width = `${Math.min(budget.pressure_ratio * 100, 100)}%`;
+  const threshold = demoConfig ? demoConfig.gc_threshold : null;
+  fill.style.background =
+    budget.pressure_ratio >= 0.9 ? "var(--status-critical)"
+    : threshold !== null && budget.pressure_ratio >= threshold ? "var(--status-warning)"
+    : "var(--young)";
+  if (threshold !== null) meter.querySelector(".tick").style.left = `${threshold * 100}%`;
+}
+
+function renderRatio(ratio) {
+  const tile = document.getElementById("tile-ratio");
+  if (ratio === null) {
+    tile.querySelector(".value").textContent = "—";
+    tile.querySelector(".value").classList.add("empty");
+    tile.querySelector(".caption").textContent = "not measured (no sweep in last pass)";
+    return;
+  }
+  tile.querySelector(".value").textContent = `${(ratio * 100).toFixed(0)}%`;
+  tile.querySelector(".value").classList.remove("empty");
+  tile.querySelector(".caption").textContent = "of swept tokens transformed (compact + archive)";
+}
+
+function renderLastRun(bd) {
+  const tile = document.getElementById("tile-last-run");
+  if (!bd) return;
+  const s = STATUS_STYLE[bd.gc_status] || { color: "var(--ink-muted)", icon: "?", text: bd.gc_status };
+  tile.querySelector(".value").outerHTML =
+    `<div class="value chip" style="font-size:18px"><span class="dot" style="background:${s.color}"></span>${s.icon} ${esc(s.text)}</div>`;
+  const failure = bd.failure_reason ? ` · ${esc(bd.failure_stage)}: ${esc(bd.failure_reason)}` : "";
+  tile.querySelector(".caption").innerHTML =
+    `saved ${bd.tokens_saved} tok · ${bd.duration_ms.toFixed(1)} ms · run ${esc(bd.gc_run_id.slice(0, 8))}${failure}`;
+}
+
+function renderBreakdown(bd) {
+  const panel = document.getElementById("panel-breakdown");
+  if (!bd) return;
+  const parts = [
+    { key: "young",   label: "KEEP",    count: bd.keep_count,    tokens: bd.keep_tokens },
+    { key: "old",     label: "COMPACT", count: bd.compact_count, tokens: bd.compact_tokens },
+    { key: "archive", label: "ARCHIVE", count: bd.archive_count, tokens: bd.archive_tokens },
+  ];
+  const total = bd.keep_tokens + bd.compact_tokens + bd.archive_tokens;
+  const segs = parts.filter((p) => p.tokens > 0).map((p) =>
+    `<div class="seg" style="flex:${p.tokens};background:${TIER_COLORS[p.key]}" title="${p.label}: ${p.tokens} tokens"></div>`);
+  const legend = parts.map((p) => chip(TIER_COLORS[p.key], `${p.label} · ${p.count} msgs · ${p.tokens} tok`));
+  panel.innerHTML = `<h2>Last pass breakdown</h2>
+    <div>${bd.tokens_before} tokens in → ${bd.tokens_before - bd.tokens_saved} out</div>
+    ${total > 0 ? `<div class="stack">${segs.join("")}</div>` : `<div class="empty" style="margin:10px 0 8px">nothing swept</div>`}
+    <div class="legend">${legend.join("")}</div>`;
+}
+
+function renderLifecycle(gl) {
+  const turnChips = (turns, key) => turns.map((t) =>
+    `<span style="background:color-mix(in srgb, ${TIER_COLORS[key]} 12%, transparent)">${t}</span>`).join("");
+  document.querySelector("#panel-lifecycle .tier-row").innerHTML = `
+    <div class="tier">${chip(TIER_COLORS.young, "Young gen")}
+      <div class="count">${gl.young_gen_count}</div>
+      <div class="meta">${gl.young_gen_tokens} tokens live</div>
+      <div class="turns">${turnChips(gl.young_gen_turn_indices, "young")}</div></div>
+    <div class="tier">${chip(TIER_COLORS.old, "Old gen")}
+      <div class="count">${gl.old_gen_count}</div>
+      <div class="meta">${gl.old_gen_tokens} tokens compacted</div>
+      <div class="turns">${turnChips(gl.old_gen_turn_indices, "old")}</div></div>
+    <div class="tier">${chip(TIER_COLORS.archive, "Permanent")}
+      <div class="count">${gl.permanent_gen_count}</div>
+      <div class="meta">active knowledge entries</div></div>`;
+
+  const knowledge = document.getElementById("knowledge-list");
+  const named = gl.permanent_gen_entries.filter((e) => e.topic_label !== "__raw__");
+  const raw = gl.permanent_gen_entries.length - named.length;
+  if (gl.permanent_gen_entries.length) {
+    knowledge.innerHTML = named.map((e) =>
+      `<li><span class="who">turn ${e.message_turn}</span>
+           <span class="topic">${esc(e.topic_label)}:</span> <span>${esc(e.content)}</span></li>`).join("")
+      + (raw ? `<li><span class="who">—</span><span class="empty">+ ${raw} raw (verbatim) entries</span></li>` : "");
+  }
+}
+
+function renderTransitions(transitions) {
+  const list = document.getElementById("transitions-list");
+  if (!transitions.length) return;
+  list.innerHTML = transitions.slice().reverse().map((t) => {
+    const style = TRANSITION_STYLE[t.transition_type];
+    const topic = t.topic_label ? ` · topic “${esc(t.topic_label)}”` : "";
+    return `<li>${chip(style.color, `turn ${t.turn_index}`)}
+      <span>${style.text}${topic}</span><span class="when">${at(t.occurred_at)}</span></li>`;
+  }).join("");
+}
+
+async function refresh() {
+  try {
+    const snap = await (await fetch("/health")).json();
+    renderBudget(snap.token_budget);
+    renderRatio(snap.transformation_ratio);
+    renderLastRun(snap.gc_breakdown);
+    renderBreakdown(snap.gc_breakdown);
+    renderLifecycle(snap.generation_lifecycle);
+    renderTransitions(snap.generation_lifecycle.recent_transitions);
+    document.getElementById("poll-note").textContent = `live · ${at(snap.snapshot_taken_at)}`;
+  } catch {
+    document.getElementById("poll-note").textContent = "server unreachable";
+  }
+}
+
+document.getElementById("run-gc").addEventListener("click", async (e) => {
+  e.target.disabled = true;
+  try { await fetch("/gc/run", { method: "POST" }); await refresh(); }
+  finally { e.target.disabled = false; }
+});
+
+(async () => {
+  try { demoConfig = await (await fetch("/config")).json(); } catch { /* tick simply hidden */ }
+  await refresh();
+  setInterval(refresh, 1000);
+})();
+</script>
+</body>
+</html>

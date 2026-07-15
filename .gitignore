@@ -28,3 +28,5 @@ benchmarks/
 
 # UV
 uv.lock
+# macOS
+.DS_Store
