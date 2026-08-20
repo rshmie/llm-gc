@@ -1,3 +1,4 @@
+from llm_gc.engine.compaction import NoOpCompactor
 from llm_gc.engine.generations.generational_memory import GenerationalMemory
 from llm_gc.engine.generations.permanent_generation import PermanentGeneration
 from llm_gc.events import EventBus, EventType
@@ -18,6 +19,7 @@ def _make_generational_memory(event_bus: EventBus | None = None) -> Generational
         event_bus=bus,
         knowledge_extractor=extractor,
         permanent_generation=permanent_gen,
+        compactor=NoOpCompactor(event_bus=bus)
     )
 
 

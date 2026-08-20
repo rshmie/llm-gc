@@ -66,7 +66,8 @@ def create_app() -> FastAPI:
     gc_config = _build_demo_config()
     generational_memory = GenerationalMemory(event_bus=event_bus,
                                              knowledge_extractor=KnowledgeExtractor(event_bus=event_bus),
-                                             permanent_generation=PermanentGeneration(event_bus=event_bus))
+                                             permanent_generation=PermanentGeneration(event_bus=event_bus),
+                                             compactor=NoOpCompactor(event_bus=event_bus))
     garbage_collector = GarbageCollector(
         event_bus=event_bus, gc_config=gc_config,
         relevance_scorer=_build_relevance_scorer(event_bus),

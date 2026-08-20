@@ -1,3 +1,4 @@
+from llm_gc.engine.compaction import BaseCompactor, CompactionResult
 from llm_gc.engine.generations.permanent_generation import PermanentGeneration
 from llm_gc.events import EventBus, Event, EventType
 from llm_gc.extraction import KnowledgeExtractor
@@ -6,10 +7,13 @@ from llm_gc.models.knowledge_entry import KnowledgeType
 
 
 class GenerationalMemory:
-    def __init__(self, event_bus: EventBus, knowledge_extractor: KnowledgeExtractor, permanent_generation: PermanentGeneration) -> None:
+    def __init__(self, event_bus: EventBus, knowledge_extractor: KnowledgeExtractor, permanent_generation: PermanentGeneration,
+                 compactor: BaseCompactor) -> None:
         self.event_bus = event_bus
         self.knowledge_extractor = knowledge_extractor
         self.permanent_generation = permanent_generation
+        self.compactor = compactor
+        self._old_gen: list[Message] = []
 
     def archive_message(self, message: Message) -> None:
         extracted_knowledge_entries = self.knowledge_extractor.extract_knowledge(message=message, message_turn=message.turn_index)
@@ -28,3 +32,20 @@ class GenerationalMemory:
 
     def get_permanent_gen(self) -> list[KnowledgeEntry]:
         return self.permanent_generation.get_all_active_entries()
+
+    def get_old_gen(self) -> list[Message]:
+        return self._old_gen
+
+    def promote_to_old_gen(self, compact_run: list[Message]) -> None:
+        compaction_result: CompactionResult = self.compactor.compact(compact_run)
+        self._old_gen.append(compaction_result.summary)
+        self.event_bus.emit(
+            Event(
+                event_type=EventType.MESSAGE_PROMOTED_TO_OLD_GEN,
+                data={
+                    "messages_compacted": len(compact_run),
+                    "tokens_before": compaction_result.original_token_count,
+                    "tokens_after": compaction_result.summary.token_count,
+                },
+            )
+        )

@@ -1,12 +1,6 @@
-from enum import Enum
+# SweepClassification is defined in llm_gc.models (shared vocabulary). It is
+# re-exported here so existing `from llm_gc.engine.sweep import SweepClassification`
+# imports keep working — the definition moved, the import path did not.
+from llm_gc.models.sweep_classification import SweepClassification
 
-class SweepClassification(Enum):
-    """Action classifications assigned to messages by the Sweeper.
-
-    KEEP - message stays in context as-is, no modification.
-    COMPACT - message is passed to the Compactor for compression.
-    ARCHIVE - message is removed from context but stored in long-term storage for potential future retrieval.
-    """
-    KEEP = "keep"
-    COMPACT = "compact"
-    ARCHIVE = "archive"
+__all__ = ["SweepClassification"]

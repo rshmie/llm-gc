@@ -14,6 +14,11 @@ DEFAULT_ARCHIVE_THRESHOLD = 0.3
 DEFAULT_MIN_COMPACTABLE_TOKENS = 30
 DEFAULT_LAST_N_TURNS_TO_KEEP = 5
 DEFAULT_MAX_RECENT_TRANSITIONS = 20
+# How long a coroutine waits for a session's lock before giving up.
+# On timeout the caller proceeds on last-persisted (possibly stale) state rather
+# than hang forever — a bounded wait keeps a stuck update from freezing the
+# session's live path.
+DEFAULT_SESSION_LOCK_TIMEOUT_MS = 100
 # Port for the context-health dashboard (spec section: Dashboard). The proxy itself will use 9900.
 DEFAULT_DASHBOARD_PORT = 9901
 
