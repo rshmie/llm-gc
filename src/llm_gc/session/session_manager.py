@@ -2,8 +2,14 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
-from llm_gc.config.constants import DEFAULT_SESSION_LOCK_TIMEOUT_MS
+from llm_gc.config.constants import (
+    DEFAULT_SESSION_CLOSE_DRAIN_MS,
+    DEFAULT_SESSION_LOCK_TIMEOUT_MS,
+    DEFAULT_SESSION_SWEEP_INTERVAL_S,
+    DEFAULT_SESSION_TIMEOUT_S,
+)
 from llm_gc.session.session_state import SessionState
 from llm_gc.session.session_store import SessionStore
 
@@ -44,10 +50,16 @@ class SessionManager:
         self,
         store: SessionStore | None = None,
         lock_timeout_ms: float = DEFAULT_SESSION_LOCK_TIMEOUT_MS,
+        session_timeout_s: float = DEFAULT_SESSION_TIMEOUT_S,
+        sweep_interval_s: float = DEFAULT_SESSION_SWEEP_INTERVAL_S,
+        close_drain_ms: float = DEFAULT_SESSION_CLOSE_DRAIN_MS,
     ) -> None:
         self._store = store if store is not None else SessionStore()
         self._locks: dict[str, asyncio.Lock] = {}
         self._lock_timeout_ms = lock_timeout_ms
+        self._session_timeout_s = session_timeout_s
+        self._sweep_interval_s = sweep_interval_s
+        self._close_drain_ms = close_drain_ms
 
     @property
     def store(self) -> SessionStore:
@@ -98,4 +110,76 @@ class SessionManager:
             yield state
         finally:
             lock.release()
+
+    async def close_session(self, session_id: str) -> None:
+        """Close a session: drain any in-flight work, drop its state, keep its lock.
+
+        Acquires the session's lock first (draining an in-flight update, up to
+        `close_drain_ms`), then removes the state from the store. The lock object
+        is deliberately KEPT in the registry: every `acquire` for this id must
+        return the *same* lock, so a request that arrives during or after the
+        close serialises on it and can never end up holding a second, competing
+        lock for the same session. A later request re-creates fresh state through
+        that lock - a reopen. The kept lock is a small, bounded leak (one per
+        session id ever seen); bounded lock cleanup is a future refinement.
+
+        Removing the lock instead would reintroduce the two-lock race: a waiter
+        queued on the old lock and a newcomer that mints a fresh one would both
+        run inside the session at once. See doc/session/overview.md.
+        """
+        lock = self._lock_for(session_id)
+        try:
+            async with asyncio.timeout(self._close_drain_ms / 1000):
+                await lock.acquire()
+        except TimeoutError:
+            # An operation held the lock past the drain window. Close anyway: it
+            # keeps its own reference to the state object and finishes on it;
+            # dropping the store entry just means the next request reopens.
+            logger.warning("close_session drain timed out; closing without waiting further",
+                           extra={"session_id": session_id, "drain_ms": self._close_drain_ms})
+            self._store.remove(session_id)
+            return
+        try:
+            self._store.remove(session_id)
+        finally:
+            lock.release()
+
+    async def sweep_once(self, now: datetime | None = None) -> list[str]:
+        """One idle-timeout pass: close every session whose last activity is older
+        than `session_timeout_s`. Returns the ids closed.
+
+        Iterates a *snapshot* of the active ids (a copy), so sessions added or
+        removed during the pass don't disturb the iteration. `now` is injectable
+        so tests don't have to wait real time.
+        """
+        current_time = now if now is not None else datetime.now(timezone.utc)
+        closed: list[str] = []
+        for session_id in self._store.active_session_ids():
+            state = self._store.get(session_id)
+            if state is None:
+                continue  # already closed between the snapshot and now
+            idle_seconds = (current_time - state.last_updated_at).total_seconds()
+            if idle_seconds >= self._session_timeout_s:
+                await self.close_session(session_id)
+                closed.append(session_id)
+        return closed
+
+    async def run_idle_sweeper(self) -> None:
+        """Long-running background task: sweep for idle sessions every
+        `sweep_interval_s`, until cancelled.
+
+        The caller (the proxy) starts it with `asyncio.create_task` and stops it
+        with `task.cancel()`. `CancelledError` is a `BaseException`, not an
+        `Exception`, so it is not caught by the guard below - it propagates and
+        ends the loop cleanly. One failed pass is logged and the loop continues,
+        so a transient error never kills the sweeper.
+        """
+        while True:
+            await asyncio.sleep(self._sweep_interval_s)
+            try:
+                closed = await self.sweep_once()
+                if closed:
+                    logger.info("Idle sweep closed sessions", extra={"closed_count": len(closed)})
+            except Exception:
+                logger.exception("Idle sweep pass failed; continuing")
 

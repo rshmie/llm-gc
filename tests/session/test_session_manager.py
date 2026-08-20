@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -139,3 +140,70 @@ class TestLockTimeout:
                 holder.cancel()
 
         asyncio.run(scenario())
+
+
+class TestCloseSession:
+    def test_close_removes_state_but_keeps_the_lock(self):
+        manager = SessionManager()
+
+        async def scenario():
+            async with manager.acquire("s1") as state:
+                state.messages.append(_msg())
+            await manager.close_session("s1")
+            return manager.store.get("s1"), "s1" in manager._locks
+
+        state_after, lock_kept = asyncio.run(scenario())
+        assert state_after is None       # state dropped from the store
+        assert lock_kept is True         # lock kept (Approach 3 - stable per id)
+
+    def test_reopen_after_close_starts_fresh(self):
+        manager = SessionManager()
+
+        async def scenario():
+            async with manager.acquire("s1") as state:
+                state.messages.append(_msg())
+            await manager.close_session("s1")
+            async with manager.acquire("s1") as reopened:
+                return len(reopened.messages)
+
+        # The reopened session is a clean slate, not the pre-close state.
+        assert asyncio.run(scenario()) == 0
+
+    def test_closing_an_unknown_session_is_harmless(self):
+        manager = SessionManager()
+
+        async def scenario():
+            await manager.close_session("never-existed")  # must not raise
+            return manager.store.get("never-existed")
+
+        assert asyncio.run(scenario()) is None
+
+
+class TestIdleSweeper:
+    def test_sweep_closes_only_idle_sessions(self):
+        manager = SessionManager(session_timeout_s=1800)
+
+        async def scenario():
+            async with manager.acquire("stale"):
+                pass
+            async with manager.acquire("fresh"):
+                pass
+            # Backdate "stale" so it looks idle past the timeout.
+            manager.store.get("stale").last_updated_at = datetime.now(timezone.utc) - timedelta(hours=1)
+            closed = await manager.sweep_once()
+            return closed, manager.store.get("stale"), manager.store.get("fresh")
+
+        closed, stale_after, fresh_after = asyncio.run(scenario())
+        assert closed == ["stale"]
+        assert stale_after is None        # idle one closed
+        assert fresh_after is not None    # active one left alone
+
+    def test_sweep_closes_nothing_when_all_sessions_are_recent(self):
+        manager = SessionManager(session_timeout_s=1800)
+
+        async def scenario():
+            async with manager.acquire("s1"):
+                pass
+            return await manager.sweep_once()
+
+        assert asyncio.run(scenario()) == []
