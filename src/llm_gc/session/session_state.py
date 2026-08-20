@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from llm_gc.models import Message, SweepClassification
+from llm_gc.models import Message
 
 
 def _now() -> datetime:
@@ -22,7 +22,6 @@ class SessionState:
     messages: list[Message] = field(default_factory=list)
     created_at: datetime = field(default_factory=_now)
     last_updated_at: datetime = field(default_factory=_now)
-    last_classifications: dict[int, SweepClassification] = field(default_factory=dict)
 
     def touch(self) -> None:
         """Mark the session as just-used, resetting its idle clock.
