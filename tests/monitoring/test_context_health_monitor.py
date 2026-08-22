@@ -76,6 +76,7 @@ def _make_monitor(max_recent_transitions: int | None = None,
     bus = EventBus()
     gen_memory = MagicMock(spec=GenerationalMemory)
     gen_memory.get_permanent_gen.return_value = []
+    gen_memory.get_old_gen.return_value = []
     kwargs = {} if max_recent_transitions is None else {"max_recent_transitions": max_recent_transitions}
     monitor = ContextHealthMonitor(event_bus=bus, gc_config=GCConfig(context_window=context_window),
                                    generational_memory=gen_memory, **kwargs)
@@ -93,65 +94,75 @@ def _transitions_of(monitor: ContextHealthMonitor, transition_type: TransitionTy
             if t.transition_type == transition_type]
 
 
-# ---- Promotion detection (regression: the pass-1 baseline bug) ---------------
+# ---- Promotion recording ------------------------------------------------------
 
 
-class TestPromotionDetection:
-    """PROMOTED = a turn seen as KEEP in one pass and COMPACT in a later one.
+def _emit_promoted(bus: EventBus, source_turn_indices: list[int], timestamp: float | None = None) -> None:
+    kwargs = {} if timestamp is None else {"timestamp": timestamp}
+    bus.emit(Event(event_type=EventType.MESSAGE_PROMOTED_TO_OLD_GEN,
+                   data={"source_turn_indices": source_turn_indices,
+                         "messages_compacted": len(source_turn_indices),
+                         "tokens_before": 100, "tokens_after": 20}, **kwargs))
 
-    Regression suite for the baseline-seeding bug: the first pass must record
-    every turn's classification even though it can never itself detect a
-    promotion - otherwise no promotion is ever detectable at all.
+
+class TestPromotionRecording:
+    """PROMOTED = generational memory told us it moved a turn into old gen.
+
+    The monitor used to *infer* this by diffing consecutive sweeps for a
+    KEEP -> COMPACT change. That inference was both lossy and false-positive:
+    it missed a turn first seen as COMPACT (no prior KEEP to diff against), and
+    it fired on the stateless collect path, which classifies COMPACT but never
+    calls promote_to_old_gen - so old gen stayed empty while the dashboard
+    claimed a promotion. These tests pin the replacement: listen for the fact.
     """
 
-    def test_keep_then_compact_fires_promoted_once(self):
+    def test_promotion_event_fires_one_transition(self):
         monitor, bus, _ = _make_monitor()
-        _emit_gc_finished(bus, _make_completed_result({1: SweepClassification.KEEP, 2: SweepClassification.KEEP}))
-        _emit_gc_finished(bus, _make_completed_result({1: SweepClassification.KEEP, 2: SweepClassification.COMPACT}))
+        _emit_promoted(bus, [2])
 
         promoted = _transitions_of(monitor, TransitionType.PROMOTED)
         assert len(promoted) == 1
         assert promoted[0].turn_index == 2
         assert promoted[0].topic_label is None
 
-    def test_first_pass_alone_fires_nothing(self):
+    def test_a_promoted_run_fires_one_transition_per_turn(self):
         monitor, bus, _ = _make_monitor()
-        _emit_gc_finished(bus, _make_completed_result({1: SweepClassification.KEEP, 2: SweepClassification.COMPACT}))
+        # promote_to_old_gen takes a *run* of turns and files one summary; each
+        # turn in the run genuinely left young, so each gets its own transition.
+        _emit_promoted(bus, [4, 5, 6])
 
-        # Turn 2 was never seen as KEEP by the monitor, so nothing was promoted.
-        assert _transitions_of(monitor, TransitionType.PROMOTED) == []
+        assert sorted(t.turn_index for t in _transitions_of(monitor, TransitionType.PROMOTED)) == [4, 5, 6]
 
-    def test_repeated_compact_does_not_duplicate(self):
+    def test_classification_change_alone_fires_nothing(self):
+        """The regression that matters most: a KEEP -> COMPACT change is a sweep
+        *decision*, not a move. Only the producer can say a turn actually left."""
         monitor, bus, _ = _make_monitor()
         _emit_gc_finished(bus, _make_completed_result({2: SweepClassification.KEEP}))
         _emit_gc_finished(bus, _make_completed_result({2: SweepClassification.COMPACT}))
-        _emit_gc_finished(bus, _make_completed_result({2: SweepClassification.COMPACT}))
-
-        assert len(_transitions_of(monitor, TransitionType.PROMOTED)) == 1
-
-    def test_compact_to_keep_demotion_fires_nothing(self):
-        monitor, bus, _ = _make_monitor()
-        _emit_gc_finished(bus, _make_completed_result({2: SweepClassification.COMPACT}))
-        _emit_gc_finished(bus, _make_completed_result({2: SweepClassification.KEEP}))
-
-        # Only KEEP -> COMPACT is a tracked transition; the reverse direction is not.
-        assert monitor.get_snapshot().generation_lifecycle.recent_transitions == []
-
-    def test_keep_to_archive_is_not_a_promotion(self):
-        monitor, bus, _ = _make_monitor()
-        _emit_gc_finished(bus, _make_completed_result({2: SweepClassification.KEEP}))
-        _emit_gc_finished(bus, _make_completed_result({2: SweepClassification.ARCHIVE}))
 
         assert _transitions_of(monitor, TransitionType.PROMOTED) == []
 
-    def test_bypassed_run_does_not_disturb_baseline(self):
+    def test_first_pass_compact_still_records_when_the_move_happens(self):
+        """The case the old diff silently missed: a turn appended and classified
+        COMPACT in the same pass has no prior KEEP, but it really was promoted."""
         monitor, bus, _ = _make_monitor()
-        _emit_gc_finished(bus, _make_completed_result({2: SweepClassification.KEEP}))
+        _emit_gc_finished(bus, _make_completed_result({2: SweepClassification.COMPACT}))
+        _emit_promoted(bus, [2])
+
+        assert [t.turn_index for t in _transitions_of(monitor, TransitionType.PROMOTED)] == [2]
+
+    def test_each_promotion_is_recorded_separately(self):
+        monitor, bus, _ = _make_monitor()
+        _emit_promoted(bus, [1])
+        _emit_promoted(bus, [3])
+
+        assert [t.turn_index for t in _transitions_of(monitor, TransitionType.PROMOTED)] == [1, 3]
+
+    def test_bypassed_run_records_no_promotion(self):
+        monitor, bus, _ = _make_monitor()
         _emit_gc_finished(bus, _make_bypassed_result([_make_message(turn_index=2)]))
-        _emit_gc_finished(bus, _make_completed_result({2: SweepClassification.COMPACT}))
 
-        # The bypassed pass carries no sweep_result; the KEEP baseline survives it.
-        assert len(_transitions_of(monitor, TransitionType.PROMOTED)) == 1
+        assert monitor.get_snapshot().generation_lifecycle.recent_transitions == []
 
 
 # ---- Archive and supersede handlers ------------------------------------------
@@ -248,13 +259,34 @@ class TestSnapshotCompleted:
         # (compact 20 + archive 10) / (keep 10 + compact 20 + archive 10)
         assert self._snapshot(monitor, bus).transformation_ratio == pytest.approx(30 / 40)
 
-    def test_lifecycle_splits_turns_by_classification(self):
+    def test_young_gen_is_derived_from_the_sweep(self):
         monitor, bus, _ = _make_monitor()
         lifecycle = self._snapshot(monitor, bus).generation_lifecycle
-        assert lifecycle.young_gen_turn_indices == [3]
-        assert lifecycle.old_gen_turn_indices == [1, 2]
-        assert (lifecycle.young_gen_count, lifecycle.old_gen_count) == (1, 2)
-        assert (lifecycle.young_gen_tokens, lifecycle.old_gen_tokens) == (10, 20)
+        assert lifecycle.young_gen_turn_indices == [3]      # the KEEP entries
+        assert lifecycle.young_gen_count == 1
+        assert lifecycle.young_gen_tokens == 10
+
+    def test_old_gen_is_read_from_storage_not_from_compact_counts(self):
+        """A COMPACT classification is a decision; old gen is where turns actually
+        landed. The sweep below classifies two turns COMPACT while storage holds
+        one summary from an earlier pass - the signal must report storage."""
+        monitor, bus, gen_memory = _make_monitor()
+        gen_memory.get_old_gen.return_value = [_make_message(turn_index=7, token_count=5)]
+
+        lifecycle = self._snapshot(monitor, bus).generation_lifecycle
+
+        assert lifecycle.old_gen_turn_indices == [7]
+        assert lifecycle.old_gen_count == 1
+        assert lifecycle.old_gen_tokens == 5
+
+    def test_old_gen_reads_empty_on_the_stateless_path(self):
+        """The stateless collect path classifies COMPACT but never promotes, so
+        old gen really is empty - reporting it as populated was a false claim."""
+        monitor, bus, _ = _make_monitor()
+        lifecycle = self._snapshot(monitor, bus).generation_lifecycle
+        assert lifecycle.old_gen_count == 0
+        assert lifecycle.old_gen_turn_indices == []
+        assert lifecycle.old_gen_tokens == 0
 
     def test_zero_token_sweep_yields_no_ratio(self):
         monitor, bus, _ = _make_monitor()

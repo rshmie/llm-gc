@@ -34,7 +34,13 @@ class GenerationalMemory:
         return self.permanent_generation.get_all_active_entries()
 
     def get_old_gen(self) -> list[Message]:
-        return self._old_gen
+        """The old generation's summaries, as a copy.
+
+        A copy, not the live list: callers assemble and sort what they get back,
+        and handing out internal storage lets a caller reorder or truncate this
+        component's state by accident.
+        """
+        return list(self._old_gen)
 
     def promote_to_old_gen(self, compact_run: list[Message]) -> None:
         compaction_result: CompactionResult = self.compactor.compact(compact_run)
@@ -43,6 +49,10 @@ class GenerationalMemory:
             Event(
                 event_type=EventType.MESSAGE_PROMOTED_TO_OLD_GEN,
                 data={
+                    # Which turns moved, not just how many. Subscribers that log a
+                    # per-turn generational transition (the health monitor) need the
+                    # identity of what moved; counts alone cannot name a turn.
+                    "source_turn_indices": [message.turn_index for message in compact_run],
                     "messages_compacted": len(compact_run),
                     "tokens_before": compaction_result.original_token_count,
                     "tokens_after": compaction_result.summary.token_count,

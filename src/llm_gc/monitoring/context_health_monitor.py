@@ -26,9 +26,9 @@ class ContextHealthMonitor:
         self.generational_memory = generational_memory
         self._last_gc_result: GCResult | None = None
         self._last_gc_completed_at: float | None = None
-        self._last_classifications: dict[int, SweepClassification] = {}
         self._recent_transitions = deque(maxlen=max_recent_transitions)
         event_bus.subscribe(EventType.GC_FINISHED, self._on_gc_finished)
+        event_bus.subscribe(EventType.MESSAGE_PROMOTED_TO_OLD_GEN, self._on_message_promoted_to_old_gen)
         event_bus.subscribe(EventType.MESSAGE_ARCHIVED, self._on_message_archived)
         event_bus.subscribe(EventType.KNOWLEDGE_ENTRY_SUPERSEDED, self._on_knowledge_entry_superseded)
 
@@ -37,21 +37,28 @@ class ContextHealthMonitor:
         self._last_gc_result = gc_result
         self._last_gc_completed_at = event.timestamp
 
-        if gc_result.sweep_result is not None:
-            for entry in gc_result.sweep_result.sweep_entries:
-                previous = self._last_classifications.get(entry.turn_index)
-                if previous == SweepClassification.KEEP and entry.classification == SweepClassification.COMPACT:
-                    self._recent_transitions.append(
-                        GenerationTransition(transition_type=TransitionType.PROMOTED, turn_index=entry.turn_index,
-                                             topic_label=None, occurred_at=event.timestamp))
-                self._last_classifications[entry.turn_index] = entry.classification
+    def _on_message_promoted_to_old_gen(self, event: Event) -> None:
+        """Record a young -> old promotion, one transition per turn that moved.
+
+        Listens for the fact rather than inferring it. This used to be derived by
+        diffing consecutive sweeps for a KEEP -> COMPACT change, which was a
+        workaround from when nothing in the pipeline actually moved turns between
+        generations. That inference both missed real promotions (a turn first seen
+        as COMPACT has no prior KEEP to diff against) and reported promotions that
+        never happened (the stateless collect path classifies COMPACT but never
+        calls promote_to_old_gen, so old gen stays empty). The producer knows what
+        it moved; the monitor just writes it down.
+        """
+        for turn_index in event.data["source_turn_indices"]:
+            self._recent_transitions.append(
+                GenerationTransition(transition_type=TransitionType.PROMOTED, turn_index=turn_index,
+                                     topic_label=None, occurred_at=event.timestamp))
 
     def _on_message_archived(self, event: Event) -> None:
         message: Message = event.data["message"]
         self._recent_transitions.append(
             GenerationTransition(transition_type=TransitionType.ARCHIVED, turn_index=message.turn_index,
                                  topic_label=None, occurred_at=event.timestamp))
-        self._last_classifications.pop(message.turn_index, None)  # can't transform again once archived
 
     def _on_knowledge_entry_superseded(self, event: Event) -> None:
         superseded_entries: list[KnowledgeEntry] = event.data["superseded_knowledge_entries"]
@@ -134,22 +141,32 @@ class ContextHealthMonitor:
 
     def _build_generation_lifecycle(self, gc_result: GCResult | None) -> GenerationLifeCycleSignal:
         young_gen_turn_indices: list[int] = []
-        old_gen_turn_indices: list[int] = []
         young_gen_tokens = 0
-        old_gen_tokens = 0
 
         if gc_result is not None and gc_result.sweep_result is not None:
-            for entry in gc_result.sweep_result.sweep_entries:
-                if entry.classification == SweepClassification.KEEP:
-                    young_gen_turn_indices.append(entry.turn_index)
-                elif entry.classification == SweepClassification.COMPACT:
-                    old_gen_turn_indices.append(entry.turn_index)
+            # Young gen is still derived from the last sweep: KEEP is exactly the
+            # set of turns that stayed. (One known skew: a turn whose promotion
+            # failed is classified COMPACT but stays young, so it is undercounted
+            # here until the next pass reclassifies it.)
+            young_gen_turn_indices = [entry.turn_index for entry in gc_result.sweep_result.sweep_entries
+                                      if entry.classification == SweepClassification.KEEP]
             young_gen_tokens = gc_result.sweep_result.total_keep_tokens
-            old_gen_tokens = gc_result.sweep_result.total_compact_tokens
         elif gc_result is not None:
             # Bypassed run: everything the pass saw stayed live and untransformed.
             young_gen_turn_indices = [message.turn_index for message in gc_result.final_messages]
             young_gen_tokens = gc_result.tokens_in_final
+
+        # Old gen is read from real storage, not derived from COMPACT counts.
+        # The derivation reported only the *last pass's* COMPACT turns, so a
+        # session that had promoted four turns over four passes still showed
+        # "old_gen_count: 1" while generational memory held four summaries - and
+        # on the stateless collect path, which classifies COMPACT but never
+        # promotes, it reported a populated old gen that was in fact empty. The
+        # summaries carry the turn index of the first turn in their run, so the
+        # indices still point back at where the content came from.
+        old_gen_messages = self.generational_memory.get_old_gen()
+        old_gen_turn_indices = [message.turn_index for message in old_gen_messages]
+        old_gen_tokens = sum(message.token_count for message in old_gen_messages)
 
         # Permanent-gen contents and the transitions log are standing facts,
         # real even before any GC pass has ever run.
