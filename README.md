@@ -383,25 +383,10 @@ alternatives that were rejected and the reason.**
 - [Tech stack](doc/LLM-GC-TechStack.md) — dependencies and why each was chosen
 - [ML research](doc/LLM-GC-ML-Research.md) — learned scoring, summary quality, fact extraction
 
-## How this project was built
+## AI assistance
 
-LLM-GC is written with AI coding assistance (Claude), used deliberately and throughout.
-The division of labour is worth stating plainly, because it affects how to read this
-repository:
-
-- **The architecture and the design decisions are mine.** Every significant choice —
-  three-tier sweeping, one-directional aging, signals over an aggregated risk score, the
-  per-session lock contract — was made by me. The design docs above record the
-  alternatives considered and rejected for each one, which is the part worth reviewing.
-- **The implementation was written by an AI assistant under my direction**, reviewed by
-  me, and verified by the test suite and CI.
-- **The design documents are mine**, drafted collaboratively and edited by me.
-
-Commits carry a `Co-Authored-By` trailer for the assistant. That trailer is a convention
-meant for human collaborators and a tool isn't an author, so it is imprecise — it is used
-anyway because it is the one form of attribution every reader and every tool already
-recognises, and because a record written as the work happened is worth more than a claim
-added afterwards.
+Built with the help of AI coding assistance (Claude): AI wrote most of the implementation
+code. The [design docs](#documentation) cover the architecture and the reasoning behind it.
 
 ## License
 
