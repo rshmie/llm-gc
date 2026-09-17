@@ -1,28 +1,38 @@
 # LLM-GC: Garbage Collection for LLM Context
 
-> **Status:** Work in progress — the core engine is built and tested: relevance scoring, three-tier sweep classification, generational memory with knowledge extraction, the full GC pipeline behind `GarbageCollector.collect()`, a context-health monitor, and a first dashboard scaffold (`python -m llm_gc.visualizer` → http://localhost:9901). The transparent proxy and real-time visualizer are still in development; nothing is pip-installable yet.
+> **Status: work in progress, and not yet useful as a tool.** The engine is built and
+> tested — relevance scoring, three-tier sweep classification, generational memory with
+> knowledge extraction, the full pipeline behind `GarbageCollector.collect()`, a
+> context-health monitor, and a dashboard scaffold
+> (`python -m llm_gc.visualizer` → http://localhost:9901). 282 tests pass.
+>
+> What does **not** work yet: aged turns move into the old generation but never leave it,
+> and extracted facts are never injected back into the assembled context. So today
+> LLM-GC *relocates* context rather than reclaiming it — measured on a 40-turn
+> conversation, the assembled context crosses the window around turn 15 and reaches 1.5×
+> by turn 39. **Every savings figure below is a target, not a measurement.** Closing that
+> loop, plus the real summarizing compactor, is the current work. The transparent proxy
+> is not built; nothing is pip-installable yet.
 
 If you've spent 50+ turns in a Claude Code session, you've probably noticed the model starts forgetting things. The database you agreed on, the auth approach you picked, the thing you explicitly said *not* to do — it's all still in the conversation, but buried under 130K tokens of old file reads, stale command outputs, and resolved debugging context. The model either hallucinates a wrong answer or tells you "I don't have that context."
 
-The primary root cause is: every API call resends the entire conversation history from scratch. Nothing gets cleaned up. Old context piles up, pushes important decisions out of the model's attention, and the quality of responses degrades. Measured across 7 real Claude Code sessions, 84% of input tokens at peak were stale context — noise that actively hurts the model's ability to recall what matters. And since 99% of token spend is input (the resent history), you're paying to re-send context that's working against you.
+The root cause is that every API call resends the entire conversation history from scratch. Nothing is ever cleaned up, so old material piles up and crowds out the things that still matter.
 
-This problem isn't new. It's the same thing that happens when a program runs out of heap memory — except in that world, it was solved decades ago with garbage collection. Java, Go, C# — they all manage memory by identifying what's still needed, discarding what's not, and compacting what remains.
+## The problem
 
-LLM-GC applies that same idea to LLM context windows. It scores each conversation turn for relevance, removes what's no longer useful, compresses what's aging, and extracts key decisions into a permanent store that survives indefinitely. The goal is to preserve what the model needs to remember — not to save tokens. Token savings are a natural byproduct of removing waste, not the point.
+Two distinct things go wrong, and only one of them is about money.
 
-But fixing context is only half the problem. The other half is **visibility**. Right now, developers have zero insight into what's happening inside their LLM session. There's no signal telling you "the model has forgotten your database decision," no indicator that context quality is degrading, no warning before the hallucination happens. The model answers with the same confidence whether its context is clean or 84% noise. LLM-GC's Context Visualizer exposes what's happening inside your session — the AI provides transparency, the human provides judgment.
+**Context loss.** The decision from turn 5 is still technically present at turn 50 — it's just one short message inside 100K tokens of less relevant material. Liu et al. (2023), [*Lost in the Middle*](https://arxiv.org/abs/2307.03172), showed that information buried in the middle of a long context is recalled less reliably than information at either end. So the decision can be *in* the window and still not usable. Worse, a naive fix makes it worse: on real sessions, a sliding window that keeps the last 10 turns loses **7.6 of 8 early decisions**.
 
-## The Problem
+**Context waste.** Across 7 real Claude Code sessions, 99% of token spend was input — the resent history — and 84% of that input at peak was stale context. You are paying, on every single call, to resend material that is crowding out the material you need.
 
-In a typical Claude Code session, every API call resends the **entire conversation history** from scratch. By turn 50, that's 130K+ tokens per call — mostly old file reads, stale command outputs, and resolved debugging context. Two things go wrong:
+This is recognisably a memory-management problem, and memory management has decades of prior art. Java, Go and C# all identify what is still needed, discard what is not, and compact what remains.
 
-**Context Loss** — The model forgets what was decided earlier. "What database are we using?" gets a hallucinated answer because the decision from turn 5 is buried under 100K tokens of noise. In benchmarks on real sessions, a simple sliding window (keep last 10 turns, drop the rest) loses **nearly all early decisions**.
+LLM-GC applies that shape to the context window. It scores each turn for relevance, compresses what is aging, and extracts decisions into a permanent store rather than deleting them. **The goal is preserving what the model needs to remember — not saving tokens.** Savings are a byproduct of removing waste.
 
-**Context Waste** — 99% of token spend is input tokens (the resent history), not output (the model's response). Measured across 7 real Claude Code sessions: 130M cumulative input tokens, 84% estimated waste at peak. The cost adds up, but worse, the noise actively degrades response quality.
+But cleaning context is only half of it. The other half is **transparency**. Today you have no signal that the model has lost your database decision, no indicator that context quality is degrading, and no warning before the wrong answer arrives. The model answers in exactly the same confident tone whether its context is clean or 84% noise. LLM-GC surfaces what is happening to your context so that *you* can judge when to trust the output — the system provides the data, the human provides the judgment.
 
-This is the equivalent of a program crashing because it ran out of memory. In Java, this was solved decades ago with garbage collection. In LLMs, we can adopt the similar idea.
-
-## How It Works
+## How it works
 
 LLM-GC intercepts LLM API calls, optimizes the conversation context, and forwards the cleaned version. Three operations, inspired by classic GC algorithms:
 
@@ -30,7 +40,7 @@ LLM-GC intercepts LLM API calls, optimizes the conversation context, and forward
 2. **Sweep** — Remove dead turns, compress stale ones, extract key facts before discarding
 3. **Compact** — Assemble clean context: system prompt + extracted memories + compressed summaries + recent turns
 
-### Generational Memory
+### Generational memory
 
 Context is managed in three generations, inspired by generational garbage collection:
 
@@ -42,9 +52,11 @@ Context is managed in three generations, inspired by generational garbage collec
 
 As turns age, they move through generations: kept in full (young) → compressed (old) → facts extracted (permanent) → original discarded. Key decisions survive indefinitely in the permanent generation and are retrieved when relevant.
 
-### Context Visualizer — Epistemic Transparency
+### Context Visualizer — epistemic transparency
 
-AI models don't know what they don't know. The research community calls this the problem of **epistemic vigilance** — how do you know when to trust a source? For AI, that's an unsolved research problem. But for humans, it's a natural skill — **if they have the data**.
+AI models have no reliable internal sense of what they know and don't know. Getting a model to report its own uncertainty accurately is an open research problem (calibration), so you cannot lean on the model to tell you when its grounding is weak.
+
+Humans, by contrast, do this naturally — **when they have the data**. Evaluating whether a source should be trusted is a cognitive skill the research literature calls **epistemic vigilance** (Sperber et al., 2010). LLM-GC's premise is to stop trying to automate the judgment and instead give the human what their own vigilance needs to work on.
 
 Right now, developers have no data:
 - You can't see that the model has effectively "forgotten" a decision you made 40 turns ago
@@ -54,7 +66,7 @@ Right now, developers have no data:
 
 LLM-GC's Context Visualizer solves this. Every GC component already computes rich internal state — relevance scores, generation classifications, waste percentages, decision tracking. Instead of using that data only internally, the visualizer **exposes it to the developer** as a live dashboard:
 
-- **Named signals, no aggregate score** — token budget pressure, what the last GC pass actually did (including when it was bypassed or failed — an unhealthy pass is visible, never hidden), and the transformation ratio. Each signal is named for what it literally measures; nothing looks more authoritative than its math supports
+- **Named signals, no aggregate score** — token budget pressure, and what the last GC pass actually did (including when it was bypassed or failed — an unhealthy pass is visible, never hidden). Each signal is named for what it literally measures; nothing looks more authoritative than its math supports. The *transformation ratio* is computed but deliberately **not** displayed: it is honest arithmetic that would still be misread as a risk score if it sat on the page as the one number to glance at
 - **Generation lifecycle & transitions timeline** — where every turn lives right now (young / old / permanent) and the last N promote / archive / supersede events — including the moment a newer fact contradicted and superseded an older one, which no current-state view can ever show
 - **Decision Survival Map** *(planned)* — Every key decision tracked: alive (young gen), compressed (old gen), preserved (permanent gen), or lost
 - **Turn Relevance Heatmap** *(planned)* — Every message color-coded by current relevance
@@ -80,17 +92,29 @@ LLM-GC borrows principles from garbage collection — a concept pioneered in Lis
 | Young generation | Recent turns (full detail) |
 | Old generation | Older turns (compressed) |
 | Permanent generation | Key facts (never discarded) |
-| GC pause | Latency overhead (<25ms warm) |
+| GC pause | Latency overhead (design target: <25ms warm; not yet benchmarked) |
 | Concurrent GC | Async pre-computation between turns |
 | GC tuning flags | Configurable thresholds and strategies |
 
-### Beyond the GC Analogy
+### Where the analogy breaks — and why that matters more than where it holds
+
+A runtime garbage collector is **sound**. Reachability is decidable and exact: trace from the roots, and an object is either reachable or it is not. The collector never frees a live object. That guarantee is precisely why Java's GC can run silently — it has nothing to report, because it cannot be wrong.
+
+Relevance is not decidable. The root set for a conversation is the *next question*, and it hasn't been asked yet. A turn that looks dead at turn 10 can be the most important thing in the conversation at turn 12, and no analysis at turn 10 can determine that. Every relevance decision is a bet against a future that doesn't exist yet.
+
+Three things follow, and they shape the whole design:
+
+- **Cleanup cannot be silent.** A system making unsound, unverifiable decisions about what the model is allowed to see — and hiding them from the person who gets handed the answer — has replaced one opaque actor with two. Transparency here isn't a feature chosen because it's appealing. It's the only honest way to ship an operation that can't be proven correct.
+- **Removal has to be recoverable.** Because a bet can be wrong, what's swept must stay reachable in some form. This is why the system compresses rather than deletes: a turn leaving the young generation survives as a summary, and its decisions survive as extracted facts. A wrong bet costs fidelity, not knowledge.
+- **Conservatism is calibration, not timidity.** Keeping an unneeded turn costs a bounded number of tokens. Removing a needed one costs an unpredictable amount and stays invisible until it surfaces as a wrong answer. Asymmetric costs demand an asymmetric policy.
+
+### Beyond the GC analogy
 
 | Concept | What LLM-GC Adds |
 |---|---|
-| Epistemic transparency | Developer sees context health, hallucination risk, decision survival — AI provides data, human provides judgment |
-| Observability from day one | Every GC component emits structured events — visualizer, logger, benchmarks all consume the same metrics bus |
-| Signals, not scores | Named, individually-explainable health signals (budget pressure, GC breakdown, generation lifecycle); an aggregated risk number ships only if it can be grounded in real hallucination labels |
+| Transparency | The developer sees what the model still knows, at what fidelity, and what it has lost — the system provides data, the human provides judgment. This is the point of the project |
+| Instrumented from the inside out | Every component emits structured events; visualizer, logger and benchmarks all consume the same bus. This is *observability* — it describes LLM-GC rather than your conversation, and it is the supporting surface, not the headline |
+| Signals, not scores | Named, individually-explainable signals (budget pressure, GC breakdown, generation lifecycle); an aggregated risk number ships only if it can be grounded in real hallucination labels |
 
 ## Installation
 
@@ -159,7 +183,7 @@ pytest                # run the test suite
 ruff check .          # lint
 ```
 
-## Planned Usage
+## Planned usage
 
 ### With Claude Code (primary use case)
 
@@ -193,7 +217,7 @@ print(f"Decisions preserved: {len(result.memories_used)}")
 print(f"Saved {result.tokens_saved} tokens ({result.savings_pct}%)")
 ```
 
-### SDK Wrapper (one import change)
+### SDK wrapper (one import change)
 
 ```python
 from llm_gc import Anthropic  # drop-in replacement
@@ -201,21 +225,23 @@ client = Anthropic()
 # Everything else identical. GC is automatic.
 ```
 
-## What LLM-GC Does and Doesn't Do
+## What LLM-GC does and doesn't do
 
-**Handles:**
-- Preserving key decisions and facts from early in the conversation
-- Context garbage collection (mark, sweep, compact)
-- Generational memory (young/old/permanent)
-- Relevance scoring per conversation turn
-- Summary compression of old turns
-- Fact extraction and retrieval (decisions survive indefinitely)
-- Async pre-computation between turns
-- Session tracking
-- Configurable strategies and thresholds
+**In scope — built today:**
+- Relevance scoring per conversation turn (five signals, weighted)
+- Three-tier sweep classification (keep / compact / archive)
+- Generational memory (young / old / permanent) with fact extraction and supersession
+- Session tracking with per-session concurrency control
+- Context-health signals and a dashboard scaffold
+- Configurable thresholds
+
+**In scope — not built yet:**
+- Reclaiming context rather than relocating it (sweeping the old generation; injecting permanent-generation facts back into the prompt)
+- Summary compression that actually compresses — the default compactor is a no-op placeholder
 - Transparent proxy for Claude Code (zero-config)
-- **Real-time context health dashboard** (named health signals, generation lifecycle, decision survival)
-- **Post-session analysis** (session timeline, degradation curve, GC effectiveness report)
+- Async pre-computation between turns
+- Knowledge-state view: what the model still knows, at what fidelity
+- Post-session analysis (session timeline, decision survival, GC effectiveness report)
 
 **Does not handle (not our problem):**
 - Model routing (use LiteLLM or your proxy)
@@ -225,36 +251,77 @@ client = Anthropic()
 - Prompt engineering or fine-tuning
 - Cross-session memory (use Mem0/Zep for that)
 
-LLM-GC does one thing: keep the context window clean so the model remembers what matters. Token savings are a natural byproduct of removing what doesn't. And unlike every other context tool, it shows you exactly what it's doing — so you can judge for yourself when to trust the output.
+LLM-GC does one thing: keep the context window clean so the model remembers what matters. Token savings are a natural byproduct of removing what doesn't.
 
-## Measured Results (from real Claude Code sessions)
+### How this differs from what already exists
+
+Context management is not a new idea, and the honest framing is worth stating plainly.
+
+**[MemGPT / Letta](https://arxiv.org/abs/2310.08560)** paged LLM context against an
+operating-system memory hierarchy in 2023 — the closest relative to this project's
+framing. **[Mem0](https://github.com/mem0ai/mem0)** and **[Zep](https://www.getzep.com/)**
+extract facts and resolve contradictions; Zep's temporal edge invalidation is the same
+idea as supersession here. **LangChain** has summary-buffer memory. **Providers ship
+their own compaction**, and it uses a frontier model to summarize, which is very likely
+better at preserving meaning than five weighted heuristics.
+
+So LLM-GC doesn't claim a better summarizer. What it does differently is **govern and
+report** the operation rather than perform it silently:
+
+- **Per-turn and selective**, not summarize-everything-at-a-threshold
+- **Recoverable** — facts survive in the permanent generation; compaction is one-way
+- **Auditable** — a record of what happened to each turn and why
+- **Under your policy** — thresholds, conservatism, never-drop rules are yours, not the provider's
+- **Cross-client** — a proxy works for anything speaking the provider's API
+
+Once the real compactor lands, LLM-GC uses the *same mechanism* provider compaction
+uses. It is not an alternative to compaction; it is a governance and transparency layer
+around it.
+
+## Measured results
+
+These numbers come from profiling **real Claude Code sessions**. They measure the
+problem and a naive baseline. They do **not** measure LLM-GC, which isn't finished.
 
 ```
-STAGE 0 — THE PROBLEM (7 real sessions, 1,742 API calls)
-  Avg input tokens at peak:        132,579
-  99% of token spend is input (resent history)
-  84% of input is stale context at peak
+STAGE 0 — THE PROBLEM (7 real sessions, 1,742 API calls, 130M cumulative tokens)
+  Avg input tokens at peak:                              132,579
+  Share of token spend that is input (resent history):   99%
+  Share of input that is stale context at peak:          84%
 
-STAGE 1 — DUMB GC BASELINE (sliding window, keep last 10 turns)
-  Token savings:                   46-95% per session
-  Decisions preserved:             NEARLY NONE (7.6 out of 8 lost)
-
-  This is why dumb truncation isn't good enough.
-  The savings are easy. Preserving decisions is the hard part.
-
-WITHOUT LLM-GC:                        WITH LLM-GC (goal):
-  Decisions remembered at turn 50: ~10%   Decisions remembered at turn 50: ~90%+
-  Token cost grows linearly               Token cost stays flat
-  Context quality degrades                Context quality stable
-  Token reduction: none                   Token reduction: 40-60% (byproduct)
+STAGE 1 — NAIVE BASELINE (sliding window: keep last 10 turns, drop the rest)
+  Token savings:                                         46-95% per session
+  Decisions preserved:                                   7.6 of 8 LOST
 ```
+
+**That second line is the whole argument.** Saving tokens is easy — a five-line sliding
+window gets 46–95%. Saving them *without throwing away the decisions that made the
+conversation worth having* is the hard part, and it's the only reason to build anything
+more complicated than truncation.
+
+### Targets — not yet measured
+
+Stated so they can be checked later, and so nobody mistakes them for results:
+
+| | Without LLM-GC | Target with LLM-GC |
+|---|---|---|
+| Decisions recoverable at turn 50 | ~10% | 90%+ |
+| Context growth | linear | bounded |
+| Token reduction | none | 40–60%, as a byproduct |
+
+Two honesty notes on that last row. First, LLM-GC doesn't reclaim context yet, so the
+figure today is **worse than zero** — see the status banner. Second, when it is measured
+it will be measured against **cached-token pricing**, not raw token counts: rewriting the
+prompt prefix invalidates the provider's prompt cache, so a real reduction in tokens can
+still be an increase in cost. A savings number that ignores that isn't an honest number,
+and this project would rather publish an awkward one.
 
 ## Configuration
 
 ```yaml
 # ~/.llm-gc/config.yaml
 gc:
-  strategy: generational     # sliding_window | summary | generational
+  strategy: generational     # the only strategy in v1.0 (see "GC strategies" above)
   aggressiveness: 0.6        # 0.0 (keep all) to 1.0 (aggressive trim)
   young_gen_size: 8          # keep last N turns in full
 
@@ -282,23 +349,59 @@ visualizer:
   # predictor (Phases 11-12) can ground it in real hallucination labels
 ```
 
-## GC Strategies
+## GC strategies
 
-| Strategy | Description | Savings | Best for |
-|---|---|---|---|
-| `sliding_window` | Keep last N turns, drop the rest | 30-50% | Simple chatbots |
-| `summary` | Keep recent in full, summarize older turns | 50-70% | Most use cases |
-| `generational` | Full mark-sweep-compact with three generations | 60-85% | Long sessions, complex work |
+v1.0 ships **one** strategy, `generational`: full mark-sweep-compact across three
+generations, with relevance scoring, fact extraction and memory retrieval. It is the
+only strategy that is fully specified, and shipping one well-specified strategy beats
+shipping three half-specified ones.
+
+Two others were considered and rejected, for different reasons:
+
+- **`sliding_window`** (drop everything older than N turns) — rejected outright. It
+  ignores content entirely, which is what loses 7.6 of 8 decisions in the benchmark
+  above. It remains useful as the baseline to beat, not as an option to offer.
+- **`summary`** (keep recent turns, roll everything older into a summary) — rejected
+  *for v1.0* on different grounds: it would need its own sweeper, compactor contract and
+  config surface. It may return as a configurable variant once the generational pipeline
+  is mature.
 
 ## Documentation
 
-- [Overview](doc/overview.md) — Why this project exists, what it does, how it is structured
-- [System Spec](doc/end-product/spec.md) — The v1.0 system in detail: components, interfaces, configuration
-- [Architecture Decision Records](doc/adr/) — Why specific design choices were made
-- [Engineering Practices](doc/engineering-practices.md) — Internal disciplines we follow when building LLM-GC
-- [Tech Stack](doc/LLM-GC-TechStack.md) — Dependencies and why each was chosen
-- [Testing](doc/LLM-GC-Testing.md) — Benchmark methodology, quality metrics, test suite
-- [ML Research](doc/LLM-GC-ML-Research.md) — Learned scoring, summary quality, fact extraction
+The design docs are the substantive part of this repository. Each one covers how a
+subsystem works, why it exists, and **why it has that shape — including the credible
+alternatives that were rejected and the reason.**
+
+- [Overview](doc/overview.md) — why this project exists, the core principles, how the pieces fit
+- [System Spec](doc/end-product/spec.md) — the v1.0 system in detail: components, interfaces, configuration
+- [Scoring](doc/scoring/overview.md) — the five relevance signals and how they combine
+- [Sweeping & composition](doc/sweeper-and-composition/sweeping-mechanism.md) — three-tier classification and context assembly
+- [Generational memory](doc/generational-memory/overview.md) — young / old / permanent, and supersession
+- [Visibility](doc/visibility/overview.md) — transparency vs. observability, and why there is no aggregate risk score
+- [Events](doc/events/overview.md) — the pub/sub bus every component instruments through
+- [Engineering practices](doc/engineering-practices.md) — the internal disciplines followed while building this
+- [Tech stack](doc/LLM-GC-TechStack.md) — dependencies and why each was chosen
+- [ML research](doc/LLM-GC-ML-Research.md) — learned scoring, summary quality, fact extraction
+
+## How this project was built
+
+LLM-GC is written with AI coding assistance (Claude), used deliberately and throughout.
+The division of labour is worth stating plainly, because it affects how to read this
+repository:
+
+- **The architecture and the design decisions are mine.** Every significant choice —
+  three-tier sweeping, one-directional aging, signals over an aggregated risk score, the
+  per-session lock contract — was made by me. The design docs above record the
+  alternatives considered and rejected for each one, which is the part worth reviewing.
+- **The implementation was written by an AI assistant under my direction**, reviewed by
+  me, and verified by the test suite and CI.
+- **The design documents are mine**, drafted collaboratively and edited by me.
+
+Commits carry a `Co-Authored-By` trailer for the assistant. That trailer is a convention
+meant for human collaborators and a tool isn't an author, so it is imprecise — it is used
+anyway because it is the one form of attribution every reader and every tool already
+recognises, and because a record written as the work happened is worth more than a claim
+added afterwards.
 
 ## License
 
