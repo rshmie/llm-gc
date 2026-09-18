@@ -383,11 +383,6 @@ alternatives that were rejected and the reason.**
 - [Tech stack](doc/LLM-GC-TechStack.md) — dependencies and why each was chosen
 - [ML research](doc/LLM-GC-ML-Research.md) — learned scoring, summary quality, fact extraction
 
-## AI assistance
-
-Built with the help of AI coding assistance (Claude): AI wrote most of the implementation
-code. The [design docs](#documentation) cover the architecture and the reasoning behind it.
-
 ## License
 
 Apache 2.0
