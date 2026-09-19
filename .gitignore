@@ -22,8 +22,10 @@ env/
 # Claude Code config (personal, not project)
 .claude/
 
+# Internal working notes: build log, phase plan, target spec, pre-build research
+doc/internal/
+
 # Not ready to track yet
-doc/
 benchmarks/
 
 # UV
