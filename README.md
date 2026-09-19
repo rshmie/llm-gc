@@ -373,15 +373,18 @@ subsystem works, why it exists, and **why it has that shape — including the cr
 alternatives that were rejected and the reason.**
 
 - [Overview](doc/overview.md) — why this project exists, the core principles, how the pieces fit
-- [System Spec](doc/end-product/spec.md) — the v1.0 system in detail: components, interfaces, configuration
-- [Scoring](doc/scoring/overview.md) — the five relevance signals and how they combine
-- [Sweeping & composition](doc/sweeper-and-composition/sweeping-mechanism.md) — three-tier classification and context assembly
-- [Generational memory](doc/generational-memory/overview.md) — young / old / permanent, and supersession
-- [Visibility](doc/visibility/overview.md) — transparency vs. observability, and why there is no aggregate risk score
-- [Events](doc/events/overview.md) — the pub/sub bus every component instruments through
-- [Engineering practices](doc/engineering-practices.md) — the internal disciplines followed while building this
-- [Tech stack](doc/LLM-GC-TechStack.md) — dependencies and why each was chosen
-- [ML research](doc/LLM-GC-ML-Research.md) — learned scoring, summary quality, fact extraction
+- [Scoring](doc/design/scoring/overview.md) — the five relevance signals and how they combine
+- [Sweeping](doc/design/sweeper-and-composition/sweeping-mechanism.md) — three-tier KEEP / COMPACT / ARCHIVE classification
+- [Composition](doc/design/sweeper-and-composition/composition-mechanism.md) — assembling classified turns back into a message list
+- [Compaction](doc/design/sweeper-and-composition/compaction-mechanism.md) — summarising compacted runs, and why the default does nothing
+- [Generational memory](doc/design/generational-memory/overview.md) — young / old / permanent, and supersession
+- [Session management](doc/design/session/overview.md) — per-conversation state and its concurrency contract
+- [Visibility](doc/design/visibility/overview.md) — transparency vs. observability, and why there is no aggregate risk score
+- [Events](doc/design/events/overview.md) — the pub/sub bus every component instruments through
+- [Storage](doc/design/storage.md) — schema versioning, so an upgrade never destroys retained knowledge
+- [Failure handling](doc/design/failure-handling.md) — the circuit breaker, and keeping degradation visible
+
+A full index is in [doc/README.md](doc/README.md).
 
 ## License
 
