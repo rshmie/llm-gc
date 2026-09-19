@@ -8,7 +8,8 @@ class ThresholdSweepStrategy(BaseSweepStrategy):
 
     Classification logic:
       - Score >= keep_threshold OR token_count <= min_compactable_tokens -> KEEP
-      - Otherwise -> COMPACT
+      - archive_threshold <= score < keep_threshold -> COMPACT
+      - Score < archive_threshold -> ARCHIVE
 
     Does not apply override rules - those are handled by the Sweeper orchestrator.
     """

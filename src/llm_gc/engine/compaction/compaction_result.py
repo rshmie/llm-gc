@@ -7,7 +7,7 @@ class CompactionResult(BaseModel):
     """The output of a compaction operation.
      Wraps the summary 'Message' produced by a 'BaseCompactor' together with the metadata callers need to compute savings
      and surface provenance. Returned instead of a bare 'Message' so the compactor can report what it knows (original token
-     count, which method produced the summary) without forcing the caller to recompute it. See ADR-0001 for the provenance contract.
+     count, which method produced the summary) without forcing the caller to recompute it. See doc/design/sweeper-and-composition/compaction-mechanism.md for the provenance contract.
 
      Attributes:
          summary: The compacted Message that will be inserted into the cleaned context.

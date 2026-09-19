@@ -77,14 +77,20 @@ to two thresholds:
 
 **Why `min_compactable_tokens`?** A 3-token "ok" classified as COMPACT would produce a summary of similar length — wasted effort. Messages below 30 tokens stay as KEEP regardless of score because the compression savings are negligible.
 
-> **Known gap: ARCHIVE is not verified.** The intended contract was that a
-> message may only be archived once fact extraction has *confirmed* its
-> information survives in the permanent generation. That check does not exist.
-> Extraction happens downstream of the decision, not as a precondition for it,
-> so a low-scoring message whose facts the heuristic extractor misses is dropped
-> from context with nothing standing in for it. The mitigation today is the
-> conservative `archive_threshold` and the KEEP overrides; the real fix is to
-> make archival conditional on extraction returning something.
+**How ARCHIVE stays safe.** The classification itself is score-only — the sweeper
+does not check whether a message's content is preserved anywhere before marking it
+ARCHIVE. The guarantee is delivered downstream instead: `archive_message` runs the
+extractor and, if it returns nothing, stores the **entire message verbatim** as a
+`RAW` knowledge entry. Raw entries are exempt from topic supersession, so repeated
+raw archives never overwrite one another. A message can therefore be archived
+without its content being lost, whether or not the heuristics understood it.
+
+> **Known gap: archived knowledge is not read back into context.** Assembly is
+> old-generation summaries plus young-generation turns. Nothing injects relevant
+> permanent-generation entries into the prompt, so today ARCHIVE means the message
+> leaves the context and its facts go into a store only the dashboard reads. The
+> knowledge is preserved, but the model does not see it. Closing this needs a
+> relevance query over the permanent generation at assembly time.
 
 ## Override Rules
 

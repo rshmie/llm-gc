@@ -125,7 +125,7 @@ class SessionManager:
 
         Removing the lock instead would reintroduce the two-lock race: a waiter
         queued on the old lock and a newcomer that mints a fresh one would both
-        run inside the session at once. See doc/session/overview.md.
+        run inside the session at once. See doc/design/session/overview.md.
         """
         lock = self._lock_for(session_id)
         try:

@@ -9,10 +9,10 @@ from llm_gc.models import Message
 class BaseCompactor(ABC):
     """Abstract contract for components that compact runs of COMPACT-classified messages.
 
-    A compactor takes a run of adjacent messages the sweeper-and-composition has classified as COMPACT and produces a
+    A compactor takes a run of adjacent messages the sweeper has classified as COMPACT and produces a
     single shorter `Message` that preserves the gist. This is an abstract base class: it defines the contract every
     concrete compactor must satisfy, but does not implement compaction itself. Concrete implementations provide the
-    actual summarization strategy. See ADR-0001 for design rationale.
+    actual summarization strategy. See doc/design/sweeper-and-composition/compaction-mechanism.md for design rationale.
     """
 
     COMPACTION_STRATEGY: CompactionStrategy
@@ -25,13 +25,13 @@ class BaseCompactor(ABC):
 
         Called by `ContextComposer` during `gc.collect` and by `gc.update` when a compact-run needs to be summarized.
         Implementations vary in how they produce the summary (no-op passthrough, LLM call and others), but every implementation
-        must satisfy the contract below. See ADR-0001 for the "honest about its own outputs" constraint on what compacted
+        must satisfy the contract below. See the compaction design doc for the "honest about its own outputs" constraint on what compacted
         output is allowed to claim about itself.
 
         Args:
             messages: The run of messages to compact. Callers must ensure:
                 - the list is non-empty,
-                - every message is COMPACT-classified by the sweeper-and-composition,
+                - every message is COMPACT-classified by the sweeper,
                 - the messages are adjacent in turn-index order
                   (a contiguous run, not a scattered selection).
 
@@ -42,7 +42,7 @@ class BaseCompactor(ABC):
             - `summary.role`: `"assistant"` — the role the model accepts for transformed-but-not-original content.
             - `summary.content`: opens with a structurally recognizable marker that (a) identifies the message as a compacted
               summary, (b) names the original turn range covered, and (c) carries a provenance marker for the method used
-              (e.g. `method=noop`, `method=llm`). Per ADR-0001 the model must never see a transformed turn pretending to be original.
+              (e.g. `method=noop`, `method=llm`). The model must never see a transformed turn pretending to be original.
             - `summary.token_count`: the token count of the *summarized* content (what the model will see), not the originals. This
               lets the orchestrator compute `tokens_saved` for `GCResult` without re-tokenizing.
             - `summary.turn_index`: the turn index of the *first* original message in the run. Required so the composer can re-interleave
