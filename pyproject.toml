@@ -7,7 +7,7 @@ name = "llm-gc"
 version = "0.1.0"
 description = "Context-aware garbage collection for LLMs with built-in epistemic transparency — see what your model remembers, what it's forgotten, and when to worry."
 requires-python = ">=3.13"
-dependencies = ["pydantic", "tiktoken", "numpy", "sentence-transformers", "fastapi", "uvicorn"]
+dependencies = ["pydantic", "tiktoken", "numpy", "sentence-transformers", "fastapi", "uvicorn", "httpx"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -19,5 +19,4 @@ line-length = 120
 dev = [
     "pytest",
     "ruff",
-    "httpx2",
 ]

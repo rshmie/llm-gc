@@ -10,24 +10,11 @@ from llm_gc.config.constants import (
     DEFAULT_SESSION_SWEEP_INTERVAL_S,
     DEFAULT_SESSION_TIMEOUT_S,
 )
+from llm_gc.exceptions import SessionLockTimeout
 from llm_gc.session.session_state import SessionState
 from llm_gc.session.session_store import SessionStore
 
 logger = logging.getLogger(__name__)
-
-
-class SessionLockTimeout(Exception):
-    """Raised when a session's lock could not be acquired within the budget.
-
-    This is an operational error, not a bug: it means another coroutine held
-    the session's lock longer than `session_lock_timeout_ms`. The caller is
-    expected to catch it and decide a fallback, not to crash.
-    """
-
-    def __init__(self, session_id: str, timeout_ms: float) -> None:
-        super().__init__(f"Could not acquire lock for session {session_id!r} within {timeout_ms}ms")
-        self.session_id = session_id
-        self.timeout_ms = timeout_ms
 
 
 class SessionManager:
