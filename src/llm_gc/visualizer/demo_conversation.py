@@ -1,4 +1,5 @@
 from itertools import cycle
+from typing import Literal
 
 from llm_gc.models import Message
 from llm_gc.utils import count_tokens
@@ -51,7 +52,7 @@ class DemoConversationFeeder:
 
         messages = []
         for content in contents:
-            role = "user" if self._next_turn_index % 2 == 0 else "assistant"
+            role: Literal["user", "assistant"] = "user" if self._next_turn_index % 2 == 0 else "assistant"
             messages.append(Message(role=role, content=content, token_count=count_tokens(content),
                                     turn_index=self._next_turn_index))
             self._next_turn_index += 1

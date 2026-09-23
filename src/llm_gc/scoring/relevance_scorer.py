@@ -18,7 +18,7 @@ class RelevanceScorer:
         self.event_bus = event_bus
 
     def score(self, message: Message, conversation: list[Message]) -> RelevanceScorerResult:
-        weighted_score = 0
+        weighted_score = 0.0
         scorer_result_list = []
         for scorer in self.scorers:
             scorer_result = scorer.score(message, conversation)
