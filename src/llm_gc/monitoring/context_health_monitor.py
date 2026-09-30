@@ -24,9 +24,13 @@ class ContextHealthMonitor:
         self.event_bus = event_bus
         self.gc_config = gc_config
         self.generational_memory = generational_memory
-        self._last_gc_result: GCResult | None = None
-        self._last_gc_completed_at: float | None = None
-        self._recent_transitions = deque(maxlen=max_recent_transitions)
+        # The last GC pass and the timestamp of the event that reported it, held as
+        # one value because they are only ever meaningful together. Two separate
+        # Optionals would let a future edit set one without the other, and the
+        # mismatch would surface as a validation error in the dashboard rather
+        # than at the line that caused it.
+        self._last_gc: tuple[GCResult, float] | None = None
+        self._recent_transitions: deque[GenerationTransition] = deque(maxlen=max_recent_transitions)
         event_bus.subscribe(EventType.GC_FINISHED, self._on_gc_finished)
         event_bus.subscribe(EventType.MESSAGE_PROMOTED_TO_OLD_GEN, self._on_message_promoted_to_old_gen)
         event_bus.subscribe(EventType.MESSAGE_ARCHIVED, self._on_message_archived)
@@ -34,8 +38,7 @@ class ContextHealthMonitor:
 
     def _on_gc_finished(self, event: Event) -> None:
         gc_result: GCResult = event.data["gc_result"]
-        self._last_gc_result = gc_result
-        self._last_gc_completed_at = event.timestamp
+        self._last_gc = (gc_result, event.timestamp)
 
     def _on_message_promoted_to_old_gen(self, event: Event) -> None:
         """Record a young -> old promotion, one transition per turn that moved.
@@ -76,15 +79,17 @@ class ContextHealthMonitor:
         gc_breakdown, and transformation_ratio are None until the first GC pass
         has run: an honest "not measured yet" instead of a fabricated zero.
         """
-        gc_result = self._last_gc_result
+        last_gc = self._last_gc
 
-        if gc_result is None:
+        if last_gc is None:
+            gc_result = None
             token_budget_signal = None
             gc_breakdown_signal = None
             transformation_ratio = None
         else:
+            gc_result, gc_completed_at = last_gc
             token_budget_signal = self._build_token_budget(gc_result)
-            gc_breakdown_signal = self._build_gc_breakdown(gc_result)
+            gc_breakdown_signal = self._build_gc_breakdown(gc_result, gc_completed_at)
             transformation_ratio = self._compute_transformation_ratio(gc_result.sweep_result)
 
         return ContextHealth(token_budget=token_budget_signal, gc_breakdown=gc_breakdown_signal,
@@ -106,7 +111,7 @@ class ContextHealthMonitor:
                                  pressure_ratio=gc_result.tokens_in_final / self.gc_config.context_window,
                                  current_msg_turn_index=current_msg_turn_index)
 
-    def _build_gc_breakdown(self, gc_result: GCResult) -> GCBreakdownSignal:
+    def _build_gc_breakdown(self, gc_result: GCResult, gc_completed_at: float) -> GCBreakdownSignal:
         if gc_result.sweep_result is not None:
             keep_tokens = gc_result.sweep_result.total_keep_tokens
             compact_tokens = gc_result.sweep_result.total_compact_tokens
@@ -117,14 +122,12 @@ class ContextHealthMonitor:
             keep_tokens = gc_result.tokens_in_final
             compact_tokens = 0
             archive_tokens = 0
-        # _last_gc_completed_at is always set alongside _last_gc_result in
-        # _on_gc_finished, so it cannot be None here.
         return GCBreakdownSignal(keep_count=gc_result.kept_count, compact_count=gc_result.compacted_count,
                                  archive_count=gc_result.archived_count, keep_tokens=keep_tokens,
                                  compact_tokens=compact_tokens, archive_tokens=archive_tokens,
                                  tokens_before=gc_result.tokens_before, tokens_saved=gc_result.tokens_saved,
                                  gc_run_id=gc_result.gc_run_id, gc_status=gc_result.status,
-                                 gc_completed_at=self._last_gc_completed_at, duration_ms=gc_result.duration_ms,
+                                 gc_completed_at=gc_completed_at, duration_ms=gc_result.duration_ms,
                                  failure_reason=gc_result.failure_reason, failure_stage=gc_result.failure_stage)
 
     @staticmethod
