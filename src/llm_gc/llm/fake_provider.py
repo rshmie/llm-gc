@@ -41,7 +41,6 @@ class GenerateCall:
     system: str | None
     max_output_tokens: int
     timeout_s: float
-    temperature: float | None
 
 
 class FakeProviderExhausted(LLMError):
@@ -90,7 +89,6 @@ class FakeProvider:
         system: str | None = None,
         max_output_tokens: int,
         timeout_s: float,
-        temperature: float | None = None,
     ) -> LLMResponse:
         """Record the call, then return or raise the next scripted item.
 
@@ -105,7 +103,6 @@ class FakeProvider:
                 system=system,
                 max_output_tokens=max_output_tokens,
                 timeout_s=timeout_s,
-                temperature=temperature,
             )
         )
 

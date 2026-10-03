@@ -116,7 +116,6 @@ class LLMProvider(Protocol):
         system: str | None = None,
         max_output_tokens: int,
         timeout_s: float,
-        temperature: float | None = None,
     ) -> LLMResponse:
         """Generate one completion.
 
@@ -145,7 +144,17 @@ class LLMProvider(Protocol):
                 silently accepts and nobody tunes, and the right budget for
                 summarising fifty turns is nothing like the right budget for a
                 one-line classification.
-            temperature: Sampling temperature, or None for the provider's default.
+
+        There is deliberately no `temperature` parameter. It was in an earlier
+        draft of this Protocol and had to come out: current Claude models reject
+        `temperature` with a 400 (it survives only on Opus 4.6 / Sonnet 4.6 /
+        Haiku 4.5), while OpenAI accepts it everywhere. A parameter one adapter
+        must either reject or silently discard is not a shared contract — and
+        silently discarding it would be the dishonest option, since the caller
+        would believe it had asked for determinism it never got. Determinism for
+        compaction comes from the prompt instead, and on Anthropic from
+        `output_config.effort`, which has no OpenAI equivalent and therefore
+        belongs to that adapter rather than to this interface.
 
         Returns:
             A validated `LLMResponse`. Check `is_complete` before trusting `text`.
