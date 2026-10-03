@@ -157,13 +157,12 @@ class TestCallRecording:
 
     def test_it_records_every_argument(self):
         provider = FakeProvider()
-        _call(provider, system="be brief", max_output_tokens=512, timeout_s=20.0, temperature=0.2)
+        _call(provider, system="be brief", max_output_tokens=512, timeout_s=20.0)
 
         call = provider.calls[0]
         assert call.system == "be brief"
         assert call.max_output_tokens == 512
         assert call.timeout_s == 20.0
-        assert call.temperature == 0.2
 
     def test_the_recorded_messages_are_a_snapshot_not_a_reference(self):
         """The subtle one. Stored by reference, a caller that reuses and mutates

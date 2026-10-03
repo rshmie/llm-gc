@@ -118,7 +118,6 @@ class TestTheProtocolIsImplementable:
                 system: str | None = None,
                 max_output_tokens: int,
                 timeout_s: float,
-                temperature: float | None = None,
             ) -> LLMResponse:
                 return _response(text=f"saw {len(messages)} messages", provider=self.name)
 
@@ -145,7 +144,6 @@ class TestTheProtocolIsImplementable:
                 system: str | None = None,
                 max_output_tokens: int,
                 timeout_s: float,
-                temperature: float | None = None,
             ) -> LLMResponse:
                 return _response()
 
