@@ -35,7 +35,7 @@ def _config(**overrides) -> GCConfig:
         "archive_threshold": 0.3,
         "min_compactable_tokens": 10,
         "last_n_turns_to_keep": 2,
-        "max_memory_tokens": 120,
+        "max_memory_ratio": 0.6,
         "max_memory_facts": 6,
     }
     base.update(overrides)
@@ -171,7 +171,7 @@ class TestSupersededFactsNeverReachThePrompt:
 
 class TestTheBudgetIsEnforcedOnTheRealPrompt:
     def test_the_block_respects_max_memory_tokens(self):
-        service, memory = _build(_config(max_memory_tokens=60, max_memory_facts=20))
+        service, memory = _build(_config(max_memory_ratio=0.3, max_memory_facts=20))
         for index in range(20):
             _store(memory, f"topic{index}", f"some value number {index} with trailing prose", turn=index)
 
@@ -181,7 +181,7 @@ class TestTheBudgetIsEnforcedOnTheRealPrompt:
         assert block.token_count <= 60
 
     def test_max_memory_facts_caps_retrieval(self):
-        service, memory = _build(_config(max_memory_facts=2, max_memory_tokens=10_000))
+        service, memory = _build(_config(max_memory_facts=2, max_memory_ratio=1.0))
         for index in range(10):
             _store(memory, f"topic{index}", f"value {index}", turn=index)
 
@@ -205,10 +205,10 @@ class TestTheBudgetIsEnforcedOnTheRealPrompt:
 
 
 class TestInjectionCanBeTurnedOff:
-    def test_zero_memory_tokens_disables_it(self):
+    def test_a_zero_memory_ratio_disables_it(self):
         """How a deployment opts out, and how a benchmark measures what injection is
         worth by running the same conversation both ways."""
-        service, memory = _build(_config(max_memory_tokens=0))
+        service, memory = _build(_config(max_memory_ratio=0.0))
         _store(memory, "database", "postgres", turn=2)
 
         assert _block(_collect(service, query="which database?")) is None
