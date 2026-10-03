@@ -34,23 +34,6 @@ class ConfigError(LLMGCError):
     code = "CONFIG_ERROR"
 
 
-class SessionLockTimeout(LLMGCError):
-    """A session's lock could not be acquired within `session_lock_timeout_ms`.
-
-    Operational, not a bug: another coroutine held the lock too long. Retryable
-    because the holder should release shortly, but on the live request path
-    proceeding on stale state beats waiting twice.
-    """
-
-    code = "SESSION_LOCK_TIMEOUT"
-    retryable = True
-
-    def __init__(self, session_id: str, timeout_ms: float) -> None:
-        super().__init__(f"Could not acquire lock for session {session_id!r} within {timeout_ms}ms")
-        self.session_id = session_id
-        self.timeout_ms = timeout_ms
-
-
 class CompactionRefused(LLMGCError):
     """A compactor declined to file the summary it was handed.
 

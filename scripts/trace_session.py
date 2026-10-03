@@ -35,7 +35,6 @@ from llm_gc.config import GCConfig  # noqa: E402
 from llm_gc.engine.compaction import BaseCompactor, LLMCompactor, NoOpCompactor  # noqa: E402
 from llm_gc.engine.gc_service import GcService  # noqa: E402
 from llm_gc.engine.generations import GenerationalMemory  # noqa: E402
-from llm_gc.engine.generations.permanent_generation import PermanentGeneration  # noqa: E402
 from llm_gc.engine.sweep import Sweeper, ThresholdSweepStrategy  # noqa: E402
 from llm_gc.events import Event, EventBus, EventType  # noqa: E402
 from llm_gc.extraction import KnowledgeExtractor  # noqa: E402
@@ -236,9 +235,7 @@ def build_engine(config: GCConfig, compactor_kind: str, api_key: str | None) -> 
     compactor, compactor_label = build_compactor(event_bus, compactor_kind, api_key)
 
     generational_memory = GenerationalMemory(
-        event_bus=event_bus,
         knowledge_extractor=KnowledgeExtractor(event_bus=event_bus),
-        permanent_generation=PermanentGeneration(event_bus=event_bus),
         compactor=compactor,
     )
 
@@ -349,8 +346,11 @@ async def trace(config: GCConfig, *, verbose: bool, compactor_kind: str, api_key
     final_context = await service.gc_collect(SESSION_ID, query=last_turn_text)
     memory_block = final_context[0] if final_context and final_context[0].turn_index == -1 else None
     sent_tokens = sum(message.token_count for message in final_context)
-    old_gen = memory.get_old_gen()
-    permanent = memory.get_permanent_gen()
+    # Read from the session's own state: generations belong to the session, not
+    # to the shared GenerationalMemory service.
+    snapshot = service.session_manager.store.get(SESSION_ID).snapshot
+    old_gen = list(snapshot.old)
+    permanent = snapshot.active_knowledge
     young = [m for m in final_context if m not in old_gen and m is not memory_block]
 
     print("\n" + "=" * 100)

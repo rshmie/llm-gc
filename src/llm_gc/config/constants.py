@@ -29,16 +29,10 @@ DEFAULT_MAX_RECENT_TRANSITIONS = 20
 # correctly means "no block fits" when the window is tiny.
 DEFAULT_MAX_MEMORY_RATIO = 0.1
 DEFAULT_MAX_MEMORY_FACTS = 8      # retrieved before the token budget is applied
-# How long a coroutine waits for a session's lock before giving up.
-# On timeout the caller proceeds on last-persisted (possibly stale) state rather
-# than hang forever — a bounded wait keeps a stuck update from freezing the
-# session's live path.
-DEFAULT_SESSION_LOCK_TIMEOUT_MS = 100
 
 # Session lifecycle timings (rationale in doc/design/session/overview.md).
 DEFAULT_SESSION_TIMEOUT_S = 1800          # close a session idle this many seconds (30 min)
 DEFAULT_SESSION_SWEEP_INTERVAL_S = 300    # how often the idle sweeper runs (5 min)
-DEFAULT_SESSION_CLOSE_DRAIN_MS = 5000     # max wait for an in-flight op before force-closing
 
 # Port for the context-health dashboard (spec section: Dashboard). The proxy itself will use 9900.
 DEFAULT_DASHBOARD_PORT = 9901

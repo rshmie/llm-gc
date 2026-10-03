@@ -17,12 +17,12 @@ from llm_gc.engine import DegradationReason, GCStatus
 from llm_gc.engine.compaction import BaseCompactor, CompactionStrategy, LLMCompactor, NoOpCompactor
 from llm_gc.engine.gc_service import GcService
 from llm_gc.engine.generations import GenerationalMemory
-from llm_gc.engine.generations.permanent_generation import PermanentGeneration
 from llm_gc.engine.sweep import Sweeper, ThresholdSweepStrategy
 from llm_gc.events import EventBus, EventType
 from llm_gc.exceptions import LLMTimeoutError
 from llm_gc.extraction import KnowledgeExtractor
 from llm_gc.llm import FakeProvider, LLMResponse, StopReason
+from llm_gc.models.generation_snapshot import GenerationSnapshot
 from llm_gc.models import Message
 from llm_gc.monitoring import ContextHealthMonitor
 from llm_gc.scoring import RecencyScorer, RelevanceScorer, RelevanceType
@@ -62,10 +62,20 @@ def _response(text: str, *, stop_reason: StopReason = StopReason.COMPLETE) -> LL
     )
 
 
+def _snapshot(service) -> GenerationSnapshot:
+    state = service.session_manager.store.get(SESSION)
+    return state.snapshot if state is not None else GenerationSnapshot()
+
+
+def _old_gen(service) -> list[Message]:
+    state = service.session_manager.store.get(SESSION)
+    return list(state.snapshot.old) if state is not None else []
+
+
 class _ArchiveFailingMemory(GenerationalMemory):
     """Archiving raises. Stands in for extraction or storage breaking."""
 
-    def archive_message(self, message: Message) -> None:
+    def extract_knowledge(self, message: Message) -> list:
         raise RuntimeError("permanent generation is unavailable")
 
 
@@ -85,9 +95,7 @@ class _NonLLMGCFailingCompactor(BaseCompactor):
 def _build(compactor: BaseCompactor | None = None, memory_cls=GenerationalMemory, config: GCConfig = CONFIG):
     bus = EventBus()
     memory = memory_cls(
-        event_bus=bus,
         knowledge_extractor=KnowledgeExtractor(event_bus=bus),
-        permanent_generation=PermanentGeneration(event_bus=bus),
         compactor=compactor if compactor is not None else NoOpCompactor(event_bus=bus),
     )
     service = GcService(
@@ -191,7 +199,7 @@ class TestARefusedCompactionIsRecorded:
         service, memory, _ = _build(_llm_compactor(bus, _response("tail-less", stop_reason=StopReason.TRUNCATED)))
         _run(service)
 
-        assert memory.get_old_gen() == []
+        assert _old_gen(service) == []
 
     def test_the_refused_turns_stay_young_and_verbatim(self):
         """First do no harm: the context is correct, just larger than intended.
@@ -315,7 +323,8 @@ class TestTheDashboardCanSeeIt:
         bus = EventBus()
         compactor = _llm_compactor(bus, _response("tail-less", stop_reason=StopReason.TRUNCATED))
         service, memory, service_bus = _build(compactor)
-        monitor = ContextHealthMonitor(event_bus=service.event_bus, gc_config=CONFIG, generational_memory=memory)
+        monitor = ContextHealthMonitor(event_bus=service.event_bus, gc_config=CONFIG,
+                                       read_generations=lambda: _snapshot(service))
 
         _run(service)
         breakdown = monitor.get_snapshot().gc_breakdown
@@ -323,11 +332,12 @@ class TestTheDashboardCanSeeIt:
         assert breakdown is not None
         assert breakdown.is_degraded is True
         assert breakdown.compact_count > 0, "the sweeper intended compactions"
-        assert memory.get_old_gen() == [], "and none were filed - which is the discrepancy"
+        assert _old_gen(service) == [], "and none were filed - which is the discrepancy"
 
     def test_a_clean_snapshot_is_not_degraded(self):
         service, memory, _ = _build()
-        monitor = ContextHealthMonitor(event_bus=service.event_bus, gc_config=CONFIG, generational_memory=memory)
+        monitor = ContextHealthMonitor(event_bus=service.event_bus, gc_config=CONFIG,
+                                       read_generations=lambda: _snapshot(service))
 
         _run(service)
         breakdown = monitor.get_snapshot().gc_breakdown

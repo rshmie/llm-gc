@@ -12,7 +12,6 @@ from llm_gc.exceptions import (
     LLMRateLimitError,
     LLMResponseError,
     LLMTimeoutError,
-    SessionLockTimeout,
 )
 
 
@@ -174,21 +173,3 @@ class TestChaining:
                 raise LLMTimeoutError("provider timed out", provider="anthropic") from err
 
         assert excinfo.value.__cause__ is original
-
-
-class TestSessionLockTimeout:
-    """Moved here from `session_manager`, where it inherited bare `Exception`."""
-
-    def test_it_is_now_inside_the_hierarchy(self):
-        """Regression guard on the move: before it lived here, a caller's
-        `except LLMGCError` would not have caught a lock timeout."""
-        assert issubclass(SessionLockTimeout, LLMGCError)
-
-    def test_the_message_names_the_session_and_the_budget(self):
-        """Both are what an operator needs to tell a contended session from a
-        budget set too low."""
-        err = SessionLockTimeout("session-7", 100)
-        assert "session-7" in str(err)
-        assert "100" in str(err)
-        assert err.session_id == "session-7"
-        assert err.timeout_ms == 100

@@ -5,6 +5,9 @@ import pytest
 
 from llm_gc.config import GCConfig
 from llm_gc.engine import ContextComposer, GarbageCollector, GCResult, GCStatus
+from llm_gc.engine.context_composer import Composition
+from llm_gc.models import KnowledgeEntry
+from llm_gc.models.knowledge_entry import KnowledgeType
 from llm_gc.engine.sweep import SweepClassification, SweepEntry, SweepResult, Sweeper
 from llm_gc.events import EventBus, EventType
 from llm_gc.models import Message
@@ -115,7 +118,7 @@ def _wire_happy_path_mocks(scorer: MagicMock, sweeper: MagicMock, composer: Magi
     """
     scorer.score.side_effect = lambda msg, conv: _make_scorer_result(msg)
     sweeper.sweep.return_value = _make_sweep_result(messages)
-    composer.compose.return_value = list(messages)
+    composer.compose.return_value = Composition(messages=list(messages), archived_knowledge=())
 
 
 # ---- COMPLETED status -------------------------------------------------------
@@ -179,12 +182,26 @@ class TestCollectCompleted:
         scorer, sweeper, composer = MagicMock(spec=RelevanceScorer), MagicMock(spec=Sweeper), MagicMock(spec=ContextComposer)
         _wire_happy_path_mocks(scorer, sweeper, composer, messages)
         composed = [_make_message(content="composed", token_count=5, turn_index=99)]
-        composer.compose.return_value = composed
+        composer.compose.return_value = Composition(messages=composed, archived_knowledge=())
         gc = _make_collector(config=config, scorer=scorer, sweeper=sweeper, composer=composer)
 
         result = _collect(gc, messages)
 
         assert result.final_messages == composed
+
+    def test_archived_facts_are_handed_back_to_the_caller(self):
+        """The stateless path stores nothing, so the facts it recovers must reach
+        the caller - or archiving would delete content with no trace."""
+        config = GCConfig()
+        messages = _make_messages_above_threshold(config)
+        scorer, sweeper, composer = MagicMock(spec=RelevanceScorer), MagicMock(spec=Sweeper), MagicMock(spec=ContextComposer)
+        _wire_happy_path_mocks(scorer, sweeper, composer, messages)
+        fact = KnowledgeEntry(message_turn=1, content="postgres", topic_label="database",
+                              knowledge_type=KnowledgeType.DECISION)
+        composer.compose.return_value = Composition(messages=list(messages), archived_knowledge=(fact,))
+        gc = _make_collector(config=config, scorer=scorer, sweeper=sweeper, composer=composer)
+
+        assert _collect(gc, messages).archived_knowledge == [fact]
 
     def test_failure_fields_are_none_on_success(self):
         config = GCConfig()

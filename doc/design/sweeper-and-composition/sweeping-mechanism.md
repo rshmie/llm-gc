@@ -71,7 +71,7 @@ to two thresholds:
 |---------------|-----------|------------------------|
 | **KEEP** | Score >= `keep_threshold` OR token count <= `min_compactable_tokens` | Message stays in context as-is. No modification. |
 | **COMPACT** | `archive_threshold` <= score < `keep_threshold` | Message is passed to the Compactor for compression. Substance preserved in fewer tokens. |
-| **ARCHIVE** | Score < `archive_threshold` | Message leaves the context entirely. The Composer routes it to `GenerationalMemory.archive_message(...)`, which extracts its facts into the permanent generation. |
+| **ARCHIVE** | Score < `archive_threshold` | Message leaves the context entirely. Its facts are extracted by `GenerationalMemory.extract_knowledge(...)` and filed in the conversation's permanent generation. |
 
 **Conservative default**: When in doubt, KEEP. A message incorrectly kept costs a few extra tokens. A message incorrectly compacted risks information loss. The asymmetry favors keeping.
 
@@ -79,8 +79,8 @@ to two thresholds:
 
 **How ARCHIVE stays safe.** The classification itself is score-only — the sweeper
 does not check whether a message's content is preserved anywhere before marking it
-ARCHIVE. The guarantee is delivered downstream instead: `archive_message` runs the
-extractor and, if it returns nothing, stores the **entire message verbatim** as a
+ARCHIVE. The guarantee is delivered downstream instead: extraction runs the
+extractor and, if it returns nothing, keeps the **entire message verbatim** as a
 `RAW` knowledge entry. Raw entries are exempt from topic supersession, so repeated
 raw archives never overwrite one another. A message can therefore be archived
 without its content being lost, whether or not the heuristics understood it.

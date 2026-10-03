@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from llm_gc.models import Message
+from llm_gc.models.generation_snapshot import GenerationSnapshot
 
 
 def _now() -> datetime:
@@ -10,23 +10,23 @@ def _now() -> datetime:
 
 @dataclass
 class SessionState:
-    """The remembered state for one conversation, carried between turns.
+    """Everything one conversation carries from turn to turn.
 
-    A session is a single continuous conversation. Everything the engine needs
-    to carry from one turn to the next lives here: the running list of messages
-    and the timestamps the idle-timeout sweeper reads to decide when a session
-    has gone quiet.
+    `snapshot` holds all three generations and is replaced, never mutated, so a
+    reader that took it keeps a consistent view with no lock. This object is the
+    single owner of a session's conversation data: removing it from the store
+    removes all of it.
+
+    `aging_in_flight` is process-local coordination, not conversation data. It
+    sits outside the snapshot and is not something a store would persist.
     """
 
     session_id: str
-    messages: list[Message] = field(default_factory=list)
+    snapshot: GenerationSnapshot = field(default_factory=GenerationSnapshot)
     created_at: datetime = field(default_factory=_now)
     last_updated_at: datetime = field(default_factory=_now)
+    aging_in_flight: bool = False
 
     def touch(self) -> None:
-        """Mark the session as just-used, resetting its idle clock.
-
-        Called on every collect/update so the sweeper measures idleness from
-        the last real activity, not from when the session was created.
-        """
+        """Reset the idle clock; the sweeper measures idleness from here."""
         self.last_updated_at = _now()

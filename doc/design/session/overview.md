@@ -6,135 +6,219 @@ A **session** is one continuous conversation's remembered state, keyed by a
 `session_id`. It is what lets the engine carry state between turns instead of
 being handed the whole message list every call.
 
-Three components, in increasing responsibility:
+### What a session owns
 
-- **`SessionState`** — the remembered state for one conversation: its
-  `session_id`, its live list of young-generation `messages`, and the timestamps
-  (`created_at`, `last_updated_at`) the idle sweeper reads. A plain mutable
-  container, appended to and re-timestamped each turn.
-- **`SessionStore`** — the registry of active sessions, keyed by id. Hands out a
-  `SessionState` on demand, creating one on first sight of an id. In-memory for
-  now; a file-backed store implementing the same small interface swaps in later.
-- **`SessionManager`** — wraps the store and adds the concurrency contract and
-  the lifecycle. All access to one session's state happens inside `async with
-  acquire(session_id)`, which holds a per-session `asyncio.Lock` for the whole
-  read-modify-write. It also owns session end: `close_session` drops a session's
-  state (keeping its lock), and `run_idle_sweeper` is a background task that
-  closes sessions gone quiet past the idle timeout.
+**Everything a conversation has produced lives on its `SessionState`, and
+nowhere else.** That is all three generations — verbatim young turns, old-gen
+summaries, and permanent-gen facts — held together as one **snapshot**. The
+services that do the work (the scorer, sweeper, compactor, knowledge extractor,
+and `GenerationalMemory`) hold *how* to do things and no conversation data at
+all. They are shared across every session, which is safe precisely because they
+remember no one.
 
-The two engine operations that use a session are the ager (`gc.update`) and the
-assembler (`gc.collect`) — the hot/cold split described in
-[generational-memory/overview.md](../generational-memory/overview.md). Both run
-under the session's lock.
+```
+             shared, stateless                       one per conversation
+  ┌──────────────────────────────────┐     ┌─────────────────────────────────────┐
+  │ GcService                        │     │ SessionState  ("alice")             │
+  │  ├ RelevanceScorer               │     │   snapshot ──▶ GenerationSnapshot    │
+  │  ├ Sweeper                       │ ──▶ │                 young  (turns)      │
+  │  ├ GenerationalMemory            │     │                 old    (summaries)  │
+  │  │   ├ KnowledgeExtractor        │     │                 knowledge (facts)   │
+  │  │   └ Compactor (LLM)           │     │                 version             │
+  │  └ SessionManager ── store ──────┼──▶  │   timestamps, aging_in_flight       │
+  └──────────────────────────────────┘     └─────────────────────────────────────┘
+                                           │ SessionState  ("bob")   ...         │
+```
 
-**The ager is the pass that reports.** `gc.update` is where the real work
-happens — scoring, sweeping, and moving turns between generations — so it is
-the operation that emits the terminal GC event, carrying both the run's result
-and the session id it belongs to. The assembler emits nothing: it changes no
-state, and a read announcing itself as a completed run would overwrite the last
-real run's breakdown with a no-op. Both the result the ager reports as the
-session's resulting context and the list the assembler returns come from a
-single shared assembly step, so the number a dashboard shows and the payload a
-caller forwards cannot drift apart. That context is measured whole —
-old-generation summaries included — because those summaries are real tokens in
-the real prompt, and a budget that counted only young turns would under-report
-pressure in the reassuring direction.
+Three components manage sessions:
 
-**Aging is triggered by pressure, not by arrival.** Every update records the new
-turn — that is bookkeeping — but the ager only scores, sweeps, and moves turns
-when the assembled context has crossed the configured GC threshold. Below it the
-pass reports itself bypassed and changes nothing. Aging is not free: it replaces
-verbatim text with a summary, and once the compactor is a real LLM it also costs
-a call per promotion. With plenty of window left there is nothing to buy with
-that cost, so the right amount of aging is none. This is the same guard the
-stateless collector already applied, measured on the same assembled context the
-caller will actually send.
+- **`SessionState`** — one conversation: its id, its current snapshot, the
+  timestamps the idle sweeper reads, and an `aging_in_flight` flag. The flag is
+  process-local coordination rather than conversation data, which is why it
+  sits beside the snapshot rather than in it.
+- **`SessionStore`** — the registry of sessions by id. In memory for now; a
+  persistent store implementing the same small interface swaps in later.
+- **`SessionManager`** — lifecycle: hands out a session's state (creating it on
+  first sight), reports whether a given state is still the live one for its id,
+  closes sessions, and runs the idle sweeper.
 
-*Rejected: aging on every update.* Uniform per-pass work and no burst when the
-threshold is crossed, but it compacted turns nobody needed compacted — observed
-promoting a turn at 13% context pressure, discarding verbatim text with most of
-the window still free, and (once the compactor is real) spending money to do it.
+### The snapshot, and the three operations on it
 
-Aging failures are contained at two levels. A single turn that fails to age
-(a compactor error, say) stays in the young generation for the next pass and
-never leaves a summary standing in for an original that is also still live; the
-rest of the pass continues. A failure in the mark stage, before anything has
-moved, is reported as a bypassed run rather than raised — the ager is called
-fire-and-forget, so an exception escaping it would be invisible to logs and
-dashboard alike.
+A **snapshot** is immutable. Every change produces a new snapshot with the next
+`version` number, and the session's reference is replaced. A reader that has
+taken a snapshot therefore holds a consistent view for as long as it likes —
+across any number of `await`s — without a lock, because nothing can change it.
+
+The engine performs three operations on a session, each with its own guarantee:
+
+| Operation | Who calls it | Guarantee |
+|---|---|---|
+| **collect** (assemble the context) | the proxy, before forwarding a request | Never waits. Reads the current snapshot once. |
+| **record** a turn | the proxy, after a successful response | Immediate. The next collect sees the turn. |
+| **age** (score, sweep, compact, archive) | runs after recording, when under pressure | At most one per session at a time; commits onto whatever the snapshot is *now*. |
+
+Aging is the slow one: compaction is a model call that can take seconds. It is
+split so that the slow part holds nothing:
+
+```
+time ─────────────────────────────────────────────────────────────────────▶
+
+ aging:    read v7 ──── plan: score, sweep, ask the LLM to summarise ──── commit
+           young 3,4,5,10   (seconds, nothing held)                         │
+                                                                            ▼
+ record:              turn 11 ─▶ v8                                   v9 = v8 + delta
+                                young 3,4,5,10,11                     young 10,11
+                                                                      old   summary(3)
+ collect:                         reads v8 ─▶ turns 3,4,5 verbatim, plus 11
+                                  (returns at once; complete, only less compressed)
+```
+
+1. **Plan.** The pass reads the current snapshot (the *base*) and works out what
+   to change: which turns leave the young generation, which summaries and facts
+   are added, which cold summaries are evicted. Nothing reaches session state.
+2. **Delta.** The plan is expressed as a **delta** — things to remove and values
+   to add — never as replacement lists. A replacement list built from the base
+   would erase any turn recorded while the pass was waiting.
+3. **Commit.** The delta is applied to the *current* snapshot, which may have
+   gained turns since the base was read, in one step with no `await` inside it.
+   Turns recorded in the meantime survive, because the delta only removes what it
+   names.
+
+Two checks guard the commit:
+
+- **One aging pass per session at a time.** A second trigger while a pass is in
+  flight is reported (`bypassed_aging_in_flight`) and skipped, not queued.
+  Pressure that persists triggers aging again on the next turn. Without this, two
+  passes reading the same base would compact the same turns twice — two model
+  calls, two summaries of one run, and two deltas each removing the same turns.
+- **The session must still be live.** If the session was closed while the pass
+  was running — including when a new conversation has since reopened the same
+  id — the result is discarded (`discarded_session_closed`) and nothing is
+  announced. A closed session stays closed, and a reopened id never inherits the
+  previous conversation's work.
+
+A delta that names a turn or summary the snapshot no longer holds is a
+programmer error and raises: only one pass ages a session, so it means that rule
+broke, and merging anyway would silently drop or duplicate content.
+
+### Events describe committed changes
+
+The ager is the pass that reports. Events for promotions, archives, added facts,
+and supersessions are emitted **after the commit**, each carrying the
+`session_id`, so a subscriber that reads state on hearing an event sees the
+change it was told about, and a discarded pass announces nothing. The terminal
+GC event is emitted exactly once per update, whatever the outcome. The assembler
+emits nothing: it changes no state.
+
+Both the context the ager reports and the list the assembler returns come from a
+single assembly step, so the number a dashboard shows and the payload a caller
+forwards cannot drift apart. That context is measured whole — summaries and the
+memory block included — because those are real tokens in the real prompt.
+
+### Aging is triggered by pressure, not by arrival
+
+Every update records the new turn — that is bookkeeping — but the ager only
+scores, sweeps, and moves turns when the assembled context has crossed the GC
+threshold. Below it the pass reports itself bypassed and changes nothing. Aging
+is not free: it replaces verbatim text with a summary and costs a model call per
+promotion, and with plenty of window left there is nothing to buy with that cost.
+
+*Rejected: aging on every update.* It compacted turns nobody needed compacted —
+observed promoting a turn at 13% context pressure.
+
+### Failures are contained
+
+A single run that fails to compact, or a turn that fails to archive, stays where
+it was for the next pass and is reported as a degradation; the rest of the pass
+continues. A failure anywhere in planning leaves the session exactly as it was
+plus the new turn, and is reported as a bypassed run rather than raised: the
+ager is called fire-and-forget, so an exception escaping it would be invisible.
 
 ## Why it exists
 
 Without sessions, the engine is stateless: every call re-derives everything from
-a full message list, and there is nowhere to keep a session's old-gen summaries,
-permanent-gen facts, or (later) a pre-computed plan between turns. A real proxy
-serving many conversations at once needs each one's memory to persist across
-requests — that persistence is the session.
+a full message list, and there is nowhere to keep a conversation's summaries and
+facts between turns. A proxy serving many conversations needs each one's memory
+to persist across requests, and to stay strictly its own.
 
-The per-session lock exists because the ager and assembler both read state, do
-work, and write state back, and that span contains `await` points. Under a
-single event loop, two coroutines for the same session can interleave at an
-`await` and lose each other's writes (a lost update). The lock closes that
-window.
+**Isolation is the first requirement.** When old and permanent generations were
+held by one shared `GenerationalMemory`, a proxy serving two users injected one
+user's archived facts into the other's prompt, labelled as the second user's own
+memory. That is a privacy failure, a correctness failure, and a false statement
+by the transparency layer, all at once. It went unnoticed because every engine
+test drove a single session. Session-owned state makes isolation structural: an
+operation can only touch the session it was handed.
+
+**The hot path must never wait on the cold path.** Using LLM-GC must not make
+a user's experience worse than not using it. Collect runs on the request path,
+before the user's request is even forwarded; aging runs afterwards and can spend
+seconds on a model call. A design in which the first can wait for the second puts
+LLM-GC's background work directly into the user's latency.
 
 ## Why this shape
 
-- **Per-session lock, not one global lock.** Different conversations never touch
-  each other's state, so serialising them behind one lock would cap throughput
-  for no correctness gain. Keying the lock by `session_id` makes one session
-  single-writer while letting unrelated sessions run fully in parallel. Rejected
-  alternative: a single manager-wide lock — simpler, but it makes every session
-  wait on every other.
-- **Bounded wait, not infinite.** `acquire` waits at most
-  `session_lock_timeout_ms` (default 100) for the lock, then raises
-  `SessionLockTimeout` rather than blocking forever. A stuck holder (e.g. a
-  hung LLM call inside an in-flight update) must not be able to freeze every
-  later request on that session. On timeout the caller is expected to fall back
-  to last-persisted state and surface the staleness, never to hang. Rejected
-  alternative: block until acquired — one hung update takes the whole session
-  down.
-- **Close keeps the lock; it does not remove it (Approach 3).** `close_session`
-  acquires the lock (draining an in-flight update up to `close_drain_ms`),
-  removes the state from the store, and **leaves the lock object in the
-  registry**. Every `acquire` for an id must return the *same* lock, so a
-  request arriving during or after a close serialises on it. Two rejected
-  alternatives, both racy: *pop the lock* — a coroutine waiting on the old lock
-  and a newcomer that mints a fresh one would both run inside the session at
-  once (the two-lock race); *acquire-then-pop* — same window survives for a
-  coroutine that was already queued on the old lock. Keeping the lock stable is
-  the only race-free option. Its cost is a lingering lock per closed session
-  (one per id ever seen); that is an accepted v1.0 leak — bounded lock cleanup
-  is a future refinement, not a correctness gap.
-- **Session ends on idle timeout OR explicit close, and reopens on demand.** A
-  background sweeper (`run_idle_sweeper`, every `sweep_interval_s`) closes
-  sessions idle longer than `session_timeout_s`; a caller can also close one
-  directly. Closing releases in-memory state but the next request for that id
-  re-creates fresh state (a reopen). Rejected alternatives: *no idle timeout* —
-  the active set and its memory grow without bound for the common case (a user
-  walks away); *idle timeout only, no explicit close* — a library caller (a test,
-  a benchmark) has no synchronous way to end a session and get its report now.
-- **State is a plain dataclass, not a validated model.** Session state is
-  internal machinery that mutates every turn and holds live sub-objects, not a
-  fixed shape of external data validated at a boundary. A dataclass fits that;
-  a validation model would fight it.
-- **`SweepClassification` lives in `models/`, not `engine/`.** Session state
-  and the engine both speak in classifications, so the type sits in the shared
-  leaf package both can depend on without a cycle — the same reason `Message`
-  lives there.
+- **Session-owned data, stateless services.** The usual backend shape: handlers
+  hold behaviour, the store holds state. It makes deletion a single operation
+  (removing a session removes everything derived from it), makes a session
+  persistable as plain data, and lets a later multi-process deployment move
+  sessions to an external store without touching the services. Rejected
+  alternatives: *one `GenerationalMemory` instance per session* — session data
+  would then carry live services (an LLM client, the event bus) and could not be
+  persisted, and deletion would have to reach inside a service object; *a
+  session-keyed map inside `GenerationalMemory`* — two owners for one session's
+  data, so expiring a session from the store would leave its facts behind, a
+  memory leak and a retention breach.
+- **Immutable snapshots, not a lock.** Readers never wait and cannot observe a
+  half-applied change, and that holds by construction rather than by discipline:
+  no future write path can mutate state across an `await` because state cannot be
+  mutated at all. *Rejected: a per-session lock held for the whole update.* It
+  made collect queue behind compaction; measured in an agent-style loop (next
+  request 200ms after the reply, compaction about a second), 18 of 40 requests
+  timed out on the lock and were forwarded without GC. *Rejected: keeping a lock
+  between writers and committing at the end.* Recording a turn then waited behind
+  the model call, so a collect in that window returned a context missing the most
+  recent turn — a plausible-but-wrong prompt with no signal.
+- **A delta, not a recomputed result.** Describing *changes* rather than
+  *outcomes* is what makes a slow computation safe to merge onto newer state, in
+  the way a patch applies on top of commits made after branching where an
+  overwrite discards them. Young turns are named by turn index; summaries by
+  value, because a regenerated turn re-sends its index and two summaries can share
+  one.
+- **Skip a second aging trigger rather than queue it.** Queuing would let aging
+  fall arbitrarily far behind and spend model calls on plans computed against
+  stale state. Skipping costs, at most, a context slightly above target for a
+  turn or two — tokens, never waiting.
+- **A version number on every snapshot.** It orders snapshots for debugging and
+  events, and it is what an external store needs to commit with compare-and-set
+  ("write version 9 only if the stored version is still 8"), so moving to one
+  needs no redesign.
+- **Session ends on idle timeout or explicit close, and reopens on demand.**
+  Without an idle timeout the active set grows without bound when users walk
+  away; without explicit close a library caller has no way to end a session now.
+- **`GenerationSnapshot` and `SweepClassification` live in `models/`.** Session
+  state and the engine both depend on them, so they sit in the shared leaf
+  package both can import without a cycle.
+
+### Accepted costs
+
+- **Copying on every change.** A commit copies the young, old, and knowledge
+  tuples: O(turns + summaries + facts). Young and old are bounded by aging; facts
+  grow over a session but are small. Revisit at around ten thousand facts per
+  session, with a persistent data structure or an index by topic.
+- **A context can be one pass behind.** While aging is in flight, collect returns
+  the pre-pass context: complete and correct, only less compressed.
+- **Single event loop.** "No `await` inside the commit" is atomic only on one
+  event loop. If aging ever moves to threads or processes, the commit must become
+  a real compare-and-set on `version`.
 
 ## Deferred (planned, not yet built)
 
-- **Stale-state fallback** — the `acquire` timeout currently raises; the
-  proceed-on-old-state-and-emit path lands with the proxy.
-- **Bounded lock cleanup** — closed sessions leave their lock in the registry;
-  a safe, bounded reclaim of long-dead locks is a future refinement.
-- **Persistence** — the in-memory store is replaced by a file-backed one.
-- **Session identity** — a session id is supplied by the caller today; deriving
-  it (by fingerprinting a request's message prefix, or by a time window) needs
-  a real request to fingerprint and lands with the proxy.
-- **Background scheduling** — the ager is designed to be fire-and-forget, but
-  nothing schedules it yet; the caller that does is the proxy.
-- **Pre-computation** — the assembler reads what the ager maintained; it does
-  not yet re-rank young turns against the incoming query, nor inject relevant
-  facts from the permanent generation. Both need the per-query relevance path,
-  and a latency budget to justify the cost against.
+- **Persistence** — the in-memory store is replaced by a persistent one; a commit
+  becomes a conditional write on `version`, and the liveness check becomes what
+  stops a late commit from resurrecting a closed session.
+- **Per-session health** — the health monitor still reads generation state from
+  the shared `GenerationalMemory`, so it does not yet describe one session.
+- **Per-query re-ranking** — collect injects the facts relevant to the incoming
+  turn but does not yet re-rank young turns against it. Any work added to collect
+  must stay within a latency budget, and CPU-bound work there must move off the
+  event loop: an asyncio timeout cannot interrupt code that never awaits.

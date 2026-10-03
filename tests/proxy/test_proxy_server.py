@@ -16,7 +16,6 @@ from llm_gc.config import GCConfig
 from llm_gc.engine.compaction import LLMCompactor
 from llm_gc.engine.gc_service import GcService
 from llm_gc.engine.generations import GenerationalMemory
-from llm_gc.engine.generations.permanent_generation import PermanentGeneration
 from llm_gc.engine.sweep import Sweeper, ThresholdSweepStrategy
 from llm_gc.events import EventBus
 from llm_gc.extraction import KnowledgeExtractor
@@ -63,9 +62,7 @@ def _engine(**config_overrides):
     base.update(config_overrides)
     config = GCConfig(**base)
     memory = GenerationalMemory(
-        event_bus=bus,
         knowledge_extractor=KnowledgeExtractor(event_bus=bus),
-        permanent_generation=PermanentGeneration(event_bus=bus),
         compactor=LLMCompactor(event_bus=bus, provider=FakeProvider(responses=[SUMMARY] * 200)),
     )
     return GcService(
@@ -307,9 +304,9 @@ class TestPostResponseAging:
 
         state = service.session_manager.store.get("s")
         assert state is not None
-        roles = [m.role for m in state.messages]
+        roles = [m.role for m in state.snapshot.young]
         assert roles == ["user", "assistant"]
-        assert "Postgres" in state.messages[-1].content
+        assert "Postgres" in state.snapshot.young[-1].content
 
     def test_nothing_is_recorded_when_the_provider_fails(self):
         """Session state would otherwise describe a conversation that never
@@ -322,7 +319,7 @@ class TestPostResponseAging:
 
         state = service.session_manager.store.get("s")
         assert state is not None, "gc_collect creates the session before we forward"
-        assert state.messages == [], "but a failed exchange records no turns"
+        assert state.snapshot.young == (), "but a failed exchange records no turns"
 
     def test_an_unparseable_reply_still_records_the_user_turn(self):
         """A 200 we cannot read costs one turn of scoring accuracy, not the turn
@@ -332,7 +329,7 @@ class TestPostResponseAging:
 
         state = service.session_manager.store.get("s")
         assert state is not None
-        assert [m.role for m in state.messages] == ["user"]
+        assert [m.role for m in state.snapshot.young] == ["user"]
 
 
 class TestItNeverLeaksCredentials:
@@ -500,7 +497,7 @@ class TestContentBlocks:
 
         state = service.session_manager.store.get("s")
         assert state is not None
-        assert state.messages[0].content == "which database?"
+        assert state.snapshot.young[0].content == "which database?"
 
     def test_a_non_text_block_does_not_break_the_request(self):
         client, _, _, seen = _proxy()
@@ -612,8 +609,8 @@ class TestStreaming:
         _post(client, _body(("user", "which database?"), stream=True), headers={SESSION_HEADER: "s"})
 
         state = service.session_manager.store.get("s")
-        assert [m.role for m in state.messages] == ["user", "assistant"]
-        assert state.messages[-1].content == "Postgres, partitioned by day."
+        assert [m.role for m in state.snapshot.young] == ["user", "assistant"]
+        assert state.snapshot.young[-1].content == "Postgres, partitioned by day."
 
     @pytest.mark.parametrize("broken", [_sse("half an", stop=False), _sse("partial", error=True)],
                              ids=["truncated", "provider-error-event"])
@@ -622,7 +619,7 @@ class TestStreaming:
         client, service, _, _ = _proxy(_streaming_upstream(broken))
         _post(client, _body(("user", "which database?"), stream=True), headers={SESSION_HEADER: "s"})
 
-        assert service.session_manager.store.get("s").messages == []
+        assert service.session_manager.store.get("s").snapshot.young == ()
         assert client.get("/stats").json()["streams_unrecorded"] == 1
 
     def test_an_error_status_on_a_stream_request_passes_through_verbatim(self):
@@ -632,7 +629,7 @@ class TestStreaming:
 
         assert response.status_code == 429
         assert response.json() == error
-        assert service.session_manager.store.get("s").messages == []
+        assert service.session_manager.store.get("s").snapshot.young == ()
 
     def test_a_gc_failure_still_streams_the_original_request(self, monkeypatch):
         body = _sse("fine")
@@ -736,5 +733,49 @@ class TestLlmGcNeverBlocksTheConversation:
         response = _post(client, _body(("user", "which database?"), stream=True), headers={SESSION_HEADER: "s"})
 
         assert response.content == body
-        assert service.session_manager.store.get("s").messages == []
+        assert service.session_manager.store.get("s").snapshot.young == ()
         assert client.get("/stats").json()["streams_unrecorded"] == 1
+
+
+class TestABypassedExchangeIsStillRecorded:
+    """A bypass costs one request its GC. It must not also cost the session a turn:
+    the exchange happened, and a hole in session state is carried into every
+    context built afterwards."""
+
+    @pytest.mark.parametrize("stream", [False, True], ids=["json", "sse"])
+    def test_a_gc_failure_still_records_both_halves(self, monkeypatch, stream):
+        upstream = _streaming_upstream(_sse("Postgres, partitioned by day.")) if stream else None
+        client, service, _, _ = _proxy(upstream)
+
+        async def busy(*args, **kwargs):
+            raise RuntimeError("session busy compacting")
+
+        monkeypatch.setattr(service, "gc_collect", busy)
+        _post(client, _body(("user", "which database?"), stream=stream), headers={SESSION_HEADER: "s"})
+
+        state = service.session_manager.store.get("s")
+        assert [m.role for m in state.snapshot.young] == ["user", "assistant"]
+        assert client.get("/stats").json()["gc_bypassed"] == 1
+
+
+class TestOneUsersConversationNeverReachesAnother:
+    def test_a_fact_from_one_session_is_never_injected_into_another(self):
+        """Found by probing, not by any existing test: with a shared permanent
+        generation, Bob's prompt carried Alice's facts labelled as *his* memory.
+        Every earlier test drove one session, and a small memory budget had
+        hidden the block that carried them."""
+        client, _, _, seen = _proxy(max_memory_ratio=0.4)
+        alice: list[tuple[str, str]] = []
+        for i in range(14):
+            alice.append(("user", f"Alice question {i}: the patient records database stores diagnoses for clinic {i}"))
+            _post(client, _body(*alice), headers={SESSION_HEADER: "alice"})
+            alice.append(("assistant", "Postgres, partitioned by day."))
+
+        bob_turns = [("user", "Bob here: help me plan a birthday party"), ("assistant", "Sure.")]
+        _post(client, _body(*bob_turns[:1]), headers={SESSION_HEADER: "bob"})
+        _post(client, _body(*bob_turns, ("user", "which database should store the party guest records?")),
+              headers={SESSION_HEADER: "bob"})
+
+        forwarded_for_bob = json.dumps(_sent(seen)["messages"])
+        assert "patient" not in forwarded_for_bob
+        assert "clinic" not in forwarded_for_bob

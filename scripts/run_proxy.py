@@ -43,7 +43,6 @@ from llm_gc.config import GCConfig  # noqa: E402
 from llm_gc.engine.compaction import LLMCompactor, NoOpCompactor  # noqa: E402
 from llm_gc.engine.gc_service import GcService  # noqa: E402
 from llm_gc.engine.generations import GenerationalMemory  # noqa: E402
-from llm_gc.engine.generations.permanent_generation import PermanentGeneration  # noqa: E402
 from llm_gc.engine.sweep import Sweeper, ThresholdSweepStrategy  # noqa: E402
 from llm_gc.events import EventBus  # noqa: E402
 from llm_gc.extraction import KnowledgeExtractor  # noqa: E402
@@ -145,9 +144,7 @@ def build_engine(*, api_key: str | None, compactor_kind: str) -> tuple[GcService
         label = "LLMCompactor -> scripted provider (no ANTHROPIC_API_KEY; wording canned, arithmetic real)"
 
     memory = GenerationalMemory(
-        event_bus=bus,
         knowledge_extractor=KnowledgeExtractor(event_bus=bus),
-        permanent_generation=PermanentGeneration(event_bus=bus),
         compactor=compactor,
     )
     service = GcService(
@@ -270,8 +267,10 @@ def demo(compactor_kind: str, api_key: str | None) -> None:
     print("\nThe last turn asks which database was chosen. Turn 1 said postgres and was")
     print("archived long before this request. Look for it in the memory block above:")
     print("that is the whole claim, arriving over HTTP.\n")
-    print(f"  old gen: {len(memory.get_old_gen())} summaries   "
-          f"permanent gen: {len(memory.get_permanent_gen())} facts\n")
+    # Generations belong to the session, not to the shared GenerationalMemory.
+    snapshot = service.session_manager.store.get(SESSION).snapshot
+    print(f"  old gen: {len(snapshot.old)} summaries   "
+          f"permanent gen: {len(snapshot.active_knowledge)} facts\n")
 
 
 def serve(port: int, compactor_kind: str, api_key: str | None) -> None:

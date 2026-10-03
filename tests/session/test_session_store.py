@@ -6,7 +6,7 @@ class TestSessionState:
     def test_new_state_starts_empty_and_timestamped(self):
         state = SessionState(session_id="s1")
         assert state.session_id == "s1"
-        assert state.messages == []
+        assert state.snapshot.young == ()
         assert state.created_at is not None
         assert state.last_updated_at is not None
 
@@ -29,11 +29,11 @@ class TestSessionStore:
     def test_get_or_create_returns_the_same_object_on_repeat(self):
         store = SessionStore()
         first = store.get_or_create("s1")
-        first.messages.append(Message(role="user", content="hi"))
+        first.snapshot = first.snapshot.with_turn(Message(role="user", content="hi"))
         second = store.get_or_create("s1")
         # Same object, so state written on the first call is still there.
         assert second is first
-        assert len(second.messages) == 1
+        assert len(second.snapshot.young) == 1
 
     def test_get_returns_none_for_unknown_session(self):
         assert SessionStore().get("missing") is None

@@ -14,10 +14,10 @@ from llm_gc.engine.compaction import NoOpCompactor
 from llm_gc.engine.gc_service import GcService
 from llm_gc.engine.generations import GenerationalMemory, LexicalFactRetriever
 from llm_gc.engine.generations.memory_block import MEMORY_BLOCK_HEADER
-from llm_gc.engine.generations.permanent_generation import PermanentGeneration
 from llm_gc.engine.sweep import Sweeper, ThresholdSweepStrategy
 from llm_gc.events import EventBus
 from llm_gc.extraction import KnowledgeExtractor
+from llm_gc.models.generation_snapshot import AgingDelta, apply_aging
 from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.knowledge_entry import KnowledgeType
 from llm_gc.scoring import RecencyScorer, RelevanceScorer, RelevanceType
@@ -45,9 +45,7 @@ def _config(**overrides) -> GCConfig:
 def _build(config: GCConfig, retriever=None):
     bus = EventBus()
     memory = GenerationalMemory(
-        event_bus=bus,
         knowledge_extractor=KnowledgeExtractor(event_bus=bus),
-        permanent_generation=PermanentGeneration(event_bus=bus),
         compactor=NoOpCompactor(event_bus=bus),
     )
     service = GcService(
@@ -66,33 +64,25 @@ def _build(config: GCConfig, retriever=None):
     return service, memory
 
 
-def _store(memory: GenerationalMemory, topic: str, content: str, turn: int) -> None:
-    """Put a fact straight into permanent generation.
+def _store(service: GcService, topic: str, content: str, turn: int) -> None:
+    """Put a fact straight into the session's permanent generation.
 
     Driving a whole conversation through the sweeper to produce one archived turn
     makes a test about *injection* depend on every threshold in the config — which
     is how a previous draft of these tests silently measured nothing. Facts are
     placed directly; the aging path has its own tests.
     """
-    memory.permanent_generation.add_knowledge_entry(
-        KnowledgeEntry(message_turn=turn, content=content, topic_label=topic, knowledge_type=KnowledgeType.FACT)
-    )
+    entry = KnowledgeEntry(message_turn=turn, content=content, topic_label=topic, knowledge_type=KnowledgeType.FACT)
+    state = service.session_manager.get_or_create(SESSION)
+    state.snapshot = apply_aging(state.snapshot, AgingDelta(new_knowledge=(entry,))).snapshot
 
 
 def _young(service: GcService, texts: list[str], start: int = 50) -> None:
-    async def scenario():
-        async with service.session_manager.acquire(SESSION) as state:
-            for offset, text in enumerate(texts):
-                state.messages.append(
-                    Message(
-                        role="user",
-                        content=text,
-                        token_count=count_tokens(text),
-                        turn_index=start + offset,
-                    )
-                )
-
-    asyncio.run(scenario())
+    state = service.session_manager.get_or_create(SESSION)
+    for offset, text in enumerate(texts):
+        state.snapshot = state.snapshot.with_turn(
+            Message(role="user", content=text, token_count=count_tokens(text), turn_index=start + offset)
+        )
 
 
 def _collect(service: GcService, query: str | None = None) -> list[Message]:
@@ -106,7 +96,7 @@ def _block(context: list[Message]) -> Message | None:
 class TestAnArchivedFactReachesThePrompt:
     def test_the_relevant_fact_is_injected(self):
         service, memory = _build(_config())
-        _store(memory, "database", "postgres, partitioned by day", turn=2)
+        _store(service, "database", "postgres, partitioned by day", turn=2)
         _young(service, ["and what about the deployment checklist"])
 
         context = _collect(service, query="Which database are we actually targeting?")
@@ -117,7 +107,7 @@ class TestAnArchivedFactReachesThePrompt:
 
     def test_it_is_announced_rather_than_disguised_as_a_turn(self):
         service, memory = _build(_config())
-        _store(memory, "database", "postgres", turn=2)
+        _store(service, "database", "postgres", turn=2)
 
         block = _block(_collect(service, query="which database?"))
 
@@ -128,7 +118,7 @@ class TestAnArchivedFactReachesThePrompt:
         """These facts are the oldest information in the context, and a conversation
         should read chronologically."""
         service, memory = _build(_config())
-        _store(memory, "database", "postgres", turn=2)
+        _store(service, "database", "postgres", turn=2)
         _young(service, ["a later turn", "the latest turn"])
 
         context = _collect(service, query="which database?")
@@ -140,7 +130,7 @@ class TestAnArchivedFactReachesThePrompt:
         """Memory is retrieved, not dumped. A prompt full of unrelated "memory"
         spends tokens and invites the model to use something off-topic."""
         service, memory = _build(_config())
-        _store(memory, "database", "postgres", turn=2)
+        _store(service, "database", "postgres", turn=2)
 
         assert _block(_collect(service, query="what time is the standup?")) is None
 
@@ -159,8 +149,8 @@ class TestSupersededFactsNeverReachThePrompt:
         "the database is postgres" and "the database is mysql" as equal claims, and
         every supersession the system detected was recorded for nothing."""
         service, memory = _build(_config())
-        _store(memory, "database", "postgres", turn=2)
-        _store(memory, "database", "mysql", turn=40)
+        _store(service, "database", "postgres", turn=2)
+        _store(service, "database", "mysql", turn=40)
 
         block = _block(_collect(service, query="which database are we targeting?"))
 
@@ -173,7 +163,7 @@ class TestTheBudgetIsEnforcedOnTheRealPrompt:
     def test_the_block_respects_max_memory_tokens(self):
         service, memory = _build(_config(max_memory_ratio=0.3, max_memory_facts=20))
         for index in range(20):
-            _store(memory, f"topic{index}", f"some value number {index} with trailing prose", turn=index)
+            _store(service, f"topic{index}", f"some value number {index} with trailing prose", turn=index)
 
         block = _block(_collect(service, query="topic0 topic1 topic2 topic3 topic4 value"))
 
@@ -183,7 +173,7 @@ class TestTheBudgetIsEnforcedOnTheRealPrompt:
     def test_max_memory_facts_caps_retrieval(self):
         service, memory = _build(_config(max_memory_facts=2, max_memory_ratio=1.0))
         for index in range(10):
-            _store(memory, f"topic{index}", f"value {index}", turn=index)
+            _store(service, f"topic{index}", f"value {index}", turn=index)
 
         block = _block(_collect(service, query=" ".join(f"topic{i}" for i in range(10))))
 
@@ -195,7 +185,7 @@ class TestTheBudgetIsEnforcedOnTheRealPrompt:
         it would under-report pressure in the reassuring direction - the same error
         the token meter already refuses to make about old-gen summaries."""
         service, memory = _build(_config())
-        _store(memory, "database", "postgres, partitioned by day", turn=2)
+        _store(service, "database", "postgres, partitioned by day", turn=2)
         _young(service, ["a turn about the database"])
 
         with_memory = _collect(service, query="which database?")
@@ -209,13 +199,13 @@ class TestInjectionCanBeTurnedOff:
         """How a deployment opts out, and how a benchmark measures what injection is
         worth by running the same conversation both ways."""
         service, memory = _build(_config(max_memory_ratio=0.0))
-        _store(memory, "database", "postgres", turn=2)
+        _store(service, "database", "postgres", turn=2)
 
         assert _block(_collect(service, query="which database?")) is None
 
     def test_zero_memory_facts_disables_it(self):
         service, memory = _build(_config(max_memory_facts=0))
-        _store(memory, "database", "postgres", turn=2)
+        _store(service, "database", "postgres", turn=2)
 
         assert _block(_collect(service, query="which database?")) is None
 
@@ -225,8 +215,8 @@ class TestWithoutAQuery:
         """A caller with no query has not asked for no memory. The dashboard reads
         the context without one."""
         service, memory = _build(_config())
-        _store(memory, "database", "postgres", turn=2)
-        _store(memory, "queue", "rabbitmq", turn=30)
+        _store(service, "database", "postgres", turn=2)
+        _store(service, "queue", "rabbitmq", turn=30)
 
         block = _block(_collect(service, query=None))
 
@@ -247,8 +237,8 @@ class TestTheRetrieverIsSwappable:
                 return sorted(entries, key=lambda entry: entry.message_turn)[:limit]
 
         service, memory = _build(_config(), retriever=_OnlyTheOldest())
-        _store(memory, "database", "postgres", turn=2)
-        _store(memory, "queue", "rabbitmq", turn=30)
+        _store(service, "database", "postgres", turn=2)
+        _store(service, "queue", "rabbitmq", turn=30)
 
         block = _block(_collect(service, query="what time is the standup?"))
 
@@ -267,7 +257,7 @@ class TestUpdateAndCollectStillAgree:
         """`_assemble` is shared so the number the dashboard shows and the payload
         the proxy forwards cannot drift. Injection must not break that."""
         service, memory = _build(_config())
-        _store(memory, "database", "postgres", turn=2)
+        _store(service, "database", "postgres", turn=2)
 
         async def scenario():
             text = "a new turn mentioning the database again"

@@ -10,8 +10,8 @@ from llm_gc.utils import count_tokens
 
 
 def _compose(composer, sweep_result):
-    """Drive the now-async `compose` from a synchronous test body."""
-    return asyncio.run(composer.compose(sweep_result))
+    """The composed messages, driven from a synchronous test body."""
+    return asyncio.run(composer.compose(sweep_result)).messages
 
 
 
@@ -266,7 +266,7 @@ class TestComposeArchive:
 
         _compose(composer, _make_sweep_result(entries))
 
-        mock_gen_mem.archive_message.assert_called_once_with(m1)
+        mock_gen_mem.extract_knowledge.assert_called_once_with(m1)
 
     def test_multiple_archives_each_call_generational_memory(self):
         mock_gen_mem = MagicMock()
@@ -282,7 +282,7 @@ class TestComposeArchive:
 
         _compose(composer, _make_sweep_result(entries))
 
-        assert mock_gen_mem.archive_message.call_count == 3
+        assert mock_gen_mem.extract_knowledge.call_count == 3
 
     def test_archive_between_compact_runs_flushes_correctly(self):
         m1 = _make_message("Compact 1", token_count=10, turn_index=0)

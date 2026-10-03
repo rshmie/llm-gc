@@ -13,7 +13,6 @@ from llm_gc.exceptions import (
     LLMRateLimitError,
     LLMResponseError,
     LLMTimeoutError,
-    SessionLockTimeout,
 )
 
 logging.getLogger(__name__).addHandler(logging.NullHandler())
@@ -29,6 +28,5 @@ __all__ = [
     "LLMRateLimitError",
     "LLMResponseError",
     "LLMTimeoutError",
-    "SessionLockTimeout",
     "__version__",
 ]

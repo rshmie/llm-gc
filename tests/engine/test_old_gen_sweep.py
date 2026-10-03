@@ -13,7 +13,6 @@ from llm_gc.engine import DegradationReason
 from llm_gc.engine.compaction import LLMCompactor
 from llm_gc.engine.gc_service import GcService
 from llm_gc.engine.generations import GenerationalMemory
-from llm_gc.engine.generations.permanent_generation import PermanentGeneration
 from llm_gc.engine.sweep import Sweeper, ThresholdSweepStrategy
 from llm_gc.events import EventBus, EventType
 from llm_gc.extraction import KnowledgeExtractor
@@ -35,6 +34,14 @@ SUMMARY = LLMResponse(
 )
 
 
+def _old_gen(service: GcService) -> list[Message]:
+    return list(service.session_manager.store.get(SESSION).snapshot.old)
+
+
+def _facts(service: GcService) -> list:
+    return service.session_manager.store.get(SESSION).snapshot.active_knowledge
+
+
 def _build(*, archive_threshold: float = 0.25, memory_cls=GenerationalMemory):
     bus = EventBus()
     config = GCConfig(
@@ -46,9 +53,7 @@ def _build(*, archive_threshold: float = 0.25, memory_cls=GenerationalMemory):
         last_n_turns_to_keep=3,
     )
     memory = memory_cls(
-        event_bus=bus,
         knowledge_extractor=KnowledgeExtractor(event_bus=bus),
-        permanent_generation=PermanentGeneration(event_bus=bus),
         compactor=LLMCompactor(event_bus=bus, provider=FakeProvider(responses=[SUMMARY] * 400)),
     )
     service = GcService(
@@ -66,9 +71,9 @@ def _build(*, archive_threshold: float = 0.25, memory_cls=GenerationalMemory):
     return service, memory
 
 
-def _converse(service: GcService, turns: int) -> None:
+def _converse(service: GcService, turns: int, start: int = 0) -> None:
     async def scenario():
-        for index in range(turns):
+        for index in range(start, start + turns):
             text = (
                 f"the topic{index % 8} is version {index} and we walked through the implications "
                 f"for throughput and retention at some length this morning."
@@ -93,9 +98,9 @@ class TestOldGenIsBounded:
         service, memory = _build()
 
         _converse(service, 80)
-        at_80 = len(memory.get_old_gen())
-        _converse(service, 80)
-        at_160 = len(memory.get_old_gen())
+        at_80 = len(_old_gen(service))
+        _converse(service, 80, start=80)
+        at_160 = len(_old_gen(service))
 
         assert at_80 > 0, "summaries must actually be accumulating for this to mean anything"
         assert at_160 <= at_80
@@ -107,7 +112,7 @@ class TestOldGenIsBounded:
 
         _converse(service, 80)
         early = sum(m.token_count for m in asyncio.run(service.gc_collect(SESSION)))
-        _converse(service, 120)
+        _converse(service, 120, start=80)
         late = sum(m.token_count for m in asyncio.run(service.gc_collect(SESSION)))
 
         assert late <= early * 1.2, f"context grew from {early} to {late}"
@@ -119,9 +124,9 @@ class TestOldGenIsBounded:
         service, memory = _build(archive_threshold=0.0)
 
         _converse(service, 80)
-        at_80 = len(memory.get_old_gen())
-        _converse(service, 80)
-        at_160 = len(memory.get_old_gen())
+        at_80 = len(_old_gen(service))
+        _converse(service, 80, start=80)
+        at_160 = len(_old_gen(service))
 
         assert at_160 > at_80
 
@@ -134,7 +139,7 @@ class TestWhereTheSummariesGo:
 
         _converse(service, 120)
 
-        assert memory.get_permanent_gen(), "evicted summaries must leave something behind"
+        assert _facts(service), "evicted summaries must leave something behind"
 
     def test_eviction_is_announced_as_an_archive_from_old_gen(self):
         """Both hops are archives, but one ends a turn's first hop and the other its
@@ -150,22 +155,6 @@ class TestWhereTheSummariesGo:
         assert "old" in sources
         assert "young" in sources
 
-    def test_a_young_turn_archive_defaults_to_young(self):
-        """Asserted on the call rather than inferred from a conversation: by turn 40
-        old-gen eviction is already running, so a whole-run assertion that every
-        archive is young is simply false. The default is what matters — the
-        stateless composer path archives without passing the argument."""
-        _, memory = _build()
-        archived = []
-        memory.event_bus.subscribe(EventType.MESSAGE_ARCHIVED, archived.append)
-
-        memory.archive_message(
-            Message(role="user", content="the database is postgres", token_count=6, turn_index=1)
-        )
-
-        assert [event.data["source_generation"] for event in archived] == ["young"]
-
-
 class TestEvictionIsAllOrNothing:
     def test_a_failed_archive_leaves_the_summary_in_old_gen(self):
         """Archive first, remove second. Removing first would lose the summary
@@ -173,26 +162,28 @@ class TestEvictionIsAllOrNothing:
         original left to fall back to."""
 
         class _ArchiveFailingMemory(GenerationalMemory):
-            def archive_message(self, message, source_generation="young"):
-                if source_generation == "old":
+            def extract_knowledge(self, message):
+                # Old-gen summaries are the ones carrying the provenance marker.
+                if message.content.startswith("[Compacted"):
                     raise RuntimeError("permanent generation is unavailable")
-                super().archive_message(message, source_generation)
+                return super().extract_knowledge(message)
 
         service, memory = _build(memory_cls=_ArchiveFailingMemory)
 
         _converse(service, 120)
 
-        assert memory.get_old_gen(), "nothing may be lost when archiving fails"
+        assert _old_gen(service), "nothing may be lost when archiving fails"
 
     def test_a_failed_eviction_is_reported_as_a_degradation(self):
         """A pass that fell short says so. Without this the old-gen count would
         quietly stop shrinking and nothing would explain why."""
 
         class _ArchiveFailingMemory(GenerationalMemory):
-            def archive_message(self, message, source_generation="young"):
-                if source_generation == "old":
+            def extract_knowledge(self, message):
+                # Old-gen summaries are the ones carrying the provenance marker.
+                if message.content.startswith("[Compacted"):
                     raise RuntimeError("permanent generation is unavailable")
-                super().archive_message(message, source_generation)
+                return super().extract_knowledge(message)
 
         service, _ = _build(memory_cls=_ArchiveFailingMemory)
         degraded = []
@@ -203,20 +194,6 @@ class TestEvictionIsAllOrNothing:
         reasons = {event.data["degradation"].reason for event in degraded}
         assert DegradationReason.ARCHIVE_FAILED in reasons
 
-    def test_evicting_a_stale_summary_crashes_loudly(self):
-        """A caller working from a copy that no longer reflects old gen is a
-        programmer error, so it raises rather than silently doing nothing."""
-        _, memory = _build()
-        ghost = Message(role="assistant", content="never filed", token_count=3, turn_index=99)
-
-        try:
-            memory.evict_from_old_gen(ghost)
-        except ValueError:
-            pass
-        else:
-            raise AssertionError("expected ValueError for a summary not in old gen")
-
-
 class TestScoringIsAgainstTheRealConversation:
     def test_the_coldest_summary_is_not_permanently_safe(self):
         """Summaries scored among themselves would make the oldest surviving one
@@ -226,8 +203,8 @@ class TestScoringIsAgainstTheRealConversation:
         service, memory = _build()
 
         _converse(service, 80)
-        oldest_early = min(m.turn_index for m in memory.get_old_gen())
-        _converse(service, 120)
-        oldest_late = min(m.turn_index for m in memory.get_old_gen())
+        oldest_early = min(m.turn_index for m in _old_gen(service))
+        _converse(service, 120, start=80)
+        oldest_late = min(m.turn_index for m in _old_gen(service))
 
         assert oldest_late > oldest_early

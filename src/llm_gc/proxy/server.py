@@ -179,6 +179,7 @@ async def _handle(app: FastAPI, request: Request) -> Response:
 
     # Everything LLM-GC does before forwarding sits inside this one guard, so no
     # failure of ours can stop the conversation: the worst case is no GC.
+    session_id: str | None = None
     try:
         session_id = resolve_session_id(client_messages, request.headers.get(SESSION_HEADER))
         forward_body, forwarded_messages = await _apply_gc(app, session_id, client_messages, payload, new_turn)
@@ -192,23 +193,41 @@ async def _handle(app: FastAPI, request: Request) -> Response:
                 "tokens_forwarded": sum(message.token_count for message in forwarded_messages),
             },
         )
-        metrics.gc_applied += 1
     except Exception as err:
         logger.exception("GC failed on the request path; forwarding the original",
-                         extra={"error_type": type(err).__name__})
+                         extra={"session_id": session_id, "error_type": type(err).__name__})
         metrics.gc_bypassed += 1
         # Counted as forwarded, so a bypass does not look free in /stats.
         metrics.tokens_forwarded += client_history_tokens
-        if streaming:
-            return await _forward_stream(app, body, headers, on_end=None)
-        return await _forward(app, body, headers)
+        # Still recorded when the session is known: the exchange really happened,
+        # and skipping it would leave a hole every later context is built over.
+        return await _forward_and_record(app, body, headers, streaming, session_id, new_turn)
 
+    metrics.gc_applied += 1
     metrics.tokens_forwarded += sum(message.token_count for message in forwarded_messages)
+    return await _forward_and_record(app, _dump_json(forward_body), headers, streaming, session_id, new_turn)
+
+
+async def _forward_and_record(
+    app: FastAPI,
+    body: bytes,
+    headers: dict[str, str],
+    streaming: bool,
+    session_id: str | None,
+    new_turn: Message,
+) -> Response:
+    """Forward, then record the exchange only if the provider answered it.
+
+    Recording only a successful exchange keeps session state to conversations the
+    client actually had: a failed one will be retried, and recording it would put
+    the turn in twice.
+    """
+    metrics: ProxyMetrics = app.state.metrics
 
     if streaming:
         def record_stream(reply: StreamedReply) -> None:
-            # An interrupted or errored stream is the streaming form of a failed
-            # request: the client will retry it, so recording it would double the turn.
+            if session_id is None:
+                return
             if reply.completed and not reply.errored:
                 app.state.schedule(_age(app, session_id, new_turn, reply.text or None))
                 return
@@ -218,19 +237,13 @@ async def _handle(app: FastAPI, request: Request) -> Response:
                 "abandoned": reply.abandoned, "malformed_events": reply.malformed_events,
             })
 
-        return await _forward_stream(
-            app, _dump_json(forward_body), headers, on_end=lambda reply: _never_blocking(record_stream, reply)
-        )
+        return await _forward_stream(app, body, headers, on_end=lambda reply: _never_blocking(record_stream, reply))
 
-    response = await _forward(app, _dump_json(forward_body), headers)
-
-    # Only record a successful exchange: otherwise session state describes a
-    # conversation the client never had, and their retry records the turn twice.
-    if response.status_code == 200:
+    response = await _forward(app, body, headers)
+    if response.status_code == 200 and session_id is not None:
         _never_blocking(
             lambda: app.state.schedule(_age(app, session_id, new_turn, _reply_text(bytes(response.body))))
         )
-
     return response
 
 

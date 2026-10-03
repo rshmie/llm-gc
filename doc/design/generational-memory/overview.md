@@ -272,9 +272,12 @@ filter the model would read an old value and its correction as two equal claims.
 
 The old generation is scored and swept on the same pressure-gated pass that ages
 the young generation, and summaries that have gone cold are archived into the
-permanent generation and removed. Without this a turn's journey ended at old gen:
-`_old_gen` was append-only, so the assembled context grew by one summary per aged
-run forever, and old gen became the leak that young gen had been fixed to avoid.
+permanent generation and removed. Without this a turn's journey would end at old
+gen: old gen would only ever grow, the assembled context would gain one summary
+per aged run forever, and old gen would become the leak that aging the young
+generation exists to prevent. Candidates include summaries produced earlier in the
+same pass; one that is already cold is archived straight away and never enters
+old gen.
 
 **Two bands, not three.** A summary is kept or archived. The *re-compact into a
 longer-horizon summary* band described under Alternatives Considered is
@@ -502,21 +505,39 @@ misspeak in a way the extractor reads as a real change. The system accepts being
 occasionally wrong about which fact is current rather than interrupting the user
 to disambiguate.
 
+## Who Owns the Generations
+
+**Each session owns its three generations; nothing else holds them.** A
+session's young turns, old-gen summaries, and permanent-gen facts live together
+in one immutable snapshot on its `SessionState` (see
+[session/overview.md](../session/overview.md)). `GenerationalMemory` is a
+stateless producer shared by every session: it *summarises* a run of turns and
+*extracts* the facts from a turn, and stores neither result. The aging pass
+collects what it produced into a delta and commits it to the session's snapshot.
+
+This is what keeps one conversation's memory out of another's prompt. When the
+generations were held inside one shared `GenerationalMemory`, a proxy serving two
+users injected the first user's facts into the second user's prompt, presented
+as the second user's own memory.
+
+Supersession is part of filing, not of storage: when a fact is filed, every
+active fact on the same topic in *that session* is marked superseded. Superseded
+facts are kept, because the record of what a conversation contradicted is part
+of what the transparency layer reports; only active facts reach the prompt.
+
 ## Events Emitted (for Context Visualizer)
 
 | Event | When | Data |
 |-------|------|------|
-| `KNOWLEDGE_ENTRY_ADDED` | New knowledge entry stored in permanent gen | entry content, source turn, knowledge type |
-| `KNOWLEDGE_ENTRY_SUPERSEDED` | New entry supersedes an existing one | new entry, superseded entries |
-| `MESSAGE_ARCHIVED` | A turn is archived after its knowledge is extracted | message, extracted knowledge entries |
-| `MESSAGE_PROMOTED_TO_OLD_GEN` | A cooled turn is summarised into the old generation | messages compacted, tokens before/after |
+| `MESSAGE_PROMOTED_TO_OLD_GEN` | A run of cooled turns was summarised into old gen | session id, source turn indices, tokens before/after |
+| `KNOWLEDGE_ENTRY_ADDED` | A fact was filed in permanent gen | session id, the entry |
+| `KNOWLEDGE_ENTRY_SUPERSEDED` | A newly filed fact contradicted active ones on its topic | session id, new entry, superseded entries |
+| `MESSAGE_ARCHIVED` | A turn or summary was archived after its facts were extracted | session id, message, extracted entries, source generation |
 
-Old-generation membership is now tracked inside `GenerationalMemory`: the ager
-(`gc.update`) hands a cooled turn to `promote_to_old_gen`, which compacts it and
-stores the summary, emitting `MESSAGE_PROMOTED_TO_OLD_GEN`.
-`MESSAGE_ADDED_TO_YOUNG_GEN` remains a reserved type with no emitter — young-generation
-membership is just the turns still present in the session's live message list, so it
-needs no separate store or event.
+All four are emitted **after** the aging pass commits, so each describes a change
+that is now in the session's state, and a pass that is discarded announces
+nothing. `MESSAGE_ADDED_TO_YOUNG_GEN` remains a reserved type with no emitter —
+young-generation membership is just the turns in the session's snapshot.
 
 These events feed the **Decision Survival Map** — showing which decisions from the conversation
 are still alive, which were superseded, and which are at risk of being lost.
@@ -526,59 +547,61 @@ are still alive, which were superseded, and which are at risk of being lost.
 ## Where It Fits in the Pipeline (hot path vs cold path)
 
 Aging and assembly are split across the two engine entry points, so the
-per-request hot path stays cheap.
+per-request hot path stays cheap and never waits for aging.
 
 ```
 COLD PATH · gc.update(session_id, new_turn)          runs after the response
 ═════════════════════════════════════════════════════════════════════════════
-  new_turn ──► append to YOUNG GEN
+  new_turn ──► recorded into the session's snapshot at once
                     │
-                    ▼
+                    ▼  (only under pressure, one pass per session at a time)
              RelevanceScorer ──► Sweeper      score + classify each young turn
                     │
-                    ▼      act on each turn's CURRENT classification
+                    ▼      plan from each turn's CURRENT classification
        ┌────────────┼─────────────────────────────┐
        ▼            ▼                              ▼
      KEEP        COMPACT                        ARCHIVE
-     stays     promote_to_old_gen            archive_message
-     young     → summary ─► OLD GEN           → facts ─► PERMANENT GEN
+     stays     summarise the run              extract the facts
+     young     (a model call)                 (KnowledgeExtractor)
                     │                              │
-                    └────────── turn leaves the YOUNG GEN ──────────┘
+                    └──────────► delta ◄───────────┘
+                                   │   + cold old-gen summaries to evict
+                                   ▼
+                     commit onto the CURRENT snapshot, then announce
 
 
-HOT PATH · gc.collect(session_id)                    runs before forwarding
+HOT PATH · gc.collect(session_id, query)             runs before forwarding
 ═════════════════════════════════════════════════════════════════════════════
-  read + stitch by turn_index — no scoring, no compaction:
+  read the session's snapshot once — no lock, no scoring, no compaction:
 
-       [ OLD GEN summaries ]  +  [ YOUNG GEN turns (verbatim) ]
+   [ memory block: PERMANENT facts relevant to the query ]
+ + [ OLD GEN summaries ] + [ YOUNG GEN turns (verbatim) ]   ordered by turn index
                                       │
                                       ▼
                           cleaned context ──► LLM
-
-  planned (not yet wired): inject relevant PERMANENT GEN facts;
-                           reuse a pre-computed plan instead of assembling cold
 ```
 
 **`gc.update` (cold path) — the ager.** Runs after a response, off the request's
-critical path. It scores and sweeps the young generation, then acts on each
-turn's current classification:
+critical path. It records the turn immediately, then, if the context is under
+pressure, plans against the current snapshot:
 
 - **KEEP** → stays in the young generation (verbatim).
-- **COMPACT** → `promote_to_old_gen` compacts it into an old-gen summary; the turn
-  then leaves the young generation.
-- **ARCHIVE** → `KnowledgeExtractor` pulls its facts into permanent gen; the turn
-  then leaves the young generation.
+- **COMPACT** → adjacent COMPACT turns are summarised together into one old-gen
+  summary; the run then leaves the young generation.
+- **ARCHIVE** → `KnowledgeExtractor` pulls the turn's facts into permanent gen; the
+  turn then leaves the young generation.
 
-Each turn is aged independently: its produce-action (compact or extract) runs
-*before* the turn is removed from the young generation, so a failure leaves the
-turn in place to be retried, never losing it and never leaving a summary whose
-original is still live.
+A turn joins the departing set only after its summary or extraction succeeded,
+so a failure leaves it in place for the next pass, never losing it and never
+filing a summary whose original is still live. The whole plan is committed in one
+step onto whatever the snapshot is by then, so turns recorded during a slow
+compaction are kept.
 
 **`gc.collect` (hot path) — the assembler.** Runs before the request is
-forwarded. It only reads and stitches: old-gen summaries + young-gen turns,
-ordered by turn index. No scoring, no compaction on this path — the ager already
-did that work. (Permanent-gen fact injection and pre-computed-plan reuse are
-planned additions to this path, not yet wired.)
+forwarded. It reads the session's current snapshot and stitches the three
+generations together. It never waits for an aging pass: if one is in flight, it
+returns the context from before that pass, which is complete and only less
+compressed. (Re-ranking young turns against the query is a planned addition.)
 
 Two properties matter here:
 

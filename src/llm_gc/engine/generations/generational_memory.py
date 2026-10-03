@@ -1,100 +1,35 @@
 from llm_gc.engine.compaction import BaseCompactor, CompactionResult
-from llm_gc.engine.generations.permanent_generation import PermanentGeneration
-from llm_gc.events import EventBus, Event, EventType
 from llm_gc.extraction import KnowledgeExtractor
-from llm_gc.models import Message, KnowledgeEntry
+from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.knowledge_entry import KnowledgeType
 
 
 class GenerationalMemory:
-    def __init__(self, event_bus: EventBus, knowledge_extractor: KnowledgeExtractor, permanent_generation: PermanentGeneration,
-                 compactor: BaseCompactor) -> None:
-        self.event_bus = event_bus
+    """Produces what the generations hold, and stores none of it.
+
+    Summarising a run of turns and extracting the facts from a turn are shared
+    behaviour; the summaries and facts they produce belong to one conversation and
+    live in that session's snapshot (or, on the stateless path, in the returned
+    result). Holding them here would make every conversation served by this
+    instance share one memory. See doc/design/generational-memory/overview.md.
+    """
+
+    def __init__(self, knowledge_extractor: KnowledgeExtractor, compactor: BaseCompactor) -> None:
         self.knowledge_extractor = knowledge_extractor
-        self.permanent_generation = permanent_generation
         self.compactor = compactor
-        self._old_gen: list[Message] = []
 
-    def archive_message(self, message: Message, source_generation: str = "young") -> None:
-        """Extract a message's facts into permanent generation.
+    def extract_knowledge(self, message: Message) -> list[KnowledgeEntry]:
+        """The facts a turn or summary yields.
 
-        Args:
-            message: The turn - or old-generation summary - being archived.
-            source_generation: `"young"` for a verbatim turn, `"old"` for a summary
-                evicted from the old generation. Carried on the event so consumers
-                can tell the two apart: they are both archives, but one ends a
-                turn's first hop and the other ends its last, and a transitions
-                timeline that conflated them would show a turn archived twice.
+        Falls back to one RAW entry holding the content verbatim when extraction
+        finds nothing, so archiving never loses information.
         """
-        extracted_knowledge_entries = self.knowledge_extractor.extract_knowledge(message=message, message_turn=message.turn_index)
-        # If extracted entry is empty build verbatim content to prevent information loss
-        if not extracted_knowledge_entries:
-            extracted_knowledge_entries = [KnowledgeEntry(message_turn=message.turn_index,
-                                                          content=message.content,
-                                                          topic_label="__raw__",
-                                                          knowledge_type=KnowledgeType.RAW)]
+        entries = self.knowledge_extractor.extract_knowledge(message=message, message_turn=message.turn_index)
+        if entries:
+            return entries
+        return [KnowledgeEntry(message_turn=message.turn_index, content=message.content,
+                               topic_label="__raw__", knowledge_type=KnowledgeType.RAW)]
 
-        for entry in extracted_knowledge_entries:
-            self.permanent_generation.add_knowledge_entry(entry)
-
-        self.event_bus.emit(Event(event_type=EventType.MESSAGE_ARCHIVED,
-                                  data={"message": message,
-                                        "extracted_knowledge_entries": extracted_knowledge_entries,
-                                        "source_generation": source_generation}))
-
-    def evict_from_old_gen(self, summary: Message) -> None:
-        """Archive an old-generation summary and remove it from old gen.
-
-        The last hop of a turn's life: young (verbatim) -> old (summarised) ->
-        permanent (facts). What it buys is not storage but *prompt position*. An
-        old-gen summary is in every prompt; its extracted facts are in a prompt
-        only when they match the turn being sent. So even a summary whose
-        extraction finds nothing - stored verbatim as a RAW entry, the same size it
-        was - still stops occupying the context unconditionally.
-
-        Archive first, remove second. If extraction or storage raises, the summary
-        stays in old gen and the caller sees the exception: the same
-        all-or-nothing posture as promotion, and for the same reason. Removing
-        first would lose the summary outright if archiving then failed.
-
-        Raises:
-            ValueError: The summary is not in old gen. A programmer error - the
-                caller is working from a stale copy - so it crashes rather than
-                degrading.
-        """
-        if summary not in self._old_gen:
-            raise ValueError(f"summary for turn {summary.turn_index} is not in the old generation")
-
-        self.archive_message(summary, source_generation="old")
-        self._old_gen.remove(summary)
-
-
-    def get_permanent_gen(self) -> list[KnowledgeEntry]:
-        return self.permanent_generation.get_all_active_entries()
-
-    def get_old_gen(self) -> list[Message]:
-        """The old generation's summaries, as a copy.
-
-        A copy, not the live list: callers assemble and sort what they get back,
-        and handing out internal storage lets a caller reorder or truncate this
-        component's state by accident.
-        """
-        return list(self._old_gen)
-
-    async def promote_to_old_gen(self, compact_run: list[Message]) -> None:
-        compaction_result: CompactionResult = await self.compactor.compact(compact_run)
-        self._old_gen.append(compaction_result.summary)
-        self.event_bus.emit(
-            Event(
-                event_type=EventType.MESSAGE_PROMOTED_TO_OLD_GEN,
-                data={
-                    # Which turns moved, not just how many. Subscribers that log a
-                    # per-turn generational transition (the health monitor) need the
-                    # identity of what moved; counts alone cannot name a turn.
-                    "source_turn_indices": [message.turn_index for message in compact_run],
-                    "messages_compacted": len(compact_run),
-                    "tokens_before": compaction_result.original_token_count,
-                    "tokens_after": compaction_result.summary.token_count,
-                },
-            )
-        )
+    async def summarise(self, compact_run: list[Message]) -> CompactionResult:
+        """Compact a run of turns into one summary."""
+        return await self.compactor.compact(compact_run)

@@ -9,10 +9,10 @@ from llm_gc.config.constants import APP_VERSION
 from llm_gc.engine import ContextComposer, GarbageCollector
 from llm_gc.engine.compaction import NoOpCompactor
 from llm_gc.engine.generations import GenerationalMemory
-from llm_gc.engine.generations.permanent_generation import PermanentGeneration
 from llm_gc.engine.sweep import Sweeper, ThresholdSweepStrategy
 from llm_gc.events import EventBus
 from llm_gc.extraction import KnowledgeExtractor
+from llm_gc.models.generation_snapshot import AgingDelta, GenerationSnapshot, apply_aging
 from llm_gc.monitoring import ContextHealth, ContextHealthMonitor
 from llm_gc.scoring import DecisionScorer, DensityScorer, RecencyScorer, ReferenceScorer, RelevanceScorer, RelevanceType
 from llm_gc.visualizer.demo_conversation import DemoConversationFeeder
@@ -64,9 +64,7 @@ def create_app() -> FastAPI:
 
     event_bus = EventBus()
     gc_config = _build_demo_config()
-    generational_memory = GenerationalMemory(event_bus=event_bus,
-                                             knowledge_extractor=KnowledgeExtractor(event_bus=event_bus),
-                                             permanent_generation=PermanentGeneration(event_bus=event_bus),
+    generational_memory = GenerationalMemory(knowledge_extractor=KnowledgeExtractor(event_bus=event_bus),
                                              compactor=NoOpCompactor(event_bus=event_bus))
     garbage_collector = GarbageCollector(
         event_bus=event_bus, gc_config=gc_config,
@@ -75,8 +73,11 @@ def create_app() -> FastAPI:
                         gc_config=gc_config, event_bus=event_bus),
         context_composer=ContextComposer(event_bus=event_bus, generational_memory=generational_memory,
                                          compactor=NoOpCompactor(event_bus=event_bus)))
+    # The stateless collector stores nothing, so the server owns this
+    # conversation's facts, as it owns the conversation itself.
+    app.state.generations = GenerationSnapshot()
     monitor = ContextHealthMonitor(event_bus=event_bus, gc_config=gc_config,
-                                   generational_memory=generational_memory)
+                                   read_generations=lambda: app.state.generations)
 
     app.state.garbage_collector = garbage_collector
     app.state.monitor = monitor
@@ -103,6 +104,9 @@ def create_app() -> FastAPI:
         app.state.conversation = app.state.conversation + new_turns
         gc_result = await app.state.garbage_collector.collect(app.state.conversation)
         app.state.conversation = gc_result.final_messages
+        app.state.generations = apply_aging(
+            app.state.generations, AgingDelta(new_knowledge=tuple(gc_result.archived_knowledge))
+        ).snapshot
         logger.info("Dashboard-triggered GC run finished",
                     extra={"gc_run_id": gc_result.gc_run_id, "status": gc_result.status.value})
         return {"gc_run_id": gc_result.gc_run_id, "status": gc_result.status.value,

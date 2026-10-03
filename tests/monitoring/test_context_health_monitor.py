@@ -1,13 +1,12 @@
-from unittest.mock import MagicMock
 
 import pytest
 from pydantic import ValidationError
 
 from llm_gc.config import GCConfig
 from llm_gc.engine import GCResult, GCStatus
-from llm_gc.engine.generations import GenerationalMemory
 from llm_gc.engine.sweep import SweepClassification, SweepEntry, SweepResult
 from llm_gc.events import Event, EventBus, EventType
+from llm_gc.models.generation_snapshot import GenerationSnapshot
 from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.knowledge_entry import KnowledgeType
 from llm_gc.monitoring import ContextHealthMonitor
@@ -66,20 +65,25 @@ def _make_knowledge_entry(message_turn: int = 1, topic_label: str = "database",
                           knowledge_type=KnowledgeType.FACT)
 
 
-def _make_monitor(max_recent_transitions: int | None = None,
-                  context_window: int = 1000) -> tuple[ContextHealthMonitor, EventBus, MagicMock]:
-    """Monitor on a real EventBus with a mocked GenerationalMemory.
+class _Generations:
+    """What the monitor reads: the current snapshot of the conversation it describes."""
 
-    The bus is cheap and already tested; GenerationalMemory is mocked so these
-    tests never stand up extractors or permanent storage they don't exercise.
+    def __init__(self) -> None:
+        self.snapshot = GenerationSnapshot()
+
+
+def _make_monitor(max_recent_transitions: int | None = None,
+                  context_window: int = 1000) -> tuple[ContextHealthMonitor, EventBus, "_Generations"]:
+    """Monitor on a real EventBus, reading a snapshot the test sets directly.
+
+    The bus is cheap and already tested; generations are a plain value, so these
+    tests never stand up extractors or a session they don't exercise.
     """
     bus = EventBus()
-    gen_memory = MagicMock(spec=GenerationalMemory)
-    gen_memory.get_permanent_gen.return_value = []
-    gen_memory.get_old_gen.return_value = []
+    gen_memory = _Generations()
     kwargs = {} if max_recent_transitions is None else {"max_recent_transitions": max_recent_transitions}
     monitor = ContextHealthMonitor(event_bus=bus, gc_config=GCConfig(context_window=context_window),
-                                   generational_memory=gen_memory, **kwargs)
+                                   read_generations=lambda: gen_memory.snapshot, **kwargs)
     return monitor, bus, gen_memory
 
 
@@ -210,7 +214,7 @@ class TestSnapshotNeverRan:
     def test_measured_signals_none_lifecycle_empty_but_real(self):
         monitor, _, gen_memory = _make_monitor()
         entry = _make_knowledge_entry()
-        gen_memory.get_permanent_gen.return_value = [entry]
+        gen_memory.snapshot = GenerationSnapshot(knowledge=(entry,))
 
         snapshot = monitor.get_snapshot()
         assert snapshot.token_budget is None
@@ -271,7 +275,7 @@ class TestSnapshotCompleted:
         landed. The sweep below classifies two turns COMPACT while storage holds
         one summary from an earlier pass - the signal must report storage."""
         monitor, bus, gen_memory = _make_monitor()
-        gen_memory.get_old_gen.return_value = [_make_message(turn_index=7, token_count=5)]
+        gen_memory.snapshot = GenerationSnapshot(old=(_make_message(turn_index=7, token_count=5),))
 
         lifecycle = self._snapshot(monitor, bus).generation_lifecycle
 

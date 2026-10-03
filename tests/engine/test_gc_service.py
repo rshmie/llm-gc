@@ -6,7 +6,6 @@ from llm_gc.engine.compaction.compaction_strategy import CompactionStrategy
 from llm_gc.engine.gc_service import GcService
 from llm_gc.engine.gc_status import GCStatus
 from llm_gc.engine.generations.generational_memory import GenerationalMemory
-from llm_gc.engine.generations.permanent_generation import PermanentGeneration
 from llm_gc.engine.sweep import SweepClassification, SweepEntry, SweepResult
 from llm_gc.events import Event, EventBus, EventType
 from llm_gc.extraction import KnowledgeExtractor
@@ -69,6 +68,17 @@ class _RaisingCompactor(BaseCompactor):
         raise RuntimeError("compaction failed")
 
 
+def _old_gen(service: GcService, session_id: str = "s1") -> list[Message]:
+    """The session's own old generation - generations are per-session state."""
+    state = service.session_manager.store.get(session_id)
+    return list(state.snapshot.old) if state is not None else []
+
+
+def _facts(service: GcService, session_id: str = "s1") -> list:
+    state = service.session_manager.store.get(session_id)
+    return state.snapshot.active_knowledge if state is not None else []
+
+
 def _msg(turn_index: int) -> Message:
     return Message(role="user", content=f"turn {turn_index}", token_count=10, turn_index=turn_index)
 
@@ -83,9 +93,7 @@ def _make_service(compactor: BaseCompactor | None = None, scorer=None,
                   gc_config: GCConfig | None = None) -> tuple[GcService, _StubSweeper]:
     bus = EventBus()
     generational_memory = GenerationalMemory(
-        event_bus=bus,
         knowledge_extractor=KnowledgeExtractor(event_bus=bus),
-        permanent_generation=PermanentGeneration(event_bus=bus),
         compactor=compactor if compactor is not None else NoOpCompactor(event_bus=bus),
     )
     sweeper = _StubSweeper()
@@ -112,7 +120,7 @@ class TestGcUpdateActsOnClassification:
             sweeper.classifications = {1: SweepClassification.COMPACT}
             await service.gc_update("s1", _msg(2))              # turn 1 cools to COMPACT
             state = service.session_manager.store.get("s1")
-            return [m.turn_index for m in state.messages], len(service.generational_memory.get_old_gen())
+            return [m.turn_index for m in list(state.snapshot.young)], len(_old_gen(service))
 
         young, old_gen_count = asyncio.run(scenario())
         assert young == [2]          # turn 1 left the desk; turn 2 stays
@@ -126,7 +134,7 @@ class TestGcUpdateActsOnClassification:
             sweeper.classifications = {1: SweepClassification.ARCHIVE}
             await service.gc_update("s1", _msg(2))
             state = service.session_manager.store.get("s1")
-            return [m.turn_index for m in state.messages], len(service.generational_memory.get_permanent_gen())
+            return [m.turn_index for m in list(state.snapshot.young)], len(_facts(service))
 
         young, permanent_count = asyncio.run(scenario())
         assert young == [2]              # turn 1 left the desk
@@ -139,7 +147,7 @@ class TestGcUpdateActsOnClassification:
             await service.gc_update("s1", _msg(1))
             await service.gc_update("s1", _msg(2))
             state = service.session_manager.store.get("s1")
-            return [m.turn_index for m in state.messages]
+            return [m.turn_index for m in list(state.snapshot.young)]
 
         # Nothing classified COMPACT/ARCHIVE, so nothing departs.
         assert asyncio.run(scenario()) == [1, 2]
@@ -149,7 +157,7 @@ class TestGcUpdateActsOnClassification:
 
         async def scenario():
             await service.gc_update("s1", _msg(1))
-            return service.generational_memory.get_old_gen()
+            return _old_gen(service)
 
         assert asyncio.run(scenario()) == []
 
@@ -161,7 +169,7 @@ class TestGcUpdateActsOnClassification:
             sweeper.classifications = {1: SweepClassification.COMPACT}
             await service.gc_update("s1", _msg(2))              # turn 1 COMPACT -> promotion raises
             state = service.session_manager.store.get("s1")
-            return [m.turn_index for m in state.messages], service.generational_memory.get_old_gen()
+            return [m.turn_index for m in list(state.snapshot.young)], _old_gen(service)
 
         # gc_update must NOT re-raise (asyncio.run would surface it), and the failed
         # turn must stay in young with nothing written - no loss, no duplicate.
@@ -246,12 +254,12 @@ class TestGcUpdateReportsOnTheBus:
             sweeper.classifications = {1: SweepClassification.COMPACT}
             await service.gc_update("s1", _msg(2))
             state = service.session_manager.store.get("s1")
-            return state.messages
+            return list(state.snapshot.young)
 
         young = asyncio.run(scenario())
         gc_result = captured[-1].data["gc_result"]
         young_tokens = sum(m.token_count for m in young)
-        old_gen_tokens = sum(m.token_count for m in service.generational_memory.get_old_gen())
+        old_gen_tokens = sum(m.token_count for m in _old_gen(service))
         assert old_gen_tokens > 0                                    # there is something to omit
         assert gc_result.tokens_in_final == young_tokens + old_gen_tokens
 
@@ -269,7 +277,7 @@ class TestGcUpdateReportsOnTheBus:
         assert "scoring failed" in gc_result.failure_reason
         # First do no harm: the new turn is still there, nothing was aged.
         assert [m.turn_index for m in gc_result.final_messages] == [1]
-        assert service.generational_memory.get_old_gen() == []
+        assert _old_gen(service) == []
 
 
 class TestAgingIsPressureTriggered:
@@ -287,11 +295,11 @@ class TestAgingIsPressureTriggered:
             sweeper.classifications = {1: SweepClassification.COMPACT}
             await service.gc_update("s1", _msg(2))     # would age turn 1 under pressure
             state = service.session_manager.store.get("s1")
-            return [m.turn_index for m in state.messages]
+            return [m.turn_index for m in list(state.snapshot.young)]
 
         young = asyncio.run(scenario())
         assert young == [1, 2]                                   # turn 1 kept verbatim
-        assert service.generational_memory.get_old_gen() == []
+        assert _old_gen(service) == []
         assert captured[-1].data["gc_result"].status == GCStatus.BYPASSED_BELOW_THRESHOLD
 
     def test_crossing_the_threshold_starts_aging(self):
@@ -305,14 +313,14 @@ class TestAgingIsPressureTriggered:
             await service.gc_update("s1", _msg(2))    # 20 tokens - under
             await service.gc_update("s1", _msg(3))    # 30 tokens - over, ages
             state = service.session_manager.store.get("s1")
-            return [m.turn_index for m in state.messages]
+            return [m.turn_index for m in list(state.snapshot.young)]
 
         young = asyncio.run(scenario())
         statuses = [e.data["gc_result"].status for e in captured]
         assert statuses[:2] == [GCStatus.BYPASSED_BELOW_THRESHOLD, GCStatus.BYPASSED_BELOW_THRESHOLD]
         assert statuses[2] == GCStatus.COMPLETED
         assert young == [2, 3]                                   # turn 1 finally aged out
-        assert len(service.generational_memory.get_old_gen()) == 1
+        assert len(_old_gen(service)) == 1
 
     def test_a_bypassed_update_still_records_the_new_turn(self):
         """Bypassing aging must not bypass bookkeeping - the turn is part of the
@@ -322,5 +330,5 @@ class TestAgingIsPressureTriggered:
 
         asyncio.run(service.gc_update("s1", _msg(1)))
 
-        assert [m.turn_index for m in service.session_manager.store.get("s1").messages] == [1]
+        assert [m.turn_index for m in service.session_manager.store.get("s1").snapshot.young] == [1]
         assert [m.turn_index for m in captured[0].data["gc_result"].final_messages] == [1]

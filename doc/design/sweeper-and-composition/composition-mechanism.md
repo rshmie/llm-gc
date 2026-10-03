@@ -10,9 +10,10 @@ ARCHIVE into memory), and produce the actual list of messages the LLM will
 see.
 
 That is the Composer's job — and only the Composer's job. It is the
-**single seam** between the live transcript and `GenerationalMemory`.
-Nothing else in the engine writes to memory; nothing else assembles the
-final message list.
+**single seam** between the live transcript and what is recovered from the
+turns that leave it. Nothing else on the stateless path produces archived
+facts; nothing else assembles the final message list. It stores nothing: the
+facts it recovers are returned to the caller, who owns the conversation.
 
 This is the **Compose** phase of the Mark-Sweep-Compact pipeline. In Java
 GC terms: marking identifies liveness, sweeping classifies, compacting
@@ -31,7 +32,7 @@ The Composer's contract is narrow on purpose:
 | Pass KEEP entries through verbatim                                | Decide which messages get compacted (the Sweeper did that)              |
 | Group **adjacent COMPACT** entries into a *compact run*           | Implement compaction itself (the injected `BaseCompactor` does that)    |
 | Delegate each compact run to the injected `BaseCompactor`         | Decide *how* compaction works (NoOp / LLM / learned — Compactor's job)  |
-| Route ARCHIVE entries to `GenerationalMemory.archive_message(...)`| Extract knowledge from archived messages (Generational memory does that)|
+| Hand ARCHIVE entries to `GenerationalMemory.extract_knowledge(...)` and return the facts | Extract knowledge from archived messages (Generational memory does that)|
 | Emit `CONTEXT_COMPOSED` with metrics                              | Decide *which* events flow downstream (consumers subscribe themselves)  |
 
 The Composer **never transforms message content**. The phrase appears
@@ -88,7 +89,7 @@ final_messages = [
   Message(turn=5,  role=...,         content=<verbatim turn 5>),
   Message(turn=6,  role="assistant", content="[Compacted (compaction_strategy=noop) turns 6-7]\n<turn 6 content>\n<turn 7 content>"),
   Message(turn=8,  role=...,         content=<verbatim turn 8>),
-  # turn 9 ARCHIVE → not present in final_messages; deposited in PermanentGeneration via GenerationalMemory.archive_message(...)
+  # turn 9 ARCHIVE → not present in final_messages; its facts are returned in archived_knowledge
   Message(turn=10, role="assistant", content="[Compacted (compaction_strategy=noop) turns 10-10]\n<turn 10 content>"),
   Message(turn=11, role=...,         content=<verbatim turn 11>),
   Message(turn=12, role="assistant", content="[Compacted (compaction_strategy=noop) turns 12-14]\n<turn 12>\n<turn 13>\n<turn 14>"),
@@ -105,8 +106,8 @@ A few invariants this example demonstrates:
    chronological interleaving with KEEP work.
 2. **ARCHIVE leaves a gap in turn numbering.** Turn 9 is missing from
    `final_messages`. That is intentional — its content is no longer in
-   the live context; what mattered about it lives in `PermanentGeneration`
-   as `KnowledgeEntry` objects.
+   the live context; what mattered about it is returned alongside the
+   messages as `KnowledgeEntry` objects, with supersession applied.
 3. **Singleton compact runs are still compacted.** Turn 10 is alone but
    still goes through `BaseCompactor.compact([turn 10])`. The Composer
    does not "skip compaction if the run is short" — that is the
@@ -127,7 +128,7 @@ is in **exactly one** of three places:
 | Location                    | Which messages                                              | Visible to the LLM? |
 |-----------------------------|-------------------------------------------------------------|---------------------|
 | `final_messages` (returned) | KEEP entries verbatim, plus one summary message per compact run | Yes              |
-| `PermanentGeneration`       | `KnowledgeEntry` records from ARCHIVE messages — extracted, or a verbatim `RAW` entry when extraction finds nothing | No (queried separately later phases) |
+| `archived_knowledge` (returned) | `KnowledgeEntry` records from ARCHIVE messages — extracted, or a verbatim `RAW` entry when extraction finds nothing | Only if the caller injects them |
 | Nowhere                     | (intentionally empty — no message is silently dropped)      | —                   |
 
 The "nowhere" row is the invariant. **Every classified message is
@@ -170,18 +171,19 @@ the other.
 ```
                     Scorer ─► SweepResult ─► COMPOSER ─► final_messages ─► LLM
                                                 │
-                                                └─► GenerationalMemory.archive_message(...)
+                                                └─► GenerationalMemory.extract_knowledge(...)
                                                           │
                                                           ▼
-                                                    PermanentGeneration
-                                                  (KnowledgeEntry records)
+                                                  archived_knowledge
+                                            (returned to the caller; stored nowhere)
 ```
 
 The Composer is the only arrow with a fork — every other component in
 the pipeline produces a single output. That fork is the reason it earns
 its own ADR: it is the place where the engine's data-flow stops being
-linear, and the rule "*only* the composer writes to memory" is what keeps
-that fork from spreading. That is also why it is documented apart from
+linear. It ends in a returned value rather than a store, so one composer
+serving several conversations can never mix their facts — a shared store here
+once did exactly that. That is also why it is documented apart from
 [compaction-mechanism.md](compaction-mechanism.md), which covers the
 component it delegates to.
 

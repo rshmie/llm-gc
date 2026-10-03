@@ -369,15 +369,12 @@ class TestItIsInterchangeableWithTheNoOp:
         is the test that says so."""
         from llm_gc.engine.compaction import NoOpCompactor
         from llm_gc.engine.generations import GenerationalMemory
-        from llm_gc.engine.generations.permanent_generation import PermanentGeneration
         from llm_gc.extraction import KnowledgeExtractor
 
         def _memory(compactor):
             bus = EventBus()
             return GenerationalMemory(
-                event_bus=bus,
                 knowledge_extractor=KnowledgeExtractor(event_bus=bus),
-                permanent_generation=PermanentGeneration(event_bus=bus),
                 compactor=compactor,
             )
 
@@ -385,11 +382,8 @@ class TestItIsInterchangeableWithTheNoOp:
         llm_memory = _memory(LLMCompactor(event_bus=bus, provider=FakeProvider(responses=[_response("Short.")])))
         noop_memory = _memory(NoOpCompactor(event_bus=bus))
 
-        asyncio.run(llm_memory.promote_to_old_gen(RUN))
-        asyncio.run(noop_memory.promote_to_old_gen(RUN))
-
-        llm_summary = llm_memory.get_old_gen()[0]
-        noop_summary = noop_memory.get_old_gen()[0]
+        llm_summary = asyncio.run(llm_memory.summarise(RUN)).summary
+        noop_summary = asyncio.run(noop_memory.summarise(RUN)).summary
 
         # Same slot, same shape, same contract — and the whole point, a different
         # size. The no-op is larger than the run it replaced; the real one is not.

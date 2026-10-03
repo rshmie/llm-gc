@@ -1,13 +1,14 @@
 import time
 from collections import deque
+from collections.abc import Callable
 
 from llm_gc.config import GCConfig
 from llm_gc.config.constants import DEFAULT_MAX_RECENT_TRANSITIONS
 from llm_gc.engine import GCResult
-from llm_gc.engine.generations import GenerationalMemory
 from llm_gc.engine.sweep import SweepClassification, SweepResult
 from llm_gc.events import Event, EventBus, EventType
 from llm_gc.models import KnowledgeEntry, Message
+from llm_gc.models.generation_snapshot import GenerationSnapshot
 from llm_gc.monitoring.context_health import (
     GenerationTransition,
     TransitionType,
@@ -19,11 +20,14 @@ from llm_gc.monitoring.context_health import (
 
 
 class ContextHealthMonitor:
-    def __init__(self, event_bus: EventBus, gc_config: GCConfig, generational_memory: GenerationalMemory,
+    def __init__(self, event_bus: EventBus, gc_config: GCConfig, read_generations: Callable[[], GenerationSnapshot],
                  max_recent_transitions: int = DEFAULT_MAX_RECENT_TRANSITIONS) -> None:
         self.event_bus = event_bus
         self.gc_config = gc_config
-        self.generational_memory = generational_memory
+        # How to read the generations of the conversation this monitor describes.
+        # A function rather than a store, because generations belong to a session
+        # and only the caller knows which one.
+        self.read_generations = read_generations
         # The last GC pass and the timestamp of the event that reported it, held as
         # one value because they are only ever meaningful together. Two separate
         # Optionals would let a future edit set one without the other, and the
@@ -49,7 +53,7 @@ class ContextHealthMonitor:
         generations. That inference both missed real promotions (a turn first seen
         as COMPACT has no prior KEEP to diff against) and reported promotions that
         never happened (the stateless collect path classifies COMPACT but never
-        calls promote_to_old_gen, so old gen stays empty). The producer knows what
+        promotes anything into old gen). The producer knows what
         it moved; the monitor just writes it down.
         """
         for turn_index in event.data["source_turn_indices"]:
@@ -168,13 +172,14 @@ class ContextHealthMonitor:
         # promotes, it reported a populated old gen that was in fact empty. The
         # summaries carry the turn index of the first turn in their run, so the
         # indices still point back at where the content came from.
-        old_gen_messages = self.generational_memory.get_old_gen()
+        generations = self.read_generations()
+        old_gen_messages = list(generations.old)
         old_gen_turn_indices = [message.turn_index for message in old_gen_messages]
         old_gen_tokens = sum(message.token_count for message in old_gen_messages)
 
         # Permanent-gen contents and the transitions log are standing facts,
         # real even before any GC pass has ever run.
-        permanent_gen_entries = self.generational_memory.get_permanent_gen()
+        permanent_gen_entries = generations.active_knowledge
         return GenerationLifeCycleSignal(young_gen_count=len(young_gen_turn_indices),
                                          old_gen_count=len(old_gen_turn_indices),
                                          permanent_gen_count=len(permanent_gen_entries),

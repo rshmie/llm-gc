@@ -55,8 +55,10 @@ class GarbageCollector:
             current_stage = "sweep"
             sweep_result = self.sweeper.sweep(messages, scores)
             current_stage = "compose"
-            final_messages = await self.context_composer.compose(sweep_result)
+            composition = await self.context_composer.compose(sweep_result)
+            final_messages = composition.messages
             gc_result = GCResult(final_messages=final_messages, gc_run_id=gc_run_id, status=GCStatus.COMPLETED,
+                                 archived_knowledge=list(composition.archived_knowledge),
                                  tokens_before=original_token_count, tokens_in_final=sum(m.token_count for m in final_messages),
                                  kept_count=sweep_result.classification_counts[SweepClassification.KEEP], compacted_count=sweep_result.classification_counts[SweepClassification.COMPACT],
                                  archived_count=sweep_result.classification_counts[SweepClassification.ARCHIVE],
