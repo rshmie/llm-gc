@@ -468,6 +468,8 @@ def main() -> None:
     parser.add_argument("--threshold", type=float, default=0.5, help="fraction of the window that triggers GC")
     parser.add_argument("--keep", type=float, default=0.55, help="score at or above which a turn stays verbatim")
     parser.add_argument("--archive", type=float, default=0.25, help="score below which a turn is archived")
+    parser.add_argument("--memory-ratio", type=float, default=0.1,
+                        help="fraction of the window the injected memory block may occupy")
     parser.add_argument("-v", "--verbose", action="store_true", help="print every turn's score and classification")
     parser.add_argument("--compactor", choices=("noop", "llm"), default="noop",
                         help="noop = the shipped baseline that expands; llm = LLMCompactor")
@@ -484,6 +486,7 @@ def main() -> None:
         archive_threshold=args.archive,
         min_compactable_tokens=10,
         last_n_turns_to_keep=3,
+        max_memory_ratio=args.memory_ratio,
     )
     asyncio.run(trace(config, verbose=args.verbose, compactor_kind=args.compactor, api_key=api_key))
 
