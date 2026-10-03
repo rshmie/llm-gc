@@ -574,3 +574,122 @@ class TestTheMemoryBudgetCannotInvertTheSaving:
         assert GCConfig(context_window=200, max_memory_ratio=0.1).max_memory_tokens == 20
         # One source of truth: there is no stored absolute to drift from the window.
         assert GCConfig(context_window=128_000, max_memory_ratio=0.0).max_memory_tokens == 0
+
+
+def _sse(*texts: str, stop: bool = True, error: bool = False) -> bytes:
+    def event(payload: dict) -> str:
+        return f"event: {payload['type']}\ndata: {json.dumps(payload)}\n\n"
+
+    out = event({"type": "message_start", "message": {"id": "m", "role": "assistant", "content": []}})
+    out += "".join(
+        event({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": t}}) for t in texts
+    )
+    if error:
+        out += event({"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}})
+    if stop:
+        out += event({"type": "message_stop"})
+    return out.encode()
+
+
+def _streaming_upstream(body: bytes):
+    return lambda request: httpx2.Response(200, content=body, headers={"content-type": "text/event-stream"})
+
+
+class TestStreaming:
+    def test_the_stream_reaches_the_client_byte_for_byte(self):
+        body = _sse("Postgres, ", "partitioned by day.")
+        client, _, _, _ = _proxy(_streaming_upstream(body))
+        response = _post(client, _body(("user", "which database?"), stream=True))
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        assert response.content == body
+
+    def test_both_halves_of_a_streamed_exchange_are_recorded(self):
+        """The defect this suite exists for: before streaming was handled, the
+        reply was dropped and the engine scored a conversation with a silent
+        assistant."""
+        client, service, _, _ = _proxy(_streaming_upstream(_sse("Postgres, ", "partitioned by day.")))
+        _post(client, _body(("user", "which database?"), stream=True), headers={SESSION_HEADER: "s"})
+
+        state = service.session_manager.store.get("s")
+        assert [m.role for m in state.messages] == ["user", "assistant"]
+        assert state.messages[-1].content == "Postgres, partitioned by day."
+
+    @pytest.mark.parametrize("broken", [_sse("half an", stop=False), _sse("partial", error=True)],
+                             ids=["truncated", "provider-error-event"])
+    def test_an_unfinished_stream_records_nothing_and_says_so(self, broken):
+        """The client will retry it; recording it would put the turn in twice."""
+        client, service, _, _ = _proxy(_streaming_upstream(broken))
+        _post(client, _body(("user", "which database?"), stream=True), headers={SESSION_HEADER: "s"})
+
+        assert service.session_manager.store.get("s").messages == []
+        assert client.get("/stats").json()["streams_unrecorded"] == 1
+
+    def test_an_error_status_on_a_stream_request_passes_through_verbatim(self):
+        error = {"type": "error", "error": {"type": "rate_limit_error", "message": "slow down"}}
+        client, service, _, _ = _proxy(lambda request: httpx2.Response(429, json=error))
+        response = _post(client, _body(("user", "which database?"), stream=True), headers={SESSION_HEADER: "s"})
+
+        assert response.status_code == 429
+        assert response.json() == error
+        assert service.session_manager.store.get("s").messages == []
+
+    def test_a_gc_failure_still_streams_the_original_request(self, monkeypatch):
+        body = _sse("fine")
+        client, service, _, seen = _proxy(_streaming_upstream(body))
+
+        async def broken(*args, **kwargs):
+            raise RuntimeError("engine bug")
+
+        monkeypatch.setattr(service, "gc_collect", broken)
+        response = _post(client, _body(("user", "which database?"), stream=True))
+        assert response.content == body
+        assert _sent(seen)["stream"] is True
+
+
+class TestStreamingIsIncremental:
+    """Driven at the ASGI level: TestClient reads the whole body before returning,
+    so it cannot tell a relayed stream from a buffered one."""
+
+    def test_the_first_chunk_reaches_the_client_before_the_upstream_finishes(self):
+        first, rest = _sse("Postgres", stop=False), _sse(", partitioned by day.")
+
+        async def scenario():
+            gate = asyncio.Event()
+
+            async def upstream_body():
+                yield first
+                await gate.wait()
+                yield rest
+
+            client, _, _, _ = _proxy(lambda request: httpx2.Response(
+                200, content=upstream_body(), headers={"content-type": "text/event-stream"}))
+            sent: list[dict] = []
+            first_body = asyncio.Event()
+
+            async def send(message):
+                sent.append(message)
+                if message["type"] == "http.response.body" and message.get("body"):
+                    first_body.set()
+
+            payload = json.dumps(_body(("user", "which database?"), stream=True)).encode()
+            received = iter([{"type": "http.request", "body": payload, "more_body": False}])
+
+            async def receive():
+                try:
+                    return next(received)
+                except StopIteration:
+                    await asyncio.Event().wait()  # the client never disconnects
+
+            scope = {"type": "http", "method": "POST", "path": "/v1/messages", "headers": [
+                (b"content-type", b"application/json"), (b"x-api-key", API_KEY.encode())],
+                "query_string": b"", "http_version": "1.1", "scheme": "http", "server": ("t", 80)}
+
+            task = asyncio.create_task(client.app(scope, receive, send))
+            await asyncio.wait_for(first_body.wait(), timeout=2)
+            delivered_early = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
+            gate.set()
+            await asyncio.wait_for(task, timeout=2)
+            return delivered_early
+
+        assert asyncio.run(scenario()) == _sse("Postgres", stop=False)

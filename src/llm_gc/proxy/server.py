@@ -21,11 +21,13 @@ from typing import Any
 
 import httpx2
 from fastapi import FastAPI, Request, Response
+from fastapi.responses import StreamingResponse
 
 from llm_gc.config.constants import APP_VERSION
 from llm_gc.engine.gc_service import GcService
 from llm_gc.exceptions import ConfigError
 from llm_gc.models import Message
+from llm_gc.proxy.anthropic_stream import StreamedReply
 from llm_gc.proxy.anthropic_translation import extract_messages, forwardable_headers, rewrite_messages
 from llm_gc.proxy.session_identity import SESSION_HEADER, resolve_session_id
 from llm_gc.utils import count_tokens
@@ -59,6 +61,8 @@ class ProxyMetrics:
         self.gc_bypassed = 0
         self.tokens_in_client_history = 0
         self.tokens_forwarded = 0
+        # Streams that reached the client but whose reply the engine never heard.
+        self.streams_unrecorded = 0
 
     def as_dict(self) -> dict[str, Any]:
         saved = self.tokens_in_client_history - self.tokens_forwarded
@@ -69,6 +73,7 @@ class ProxyMetrics:
             "tokens_in_client_history": self.tokens_in_client_history,
             "tokens_forwarded": self.tokens_forwarded,
             "tokens_saved": saved,
+            "streams_unrecorded": self.streams_unrecorded,
             # None, not 1.0: a ratio with no requests behind it is not a measurement.
             "ratio": (
                 round(self.tokens_forwarded / self.tokens_in_client_history, 3)
@@ -167,6 +172,7 @@ async def _handle(app: FastAPI, request: Request) -> Response:
         metrics.gc_bypassed += 1
         return await _forward(app, body, headers)
 
+    streaming = payload.get("stream") is True
     session_id = resolve_session_id(client_messages, request.headers.get(SESSION_HEADER))
     new_turn = client_messages[-1]
     client_history_tokens = sum(message.token_count for message in client_messages)
@@ -182,6 +188,8 @@ async def _handle(app: FastAPI, request: Request) -> Response:
         metrics.gc_bypassed += 1
         # Counted as forwarded, so a bypass does not look free in /stats.
         metrics.tokens_forwarded += client_history_tokens
+        if streaming:
+            return await _forward_stream(app, body, headers, on_end=None)
         return await _forward(app, body, headers)
 
     metrics.tokens_forwarded += sum(message.token_count for message in forwarded_messages)
@@ -196,12 +204,27 @@ async def _handle(app: FastAPI, request: Request) -> Response:
         },
     )
 
+    if streaming:
+        def record_stream(reply: StreamedReply) -> None:
+            # An interrupted or errored stream is the streaming form of a failed
+            # request: the client will retry it, so recording it would double the turn.
+            if reply.completed and not reply.errored:
+                app.state.schedule(_age(app, session_id, new_turn, reply.text or None))
+                return
+            metrics.streams_unrecorded += 1
+            logger.warning("streamed reply not recorded", extra={
+                "session_id": session_id, "completed": reply.completed, "errored": reply.errored,
+                "abandoned": reply.abandoned, "malformed_events": reply.malformed_events,
+            })
+
+        return await _forward_stream(app, _dump_json(forward_body), headers, on_end=record_stream)
+
     response = await _forward(app, _dump_json(forward_body), headers)
 
     # Only record a successful exchange: otherwise session state describes a
     # conversation the client never had, and their retry records the turn twice.
     if response.status_code == 200:
-        app.state.schedule(_age(app, session_id, new_turn, response))
+        app.state.schedule(_age(app, session_id, new_turn, _reply_text(bytes(response.body))))
 
     return response
 
@@ -231,7 +254,7 @@ async def _apply_gc(
     return rewrite_messages(payload, forwarded), forwarded
 
 
-async def _age(app: FastAPI, session_id: str, new_turn: Message, response: Response) -> None:
+async def _age(app: FastAPI, session_id: str, new_turn: Message, reply_text: str | None) -> None:
     """Record both halves of the exchange after the client has their answer.
 
     Runs detached, so exceptions are logged rather than left to vanish unretrieved.
@@ -240,21 +263,22 @@ async def _age(app: FastAPI, session_id: str, new_turn: Message, response: Respo
         gc_service: GcService = app.state.gc_service
         await gc_service.gc_update(session_id, new_turn)
 
-        reply = _assistant_turn(response, new_turn.turn_index + 1)
-        if reply is not None:
+        if reply_text is not None:
+            reply = Message(role="assistant", content=reply_text, token_count=count_tokens(reply_text),
+                            turn_index=new_turn.turn_index + 1)
             await gc_service.gc_update(session_id, reply)
     except Exception:
         logger.exception("post-response aging failed", extra={"session_id": session_id})
 
 
-def _assistant_turn(response: Response, turn_index: int) -> Message | None:
-    """Read the provider's reply back out as a `Message`, or None.
+def _reply_text(body: bytes) -> str | None:
+    """Read the assistant's text out of a non-streamed reply, or None.
 
     None rather than raising: the client already has their answer, and a missing
     reply costs one turn of scoring accuracy.
     """
     try:
-        payload = _parse_json(bytes(response.body))
+        payload = _parse_json(body)
     except ValueError:
         return None
 
@@ -267,10 +291,7 @@ def _assistant_turn(response: Response, turn_index: int) -> Message | None:
         for block in blocks
         if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str)
     )
-    if not text:
-        return None
-
-    return Message(role="assistant", content=text, token_count=count_tokens(text), turn_index=turn_index)
+    return text or None
 
 
 async def _forward(app: FastAPI, body: bytes, headers: dict[str, str]) -> Response:
@@ -281,28 +302,97 @@ async def _forward(app: FastAPI, body: bytes, headers: dict[str, str]) -> Respon
     """
     client: httpx2.AsyncClient = app.state.http_client
     try:
-        upstream = await client.post(
-            f"{app.state.upstream_base_url}{MESSAGES_PATH}",
-            content=body,
-            headers={**headers, "content-type": "application/json"},
-            timeout=app.state.upstream_timeout_s,
-        )
+        upstream = await client.send(_upstream_request(app, body, headers))
     except httpx2.RequestError as err:
-        # 502: the failure is upstream of us, not the client's mistake.
-        logger.warning("could not reach the provider", extra={"error_type": type(err).__name__})
-        return Response(
-            content=_dump_json_bytes(
-                {"error": {"type": "api_error", "message": f"llm-gc could not reach the provider: {type(err).__name__}"}}
-            ),
-            status_code=502,
-            media_type="application/json",
-        )
+        return _unreachable(err)
+    return _verbatim(upstream, upstream.content)
 
-    return Response(
-        content=upstream.content,
+
+async def _forward_stream(
+    app: FastAPI,
+    body: bytes,
+    headers: dict[str, str],
+    *,
+    on_end: Callable[[StreamedReply], None] | None,
+) -> Response:
+    """Relay a streamed reply chunk by chunk, observing it on the way past.
+
+    `on_end` runs only when the upstream stream ran to its end. A client that
+    disconnects, or an upstream that drops mid-stream, never reaches it.
+    """
+    client: httpx2.AsyncClient = app.state.http_client
+    try:
+        upstream = await client.send(_upstream_request(app, body, headers), stream=True)
+    except httpx2.RequestError as err:
+        return _unreachable(err)
+
+    # An error status arrives as a JSON body, not a stream; pass it through whole.
+    if upstream.status_code != 200:
+        try:
+            content = await upstream.aread()
+        finally:
+            await upstream.aclose()
+        return _verbatim(upstream, content)
+
+    reply = StreamedReply()
+
+    async def relay() -> AsyncIterator[bytes]:
+        try:
+            # Decoded bytes: we strip `content-encoding`, so relaying raw gzip would
+            # hand the client compressed bytes labelled as plain text.
+            async for chunk in upstream.aiter_bytes():
+                reply.feed(chunk)
+                yield chunk
+        except httpx2.TransportError as err:
+            logger.warning("provider stream dropped mid-response", extra={"error_type": type(err).__name__})
+            raise
+        finally:
+            # Also runs on client disconnect, when the server closes this generator.
+            await upstream.aclose()
+        if on_end is not None:
+            on_end(reply)
+
+    return StreamingResponse(
+        relay(),
         status_code=upstream.status_code,
-        headers={k: v for k, v in upstream.headers.items() if k.lower() not in _RESPONSE_HOP_BY_HOP},
+        headers=_response_headers(upstream),
+        media_type=upstream.headers.get("content-type", "text/event-stream"),
+    )
+
+
+def _upstream_request(app: FastAPI, body: bytes, headers: dict[str, str]) -> httpx2.Request:
+    client: httpx2.AsyncClient = app.state.http_client
+    return client.build_request(
+        "POST",
+        f"{app.state.upstream_base_url}{MESSAGES_PATH}",
+        content=body,
+        headers={**headers, "content-type": "application/json"},
+        timeout=app.state.upstream_timeout_s,
+    )
+
+
+def _verbatim(upstream: httpx2.Response, content: bytes) -> Response:
+    return Response(
+        content=content,
+        status_code=upstream.status_code,
+        headers=_response_headers(upstream),
         media_type=upstream.headers.get("content-type", "application/json"),
+    )
+
+
+def _response_headers(upstream: httpx2.Response) -> dict[str, str]:
+    return {k: v for k, v in upstream.headers.items() if k.lower() not in _RESPONSE_HOP_BY_HOP}
+
+
+def _unreachable(err: httpx2.RequestError) -> Response:
+    # 502: the failure is upstream of us, not the client's mistake.
+    logger.warning("could not reach the provider", extra={"error_type": type(err).__name__})
+    return Response(
+        content=_dump_json_bytes(
+            {"error": {"type": "api_error", "message": f"llm-gc could not reach the provider: {type(err).__name__}"}}
+        ),
+        status_code=502,
+        media_type="application/json",
     )
 
 
