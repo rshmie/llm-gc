@@ -14,6 +14,13 @@ DEFAULT_ARCHIVE_THRESHOLD = 0.3
 DEFAULT_MIN_COMPACTABLE_TOKENS = 30
 DEFAULT_LAST_N_TURNS_TO_KEEP = 5
 DEFAULT_MAX_RECENT_TRANSITIONS = 20
+
+# Permanent-generation injection. The cap is what makes the system stable, not a
+# nicety: archiving produces facts, injected facts are real tokens, and more
+# pressure causes more archiving. Bounded, that loop converges; unbounded, memory
+# grows with the session and undoes the saving archiving produced.
+DEFAULT_MAX_MEMORY_TOKENS = 200   # whole injected block, header included
+DEFAULT_MAX_MEMORY_FACTS = 8      # retrieved before the token budget is applied
 # How long a coroutine waits for a session's lock before giving up.
 # On timeout the caller proceeds on last-persisted (possibly stale) state rather
 # than hang forever — a bounded wait keeps a stuck update from freezing the
@@ -54,3 +61,7 @@ def get_default_config() -> dict[str, str | int | float]:
         "min_compactable_tokens": DEFAULT_MIN_COMPACTABLE_TOKENS,
         "last_n_turns_to_keep": DEFAULT_LAST_N_TURNS_TO_KEEP,
     }
+# LLM compaction (rationale in doc/design/sweeper-and-composition/compaction-mechanism.md).
+DEFAULT_COMPACTION_TIMEOUT_S = 30.0       # wall-clock budget for one summarisation call
+DEFAULT_COMPACTION_TARGET_RATIO = 0.35    # output cap as a fraction of the run's own tokens
+DEFAULT_MIN_COMPACTION_OUTPUT_TOKENS = 64 # floor, so a short run still has room for one sentence

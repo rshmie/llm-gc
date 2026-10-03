@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import MagicMock
 
 import pytest
@@ -9,6 +10,17 @@ from llm_gc.events import EventBus, EventType
 from llm_gc.models import Message
 from llm_gc.scoring import RelevanceScorer
 from llm_gc.scoring.relevance_scorer_result import RelevanceScorerResult
+
+
+def _collect(gc, messages):
+    """Drive the now-async `collect` from a synchronous test body.
+
+    `pytest-asyncio` is not installed and the suite's one convention is
+    `asyncio.run` at the call site; this keeps that convention readable where the
+    call is nested inside another expression.
+    """
+    return asyncio.run(gc.collect(messages))
+
 
 
 # ---- Helper factories -------------------------------------------------------
@@ -121,7 +133,7 @@ class TestCollectCompleted:
         _wire_happy_path_mocks(scorer, sweeper, composer, messages)
         gc = _make_collector(config=config, scorer=scorer, sweeper=sweeper, composer=composer)
 
-        result = gc.collect(messages)
+        result = _collect(gc, messages)
 
         assert result.status == GCStatus.COMPLETED
 
@@ -132,7 +144,7 @@ class TestCollectCompleted:
         _wire_happy_path_mocks(scorer, sweeper, composer, messages)
         gc = _make_collector(config=config, scorer=scorer, sweeper=sweeper, composer=composer)
 
-        gc.collect(messages)
+        _collect(gc, messages)
 
         assert scorer.score.call_count == 4
 
@@ -143,7 +155,7 @@ class TestCollectCompleted:
         _wire_happy_path_mocks(scorer, sweeper, composer, messages)
         gc = _make_collector(config=config, scorer=scorer, sweeper=sweeper, composer=composer)
 
-        gc.collect(messages)
+        _collect(gc, messages)
 
         sweeper.sweep.assert_called_once()
         passed_messages, passed_scores = sweeper.sweep.call_args.args
@@ -157,7 +169,7 @@ class TestCollectCompleted:
         _wire_happy_path_mocks(scorer, sweeper, composer, messages)
         gc = _make_collector(config=config, scorer=scorer, sweeper=sweeper, composer=composer)
 
-        gc.collect(messages)
+        _collect(gc, messages)
 
         composer.compose.assert_called_once_with(sweeper.sweep.return_value)
 
@@ -170,7 +182,7 @@ class TestCollectCompleted:
         composer.compose.return_value = composed
         gc = _make_collector(config=config, scorer=scorer, sweeper=sweeper, composer=composer)
 
-        result = gc.collect(messages)
+        result = _collect(gc, messages)
 
         assert result.final_messages == composed
 
@@ -181,7 +193,7 @@ class TestCollectCompleted:
         _wire_happy_path_mocks(scorer, sweeper, composer, messages)
         gc = _make_collector(config=config, scorer=scorer, sweeper=sweeper, composer=composer)
 
-        result = gc.collect(messages)
+        result = _collect(gc, messages)
 
         assert result.failure_reason is None
         assert result.failure_stage is None
@@ -193,7 +205,7 @@ class TestCollectCompleted:
         _wire_happy_path_mocks(scorer, sweeper, composer, messages)
         gc = _make_collector(config=config, scorer=scorer, sweeper=sweeper, composer=composer)
 
-        result = gc.collect(messages)
+        result = _collect(gc, messages)
 
         assert result.sweep_result is sweeper.sweep.return_value
 
@@ -224,7 +236,7 @@ class TestCollectCompleted:
         )
         gc = _make_collector(config=config, scorer=scorer, sweeper=sweeper, composer=composer)
 
-        result = gc.collect(messages)
+        result = _collect(gc, messages)
 
         assert result.kept_count == 2
         assert result.compacted_count == 2
@@ -241,7 +253,7 @@ class TestCollectBypassedBelowThreshold:
     def test_returns_status_bypassed_below_threshold(self):
         gc = _make_collector()
 
-        result = gc.collect(_make_messages_below_threshold())
+        result = _collect(gc, _make_messages_below_threshold())
 
         assert result.status == GCStatus.BYPASSED_BELOW_THRESHOLD
 
@@ -249,7 +261,7 @@ class TestCollectBypassedBelowThreshold:
         messages = _make_messages_below_threshold()
         gc = _make_collector()
 
-        result = gc.collect(messages)
+        result = _collect(gc, messages)
 
         assert result.final_messages == messages
 
@@ -257,7 +269,7 @@ class TestCollectBypassedBelowThreshold:
         scorer = MagicMock(spec=RelevanceScorer)
         gc = _make_collector(scorer=scorer)
 
-        gc.collect(_make_messages_below_threshold())
+        _collect(gc, _make_messages_below_threshold())
 
         scorer.score.assert_not_called()
 
@@ -265,7 +277,7 @@ class TestCollectBypassedBelowThreshold:
         sweeper = MagicMock(spec=Sweeper)
         gc = _make_collector(sweeper=sweeper)
 
-        gc.collect(_make_messages_below_threshold())
+        _collect(gc, _make_messages_below_threshold())
 
         sweeper.sweep.assert_not_called()
 
@@ -273,21 +285,21 @@ class TestCollectBypassedBelowThreshold:
         composer = MagicMock(spec=ContextComposer)
         gc = _make_collector(composer=composer)
 
-        gc.collect(_make_messages_below_threshold())
+        _collect(gc, _make_messages_below_threshold())
 
         composer.compose.assert_not_called()
 
     def test_sweep_result_is_none(self):
         gc = _make_collector()
 
-        result = gc.collect(_make_messages_below_threshold())
+        result = _collect(gc, _make_messages_below_threshold())
 
         assert result.sweep_result is None
 
     def test_failure_fields_are_none(self):
         gc = _make_collector()
 
-        result = gc.collect(_make_messages_below_threshold())
+        result = _collect(gc, _make_messages_below_threshold())
 
         assert result.failure_reason is None
         assert result.failure_stage is None
@@ -296,7 +308,7 @@ class TestCollectBypassedBelowThreshold:
         messages = _make_messages_below_threshold()
         gc = _make_collector()
 
-        result = gc.collect(messages)
+        result = _collect(gc, messages)
 
         assert result.tokens_before == result.tokens_in_final
         assert result.tokens_saved == 0
@@ -319,7 +331,7 @@ class TestCollectBypassedOnError:
         scorer.score.side_effect = RuntimeError("scorer broke")
         gc = _make_collector(config=config, scorer=scorer)
 
-        result = gc.collect(messages)
+        result = _collect(gc, messages)
 
         assert result.status == GCStatus.BYPASSED_ON_ERROR
 
@@ -330,7 +342,7 @@ class TestCollectBypassedOnError:
         scorer.score.side_effect = RuntimeError("scorer broke")
         gc = _make_collector(config=config, scorer=scorer)
 
-        result = gc.collect(messages)
+        result = _collect(gc, messages)
 
         assert result.failure_stage == "score"
 
@@ -342,7 +354,7 @@ class TestCollectBypassedOnError:
         sweeper.sweep.side_effect = RuntimeError("sweeper broke")
         gc = _make_collector(config=config, scorer=scorer, sweeper=sweeper, composer=composer)
 
-        result = gc.collect(messages)
+        result = _collect(gc, messages)
 
         assert result.failure_stage == "sweep"
 
@@ -354,7 +366,7 @@ class TestCollectBypassedOnError:
         composer.compose.side_effect = RuntimeError("composer broke")
         gc = _make_collector(config=config, scorer=scorer, sweeper=sweeper, composer=composer)
 
-        result = gc.collect(messages)
+        result = _collect(gc, messages)
 
         assert result.failure_stage == "compose"
 
@@ -365,7 +377,7 @@ class TestCollectBypassedOnError:
         scorer.score.side_effect = RuntimeError("very specific message")
         gc = _make_collector(config=config, scorer=scorer)
 
-        result = gc.collect(messages)
+        result = _collect(gc, messages)
 
         assert "very specific message" in result.failure_reason
 
@@ -380,7 +392,7 @@ class TestCollectBypassedOnError:
         # (proxy, benchmark, CLI) must never see the exception. If this
         # assertion ever fails, the first-do-no-harm contract is broken.
         try:
-            gc.collect(messages)
+            _collect(gc, messages)
         except Exception as exc:  # noqa: BLE001 — intentionally broad
             pytest.fail(f"collect() raised {type(exc).__name__}: {exc}")
 
@@ -391,7 +403,7 @@ class TestCollectBypassedOnError:
         scorer.score.side_effect = RuntimeError("boom")
         gc = _make_collector(config=config, scorer=scorer)
 
-        result = gc.collect(messages)
+        result = _collect(gc, messages)
 
         # The fallback contract: if GC fails, the proxy still has a
         # forwardable list — the original messages.
@@ -404,7 +416,7 @@ class TestCollectBypassedOnError:
         scorer.score.side_effect = RuntimeError("scorer broke")
         gc = _make_collector(config=config, scorer=scorer)
 
-        result = gc.collect(messages)
+        result = _collect(gc, messages)
 
         assert result.sweep_result is None
 
@@ -422,8 +434,8 @@ class TestCollectRunIdentity:
         _wire_happy_path_mocks(scorer, sweeper, composer, messages)
         gc = _make_collector(config=config, scorer=scorer, sweeper=sweeper, composer=composer)
 
-        result1 = gc.collect(messages)
-        result2 = gc.collect(messages)
+        result1 = _collect(gc, messages)
+        result2 = _collect(gc, messages)
 
         assert result1.gc_run_id != result2.gc_run_id
 
@@ -434,7 +446,7 @@ class TestCollectRunIdentity:
         _wire_happy_path_mocks(scorer, sweeper, composer, messages)
         gc = _make_collector(config=config, scorer=scorer, sweeper=sweeper, composer=composer)
 
-        result = gc.collect(messages)
+        result = _collect(gc, messages)
 
         assert result.gc_run_id
         assert isinstance(result.gc_run_id, str)
@@ -442,7 +454,7 @@ class TestCollectRunIdentity:
     def test_run_id_is_non_empty_for_bypassed(self):
         gc = _make_collector()
 
-        result = gc.collect(_make_messages_below_threshold())
+        result = _collect(gc, _make_messages_below_threshold())
 
         assert result.gc_run_id
         assert isinstance(result.gc_run_id, str)
@@ -454,7 +466,7 @@ class TestCollectRunIdentity:
         scorer.score.side_effect = RuntimeError("boom")
         gc = _make_collector(config=config, scorer=scorer)
 
-        result = gc.collect(messages)
+        result = _collect(gc, messages)
 
         assert result.gc_run_id
         assert isinstance(result.gc_run_id, str)
@@ -466,7 +478,7 @@ class TestCollectRunIdentity:
         _wire_happy_path_mocks(scorer, sweeper, composer, messages)
         gc = _make_collector(config=config, scorer=scorer, sweeper=sweeper, composer=composer)
 
-        result = gc.collect(messages)
+        result = _collect(gc, messages)
 
         assert result.duration_ms >= 0
 
@@ -489,7 +501,7 @@ class TestCollectEventEmission:
         _wire_happy_path_mocks(scorer, sweeper, composer, messages)
         gc = _make_collector(event_bus=bus, config=config, scorer=scorer, sweeper=sweeper, composer=composer)
 
-        gc.collect(messages)
+        _collect(gc, messages)
 
         assert len(received) == 1
 
@@ -499,7 +511,7 @@ class TestCollectEventEmission:
         bus.subscribe(EventType.GC_FINISHED, lambda e: received.append(e))
         gc = _make_collector(event_bus=bus)
 
-        gc.collect(_make_messages_below_threshold())
+        _collect(gc, _make_messages_below_threshold())
 
         assert len(received) == 1
 
@@ -513,7 +525,7 @@ class TestCollectEventEmission:
         scorer.score.side_effect = RuntimeError("boom")
         gc = _make_collector(event_bus=bus, config=config, scorer=scorer)
 
-        gc.collect(messages)
+        _collect(gc, messages)
 
         assert len(received) == 1
 
@@ -527,7 +539,7 @@ class TestCollectEventEmission:
         _wire_happy_path_mocks(scorer, sweeper, composer, messages)
         gc = _make_collector(event_bus=bus, config=config, scorer=scorer, sweeper=sweeper, composer=composer)
 
-        returned = gc.collect(messages)
+        returned = _collect(gc, messages)
 
         emitted_result = received[0].data["gc_result"]
         # The reactive (event) and imperative (return) views of the same run
@@ -545,7 +557,7 @@ class TestCollectEventEmission:
         _wire_happy_path_mocks(scorer, sweeper, composer, messages)
         gc = _make_collector(event_bus=bus, config=config, scorer=scorer, sweeper=sweeper, composer=composer)
 
-        returned = gc.collect(messages)
+        returned = _collect(gc, messages)
 
         assert received[0].data["gc_run_id"] == returned.gc_run_id
 
@@ -564,7 +576,7 @@ class TestCollectThresholdBoundary:
         messages = [_make_message(token_count=23, turn_index=i) for i in range(3)]  # 69 total
         gc = _make_collector(config=config)
 
-        result = gc.collect(messages)
+        result = _collect(gc, messages)
 
         assert result.status == GCStatus.BYPASSED_BELOW_THRESHOLD
 
@@ -577,7 +589,7 @@ class TestCollectThresholdBoundary:
         _wire_happy_path_mocks(scorer, sweeper, composer, messages)
         gc = _make_collector(config=config, scorer=scorer, sweeper=sweeper, composer=composer)
 
-        result = gc.collect(messages)
+        result = _collect(gc, messages)
 
         assert result.status == GCStatus.COMPLETED
 
@@ -588,7 +600,7 @@ class TestCollectThresholdBoundary:
         _wire_happy_path_mocks(scorer, sweeper, composer, messages)
         gc = _make_collector(config=config, scorer=scorer, sweeper=sweeper, composer=composer)
 
-        result = gc.collect(messages)
+        result = _collect(gc, messages)
 
         assert result.status == GCStatus.COMPLETED
 
@@ -604,12 +616,12 @@ class TestCollectReturnType:
         _wire_happy_path_mocks(scorer, sweeper, composer, messages)
         gc = _make_collector(config=config, scorer=scorer, sweeper=sweeper, composer=composer)
 
-        assert isinstance(gc.collect(messages), GCResult)
+        assert isinstance(_collect(gc, messages), GCResult)
 
     def test_returns_gc_result_on_bypass(self):
         gc = _make_collector()
 
-        assert isinstance(gc.collect(_make_messages_below_threshold()), GCResult)
+        assert isinstance(_collect(gc, _make_messages_below_threshold()), GCResult)
 
     def test_returns_gc_result_on_error(self):
         config = GCConfig()
@@ -618,4 +630,4 @@ class TestCollectReturnType:
         scorer.score.side_effect = RuntimeError("boom")
         gc = _make_collector(config=config, scorer=scorer)
 
-        assert isinstance(gc.collect(messages), GCResult)
+        assert isinstance(_collect(gc, messages), GCResult)

@@ -128,7 +128,8 @@ class ContextHealthMonitor:
                                  tokens_before=gc_result.tokens_before, tokens_saved=gc_result.tokens_saved,
                                  gc_run_id=gc_result.gc_run_id, gc_status=gc_result.status,
                                  gc_completed_at=gc_completed_at, duration_ms=gc_result.duration_ms,
-                                 failure_reason=gc_result.failure_reason, failure_stage=gc_result.failure_stage)
+                                 failure_reason=gc_result.failure_reason, failure_stage=gc_result.failure_stage,
+                                 degradations=gc_result.degradations)
 
     @staticmethod
     def _compute_transformation_ratio(sweep_result: SweepResult | None) -> float | None:

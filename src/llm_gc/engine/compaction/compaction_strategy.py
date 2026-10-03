@@ -9,3 +9,4 @@ class CompactionStrategy(Enum):
     """
 
     NOOP = "noop"
+    LLM = "llm"

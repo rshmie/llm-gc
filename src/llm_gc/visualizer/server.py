@@ -98,10 +98,10 @@ def create_app() -> FastAPI:
         return {"context_window": gc_config.context_window, "gc_threshold": gc_config.gc_threshold}
 
     @app.post("/gc/run")
-    def run_gc() -> dict:
+    async def run_gc() -> dict:
         new_turns = app.state.feeder.next_turns()
         app.state.conversation = app.state.conversation + new_turns
-        gc_result = app.state.garbage_collector.collect(app.state.conversation)
+        gc_result = await app.state.garbage_collector.collect(app.state.conversation)
         app.state.conversation = gc_result.final_messages
         logger.info("Dashboard-triggered GC run finished",
                     extra={"gc_run_id": gc_result.gc_run_id, "status": gc_result.status.value})

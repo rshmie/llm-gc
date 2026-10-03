@@ -20,7 +20,7 @@ class BaseCompactor(ABC):
         self.event_bus = event_bus
 
     @abstractmethod
-    def compact(self, messages: list[Message]) -> CompactionResult:
+    async def compact(self, messages: list[Message]) -> CompactionResult:
         """Produce a single summary `Message` from a run of adjacent COMPACT-classified messages.
 
         Called by `ContextComposer` during `gc.collect` and by `gc.update` when a compact-run needs to be summarized.

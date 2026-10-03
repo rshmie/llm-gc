@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import MagicMock
 
 from llm_gc.engine.compaction import NoOpCompactor
@@ -6,6 +7,12 @@ from llm_gc.engine.sweep import SweepResult, SweepClassification, SweepEntry
 from llm_gc.events import EventBus, EventType
 from llm_gc.models import Message
 from llm_gc.utils import count_tokens
+
+
+def _compose(composer, sweep_result):
+    """Drive the now-async `compose` from a synchronous test body."""
+    return asyncio.run(composer.compose(sweep_result))
+
 
 
 def _make_message(content: str, token_count: int = 10, role: str = "user", turn_index: int = 0) -> Message:
@@ -68,7 +75,7 @@ class TestComposeAllKeep:
         ]
         composer = _make_composer()
 
-        result = composer.compose(_make_sweep_result(entries))
+        result = _compose(composer, _make_sweep_result(entries))
 
         assert result == [m1, m2, m3]
 
@@ -77,7 +84,7 @@ class TestComposeAllKeep:
         entries = [_make_sweep_entry(msg, SweepClassification.KEEP)]
         composer = _make_composer()
 
-        result = composer.compose(_make_sweep_result(entries))
+        result = _compose(composer, _make_sweep_result(entries))
 
         assert result[0].role == "system"
         assert result[0].token_count == 42
@@ -96,7 +103,7 @@ class TestComposeAllCompact:
         ]
         composer = _make_composer()
 
-        result = composer.compose(_make_sweep_result(entries))
+        result = _compose(composer, _make_sweep_result(entries))
 
         assert len(result) == 1
 
@@ -109,7 +116,7 @@ class TestComposeAllCompact:
         ]
         composer = _make_composer()
 
-        result = composer.compose(_make_sweep_result(entries))
+        result = _compose(composer, _make_sweep_result(entries))
 
         assert result[0].role == "assistant"
 
@@ -122,7 +129,7 @@ class TestComposeAllCompact:
         ]
         composer = _make_composer()
 
-        result = composer.compose(_make_sweep_result(entries))
+        result = _compose(composer, _make_sweep_result(entries))
 
         assert result[0].content == _expected_noop_summary_content([m1, m2])
 
@@ -137,7 +144,7 @@ class TestComposeAllCompact:
         ]
         composer = _make_composer()
 
-        result = composer.compose(_make_sweep_result(entries))
+        result = _compose(composer, _make_sweep_result(entries))
 
         # NoOpCompactor recomputes token count over the synthesized full
         # content (marker + verbatim), not as a sum of originals.
@@ -153,7 +160,7 @@ class TestComposeAllCompact:
         ]
         composer = _make_composer()
 
-        result = composer.compose(_make_sweep_result(entries))
+        result = _compose(composer, _make_sweep_result(entries))
 
         assert result[0].turn_index == 5
 
@@ -164,7 +171,7 @@ class TestComposeSingleCompact:
         entries = [_make_sweep_entry(msg, SweepClassification.COMPACT)]
         composer = _make_composer()
 
-        result = composer.compose(_make_sweep_result(entries))
+        result = _compose(composer, _make_sweep_result(entries))
 
         expected_content = _expected_noop_summary_content([msg])
         assert len(result) == 1
@@ -186,7 +193,7 @@ class TestComposeMixedKeepAndCompact:
         ]
         composer = _make_composer()
 
-        result = composer.compose(_make_sweep_result(entries))
+        result = _compose(composer, _make_sweep_result(entries))
 
         assert len(result) == 3
         assert result[0] == m1
@@ -208,7 +215,7 @@ class TestComposeMixedKeepAndCompact:
         ]
         composer = _make_composer()
 
-        result = composer.compose(_make_sweep_result(entries))
+        result = _compose(composer, _make_sweep_result(entries))
 
         assert len(result) == 3
         assert result[0].content == _expected_noop_summary_content([m1, m2])
@@ -226,7 +233,7 @@ class TestComposeMixedKeepAndCompact:
         ]
         composer = _make_composer()
 
-        result = composer.compose(_make_sweep_result(entries))
+        result = _compose(composer, _make_sweep_result(entries))
 
         assert len(result) == 2
         assert result[0] == m1
@@ -245,7 +252,7 @@ class TestComposeArchive:
         ]
         composer = _make_composer()
 
-        result = composer.compose(_make_sweep_result(entries))
+        result = _compose(composer, _make_sweep_result(entries))
 
         assert len(result) == 2
         assert result[0] == m1
@@ -257,7 +264,7 @@ class TestComposeArchive:
         entries = [_make_sweep_entry(m1, SweepClassification.ARCHIVE)]
         composer = _make_composer(generational_memory=mock_gen_mem)
 
-        composer.compose(_make_sweep_result(entries))
+        _compose(composer, _make_sweep_result(entries))
 
         mock_gen_mem.archive_message.assert_called_once_with(m1)
 
@@ -273,7 +280,7 @@ class TestComposeArchive:
         ]
         composer = _make_composer(generational_memory=mock_gen_mem)
 
-        composer.compose(_make_sweep_result(entries))
+        _compose(composer, _make_sweep_result(entries))
 
         assert mock_gen_mem.archive_message.call_count == 3
 
@@ -292,7 +299,7 @@ class TestComposeArchive:
         ]
         composer = _make_composer()
 
-        result = composer.compose(_make_sweep_result(entries))
+        result = _compose(composer, _make_sweep_result(entries))
 
         assert len(result) == 2
         assert result[0].content == _expected_noop_summary_content([m1, m2])
@@ -308,7 +315,7 @@ class TestComposeEventEmission:
         entries = [_make_sweep_entry(m1, SweepClassification.KEEP)]
         composer = _make_composer(event_bus=bus)
 
-        composer.compose(_make_sweep_result(entries))
+        _compose(composer, _make_sweep_result(entries))
 
         assert len(received_events) == 1
 
@@ -323,7 +330,7 @@ class TestComposeEventEmission:
         ]
         composer = _make_composer(event_bus=bus)
 
-        composer.compose(_make_sweep_result(entries))
+        _compose(composer, _make_sweep_result(entries))
 
         assert received_events[0].data["messages_kept"] == 2
 
@@ -338,7 +345,7 @@ class TestComposeEventEmission:
         ]
         composer = _make_composer(event_bus=bus)
 
-        composer.compose(_make_sweep_result(entries))
+        _compose(composer, _make_sweep_result(entries))
 
         assert received_events[0].data["messages_compacted"] == 3
 
@@ -352,7 +359,7 @@ class TestComposeEventEmission:
         ]
         composer = _make_composer(event_bus=bus)
 
-        composer.compose(_make_sweep_result(entries))
+        _compose(composer, _make_sweep_result(entries))
 
         assert received_events[0].data["messages_archived"] == 2
 
@@ -368,7 +375,7 @@ class TestComposeEventEmission:
         ]
         composer = _make_composer(event_bus=bus)
 
-        composer.compose(_make_sweep_result(entries))
+        _compose(composer, _make_sweep_result(entries))
 
         assert received_events[0].data["compact_runs_created"] == 2
 
@@ -386,7 +393,7 @@ class TestComposeEventEmission:
         ]
         composer = _make_composer(event_bus=bus)
 
-        composer.compose(_make_sweep_result(entries))
+        _compose(composer, _make_sweep_result(entries))
 
         # tokens_before is the sum of every classification's tokens fed into the sweeper-and-composition.
         assert received_events[0].data["tokens_before"] == 100

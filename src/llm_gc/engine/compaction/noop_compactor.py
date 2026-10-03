@@ -13,7 +13,7 @@ class NoOpCompactor(BaseCompactor):
     """
     COMPACTION_STRATEGY: CompactionStrategy = CompactionStrategy.NOOP
 
-    def compact(self, messages: list[Message]) -> CompactionResult:
+    async def compact(self, messages: list[Message]) -> CompactionResult:
         """Return the input conversation unmodified."""
         first_turn = messages[0].turn_index
         last_turn = messages[-1].turn_index

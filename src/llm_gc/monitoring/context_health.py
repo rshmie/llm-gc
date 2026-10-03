@@ -1,8 +1,8 @@
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
-from llm_gc.engine import GCStatus
+from llm_gc.engine import AgingDegradation, GCStatus
 from llm_gc.models import KnowledgeEntry
 
 
@@ -63,6 +63,27 @@ class GCBreakdownSignal(BaseModel):
     duration_ms: float
     failure_reason: str | None  # None unless gc_status is BYPASSED_ON_ERROR
     failure_stage: str | None   # "score" | "sweep" | "compose" | None
+
+    degradations: list[AgingDegradation] = Field(default_factory=list)
+    """What the pass intended and did not manage - copied from GCResult.
+
+    Carried alongside the counts because the counts are the sweeper's *decision*:
+    a pass whose compactions were all refused reports a non-zero compact_count and
+    files nothing. A dashboard rendering compact_count without this would draw
+    compactions that never happened, which is exactly the kind of confident-looking
+    falsehood this component exists to prevent. Empty on a clean pass.
+    """
+
+    @property
+    def is_degraded(self) -> bool:
+        """Whether this pass fell short of its own plan.
+
+        A named property rather than `len(signal.degradations) > 0` at each call
+        site, for the same reason `LLMResponse.is_complete` is one: this is the
+        check most likely to be forgotten, and the one whose absence fails
+        silently.
+        """
+        return bool(self.degradations)
 
 
 class GenerationTransition(BaseModel):

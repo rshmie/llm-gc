@@ -20,3 +20,8 @@ class EventType(Enum):
    # Fires once per compactor invocation, regardless of whether real compaction occurred. Subscribers should inspect `method` and the
    # token-count delta in the payload to determine the outcome.
    MESSAGE_COMPACTED = "message_compacted"
+   # Fires once per thing a completed GC pass intended and did not manage - a refused
+   # summary, a failed provider call, a failed archive. The affected turns stay in the
+   # young generation verbatim, so the context is correct but larger than intended.
+   # Emitted separately from GC_FINISHED
+   AGING_DEGRADED = "aging_degraded"

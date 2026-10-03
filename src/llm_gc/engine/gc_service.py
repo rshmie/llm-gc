@@ -3,11 +3,15 @@ import uuid
 from time import perf_counter
 
 from llm_gc.config.gc_config import GCConfig
+from llm_gc.engine.aging_degradation import AgingDegradation, DegradationReason
 from llm_gc.engine.gc_result import GCResult
 from llm_gc.engine.gc_status import GCStatus
+from llm_gc.engine.generations.fact_retriever import FactRetriever, LexicalFactRetriever
 from llm_gc.engine.generations.generational_memory import GenerationalMemory
+from llm_gc.engine.generations.memory_block import format_memory_block
 from llm_gc.engine.sweep import Sweeper, SweepResult
 from llm_gc.events import Event, EventBus, EventType
+from llm_gc.exceptions import CompactionRefused, LLMGCError
 from llm_gc.models import Message, SweepClassification
 from llm_gc.scoring import RelevanceScorer
 from llm_gc.session import SessionManager
@@ -35,31 +39,81 @@ class GcService:
 
     def __init__(self, session_manager: SessionManager, generational_memory: GenerationalMemory,
                  relevance_scorer: RelevanceScorer, sweeper: Sweeper, event_bus: EventBus,
-                 gc_config: GCConfig) -> None:
+                 gc_config: GCConfig, fact_retriever: FactRetriever | None = None) -> None:
         self.session_manager = session_manager
         self.generational_memory = generational_memory
         self.relevance_scorer = relevance_scorer
         self.sweeper = sweeper
         self.event_bus = event_bus
         self.gc_config = gc_config
+        # Defaulted rather than required, so existing wiring keeps working and a
+        # deployment with its own vector store supplies one instead. Ranking
+        # quality is tunable; that it happens at all is not.
+        self.fact_retriever = fact_retriever if fact_retriever is not None else LexicalFactRetriever()
 
-    def _assemble(self, young_messages: list[Message]) -> list[Message]:
-        """Stitch old-generation summaries together with young turns, in turn order.
+    def _assemble(self, young_messages: list[Message], query: str | None = None) -> list[Message]:
+        """Stitch all three generations together, in turn order.
 
         The single definition of "the context this session would send". Both
         `gc_collect` (which returns it) and `gc_update` (which reports it as
         `final_messages`) call this, so the number the dashboard shows and the
         payload the proxy forwards can never drift apart.
 
-        An old-gen summary carries the turn index of the first turn in its run,
-        so sorting by `turn_index` slots it back into its original position and
-        the conversation still reads chronologically.
+        Three generations, in increasing order of compression:
+
+        - **permanent** - facts recovered from turns that were archived, as one
+          announced memory block. Retrieved rather than dumped: permanent
+          generation accumulates for the life of the session, and injecting all of
+          it would recreate the unbounded growth that archiving exists to stop.
+        - **old** - summaries. Each carries the turn index of the first turn in its
+          run, so sorting slots it back into position.
+        - **young** - verbatim turns.
+
+        Sorting by `turn_index` keeps the conversation chronological; the memory
+        block uses index -1 so it precedes every real turn without colliding with
+        turn 0, which may still be present.
+
+        Args:
+            young_messages: The verbatim turns this session still holds.
+            query: Text to rank stored facts against, normally the turn about to be
+                sent. None falls back to the most recent facts - a caller with no
+                query has not asked for no memory.
         """
         assembled = self.generational_memory.get_old_gen() + young_messages
         assembled.sort(key=lambda message: message.turn_index)
+
+        memory_block = self._build_memory_block(query)
+        if memory_block is not None:
+            # Prepended, not sorted in: the block is not a turn, and giving it a
+            # real turn index would make it compete for position with the turns it
+            # summarises.
+            return [memory_block] + assembled
         return assembled
 
-    async def gc_collect(self, session_id: str) -> list[Message]:
+    def _build_memory_block(self, query: str | None) -> Message | None:
+        """Retrieve the relevant stored facts and render them, or None.
+
+        Both budgets are checked here rather than inside the retriever, because
+        "how many to consider" and "how many tokens they may occupy" are the
+        caller's policy and the retriever's job is only ranking. Zero on either
+        knob disables injection entirely, which is how a deployment opts out and
+        how a benchmark measures what injection is worth.
+        """
+        if self.gc_config.max_memory_facts <= 0 or self.gc_config.max_memory_tokens <= 0:
+            return None
+
+        # Active entries only - supersession has already been applied, so a fact
+        # that was contradicted later never reaches the prompt. That is the whole
+        # point of tracking supersession: without this filter the model would read
+        # "the database is postgres" and "the database is mysql" as equal claims.
+        entries = self.generational_memory.get_permanent_gen()
+        if not entries:
+            return None
+
+        relevant = self.fact_retriever.retrieve(entries, query, self.gc_config.max_memory_facts)
+        return format_memory_block(relevant, self.gc_config.max_memory_tokens)
+
+    async def gc_collect(self, session_id: str, query: str | None = None) -> list[Message]:
         """Hot path: assemble the cleaned context for a session.
 
         No scoring here - `gc_update` already did that work; collect only reads
@@ -71,7 +125,11 @@ class GcService:
         overwrite the last real run's breakdown with a no-op.
         """
         async with self.session_manager.acquire(session_id) as state:
-            return self._assemble(state.messages)
+            # The query is the incoming turn, which only the caller has: collect
+            # runs *before* the turn is recorded. Optional so existing callers keep
+            # working, and so a caller that genuinely has no query (a dashboard
+            # reading the context) still gets memory, ranked by recency.
+            return self._assemble(state.messages, query=query)
 
     async def gc_update(self, session_id: str, new_turn: Message) -> None:
         """Cold path, fire-and-forget: fold a new turn into session state and,
@@ -132,7 +190,7 @@ class GcService:
                     current_stage = "sweep"
                     sweep_result = self.sweeper.sweep(state.messages, scores)
                     current_stage = "age"
-                    departed_turn_indices = self._age_out_turns(session_id, sweep_result)
+                    departed_turn_indices, degradations = await self._age_out_turns(session_id, sweep_result)
 
                     # The departed turns leave the young generation - their
                     # summaries (old gen) or facts (permanent gen) now stand in for
@@ -142,6 +200,13 @@ class GcService:
                     if departed_turn_indices:
                         state.messages = [m for m in state.messages
                                           if m.turn_index not in departed_turn_indices]
+
+                    # The old generation's own aging pass. Inside the pressure
+                    # gate with everything else: evicting summaries nobody needed
+                    # evicted is what the gate exists to prevent.
+                    current_stage = "sweep_old_gen"
+                    evicted, old_gen_degradations = self._sweep_old_gen(session_id, state.messages)
+                    degradations.extend(old_gen_degradations)
 
                     final_messages = self._assemble(state.messages)
                     counts = sweep_result.classification_counts
@@ -157,10 +222,12 @@ class GcService:
                         compacted_count=counts[SweepClassification.COMPACT],
                         archived_count=counts[SweepClassification.ARCHIVE],
                         sweep_result=sweep_result, duration_ms=(perf_counter() - start) * 1000,
+                        degradations=degradations,
                     )
                     logger.debug("gc_update completed",
                                  extra={"session_id": session_id, "gc_run_id": gc_run_id,
                                         "turns_aged_out": len(departed_turn_indices),
+                                        "old_gen_summaries_evicted": evicted,
                                         "young_remaining": len(state.messages)})
                 except Exception as e:
                     # First do no harm: the mark stage failed before anything was
@@ -185,10 +252,17 @@ class GcService:
                                   data={"gc_run_id": gc_run_id, "session_id": session_id,
                                         "gc_result": gc_result}))
 
-    def _age_out_turns(self, session_id: str, sweep_result: SweepResult) -> set[int]:
+    async def _age_out_turns(
+        self, session_id: str, sweep_result: SweepResult
+    ) -> tuple[set[int], list[AgingDegradation]]:
         """ACT: each turn's current classification is its instruction. COMPACT ->
         summarise into old gen; ARCHIVE -> extract its facts into permanent gen.
-        Returns the turn indices that successfully left the young generation.
+
+        Returns the turn indices that successfully left the young generation, and a
+        record of everything this pass intended and did not manage. The second half
+        is not optional bookkeeping: the GCResult counts describe the *sweeper's
+        decision*, so a pass whose compactions were all refused would otherwise
+        report five compactions and file none, and no consumer could tell.
 
         State-based, not a diff against the last pass: an acted-on turn is
         *removed*, so it can never be re-processed - there is nothing to
@@ -205,18 +279,185 @@ class GcService:
         KeyboardInterrupt / SystemExit still propagate.
         """
         departed_turn_indices: set[int] = set()
+        degradations: list[AgingDegradation] = []
+        # Adjacent COMPACT turns are summarised together, as one run. Promoting
+        # them one at a time is what the session path used to do, and with a real
+        # LLMCompactor it cannot work: every summary carries a ~15-token provenance
+        # marker, so a single 20-token turn can never be replaced by something
+        # shorter than itself and the compactor refuses every promotion. Grouping
+        # also produces better summaries - a run of turns has a thread to follow,
+        # where one turn in isolation has only itself. Same grouping rule as
+        # ContextComposer.compose: a run breaks at the first non-COMPACT turn, so
+        # a summary never spans turns that were separated by a kept one.
+        compact_run: list[Message] = []
+
         for entry in sweep_result.sweep_entries:
-            try:
-                if entry.classification == SweepClassification.COMPACT:
-                    self.generational_memory.promote_to_old_gen([entry.message])
-                    departed_turn_indices.add(entry.turn_index)
-                elif entry.classification == SweepClassification.ARCHIVE:
+            if compact_run and entry.classification != SweepClassification.COMPACT:
+                departed, degradation = await self._promote_run(session_id, compact_run)
+                departed_turn_indices |= departed
+                if degradation is not None:
+                    degradations.append(degradation)
+                compact_run = []
+
+            if entry.classification == SweepClassification.COMPACT:
+                compact_run.append(entry.message)
+            elif entry.classification == SweepClassification.ARCHIVE:
+                try:
                     self.generational_memory.archive_message(entry.message)
                     departed_turn_indices.add(entry.turn_index)
-            except Exception:
+                except Exception as err:
+                    logger.exception(
+                        "Failed to archive turn out of young generation; leaving it for retry",
+                        extra={"session_id": session_id, "turn_index": entry.turn_index,
+                               "classification": entry.classification.value},
+                    )
+                    degradations.append(
+                        self._record_degradation(
+                            session_id, DegradationReason.ARCHIVE_FAILED, [entry.turn_index], err
+                        )
+                    )
+
+        if compact_run:
+            departed, degradation = await self._promote_run(session_id, compact_run)
+            departed_turn_indices |= departed
+            if degradation is not None:
+                degradations.append(degradation)
+
+        return departed_turn_indices, degradations
+
+    def _sweep_old_gen(self, session_id: str, young_messages: list[Message]) -> tuple[int, list[AgingDegradation]]:
+        """Score the old generation and archive the summaries that have gone cold.
+
+        Without this, a turn's journey ends at old gen: `_old_gen` is append-only,
+        so the assembled context grows by one summary per aged run forever. Old gen
+        becomes the leak that young gen was fixed to avoid.
+
+        **Two bands here, not three.** A summary is kept or archived. The
+        sweep strategy's middle band - re-compact into a longer-horizon summary -
+        is deliberately not used: summarising a summary compounds loss, because each
+        pass through a model drops detail and the second pass drops detail about
+        detail we can no longer inspect. It also costs a model call per eviction,
+        where extraction costs none. A benchmark showing re-compaction retains more
+        than extraction would reopen it. Since the decision is binary, this
+        compares the score to `archive_threshold` directly rather than reusing
+        `ThresholdSweepStrategy`, whose three-way split has no middle band to mean
+        anything here.
+
+        **Scored against the assembled context, not against old gen alone.**
+        Recency is positional, and a summary's age is its distance from the newest
+        turn in the real conversation. Scoring summaries among themselves would
+        make the oldest surviving summary always look recent, so the coldest
+        summary would be permanently safe - exactly the bug that would make this
+        pass look like it worked while bounding nothing.
+
+        No separate token budget. Summaries carry the first turn index of their
+        run, so decay already applies and the bound already exists; a budget would
+        be a second mechanism able to disagree with the score. The thing to watch
+        is whether decay bounds old gen *fast enough*, which is a measurement, not
+        an argument.
+
+        Returns the number of summaries evicted, and a record of any that could not
+        be.
+        """
+        old_gen = self.generational_memory.get_old_gen()
+        if not old_gen:
+            return 0, []
+
+        # Same list the caller will send, so positional recency means what it says.
+        assembled = sorted(old_gen + young_messages, key=lambda message: message.turn_index)
+
+        evicted = 0
+        degradations: list[AgingDegradation] = []
+        for summary in old_gen:
+            score = self.relevance_scorer.score(summary, assembled).combined_score
+            if score >= self.gc_config.archive_threshold:
+                continue
+            try:
+                self.generational_memory.evict_from_old_gen(summary)
+                evicted += 1
+            except Exception as err:
                 logger.exception(
-                    "Failed to age turn out of young generation; leaving it for retry",
-                    extra={"session_id": session_id, "turn_index": entry.turn_index,
-                           "classification": entry.classification.value},
+                    "Failed to archive an old-gen summary; leaving it in old gen",
+                    extra={"session_id": session_id, "turn_index": summary.turn_index},
                 )
-        return departed_turn_indices
+                degradations.append(
+                    self._record_degradation(
+                        session_id, DegradationReason.ARCHIVE_FAILED, [summary.turn_index], err
+                    )
+                )
+
+        # Iterating `old_gen` (a copy) while `evict_from_old_gen` mutates the real
+        # list is safe precisely because `get_old_gen` returns a copy. Iterating the
+        # live list and removing from it would skip elements.
+        return evicted, degradations
+
+    async def _promote_run(
+        self, session_id: str, compact_run: list[Message]
+    ) -> tuple[set[int], AgingDegradation | None]:
+        """Summarise one run into old gen; return what left and what degraded.
+
+        All-or-nothing per run, not per turn: the summary covers the whole run, so
+        filing it while leaving one of its turns young would send both the summary
+        and the original. On failure the entire run stays young and verbatim, which
+        costs one wasted call and loses nothing.
+
+        A `CompactionRefused` is reported separately from a provider failure even
+        though both leave the run verbatim, because the next action differs. A
+        refusal is the guard working - the summary was truncated, empty, or no
+        shorter than its input - and the usual remedy is a *different run* rather
+        than the same call again, which the next pass produces for free as more
+        turns cool and the run grows. A provider failure means check the provider.
+        """
+        turn_indices = [message.turn_index for message in compact_run]
+
+        try:
+            await self.generational_memory.promote_to_old_gen(compact_run)
+        except CompactionRefused as err:
+            logger.warning(
+                "Compaction refused; the run stays verbatim for the next pass",
+                extra={"session_id": session_id, "turn_indices": turn_indices, "detail": str(err)},
+            )
+            return set(), self._record_degradation(
+                session_id, DegradationReason.COMPACTION_REFUSED, turn_indices, err
+            )
+        except Exception as err:
+            logger.exception(
+                "Failed to promote a run out of young generation; leaving it for retry",
+                extra={"session_id": session_id, "turn_indices": turn_indices},
+            )
+            return set(), self._record_degradation(
+                session_id, DegradationReason.COMPACTION_FAILED, turn_indices, err
+            )
+        return set(turn_indices), None
+
+    def _record_degradation(
+        self, session_id: str, reason: DegradationReason, turn_indices: list[int], err: Exception
+    ) -> AgingDegradation:
+        """Build the record and announce it on the bus.
+
+        Emitted here rather than only folded into GC_FINISHED so a subscriber gets
+        the detail as it happens, and so degradation is never something a consumer
+        has to infer from counts that do not add up.
+
+        The message is taken from the exception only when it is one of ours:
+        `LLMGCError` messages are content-free by the convention documented in
+        `exceptions.py`, while an arbitrary exception - including from a
+        third-party compactor - is not a boundary we control, and event payloads
+        reach the dashboard over HTTP.
+        """
+        if isinstance(err, LLMGCError):
+            degradation = AgingDegradation(
+                reason=reason, turn_indices=turn_indices, error_code=err.code, detail=str(err)
+            )
+        else:
+            degradation = AgingDegradation(
+                reason=reason, turn_indices=turn_indices, error_code=None, detail=type(err).__name__
+            )
+
+        self.event_bus.emit(
+            Event(
+                event_type=EventType.AGING_DEGRADED,
+                data={"session_id": session_id, "degradation": degradation},
+            )
+        )
+        return degradation

@@ -19,7 +19,7 @@ class ContextComposer:
         self.generational_memory = generational_memory
         self.compactor = compactor
 
-    def compose(self, sweep_result: SweepResult) -> list[Message]:
+    async def compose(self, sweep_result: SweepResult) -> list[Message]:
         """Produce the optimized message list from a sweep result.
 
         Iterates sweep entries in turn order, grouping adjacent COMPACT messages into compaction runs that are passed to the
@@ -31,7 +31,7 @@ class ContextComposer:
         kept_messages_count, compacted_messages_count, archived_messages_count, compact_runs_count = 0, 0, 0, 0
         for sweep_entry in sweep_result.sweep_entries:
             if current_compact_run and sweep_entry.classification != SweepClassification.COMPACT:
-                compaction_result = self.compactor.compact(current_compact_run)
+                compaction_result = await self.compactor.compact(current_compact_run)
                 final_messages.append(compaction_result.summary)
                 compact_runs_count += 1
                 current_compact_run = []
@@ -47,7 +47,7 @@ class ContextComposer:
                 archived_messages_count += 1
 
         if current_compact_run:
-            final_messages.append(self.compactor.compact(current_compact_run).summary)
+            final_messages.append((await self.compactor.compact(current_compact_run)).summary)
             compact_runs_count += 1
 
         self.event_bus.emit(Event(event_type=EventType.CONTEXT_COMPOSED,

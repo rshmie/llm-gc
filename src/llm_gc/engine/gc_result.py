@@ -1,6 +1,7 @@
 from typing import Optional
 from pydantic import BaseModel, Field
 
+from llm_gc.engine.aging_degradation import AgingDegradation
 from llm_gc.engine.gc_status import GCStatus
 from llm_gc.engine.sweep.sweep_result import SweepResult
 from llm_gc.models.message import Message
@@ -22,6 +23,22 @@ class GCResult(BaseModel):
     archived_count: int = Field(ge=0)
     sweep_result: Optional[SweepResult] = None
     duration_ms: float = Field(ge=0)
+
+    degradations: list[AgingDegradation] = Field(default_factory=list)
+    """What this pass intended and did not manage - see `AgingDegradation`.
+
+    Empty on a clean pass, which is the common case and why it defaults rather
+    than being required. Note that `kept_count` / `compacted_count` /
+    `archived_count` describe the *sweeper's decision*; this field is the only
+    place the difference between decision and outcome is recorded, so a consumer
+    rendering those counts has to read this too or it will draw compactions that
+    never happened.
+
+    `status` deliberately stays COMPLETED when this list is non-empty. Status
+    answers "did the pass run"; this answers "did everything it intended happen".
+    A fourth status value would make every existing `== COMPLETED` check silently
+    stop matching, for information already carried here.
+    """
 
     @property
     def tokens_saved(self) -> int:

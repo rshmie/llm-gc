@@ -11,14 +11,21 @@ from llm_gc.engine.sweep import SweepClassification, SweepEntry, SweepResult
 from llm_gc.events import Event, EventBus, EventType
 from llm_gc.extraction import KnowledgeExtractor
 from llm_gc.models import Message
+from llm_gc.scoring.relevance_scorer_result import RelevanceScorerResult
 from llm_gc.session import SessionManager
 
 
 class _StubScorer:
-    """The stub sweeper ignores scores, so this can return anything."""
+    """Always scores 1.0, meaning "no opinion, keep it".
+
+    The stub sweeper ignores the score when classifying young turns, but the
+    old-generation pass reads it directly - it has no strategy to delegate to,
+    because its decision is binary. A stub returning None was enough until that
+    pass existed, and this docstring used to say so.
+    """
 
     def score(self, message, conversation):
-        return None
+        return RelevanceScorerResult(message=message, combined_score=1.0, scorer_results=[])
 
 
 class _StubSweeper:
@@ -58,7 +65,7 @@ class _RaisingCompactor(BaseCompactor):
 
     COMPACTION_STRATEGY = CompactionStrategy.NOOP
 
-    def compact(self, messages):
+    async def compact(self, messages):
         raise RuntimeError("compaction failed")
 
 

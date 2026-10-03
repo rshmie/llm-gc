@@ -117,6 +117,18 @@ class TestRetryability:
         assert permanent.retryable is False
         assert LLMResponseError.retryable is False
 
+    def test_a_rate_limit_can_be_declared_permanent_without_changing_the_default(self):
+        """The same shadowing, in the opposite direction. OpenAI reports an exhausted
+        account quota as a 429 like any other, and retrying it never succeeds — so
+        the adapter has to be able to say so. The class default stays True, because
+        a rate limit is a window that reopens unless something tells us otherwise."""
+        quota_exhausted = LLMRateLimitError("insufficient quota", retryable=False)
+        throttled = LLMRateLimitError("slow down")
+
+        assert quota_exhausted.retryable is False
+        assert throttled.retryable is True
+        assert LLMRateLimitError.retryable is True
+
 
 class TestFailuresCarryTheirContext:
     """Each subclass exists to carry what its caller needs to act. These pin that

@@ -30,7 +30,7 @@ class GarbageCollector:
         self.sweeper = sweeper
         self.context_composer = context_composer
 
-    def collect(self, messages: list[Message]) -> GCResult:
+    async def collect(self, messages: list[Message]) -> GCResult:
         start = perf_counter()
         original_token_count = sum(m.token_count for m in messages)
         gc_run_id = str(uuid.uuid4())
@@ -55,7 +55,7 @@ class GarbageCollector:
             current_stage = "sweep"
             sweep_result = self.sweeper.sweep(messages, scores)
             current_stage = "compose"
-            final_messages = self.context_composer.compose(sweep_result)
+            final_messages = await self.context_composer.compose(sweep_result)
             gc_result = GCResult(final_messages=final_messages, gc_run_id=gc_run_id, status=GCStatus.COMPLETED,
                                  tokens_before=original_token_count, tokens_in_final=sum(m.token_count for m in final_messages),
                                  kept_count=sweep_result.classification_counts[SweepClassification.KEEP], compacted_count=sweep_result.classification_counts[SweepClassification.COMPACT],
