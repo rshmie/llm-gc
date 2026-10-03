@@ -218,27 +218,103 @@ This resembles RAG — but instead of retrieving from an external knowledge base
 from facts extracted from **this conversation's own history**. Same mechanism (embedding
 similarity for retrieval), different source.
 
-### Not yet built — two gaps between this design and the code
+### How step 2 chooses, and what it costs
 
-Both are on the build plan; neither works today. They are recorded here because
-the sections above describe the design as decided, and a reader should not take
-them as describing behaviour that currently runs.
+Retrieval, not a dump. Permanent generation accumulates for the life of a session,
+so injecting all of it would recreate, somewhere new, the unbounded growth that
+archiving exists to stop.
 
-- **Permanent-gen facts are not injected** (step 2 above). The assembler stitches
-  old-gen summaries and young turns only. Extraction runs and facts are stored,
-  but nothing reads them back into the prompt — the permanent generation is
-  effectively write-only, so an ARCHIVE currently behaves like a deletion with a
-  receipt. Injection needs the per-query similarity path.
-- **Old gen is never swept** (see *Old gen with no eviction* under Alternatives
-  Considered — the eviction described there as the accepted design does not
-  exist). Summaries are appended and never removed, re-scored, or archived, so a
-  turn's journey ends at old gen. Combined with the gap above, the assembled
-  context grows by one summary per aged turn without bound: measured on a
-  40-turn conversation it passed the context window around turn 15 and reached
-  1.5x by turn 39.
+**Ranking sits behind an interface.** Retrieval quality is a measurable property
+that belongs to a benchmark, and the component that *uses* a ranking should not
+change when the ranking does. The shipped default ranks by word overlap with the
+turn about to be sent, weighting a match on the fact's subject above a match
+anywhere in its content. The rejected alternative was to make embedding similarity
+the default: it is better at paraphrase, and it puts a model download and a cold
+start on the collect path for an improvement nobody has measured yet. That is the
+wrong order. The accepted cost is a real and named miss — "which datastore?" does
+not match a fact stored under `database` — and a deployment that cares supplies its
+own retriever rather than editing the engine.
 
-The two are one fix, not two: sweeping old gen into the permanent generation is
-only worth doing if the permanent generation reaches the prompt.
+**Facts with no overlap are excluded, not merely ranked last.** A prompt filled
+with whatever happened to be stored spends tokens and invites the model to use
+something unrelated to the turn. Returning fewer facts is the better failure.
+
+**The block is capped, and the cap is what makes the system stable.** Injected
+facts are real tokens in the real prompt, so they count against the context budget
+like any other message — the same ruling the budget meter already makes about
+old-generation summaries, for the same reason: a meter that omitted them would
+under-report pressure in the reassuring direction. That creates a loop worth
+naming: pressure causes archiving, archiving produces facts, facts add tokens,
+tokens add pressure. Bounded, it converges, because past the cap further archiving
+only ever reduces the total. Unbounded, memory grows with the session and cancels
+the saving that archiving produced. Setting either budget to zero disables
+injection, which is how a deployment opts out and how a benchmark measures what
+injection is worth by running the same conversation both ways.
+
+**Selection and presentation use different orderings.** Relevance decides what
+survives the budget; the surviving facts are then shown in conversation order,
+because a block is read top to bottom and a fact from turn 2 belongs before one
+from turn 40.
+
+**The block says what it is.** It carries a header naming it as recovered memory
+and each fact carries its origin turn. Distilled facts presented as if they were
+original conversation would be the same dishonesty the compacted-summary marker
+exists to prevent, and the origin turn is what lets the prompt and the dashboard
+agree about provenance. A `RAW` entry is labelled an excerpt rather than a parsed
+fact, because extraction found nothing in that turn and calling it a fact would
+overstate what is known.
+
+**Superseded facts never reach the prompt.** Only active entries are candidates.
+This is the step that makes contradiction tracking worth anything: without the
+filter the model would read an old value and its correction as two equal claims.
+
+### How old gen is swept, and why it is the bound that matters
+
+The old generation is scored and swept on the same pressure-gated pass that ages
+the young generation, and summaries that have gone cold are archived into the
+permanent generation and removed. Without this a turn's journey ended at old gen:
+`_old_gen` was append-only, so the assembled context grew by one summary per aged
+run forever, and old gen became the leak that young gen had been fixed to avoid.
+
+**Two bands, not three.** A summary is kept or archived. The *re-compact into a
+longer-horizon summary* band described under Alternatives Considered is
+deliberately not built: summarising a summary compounds loss, because each pass
+through a model drops detail and a second pass drops detail about detail that can
+no longer be inspected. It also costs a model call per eviction where extraction
+costs none. Deferred rather than rejected — a benchmark showing that re-compaction
+retains more than extraction does would reopen it.
+
+**What eviction buys is prompt position, not storage.** An old-generation summary
+is in every prompt; its extracted facts are in a prompt only when they match the
+turn being sent. So even a summary whose extraction finds nothing — kept verbatim
+as a `RAW` entry, at the same size it was — stops occupying the context
+unconditionally. Archiving happens before removal, so a failed archive leaves the
+summary where it was: unlike a young turn, an evicted summary has no original to
+fall back on.
+
+**Scored against the assembled context, not against old gen alone.** Recency is
+positional, so a summary's age is its distance from the newest real turn. Scoring
+summaries only among themselves would make the oldest survivor always look recent,
+and the coldest summary would be permanently safe — a pass that appears to work
+while bounding nothing.
+
+**No separate token budget, and this was settled by measurement rather than by
+argument.** Summaries carry the first turn index of their run, so decay already
+applies to them. Over 200 synthetic turns against a 700-token window: unswept, old
+gen reached 72 summaries and 2226 tokens and was still climbing linearly, with the
+compression ratio *worsening* from 0.20x to 0.51x as the conversation went on.
+Swept, old gen held at 9 summaries and the assembled context held at 537 tokens —
+constant, independent of conversation length — with the ratio improving from 0.61x
+to 0.12x. A token budget would be a second mechanism able to disagree with the
+score, and the score-driven bound is sufficient. What would change this: a decay
+rate or threshold setting where the bound exists but arrives too slowly to keep
+the context inside the window.
+
+That last result is the difference between compressing context and *bounding* it,
+and it is the claim the whole design rests on. Sweeping old gen is also only worth
+doing because injection exists: the two were always one idea, since moving a cold
+summary into the permanent generation is an improvement only if the permanent
+generation reaches the prompt. Before injection it would have been a deletion.
 
 ---
 
@@ -314,6 +390,41 @@ the permanent gen injects a false entry forever.
 **Mitigation:** Conservative extraction (high-confidence patterns only), contradiction detection
 (user corrections supersede bad extractions), and the Context Visualizer lets humans see and
 correct stored entries.
+
+**What "conservative" means concretely, because it is the load-bearing word.** The
+extractor refuses rather than guesses, and refusing costs nothing: a turn it
+declines to parse is archived verbatim as a `RAW` entry, so the text survives and
+nothing is claimed about it. A *mislabelled* entry is strictly worse than no entry,
+and for a reason that is easy to miss — contradiction detection matches on the
+topic label, so a label that is really a sentence fragment can never be
+contradicted by anything and stays active permanently. A bad label does not just
+look untidy; it disables the mechanism that was supposed to correct it.
+
+Four rules follow, and each one trades recall for precision deliberately:
+
+- **A subject is one to four words.** Counting words, not characters and not
+  "whatever precedes the verb". Without a bound, a topic grows until it happens to
+  hit a full stop.
+- **A declarative subject sits at the start of its sentence.** A matching verb
+  further in belongs to a subordinate clause, and what precedes it is a fragment
+  rather than a subject. This is the rule that does the most work.
+- **Matching is per sentence, not per turn.** Otherwise a verb anywhere in a long
+  turn matches, and a capture anchored to "the start" reaches back to the start of
+  the whole turn. It also makes the end-of-input anchors mean end-of-*sentence*,
+  which is what they were always written for.
+- **A subject made only of pronouns, articles or interrogatives is rejected.** "it
+  is fine" and "what are the constraints" state nothing retrievable later. The
+  rejection is what sends the turn to a verbatim archive instead.
+
+Labels are also normalised — lowercased, internal whitespace collapsed — because
+contradiction detection compares them exactly, and "the Database is X" followed by
+"the database is Y" has to be one topic with two values rather than two unrelated
+facts.
+
+The known remaining weakness is a subject that is a quantity or a long noun
+phrase: "forty thousand a second is above what a single writer handles" yields a
+real fact under an odd label. That is where a learned extractor earns its place;
+pattern matching cannot tell a subject from a measurement.
 
 ### 3. Decontextualized Knowledge
 "If we were building in Go, we'd use PostgreSQL" is hypothetical. Stripped of context, it

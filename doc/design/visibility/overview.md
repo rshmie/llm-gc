@@ -362,6 +362,45 @@ to "context state plus model output", which is a real architectural change,
 not a new display. It is recorded here as a considered direction, not a
 commitment.
 
+### Intent and outcome are different signals
+
+A GC pass can complete and still fall short of its own plan. The sweeper decides
+a run should be summarised, the compactor refuses the summary it gets back, and
+the turns stay verbatim. Nothing is lost and the context is correct — it is just
+larger than the pass set out to make it.
+
+The classification counts on a GC result describe the **sweeper's decision**, not
+what happened. Read alone, a pass whose compactions were all refused reports
+several compactions and files none. A dashboard rendering those counts would draw
+transformations that never occurred, which is the same class of failure as the
+aggregated risk score this layer exists without: a confident-looking number with
+nothing behind it. The difference is that here the subject is the system's own
+behaviour, so getting it wrong means the transparency layer is the thing lying.
+
+So a completed pass carries a structured record of what it intended and did not
+manage, with the reason separated by what an operator would do next — a refused
+summary means the run or the cap was wrong; a failed provider call means check the
+provider; a failed archive means check extraction and storage. Each one is
+announced on the bus as it happens as well as collected onto the result, so a
+subscriber does not have to wait for the pass to end, and degradation is never
+something a consumer has to infer from counts that fail to add up.
+
+Two decisions inside this that are easy to get wrong:
+
+- **The run status stays "completed".** A separate status value for a degraded
+  pass was rejected: status answers *did the pass run*, and degradation answers
+  *did everything it intended happen*. Fusing them means no consumer can ask the
+  first without handling the second, and every equality check already written
+  against the status silently stops matching — which is precisely what a new enum
+  value is worst at. What would change this: a degraded pass needing different
+  *handling* at the HTTP boundary rather than different reporting.
+- **An arbitrary exception's message is not recorded.** These records reach the
+  dashboard over HTTP, and payloads carry no raw conversation content. The
+  project's own exception messages are content-free by convention, so theirs are
+  kept; anything else — including an exception from a compactor written by someone
+  else — contributes only its type name. A failure cause is not a trust boundary
+  we control.
+
 ---
 
 ## Consequences
@@ -373,6 +412,11 @@ commitment.
   That distinction must be stated prominently anywhere the signals are
   displayed — otherwise they quietly become the same authoritative black box
   the aggregated score was rejected for.
+- **A clean pass must stay clean.** The degradation record is only useful while
+  it is rare: a field that is populated on most passes becomes noise consumers
+  learn to skip, and then it is worse than absent, because its presence implies
+  someone is reading it. Anything that routinely degrades is a design fault to
+  fix rather than a condition to report.
 
 - **The monitor's view drifts if the engine grows without it.** Every new
   event type that affects context state has to be considered for inclusion in
