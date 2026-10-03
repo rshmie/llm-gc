@@ -1,16 +1,13 @@
 """Pull reusable facts out of a turn that is about to be archived.
 
-Regex patterns, not a model. The patterns are a dictionary keyed by
-`KnowledgeType` so a new phrasing is a new row rather than a new branch — the
-Open/Closed Principle, applied to a lookup table.
+Regex patterns keyed by `KnowledgeType`, so a new phrasing is a new row rather
+than a new branch.
 
-The guiding constraint is the same one the compactor works under: **refusing to
-label is better than labelling wrongly.** When nothing here matches, the archiving
-caller stores the turn verbatim as a `RAW` entry, so a rejected match loses
-nothing. A *mislabelled* match, by contrast, is stored as a confident fact under a
-topic that is really a sentence fragment — and because supersession matches on the
-topic label, a mangled label can never be contradicted and sits active forever.
-That is a worse outcome than no extraction at all.
+Refusing to label beats labelling wrongly: when nothing matches, the caller stores
+the turn verbatim as a `RAW` entry, so a rejected match loses nothing. A
+mislabelled one is filed as a confident fact under a topic that is really a
+sentence fragment, and since supersession matches on the label it can never be
+contradicted. See doc/design/generational-memory/overview.md.
 """
 
 import re
@@ -51,9 +48,8 @@ _TOPIC_STOPWORDS = frozenset({
 _MIN_CONTENT_CHARS = 3
 
 _GENERAL_TOPIC = "general"
-"""Used when a pattern legitimately has no topic slot filled — "we decided to ship
-on Friday" states a decision with no subject to name. Distinct from a *rejected*
-topic, which discards the match entirely."""
+"""For patterns with no topic slot filled ("we decided to ship on Friday").
+Distinct from a rejected topic, which discards the match."""
 
 
 class KnowledgeExtractor:
@@ -144,23 +140,13 @@ class KnowledgeExtractor:
     def _normalise_topic(raw: str | None) -> str | None:
         """Turn a raw topic capture into a label, or reject it.
 
-        Three outcomes, and the distinction between the last two matters:
+        Three outcomes:
 
-        - `None` capture -> `_GENERAL_TOPIC`. The pattern has no topic slot filled,
-          which is legitimate: "we decided to ship on Friday" names no subject.
-        - A usable capture -> lowercased, with internal whitespace collapsed.
-          Supersession compares topic labels exactly, so "the Database is X" and
-          "the database is Y" have to normalise to the same string or the
-          contradiction is never detected.
-        - Stopwords only, or empty after stripping -> `None`, meaning *discard the
-          match*. The caller then stores the turn verbatim instead of filing a fact
-          under a label that names nothing.
-
-        The old code was `match.group("topic") or "general"`, which is the Python
-        `or`-as-default idiom guarding the wrong thing: it falls back on *empty*,
-        not on *meaningless*. `""` is falsy and fell back correctly; `" "` is truthy
-        and was stored, which is exactly where the leading space in `' What'` came
-        from — `content` was stripped and `topic_label` was not.
+        - `None` capture -> `_GENERAL_TOPIC`; the pattern has no topic slot.
+        - A usable capture -> lowercased, whitespace collapsed, because
+          supersession compares labels exactly.
+        - Stopwords only, or empty -> `None`, meaning discard the match so the
+          caller archives the turn verbatim instead.
         """
         if raw is None:
             return _GENERAL_TOPIC

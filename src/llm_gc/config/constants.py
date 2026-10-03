@@ -19,7 +19,15 @@ DEFAULT_MAX_RECENT_TRANSITIONS = 20
 # nicety: archiving produces facts, injected facts are real tokens, and more
 # pressure causes more archiving. Bounded, that loop converges; unbounded, memory
 # grows with the session and undoes the saving archiving produced.
-DEFAULT_MAX_MEMORY_TOKENS = 200   # whole injected block, header included
+# A *fraction* of the context window, not an absolute. Every other budget in
+# GCConfig that relates to the window is a ratio, and memory was the odd one out:
+# 200 tokens is 0.15% of a 128k window and 100% of a 200-token one, so the same
+# number was sane in production and ruinous in a small configuration. Measured on
+# a 200-token window, an absolute budget of 100 made a proxy forward 21% MORE than
+# the client sent - the memory block ate the entire saving and inverted the
+# system's value, silently. 10% leaves memory meaningful at every window size and
+# correctly means "no block fits" when the window is tiny.
+DEFAULT_MAX_MEMORY_RATIO = 0.1
 DEFAULT_MAX_MEMORY_FACTS = 8      # retrieved before the token budget is applied
 # How long a coroutine waits for a session's lock before giving up.
 # On timeout the caller proceeds on last-persisted (possibly stale) state rather

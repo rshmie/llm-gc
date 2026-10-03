@@ -7,60 +7,39 @@ from llm_gc.models import Message
 
 
 class BaseCompactor(ABC):
-    """Abstract contract for components that compact runs of COMPACT-classified messages.
+    """Turns a run of COMPACT-classified messages into one shorter summary.
 
-    A compactor takes a run of adjacent messages the sweeper has classified as COMPACT and produces a
-    single shorter `Message` that preserves the gist. This is an abstract base class: it defines the contract every
-    concrete compactor must satisfy, but does not implement compaction itself. Concrete implementations provide the
-    actual summarization strategy. See doc/design/sweeper-and-composition/compaction-mechanism.md for design rationale.
+    An ABC rather than a Protocol because `_format_summary_marker` is shared
+    behaviour every compactor must use. See
+    doc/design/sweeper-and-composition/compaction-mechanism.md.
     """
 
     COMPACTION_STRATEGY: CompactionStrategy
+
     def __init__(self, event_bus: EventBus):
         self.event_bus = event_bus
 
     @abstractmethod
     async def compact(self, messages: list[Message]) -> CompactionResult:
-        """Produce a single summary `Message` from a run of adjacent COMPACT-classified messages.
-
-        Called by `ContextComposer` during `gc.collect` and by `gc.update` when a compact-run needs to be summarized.
-        Implementations vary in how they produce the summary (no-op passthrough, LLM call and others), but every implementation
-        must satisfy the contract below. See the compaction design doc for the "honest about its own outputs" constraint on what compacted
-        output is allowed to claim about itself.
+        """Summarise a contiguous run of messages.
 
         Args:
-            messages: The run of messages to compact. Callers must ensure:
-                - the list is non-empty,
-                - every message is COMPACT-classified by the sweeper,
-                - the messages are adjacent in turn-index order
-                  (a contiguous run, not a scattered selection).
+            messages: A non-empty, adjacent run in turn-index order, every entry
+                COMPACT-classified by the sweeper.
 
         Returns:
-            A `CompactionResult` whose fields satisfy the following
-            invariants for every concrete implementation:
+            A `CompactionResult` whose `summary` has role `"assistant"`, content
+            opening with `_format_summary_marker`, `token_count` of the summary
+            (not the originals), and `turn_index` of the run's *first* message so
+            the composer can re-interleave it chronologically.
 
-            - `summary.role`: `"assistant"` — the role the model accepts for transformed-but-not-original content.
-            - `summary.content`: opens with a structurally recognizable marker that (a) identifies the message as a compacted
-              summary, (b) names the original turn range covered, and (c) carries a provenance marker for the method used
-              (e.g. `method=noop`, `method=llm`). The model must never see a transformed turn pretending to be original.
-            - `summary.token_count`: the token count of the *summarized* content (what the model will see), not the originals. This
-              lets the orchestrator compute `tokens_saved` for `GCResult` without re-tokenizing.
-            - `summary.turn_index`: the turn index of the *first* original message in the run. Required so the composer can re-interleave
-              the summary with KEEP and ARCHIVE turns in chronological order; using the last (or any other) original index would
-              scramble the conversation order.
-            - `original_token_count`: sum of `token_count` across the input messages, used by the orchestrator to compute
-              `tokens_saved`.
-            - `method`: short string identifying which compactor produced the summary (e.g. `"noop"`, `"llm"`). Surfaced to the
-              dashboard and post-session report so the developer can see *how* a turn was compacted, not just that it was.
+        Raises:
+            CompactionRefused: The summary is unusable and must not replace the
+                run. Callers leave the messages untouched.
         """
-
         ...
 
     def _format_summary_marker(self, first_turn: int, last_turn: int) -> str:
-        """Build the structural marker every compacted summary opens with.
-
-          Returns a string of the form `[Compacted (compaction_strategy=<name>) turns N-M]`.
-          Concrete compactors call this to satisfy the `summary.content` contract
-          in `BaseCompactor.compact` (recognizable as compacted, names turn range, carries provenance).
-        """
-        return  f"[Compacted (compaction_strategy={self.COMPACTION_STRATEGY.value}) turns {first_turn}-{last_turn}]"
+        """Build the marker every summary opens with, so the model never sees a
+        transformed turn presented as an original."""
+        return f"[Compacted (compaction_strategy={self.COMPACTION_STRATEGY.value}) turns {first_turn}-{last_turn}]"

@@ -1,28 +1,17 @@
-"""The HTTP proxy: GC on the request path, for an app that changed one line.
+"""The HTTP proxy: GC on the request path.
 
-An application points its SDK at this server instead of at the provider and
-changes nothing else. Each request's conversation is replaced by the garbage-
-collected version before being forwarded.
+An app points its SDK here instead of at the provider and changes nothing else.
+Each request's conversation is replaced by the garbage-collected version:
 
-The shape of one request:
-
-    client sends the FULL conversation
-      -> the last message is the new turn
+    client sends the full conversation
+      -> its last message is the new turn
       -> gc_collect(session, query=new turn) returns OUR maintained context
-      -> forward [our context] + [new turn] upstream
-      -> return the provider's answer to the client unchanged
+      -> forward [our context] + [new turn]
+      -> return the provider's answer unchanged
       -> after responding, record both turns with gc_update()
 
-The non-obvious part is that **the client's history is ignored**. It resends
-everything every time; we send ours, which is smaller and has been through five
-generations of compression. That is the entire value of the proxy, and also its
-whole risk: if our state is wrong, the model is sent a conversation that never
-happened. Which is why the engine's bookkeeping is reported rather than assumed,
-and why `GCResult` carries what a pass intended versus what it managed.
-
-**First do no harm.** Any failure in our own machinery forwards the client's
-original request untouched. A proxy that returns a 500 because its optimiser had
-a bad day is worse than no proxy.
+The client's history is ignored; we send ours. Any failure in our own machinery
+forwards the client's original request untouched. See doc/design/ for rationale.
 """
 
 import logging
@@ -62,13 +51,7 @@ _RESPONSE_HOP_BY_HOP = frozenset({
 
 
 class ProxyMetrics:
-    """What the proxy has done, in the aggregate.
-
-    Counters only, no conversation content. Exposed on `GET /stats` so the effect
-    is checkable from outside without reading logs — the same reasoning as the
-    trace tool's honesty check: a claim about savings should come with the number
-    it was computed from.
-    """
+    """Aggregate counters for `GET /stats`. No conversation content."""
 
     def __init__(self) -> None:
         self.requests = 0
@@ -86,8 +69,7 @@ class ProxyMetrics:
             "tokens_in_client_history": self.tokens_in_client_history,
             "tokens_forwarded": self.tokens_forwarded,
             "tokens_saved": saved,
-            # None rather than a misleading 1.0 before any traffic: a ratio with no
-            # requests behind it is not a measurement.
+            # None, not 1.0: a ratio with no requests behind it is not a measurement.
             "ratio": (
                 round(self.tokens_forwarded / self.tokens_in_client_history, 3)
                 if self.tokens_in_client_history
@@ -107,19 +89,14 @@ def create_app(
     """Wire the proxy around an already-built engine.
 
     Args:
-        gc_service: The engine. Injected rather than constructed here, so the app
-            has no opinion about scorers, thresholds or which compactor is wired
-            in — and so a test can drive the real routes with a fake provider.
-        upstream_base_url: Where to forward. Overridable for a gateway or a test
-            double.
-        http_client: An existing client to borrow, chiefly so tests can supply an
-            `httpx2.MockTransport` and exercise the real routes with no network.
+        gc_service: The engine, injected so the app has no opinion about scorers,
+            thresholds, or which compactor is wired in.
+        upstream_base_url: Where to forward.
+        http_client: An existing client to borrow; tests pass a `MockTransport`.
             When None, the app owns one and closes it on shutdown.
         upstream_timeout_s: Ceiling on the forwarded call.
-        schedule: How to run post-response aging. Defaults to `asyncio.create_task`
-            via the background scheduler. Injectable because a test needs the work
-            to have *finished* before it asserts, and awaiting a fire-and-forget
-            task is not something a test should have to guess at.
+        schedule: How to run post-response aging. Injectable so a test can drive it
+            to completion instead of racing a fire-and-forget task.
     """
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -159,14 +136,8 @@ def create_app(
 def _default_schedule(coro: Awaitable[None]) -> None:
     """Run post-response work without making the client wait for it.
 
-    Aging is the expensive half — it can make a model call — and it changes nothing
-    the client is waiting on. Doing it inline would add the compaction latency to
-    every request that happens to cross the pressure threshold.
-
-    The task reference is deliberately held until it finishes. A bare
-    `create_task` result that nobody keeps can be garbage-collected mid-flight,
-    which is one of asyncio's nastier footguns: the work silently stops partway
-    and no exception is ever raised.
+    The task reference is held until it finishes: a `create_task` result nobody
+    keeps can be garbage-collected mid-flight, stopping the work with no exception.
     """
     import asyncio
 
@@ -190,10 +161,8 @@ async def _handle(app: FastAPI, request: Request) -> Response:
         payload = _parse_json(body)
         client_messages = extract_messages(payload)
     except (ConfigError, ValueError) as err:
-        # The request is malformed by our reading of it, but the provider is the
-        # authority on its own API — it may well accept something this version does
-        # not understand. Forward it untouched and let the provider decide, rather
-        # than rejecting a request that might be perfectly valid.
+        # The provider is the authority on its own API and may accept something we
+        # cannot parse, so forward untouched rather than reject.
         logger.info("forwarding unprocessable request untouched", extra={"reason": str(err)})
         metrics.gc_bypassed += 1
         return await _forward(app, body, headers)
@@ -207,14 +176,11 @@ async def _handle(app: FastAPI, request: Request) -> Response:
         forward_body, forwarded_messages = await _apply_gc(app, session_id, client_messages, payload, new_turn)
         metrics.gc_applied += 1
     except Exception as err:
-        # First do no harm. Our optimiser failing is not the client's problem, and a
-        # 500 here is strictly worse than forwarding what they sent. `except
-        # Exception`, not bare, so KeyboardInterrupt and SystemExit still propagate.
+        # First do no harm: a 500 here is worse than forwarding what they sent.
         logger.exception("GC failed on the request path; forwarding the original",
                          extra={"session_id": session_id, "error_type": type(err).__name__})
         metrics.gc_bypassed += 1
-        # Counted against what was forwarded, which is the client's own history -
-        # otherwise a bypassed request would look like a free one in /stats.
+        # Counted as forwarded, so a bypass does not look free in /stats.
         metrics.tokens_forwarded += client_history_tokens
         return await _forward(app, body, headers)
 
@@ -232,9 +198,8 @@ async def _handle(app: FastAPI, request: Request) -> Response:
 
     response = await _forward(app, _dump_json(forward_body), headers)
 
-    # Only record the exchange if the provider actually answered. Recording a turn
-    # whose reply failed would leave session state describing a conversation the
-    # client never had, and the client will retry - producing the turn twice.
+    # Only record a successful exchange: otherwise session state describes a
+    # conversation the client never had, and their retry records the turn twice.
     if response.status_code == 200:
         app.state.schedule(_age(app, session_id, new_turn, response))
 
@@ -250,21 +215,14 @@ async def _apply_gc(
 ) -> tuple[dict[str, Any], list[Message]]:
     """Replace the client's history with ours, keeping their newest turn.
 
-    `gc_collect` returns the session's maintained context: memory block, old-gen
-    summaries, young turns. The new turn is not in it, because it has not been
-    recorded yet - aging runs after the response. So it is appended here.
-
-    On a session's first ever request there is nothing maintained, so this
-    forwards what the client sent. That is the correct cold start: the proxy
-    cannot compress a conversation it has not seen.
+    The new turn is appended because aging runs after the response, so it is not
+    in the maintained context yet. On a cold session nothing is maintained and the
+    client's own messages are forwarded.
     """
     gc_service: GcService = app.state.gc_service
     collected = await gc_service.gc_collect(session_id, query=new_turn.content)
 
-    # Guard against sending the newest turn twice. On a cold session `collected`
-    # is empty; on a warm one the new turn has not been recorded, so it should not
-    # be there - but a duplicated final turn is a confusing prompt and the check
-    # is one comparison.
+    # A duplicated final turn is a confusing prompt, and the check is one compare.
     if collected and collected[-1].content == new_turn.content:
         forwarded = collected
     else:
@@ -274,15 +232,9 @@ async def _apply_gc(
 
 
 async def _age(app: FastAPI, session_id: str, new_turn: Message, response: Response) -> None:
-    """Record the exchange after the client has their answer.
+    """Record both halves of the exchange after the client has their answer.
 
-    Both halves: the user's turn and the assistant's reply. Recording only the
-    user's would leave the engine scoring a conversation in which the assistant
-    never spoke, and half of what a conversation decides is in the replies.
-
-    Exceptions are caught and logged rather than left to escape. This runs
-    detached, so an exception here is never retrieved by anyone and would vanish -
-    the same loud-but-contained posture as the event bus.
+    Runs detached, so exceptions are logged rather than left to vanish unretrieved.
     """
     try:
         gc_service: GcService = app.state.gc_service
@@ -298,9 +250,8 @@ async def _age(app: FastAPI, session_id: str, new_turn: Message, response: Respo
 def _assistant_turn(response: Response, turn_index: int) -> Message | None:
     """Read the provider's reply back out as a `Message`, or None.
 
-    None on anything unexpected rather than raising: the client already has their
-    answer, and failing to record a reply costs one turn of scoring accuracy where
-    raising would cost nothing less than a logged traceback with no upside.
+    None rather than raising: the client already has their answer, and a missing
+    reply costs one turn of scoring accuracy.
     """
     try:
         payload = _parse_json(bytes(response.body))
@@ -325,10 +276,8 @@ def _assistant_turn(response: Response, turn_index: int) -> Message | None:
 async def _forward(app: FastAPI, body: bytes, headers: dict[str, str]) -> Response:
     """Send the request upstream and hand the answer back verbatim.
 
-    The provider's status code and body are returned unchanged, including errors.
-    A client's own error handling is written against the provider's error format,
-    and translating a 429 into something of our own would break it (CLAUDE.md §2
-    puts error translation at *our* HTTP boundary, not on a passthrough).
+    Status codes and error bodies pass through unchanged: the client's error
+    handling was written against the provider's format, not ours.
     """
     client: httpx2.AsyncClient = app.state.http_client
     try:
@@ -339,8 +288,7 @@ async def _forward(app: FastAPI, body: bytes, headers: dict[str, str]) -> Respon
             timeout=app.state.upstream_timeout_s,
         )
     except httpx2.RequestError as err:
-        # We could not reach the provider. 502 is the honest code: the failure is
-        # upstream of us, and the client should not read it as their own mistake.
+        # 502: the failure is upstream of us, not the client's mistake.
         logger.warning("could not reach the provider", extra={"error_type": type(err).__name__})
         return Response(
             content=_dump_json_bytes(
