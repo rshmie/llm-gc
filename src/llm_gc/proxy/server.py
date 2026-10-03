@@ -173,18 +173,29 @@ async def _handle(app: FastAPI, request: Request) -> Response:
         return await _forward(app, body, headers)
 
     streaming = payload.get("stream") is True
-    session_id = resolve_session_id(client_messages, request.headers.get(SESSION_HEADER))
     new_turn = client_messages[-1]
     client_history_tokens = sum(message.token_count for message in client_messages)
     metrics.tokens_in_client_history += client_history_tokens
 
+    # Everything LLM-GC does before forwarding sits inside this one guard, so no
+    # failure of ours can stop the conversation: the worst case is no GC.
     try:
+        session_id = resolve_session_id(client_messages, request.headers.get(SESSION_HEADER))
         forward_body, forwarded_messages = await _apply_gc(app, session_id, client_messages, payload, new_turn)
+        logger.info(
+            "proxying with a collected context",
+            extra={
+                "session_id": session_id,
+                "turns_from_client": len(client_messages),
+                "turns_forwarded": len(forwarded_messages),
+                "tokens_from_client": client_history_tokens,
+                "tokens_forwarded": sum(message.token_count for message in forwarded_messages),
+            },
+        )
         metrics.gc_applied += 1
     except Exception as err:
-        # First do no harm: a 500 here is worse than forwarding what they sent.
         logger.exception("GC failed on the request path; forwarding the original",
-                         extra={"session_id": session_id, "error_type": type(err).__name__})
+                         extra={"error_type": type(err).__name__})
         metrics.gc_bypassed += 1
         # Counted as forwarded, so a bypass does not look free in /stats.
         metrics.tokens_forwarded += client_history_tokens
@@ -193,16 +204,6 @@ async def _handle(app: FastAPI, request: Request) -> Response:
         return await _forward(app, body, headers)
 
     metrics.tokens_forwarded += sum(message.token_count for message in forwarded_messages)
-    logger.info(
-        "proxying with a collected context",
-        extra={
-            "session_id": session_id,
-            "turns_from_client": len(client_messages),
-            "turns_forwarded": len(forwarded_messages),
-            "tokens_from_client": client_history_tokens,
-            "tokens_forwarded": sum(message.token_count for message in forwarded_messages),
-        },
-    )
 
     if streaming:
         def record_stream(reply: StreamedReply) -> None:
@@ -217,16 +218,32 @@ async def _handle(app: FastAPI, request: Request) -> Response:
                 "abandoned": reply.abandoned, "malformed_events": reply.malformed_events,
             })
 
-        return await _forward_stream(app, _dump_json(forward_body), headers, on_end=record_stream)
+        return await _forward_stream(
+            app, _dump_json(forward_body), headers, on_end=lambda reply: _never_blocking(record_stream, reply)
+        )
 
     response = await _forward(app, _dump_json(forward_body), headers)
 
     # Only record a successful exchange: otherwise session state describes a
     # conversation the client never had, and their retry records the turn twice.
     if response.status_code == 200:
-        app.state.schedule(_age(app, session_id, new_turn, _reply_text(bytes(response.body))))
+        _never_blocking(
+            lambda: app.state.schedule(_age(app, session_id, new_turn, _reply_text(bytes(response.body))))
+        )
 
     return response
+
+
+def _never_blocking(action: Callable[..., None], *args: Any) -> None:
+    """Run post-response bookkeeping that must never cost the client their answer.
+
+    By this point the provider has answered; a failure here loses one recorded
+    turn, which is logged, rather than the response the user is waiting on.
+    """
+    try:
+        action(*args)
+    except Exception:
+        logger.exception("post-response recording failed; the client's response is unaffected")
 
 
 async def _apply_gc(
@@ -337,11 +354,19 @@ async def _forward_stream(
     reply = StreamedReply()
 
     async def relay() -> AsyncIterator[bytes]:
+        observing = True
         try:
             # Decoded bytes: we strip `content-encoding`, so relaying raw gzip would
             # hand the client compressed bytes labelled as plain text.
             async for chunk in upstream.aiter_bytes():
-                reply.feed(chunk)
+                if observing:
+                    try:
+                        reply.feed(chunk)
+                    except Exception:
+                        # A bug in the observer stops observation, never the relay.
+                        # The reply ends incomplete, so it is counted as unrecorded.
+                        logger.exception("stream observer failed; relaying without it")
+                        observing = False
                 yield chunk
         except httpx2.TransportError as err:
             logger.warning("provider stream dropped mid-response", extra={"error_type": type(err).__name__})

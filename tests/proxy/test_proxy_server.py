@@ -693,3 +693,48 @@ class TestStreamingIsIncremental:
             return delivered_early
 
         assert asyncio.run(scenario()) == _sse("Postgres", stop=False)
+
+
+class TestLlmGcNeverBlocksTheConversation:
+    """The rule: a failure anywhere in LLM-GC costs, at worst, GC or one recorded
+    turn. It never costs the user their response."""
+
+    def test_a_session_resolution_failure_forwards_the_original(self, monkeypatch):
+        def broken(*args, **kwargs):
+            raise RuntimeError("bug")
+
+        monkeypatch.setattr("llm_gc.proxy.server.resolve_session_id", broken)
+        client, _, _, _ = _proxy()
+        response = _post(client, _body(("user", "which database?")))
+        assert response.status_code == 200
+        assert response.json() == UPSTREAM_OK
+
+    @pytest.mark.parametrize("stream", [False, True], ids=["json", "sse"])
+    def test_a_recording_failure_after_the_answer_does_not_lose_it(self, stream):
+        """The provider answered and billed for it; our bookkeeping must not
+        discard it. On a stream, a raise here would abort the connection before
+        its final frame, after every byte had been sent."""
+        body = _sse("Postgres.")
+        client, _, _, _ = _proxy(_streaming_upstream(body) if stream else None)
+
+        def broken(coro):
+            coro.close()
+            raise RuntimeError("scheduler down")
+
+        client.app.state.schedule = broken
+        response = _post(client, _body(("user", "which database?"), stream=stream))
+        assert response.status_code == 200
+        assert response.content == body if stream else response.json() == UPSTREAM_OK
+
+    def test_an_observer_failure_does_not_cut_the_stream(self, monkeypatch):
+        def broken(self, chunk):
+            raise RuntimeError("parser bug")
+
+        monkeypatch.setattr("llm_gc.proxy.server.StreamedReply.feed", broken)
+        body = _sse("Postgres, ", "partitioned by day.")
+        client, service, _, _ = _proxy(_streaming_upstream(body))
+        response = _post(client, _body(("user", "which database?"), stream=True), headers={SESSION_HEADER: "s"})
+
+        assert response.content == body
+        assert service.session_manager.store.get("s").messages == []
+        assert client.get("/stats").json()["streams_unrecorded"] == 1
