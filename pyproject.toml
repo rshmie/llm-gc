@@ -7,7 +7,7 @@ name = "llm-gc"
 version = "0.1.0"
 description = "Context-aware garbage collection for LLMs with built-in epistemic transparency — see what your model remembers, what it's forgotten, and when to worry."
 requires-python = ">=3.13"
-dependencies = ["pydantic", "tiktoken", "numpy", "sentence-transformers", "fastapi", "uvicorn", "httpx"]
+dependencies = ["pydantic", "tiktoken", "numpy", "sentence-transformers", "fastapi", "uvicorn", "httpx2"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -25,11 +25,9 @@ dev = [
 [tool.mypy]
 python_version = "3.13"
 files = ["src/llm_gc"]
-ignore_errors = true
 
 [[tool.mypy.overrides]]
 module = ["llm_gc.llm.*", "llm_gc.exceptions"]
-ignore_errors = false
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
 disallow_untyped_calls = true
