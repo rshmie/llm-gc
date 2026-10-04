@@ -96,6 +96,12 @@ These overrides apply before any threshold logic. They are universal (strategy-i
 
 When an override fires, the `SweepEntry` records `override_applied=True` and `override_reason` explaining which rule triggered.
 
+The threshold strategy records one rule of its own the same way: a message kept
+**only** because it is at or below `min_compactable_tokens` — its score alone would
+have compacted or archived it — carries an override saying it was too short to be
+worth summarising. A message kept by a high score records none. Without the
+distinction a low score beside a KEEP looks like a broken classifier.
+
 ## Core Design Principle: Quality Non-Negotiable
 
 **LLM-GC must never cause quality loss.** If there is any doubt about whether a message can be safely compressed, the sweeper defaults to KEEP.
@@ -252,7 +258,7 @@ Token savings are a byproduct of preserving what matters, not the goal.
 
 **A single tuning dial over two correlated knobs.** The design intent is to expose
 cleanup aggressiveness as *one* control that moves both thresholds together, rather
-than letting users set `keep_threshold` and `compact_threshold` independently. The
+than letting users set `keep_threshold` and `archive_threshold` independently. The
 thresholds are correlated: moving one without the other silently shifts the
 COMPACT-vs-ARCHIVE balance in ways most users do not intend. A single dial keeps
 the conservative-to-aggressive axis coherent by construction; the per-threshold

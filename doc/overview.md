@@ -187,7 +187,7 @@ analysis are also consumers of the same stream.
 **The Visibility Layer** is where the human gets what they need to judge. It
 consists of the *Health Monitor*, which observes the conversation
 continuously — not only when GC operations run — and the *Visualizer*, which
-renders that state in real time and generates post-session reports. Without
+renders that state in real time — and, planned, post-session reports. Without
 this layer the system would manage context invisibly, which would miss the
 point entirely.
 
@@ -208,7 +208,8 @@ generation sizes is describing the collector. A view reporting *"the
 decision you made at turn 5 is no longer in verbatim context — it survives
 as an extracted fact"* is describing the conversation. The second is what
 the developer acts on, so it leads. The first stays one level down, for
-when something needs explaining.
+when something needs explaining. The dashboard is built the same way: one view
+for the conversation, which opens first, and one for LLM-GC at work.
 
 **The Proxy** is how the system is most often used in practice. It sits as
 a small HTTP server between an application (such as Claude Code) and an
@@ -245,19 +246,30 @@ not just what it does.
 
 - **[design/generational-memory/overview.md](design/generational-memory/overview.md)**
   — the young / old / permanent generations and how context moves between them.
+- **[design/generational-memory/the-cut.md](design/generational-memory/the-cut.md)**
+  — how compaction reaches the prompt: the one moment the conversation the model
+  receives is changed, and why only there.
 - **[design/session/overview.md](design/session/overview.md)** — how one
   conversation's state persists across turns, and the concurrency contract that
   protects it.
 - **[design/storage.md](design/storage.md)** — how persisted records survive an
   upgrade of the system that wrote them.
 
+**Meeting real traffic**
+
+- **[design/proxy/overview.md](design/proxy/overview.md)** — how the proxy finds
+  the conversation a request belongs to, keeps its record true to the client's
+  history, and never makes a conversation worse than not using LLM-GC.
+- **[design/llm-provider.md](design/llm-provider.md)** — the model calls LLM-GC
+  makes for itself, and why they never share the user's key.
+
 **Transparency and failure**
 
 - **[design/events/overview.md](design/events/overview.md)** — the event bus
   every component reports through.
-- **[design/visibility/overview.md](design/visibility/overview.md)** — the
-  signals the system exposes about its own confidence, and why they are not
-  collapsed into a single score.
+- **[design/visibility/overview.md](design/visibility/overview.md)** — what the
+  model knows of each conversation, what LLM-GC did to it, the dashboard that
+  shows both, and why none of it is collapsed into a single score.
 - **[design/failure-handling.md](design/failure-handling.md)** — what happens
   when the engine itself fails, and how that stays visible.
 

@@ -1,18 +1,15 @@
 # LLM-GC: Garbage Collection for LLM Context
 
-> **Status: work in progress, and not yet useful as a tool.** The engine is built and
-> tested — relevance scoring, three-tier sweep classification, generational memory with
-> knowledge extraction, the full pipeline behind `GarbageCollector.collect()`, a
-> context-health monitor, and a live dashboard
-> (`python scripts/run_proxy.py --serve --dashboard` → http://localhost:9901). 282 tests pass.
+> **Status: work in progress.** The engine and an Anthropic-compatible proxy are built
+> and tested — relevance scoring, three-tier classification, generational memory with
+> fact extraction and supersession, a summarising compactor, cuts that keep the
+> provider's prompt cache and thinking blocks valid, streaming, and a live dashboard
+> (`python scripts/run_proxy.py --serve --dashboard` → http://localhost:9901). 691 tests
+> pass.
 >
-> What does **not** work yet: aged turns move into the old generation but never leave it,
-> and extracted facts are never injected back into the assembled context. So today
-> LLM-GC *relocates* context rather than reclaiming it — measured on a 40-turn
-> conversation, the assembled context crosses the window around turn 15 and reaches 1.5×
-> by turn 39. **Every savings figure below is a target, not a measurement.** Closing that
-> loop, plus the real summarizing compactor, is the current work. The transparent proxy
-> is not built; nothing is pip-installable yet.
+> What is **not** done yet: the OpenAI-compatible endpoint, a verified run of Claude Code
+> through the proxy, and the benchmarks behind the claims below — **every savings
+> figure below is a target, not a measurement.** Nothing is pip-installable yet.
 
 If you've spent 50+ turns in a Claude Code session, you've probably noticed the model starts forgetting things. The database you agreed on, the auth approach you picked, the thing you explicitly said *not* to do — it's all still in the conversation, but buried under 130K tokens of old file reads, stale command outputs, and resolved debugging context. The model either hallucinates a wrong answer or tells you "I don't have that context."
 
@@ -68,8 +65,8 @@ LLM-GC's Context Visualizer solves this. Every GC component already computes ric
 
 - **Named signals, no aggregate score** — token budget pressure, and what the last GC pass actually did (including when it was bypassed or failed — an unhealthy pass is visible, never hidden). Each signal is named for what it literally measures; nothing looks more authoritative than its math supports. The *transformation ratio* is computed but deliberately **not** displayed: it is honest arithmetic that would still be misread as a risk score if it sat on the page as the one number to glance at
 - **Generation lifecycle & transitions timeline** — where every turn lives right now (young / old / permanent) and the last N promote / archive / supersede events — including the moment a newer fact contradicted and superseded an older one, which no current-state view can ever show
-- **Decision Survival Map** *(planned)* — Every key decision tracked: alive (young gen), compressed (old gen), preserved (permanent gen), or lost
-- **Turn Relevance Heatmap** *(planned)* — Every message color-coded by current relevance
+- **What the model knows, turn by turn** — every turn as it was said, beside what the model still has of it: word for word, quoted, inside a summary, as facts, or out of view — and every fact marked as sent to the model or only stored. A fact that is kept but never sent is the case this view exists to expose
+- **Turn relevance** — each recent turn's score against the keep and archive thresholds, and what the next cut will make of it
 - **Post-Session Analysis** *(planned)* — After a session ends: full timeline of when quality peaked, when it degraded, which decisions survived, where the danger zones were
 
 There is deliberately **no single "health score" or "hallucination risk" number**. A number labelled "risk" claims an accuracy no heuristic can back without ground-truth hallucination labels — and a dishonest number is a new black box, which is the opposite of the point. If the planned learned predictor (Phases 11-12) can be defensibly grounded in real labels, an aggregate ships *alongside* the signals; until then, the signals do the part that can be done honestly, and you do the part that can't yet be automated honestly. **Aggregation is earned, not assumed.** Most tools optimize context silently. LLM-GC shows you what's happening and lets YOU decide if the AI's output is trustworthy right now.
@@ -234,17 +231,18 @@ client = Anthropic()
 **In scope — built today:**
 - Relevance scoring per conversation turn (five signals, weighted)
 - Three-tier sweep classification (keep / compact / archive)
-- Generational memory (young / old / permanent) with fact extraction and supersession
-- Session tracking with per-session concurrency control
-- Context-health signals and a dashboard scaffold
+- Generational memory (young / old / permanent) with fact extraction and supersession; cold summaries are archived into facts, and facts go back into the prompt
+- A summarising compactor that refuses any summary that does not shrink what it replaces
+- Cuts: the prompt changes only at its front, in batches, so the provider's prompt cache and the model's thinking blocks stay valid
+- An Anthropic Messages proxy, streaming included, that finds each conversation by its content and never makes a reply wait on GC
+- Per-session state that reads never wait for
+- A live dashboard: what the model knows of each turn, and what LLM-GC did
 - Configurable thresholds
 
 **In scope — not built yet:**
-- Reclaiming context rather than relocating it (sweeping the old generation; injecting permanent-generation facts back into the prompt)
-- Summary compression that actually compresses — the default compactor is a no-op placeholder
-- Transparent proxy for Claude Code (zero-config)
-- Async pre-computation between turns
-- Knowledge-state view: what the model still knows, at what fidelity
+- The OpenAI-compatible endpoint
+- Claude Code through the proxy, verified on real traffic
+- Benchmarks for the savings and quality claims
 - Post-session analysis (session timeline, decision survival, GC effectiveness report)
 
 **Does not handle (not our problem):**

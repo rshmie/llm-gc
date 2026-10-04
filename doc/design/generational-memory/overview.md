@@ -29,8 +29,8 @@ uses these scores to classify each turn:
 
 ```
   score >= keep_threshold (default 0.7)     → KEEP      → Young Generation
-  compact_threshold <= score < keep_threshold → COMPACT   → Old Generation (after summarization)
-  score < compact_threshold (default 0.3)   → ARCHIVE   → Permanent Generation (after extraction)
+  archive_threshold <= score < keep_threshold → COMPACT   → Old Generation (after summarization)
+  score < archive_threshold (default 0.3)   → ARCHIVE   → Permanent Generation (after extraction)
 ```
 
 **Override rules (applied regardless of score):**
@@ -72,8 +72,10 @@ sole determinant.**
 ├─────────────────────────────────────────────────────────────────────┤
 │                        OLD GENERATION                                │
 │                                                                     │
-│  Contains:   Turns classified COMPACT (score between compact_       │
-│              threshold and keep_threshold), compressed into summaries│
+│  Contains:   Summaries of COMPACT runs (score between archive_      │
+│              threshold and keep_threshold), and KEEP turns quoted   │
+│              word for word when a cut takes them. Each entry records│
+│              the turns it stands in for.                            │
 │  Size:       Variable (bounded — entries eventually ARCHIVE)        │
 │  Storage:    Session store                                          │
 │  Token cost: MEDIUM (~80 tokens per 5-turn summary block)           │
@@ -115,8 +117,8 @@ sole determinant.**
 | Generation | Placement Criteria | Token Cost | Growth Pattern | Bounded? |
 |-----------|-------------------|-----------|---------------|----------|
 | Young | score >= keep_threshold OR override | High | Variable (depends on score distribution) | Soft — more high-scoring turns = larger young gen |
-| Old | compact_threshold <= score < keep_threshold | Medium | Linear with conversation length | Partially — entries eventually archive |
-| Permanent | score < compact_threshold (after extraction) | Low | Sublinear (deduplicated facts) | Effectively yes — unique decisions are finite |
+| Old | archive_threshold <= score < keep_threshold | Medium | Linear with conversation length | Partially — entries eventually archive |
+| Permanent | score < archive_threshold (after extraction) | Low | Sublinear (deduplicated facts) | Effectively yes — unique decisions are finite |
 
 The key insight: **summaries grow linearly, but knowledge entries grow sublinearly.** Whether you
 discussed PostgreSQL across turns 5, 15, and 45 — the permanent gen holds ONE entry. This is
@@ -155,7 +157,7 @@ SWEEPER ──── Classifies based on score + overrides:
   │                                                         YOUNG GEN
   │                                                         (full verbatim)
   │
-  ├─── compact_threshold <= score < keep_threshold ──────→ COMPACT
+  ├─── archive_threshold <= score < keep_threshold ──────→ COMPACT
   │                                                              │
   │                                                              ▼
   │                                                         PROMOTION
@@ -165,7 +167,7 @@ SWEEPER ──── Classifies based on score + overrides:
   │                                                         OLD GEN
   │                                                         (compressed summary)
   │
-  └─── score < compact_threshold ────────────────────────→ ARCHIVE
+  └─── score < archive_threshold ────────────────────────→ ARCHIVE
                                                                │
                                                                ▼
                                                           EXTRACTION
@@ -186,8 +188,12 @@ A turn's relevance score is **not static**. It changes every GC pass because:
 
 This means a turn classified as KEEP today could become COMPACT on a future GC pass
 (its score dropped below keep_threshold). And a COMPACT turn could become ARCHIVE later
-(score dropped below compact_threshold). This is the natural aging process — driven by
+(score dropped below archive_threshold). This is the natural aging process — driven by
 relevance, not just position.
+
+Classification says what a turn *would* become; a **cut** is when it happens, for
+the oldest turns in one batch (see [the-cut.md](the-cut.md)). A KEEP turn that a
+cut takes is not lost: it is quoted word for word in the front.
 
 ---
 
@@ -245,13 +251,21 @@ filter the model would read an old value and its correction as two equal claims.
 
 ### How old gen is swept, and why it is the bound that matters
 
-The old generation is scored and swept as part of each cut, and summaries that have gone cold are archived into the
-permanent generation and removed. Without this a turn's journey would end at old
-gen: old gen would only ever grow, the assembled context would gain one summary
-per aged run forever, and old gen would become the leak that aging the young
-generation exists to prevent. Candidates include summaries produced earlier in the
-same pass; one that is already cold is archived straight away and never enters
-old gen.
+The old generation is scored and swept as part of each cut, and entries —
+summaries and quotes — that have gone cold are archived into the permanent
+generation and removed. Without this a turn's journey would end at old gen: old
+gen would only ever grow, the assembled context would gain one summary per aged
+run forever, and old gen would become the leak that aging the young generation
+exists to prevent. Candidates include entries produced earlier in the same pass;
+one that is already cold is archived straight away and never enters old gen.
+
+**Archiving reads what an entry says, not how it is shown.** An entry opens with a
+marker telling the model what it is — "[Quoted exactly] (turn 2, user)",
+"[Compacted … turns 13–16]" — and extraction parses the entry's text without it;
+parsed with it, the marker read as the first words of the turn, the fact in that
+sentence was lost, and a short stated decision fell out of the prompt as a raw
+excerpt. The facts an archived entry yields carry every turn it covered, so a
+reader can still trace turn 15 after its summary is gone.
 
 **Two bands, not three.** A summary is kept or archived. The *re-compact into a
 longer-horizon summary* band described under Alternatives Considered is
@@ -262,10 +276,11 @@ costs none. Deferred rather than rejected — a benchmark showing that re-compac
 retains more than extraction does would reopen it.
 
 **What eviction buys is prompt position, not storage.** An old-generation summary
-is in every prompt; its extracted facts are in a prompt only when they match the
-turn being sent. So even a summary whose extraction finds nothing — kept verbatim
-as a `RAW` entry, at the same size it was — stops occupying the context
-unconditionally. Archiving happens before removal, so a failed archive leaves the
+is in every prompt; its extracted facts are in a prompt only if they win a place in
+the front's fact budget at the next cut. So even a summary whose extraction finds
+nothing — kept verbatim as a `RAW` entry, at the same size it was — stops
+occupying the context unconditionally, at the cost that a `RAW` entry ranks last
+for that budget. Archiving happens before removal, so a failed archive leaves the
 summary where it was: unlike a young turn, an evicted summary has no original to
 fall back on.
 
@@ -428,7 +443,7 @@ transparency, the human provides judgment.
 | Three generations (not two, not four) | Maps naturally to: full detail / compressed / extracted knowledge. Fewer = information loss. More = unnecessary complexity for the same guarantees. |
 | Heuristic extraction before LLM-based | Free, deterministic, testable. LLM-based extraction is more accurate and can be added behind the same interface. |
 | Supersede entries, don't delete | Deletion destroys history. Supersession preserves the decision chain for audit and visualization. |
-| Retrieve permanent gen by similarity | Not all stored entries are relevant to every query. Injecting everything wastes tokens. Similarity retrieval = only inject what matters now. |
+| Choose facts for the front at the cut, by type then recency | Injecting everything wastes tokens and grows with the session. Choosing per question would change the prompt on every request, breaking the provider's cache and the model's thinking blocks, so facts are chosen when a cut makes the front: decisions, then facts, then preferences, raw excerpts last. Accepted cost: a stored fact can miss the budget and not be sent, which the dashboard reports. |
 | ARCHIVE always leaves a trace | A turn is run through the extractor before it leaves active context; if extraction yields no entry, the turn is preserved **verbatim** as a `RAW` knowledge entry. Extraction recall is imperfect, so the verbatim fallback is what makes the no-information-loss guarantee actually hold. |
 | Young gen is NOT purely "last N" | Last N is a floor guarantee (those are always KEEP). But any turn scoring above keep_threshold also stays in young gen regardless of age. |
 | Aging happens in `gc.update` (cold path), not `gc.collect` | Compaction and extraction are the expensive work; doing them per request would add latency to every forwarded call. The ager runs after the response; the hot-path collect only assembles what the ager already produced. |
@@ -513,8 +528,9 @@ that is now in the session's state, and a pass that is discarded announces
 nothing. `MESSAGE_ADDED_TO_YOUNG_GEN` remains a reserved type with no emitter —
 young-generation membership is just the turns in the session's snapshot.
 
-These events feed the **Decision Survival Map** — showing which decisions from the conversation
-are still alive, which were superseded, and which are at risk of being lost.
+These events feed the health monitor's transitions timeline. Where each turn and
+fact stands *now* is read from the session's state rather than from events — see
+the knowledge state in [visibility/overview.md](../visibility/overview.md).
 
 ---
 

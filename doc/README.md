@@ -22,10 +22,12 @@ yet, the doc says so at the top.
 design/
   scoring/                    relevance scoring — overview + one doc per scorer
   sweeper-and-composition/    classification, assembly, and compaction
-  generational-memory/        young / old / permanent generations
+  generational-memory/        young / old / permanent generations, and the cut
   session/                    per-conversation state and its concurrency contract
+  proxy/                      the HTTP proxy: finding a conversation, forwarding, never degrading
   events/                     the event bus components report through
-  visibility/                 the signals exposed about the system's own confidence
+  visibility/                 what the model knows, what LLM-GC did, and the dashboard
+  llm-provider.md             the model calls LLM-GC makes on its own behalf
   storage.md                  schema versioning for persisted records
   failure-handling.md         the circuit breaker around engine failures
 ```

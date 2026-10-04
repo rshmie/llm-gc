@@ -40,15 +40,17 @@ being allocated.
 
 The layer is two pieces, with a deliberately clean split:
 
-- **The Health Monitor — the data source.** It listens to the event bus
-  continuously and keeps a live answer to one question: *"what state is the
-  context in right now?"* It renders nothing; it maintains a snapshot of
-  named signals.
-- **The Visualizer (dashboard) — the view.** It renders what the monitor
-  knows. It reads the monitor's snapshot and the event stream; it computes
-  nothing of its own and emits no events.
+- **The data sources.** The Health Monitor listens to the event bus
+  continuously and keeps, per session, a live answer to *"what has LLM-GC
+  done to this conversation?"* — its last pass, its history of passes,
+  transitions and degradations. The knowledge-state projection answers *"what
+  does the model know?"* from a read-only inspection of the session. Neither
+  renders anything.
+- **The Visualizer (dashboard) — the view.** It renders what those report,
+  beside what the client said (a transcript the proxy hands it). It computes
+  nothing of its own, and its one action is the developer's Run GC now.
 
-This document covers the layer as a whole and the Health Monitor in depth.
+This document covers the layer as a whole and the data sources in depth.
 
 ---
 

@@ -92,6 +92,7 @@ forwarding itself may fail a request:
 |---|---|---|
 | Anything before forwarding (parsing, reconciling, collecting) | The original request, forwarded | GC for that one request |
 | Background aging, or scheduling it | The full answer | That aging pass; logged |
+| The history observer (the dashboard's transcript) | The full answer, with GC | Nothing; logged |
 | The provider | The provider's own error | Nothing of ours |
 
 A malformed body is forwarded untouched, because the provider is the authority on
@@ -162,8 +163,10 @@ history, at the cost of one uncompressed request.
 ### The dashboard
 
 The live dashboard runs in the same process on its own localhost port, reading
-the same sessions; it is opt-in because it shows conversation content. See
-[visibility](../visibility/overview.md).
+the same sessions; it is opt-in because it shows conversation content. To show
+what was said beside what the model still has, the proxy hands each request's
+conversation to an optional observer before forwarding; it is attached only when
+the dashboard runs. See [visibility](../visibility/overview.md).
 
 ### Request size
 
