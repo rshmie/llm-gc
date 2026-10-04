@@ -1,6 +1,6 @@
 // The page around the views: tabs, the guide, the theme, the live indicator.
 
-import { $, storeSet } from "./dom.js";
+import { $, h, storeSet } from "./dom.js";
 import { state, ui } from "./state.js";
 import { renderChart } from "./engine.js";
 
@@ -36,4 +36,15 @@ export function applyTheme(theme) {
 export function setLive(stateName, text) {
   $("live").dataset.state = stateName;
   $("live-text").textContent = text;
+}
+
+// A brief, self-dismissing notice that a clean-up just ran. The CSS handles not animating its
+// entrance and exit under reduced motion; either way it shows for the same few seconds.
+export function showCleanupNotice(text) {
+  const stack = $("toast-stack");
+  if (!stack) return;
+  const toast = h("div", { class: "cleanup-toast", role: "status" }, h("span", { class: "dot good" }), text);
+  stack.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add("show"));
+  setTimeout(() => { toast.classList.remove("show"); setTimeout(() => toast.remove(), 300); }, 4000);
 }

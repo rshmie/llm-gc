@@ -1,11 +1,11 @@
 // Entry point: polling, the session picker, and wiring the controls.
 
 import { CATS, GLOSSARY, GUIDE_TERMS, ORDER, swatch } from "./vocabulary.js";
-import { $, fill, h, plural, setChildren, storeGet, storeSet } from "./dom.js";
+import { $, clearMotionCaches, fill, h, plural, setChildren, storeGet, storeSet } from "./dom.js";
 import { getJSON, sessionPath, state, ui } from "./state.js";
 import { hideTooltip } from "./tooltip.js";
-import { THEMES, applyTheme, setGuide, setLive, showTab } from "./shell.js";
-import { renderAttention, renderChips, renderHero, renderHeroMeta, renderMemory, renderMessages, renderPrompt, renderTimeline, setPromptView } from "./conversation.js";
+import { THEMES, applyTheme, setGuide, setLive, showCleanupNotice, showTab } from "./shell.js";
+import { clearMapCache, renderAttention, renderChips, renderHero, renderHeroMeta, renderMemory, renderMessages, renderPrompt, renderTimeline, setPromptView } from "./conversation.js";
 import { renderChart, renderChecks, renderHistory, renderLastCheck, renderProblems, renderRelevance, renderSettings, renderTiles } from "./engine.js";
 import { runGcNow } from "./run-gc.js";
 
@@ -41,6 +41,9 @@ async function refresh() {
       state.version = null;
       state.knowledge = null;
       ui.open.clear();
+      ui.earlierOpen = false;
+      clearMapCache();
+      clearMotionCaches();
     }
     renderSessions();
     renderSettings();
@@ -51,12 +54,18 @@ async function refresh() {
       const current = state.sessions.find((s) => s.session_id === state.selected);
       // Content changes only with the conversation's version; activity is cheap and polled every time.
       if (current.version !== state.version) {
+        const previousCuts = state.knowledge ? state.knowledge.cuts : null;
         const [k, transcript] = await Promise.all([getJSON(sessionPath()), getJSON(sessionPath("/transcript"))]);
         if (k) {
           state.knowledge = k;
           state.transcript = transcript;
           state.version = k.version;
           renderConversation();
+          if (previousCuts !== null && k.cuts > previousCuts) {
+            showCleanupNotice(k.cuts - previousCuts > 1
+              ? `${plural(k.cuts - previousCuts, "clean-up")} just ran — older messages condensed.`
+              : "A clean-up just ran — older messages condensed.");
+          }
         }
       }
       state.activity = await getJSON(sessionPath("/activity"));
@@ -93,7 +102,9 @@ document.addEventListener("keydown", (e) => {
 });
 $("session-select").addEventListener("change", (e) => {
   state.selected = e.target.value; state.version = null; state.knowledge = null;
-  ui.open.clear(); ui.filter = "all"; ui.query = ""; $("search").value = "";
+  ui.open.clear(); ui.filter = "all"; ui.query = ""; $("search").value = ""; ui.earlierOpen = false;
+  clearMapCache();
+  clearMotionCaches();
   refresh();
 });
 let searchTimer = null;

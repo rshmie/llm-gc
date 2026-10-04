@@ -3,8 +3,8 @@
 // Every value comes from an endpoint; this view formats and explains, and derives
 // nothing beyond grouping, counting, and sums and differences of numbers it was given.
 
-import { BECOMES, BECOMES_CAT, CATS, CELL_MAX_PX, CLAMP_CHARS, FACTS_SHOWN, GLOSSARY, GONE, ORDER, RUN_MIN, categoryOf, speaker, swatch } from "./vocabulary.js";
-import { $, agoIso, fill, fmt, h, percent, plural, ranges, setChildren } from "./dom.js";
+import { BECOMES, BECOMES_CAT, CATS, CELL_MAX_PX, CLAMP_CHARS, EARLIER_SHOWN, FACTS_SHOWN, GLOSSARY, GONE, ORDER, RUN_MIN, categoryOf, speaker, swatch } from "./vocabulary.js";
+import { $, agoIso, countEl, fill, fmt, h, meterBar, percent, plural, ranges, setChildren } from "./dom.js";
 import { captured, countCats, factsByTurn, has, keepLast, marked, maxFacts, pendingTurns, preview, query, saidByTurn, state, turnMatches, ui } from "./state.js";
 import { hideTooltip, info, showTooltip, tipQuote, hoverTip } from "./tooltip.js";
 import { showTab } from "./shell.js";
@@ -35,6 +35,12 @@ export function renderHeroMeta(k) {
     h("span", {}, current ? `active ${agoIso(current.last_activity)}` : ""));
 }
 
+// Cells keyed by turn_index and reused across renders: a message that changes category gets its
+// existing element recoloured (and moved to its new group) instead of torn down and rebuilt, which
+// is what lets the colour change transition instead of jumping when a clean-up runs.
+const mapCellCache = new Map();
+export function clearMapCache() { mapCellCache.clear(); }
+
 export function renderMap(k) {
   const said = saidByTurn();
   const facts = factsByTurn(k);
@@ -58,16 +64,22 @@ export function renderMap(k) {
     const words = said.get(t.turn_index)?.text ?? t.text;
     const role = said.get(t.turn_index)?.role ?? t.role;
     const keeps = (facts.get(t.turn_index) || []).filter((f) => f.status === "active");
-    return h("div", {
-      class: `cell f-${cat}${t.becomes ? " will" : ""}${query() ? (turnMatches(t, said, facts) ? " hit" : " miss") : ""}`,
-      style: t.becomes ? `--b:var(--fid-${BECOMES_CAT[t.becomes]})` : null,
-      onclick: () => jumpTo(t.turn_index), onpointerleave: hideTooltip,
-      onpointerenter: (e) => showTooltip(e, [swatch(cat), `Message ${t.turn_index} · ${speaker(role)}`],
-        `${CATS[cat].label}: ${CATS[cat].desc}`,
-        t.becomes ? `Next clean-up: ${BECOMES[t.becomes]}` : null,
-        GONE.has(cat) && keeps.length ? `Keeps ${plural(keeps.length, "fact")}, ${keeps.filter((f) => f.sent).length} sent` : null,
-        tipQuote(preview(words)), h("div", { class: "tip-row muted" }, "Click to open it")),
-    });
+    let el = mapCellCache.get(t.turn_index);
+    if (!el) {
+      el = h("div", {
+        onclick: () => jumpTo(el._tip.turnIndex), onpointerleave: hideTooltip,
+        onpointerenter: (e) => { const d = el._tip; showTooltip(e, [swatch(d.cat), `Message ${d.turnIndex} · ${speaker(d.role)}`],
+          `${CATS[d.cat].label}: ${CATS[d.cat].desc}`,
+          d.becomes ? `Next clean-up: ${BECOMES[d.becomes]}` : null,
+          GONE.has(d.cat) && d.keeps.length ? `Keeps ${plural(d.keeps.length, "fact")}, ${d.keeps.filter((f) => f.sent).length} sent` : null,
+          tipQuote(preview(d.words)), h("div", { class: "tip-row muted" }, "Click to open it")); },
+      });
+      mapCellCache.set(t.turn_index, el);
+    }
+    el.className = `cell f-${cat}${t.becomes ? " will" : ""}${query() ? (turnMatches(t, said, facts) ? " hit" : " miss") : ""}`;
+    el.style.cssText = t.becomes ? `--b:var(--fid-${BECOMES_CAT[t.becomes]})` : "";
+    el._tip = { cat, turnIndex: t.turn_index, role, keeps, words, becomes: t.becomes };
+    return el;
   };
   const pendingCell = (p) => h("div", { class: "cell pending", onclick: () => jumpTo(p.turn_index), onpointerleave: hideTooltip,
     onpointerenter: (e) => showTooltip(e, `Message ${p.turn_index} · ${speaker(p.role)}`, "Your newest message: recorded, with its reply, once the next request arrives.", tipQuote(preview(p.text))) });
@@ -80,7 +92,7 @@ export function renderMap(k) {
     return h("div", { class: `map-group g-${g.key}`, style: `flex:${n} 1 0px;max-width:${widest(n)}px` },
       h("div", { class: "map-label", ...hoverTip(`${g.label}: ${plural(recorded, "message")} ${span}`, GLOSSARY[g.term][1],
           g.pending.length ? "The last cell is your newest message, recorded with its reply." : null) },
-        h("b", {}, g.label), h("span", { class: "num" }, fmt(recorded)), g.pending.length ? h("span", {}, "+1 newest") : null,
+        h("b", {}, g.label), countEl(`map-${g.key}`, recorded), g.pending.length ? h("span", {}, "+1 newest") : null,
         h("span", { class: "num range" }, span)),
       h("div", { class: "cells" }, g.turns.map(cell), g.pending.map(pendingCell)));
   }));
@@ -94,7 +106,7 @@ export function renderLegend(k, counts) {
     class: "legend-item", type: "button", "aria-pressed": String(ui.filter === key),
     onclick: () => { setFilter(ui.filter === key ? "all" : key); $("messages").scrollIntoView({ behavior: "smooth", block: "start" }); },
     ...hoverTip(GLOSSARY[glossaryKey][0], GLOSSARY[glossaryKey][1], "Click to list these messages"),
-  }, mark, label, h("b", { class: "num" }, fmt(count)));
+  }, mark, label, h("b", {}, countEl(`legend-${key}`, count)));
   fill("legend",
     ORDER.filter((key) => counts[key]).map((key) => item(key, CATS[key].label, counts[key], key, swatch(key))),
     nextCount ? item("next", "Taken by the next clean-up", nextCount, "next", h("span", { class: "swatch will-swatch" })) : null);
@@ -109,7 +121,7 @@ export function renderSize(k) {
   const saved = written === null ? null : written - sent;
   fill("panel-size",
     h("div", { class: "stat-label" }, "Tokens per request", info("size")),
-    h("div", { class: "big" }, fmt(sent), h("small", {}, written === null ? " sent to the model" : ` sent, of ${fmt(written)} written`)),
+    h("div", { class: "big" }, countEl("size-sent", sent), h("small", {}, written === null ? " sent to the model" : ` sent, of ${fmt(written)} written`)),
     h("div", { class: "bars" },
       written === null ? null : [h("span", { class: "lab" }, "As written"),
         h("div", { class: "bar-track" }, h("div", { class: "seg written", style: `width:${width(written)};border-radius:0 4px 4px 0` })),
@@ -140,9 +152,9 @@ export function renderNext(k) {
     : `${fmt(cut.min_cut_tokens - cut.compactable_tokens)} more needed, or press Run GC now.`;
   fill("panel-next",
     h("div", { class: "stat-label" }, "Next clean-up", info("ready")),
-    h("div", { class: "big" }, fmt(cut.compactable_tokens), h("small", {}, ` of ${fmt(cut.min_cut_tokens)} tokens ready`)),
+    h("div", { class: "big" }, countEl("next-ready", cut.compactable_tokens), h("small", {}, ` of ${fmt(cut.min_cut_tokens)} tokens ready`)),
     h("div", { class: `meter${cut.batch_ready ? " ready" : ""}`, role: "meter", "aria-valuemin": "0", "aria-valuemax": String(cut.min_cut_tokens), "aria-valuenow": String(cut.compactable_tokens), "aria-label": "Tokens ready to condense" },
-      h("div", { class: share > 0 ? "some" : "", style: `width:${Math.min(100, share * 100)}%` })),
+      meterBar("next-ready", share * 100)),
     plan ? h("div", { class: "note" }, `${plural(cut.turns.length, "message")} queued: ${plan}`) : null,
     h("div", { class: "note" }, why));
 }
@@ -152,9 +164,9 @@ export function renderWindow(k) {
   const share = w ? k.context_tokens / w : 0;
   fill("panel-window",
     h("div", { class: "stat-label" }, "The model's window", info("window")),
-    h("div", { class: "big" }, w ? `${share < 0.001 && share > 0 ? "<0.1" : (share * 100).toFixed(share < 0.1 ? 1 : 0)}%` : "—", h("small", {}, " used")),
+    h("div", { class: "big" }, w ? [countEl("window-pct", share * 100, { format: (v) => (v < 0.1 && v > 0 ? "<0.1" : v.toFixed(v < 10 ? 1 : 0)) }), "%"] : "—", h("small", {}, " used")),
     h("div", { class: "meter", role: "meter", "aria-valuemin": "0", "aria-valuemax": String(w || 0), "aria-valuenow": String(k.context_tokens), "aria-label": "Share of the model's window" },
-      h("div", { class: share > 0 ? "some" : "", style: `width:${Math.min(100, share * 100)}%` })),
+      meterBar("window-share", share * 100)),
     h("div", { class: "note" }, w ? `${fmt(k.context_tokens)} of ${fmt(w)} tokens, before your next message` : "window size not reported"));
 }
 
@@ -216,7 +228,7 @@ export function renderChips(k) {
   const pending = pendingTurns(k).length;
   const nextCount = k.turns.filter((t) => t.becomes).length;
   const chip = (key, label, count, mark) => h("button", { class: "chip-btn", type: "button", "aria-pressed": String(ui.filter === key),
-    onclick: () => setFilter(ui.filter === key && key !== "all" ? "all" : key) }, mark, label, h("span", { class: "count" }, fmt(count)));
+    onclick: () => setFilter(ui.filter === key && key !== "all" ? "all" : key) }, mark, label, h("span", { class: "count" }, countEl(`chip-${key}`, count)));
   fill("chips", chip("all", "All", k.turns.length + pending),
     ORDER.filter((key) => counts[key]).map((key) => chip(key, CATS[key].label, counts[key], swatch(key))),
     nextCount ? chip("next", "Next clean-up", nextCount, h("span", { class: "swatch will-swatch" })) : null);
@@ -263,22 +275,38 @@ export function foldRuns(rows) {
   return out;
 }
 
+// How many original messages a row stands for: a run or a summary speaks for several at once.
+export function rowMessageCount(row) {
+  return row.kind === "run" ? row.rows.length : row.kind === "summary" ? row.turns.length : 1;
+}
+
 export function renderTimeline(k) {
   const said = saidByTurn();
   const facts = factsByTurn(k);
   const all = buildRows(k);
   const visible = all.filter((row) => rowVisible(row, said, facts));
-  const items = foldRuns(visible).map((row) => row.kind === "run" ? runRow(row, said, facts)
-    : row.kind === "summary" ? summaryRow(row, said) : row.kind === "pending" ? pendingRow(row.pending) : turnRow(row.turn, said, facts));
+  const folded = foldRuns(visible);
   const filtered = ui.filter !== "all" || query();
+  // Unfiltered, a long conversation leads with its newest messages; the rest sit behind a button,
+  // so opening the page does not mean reading the whole history. Filtering, searching or jumping to
+  // a message (ui.earlierOpen) always shows everything that matches, regardless of this fold.
+  const foldOlder = !filtered && !ui.earlierOpen && folded.length - EARLIER_SHOWN >= RUN_MIN;
+  const hidden = foldOlder ? folded.slice(0, folded.length - EARLIER_SHOWN) : [];
+  const shown = foldOlder ? folded.slice(folded.length - EARLIER_SHOWN) : folded;
+  const items = shown.map((row) => row.kind === "run" ? runRow(row, said, facts)
+    : row.kind === "summary" ? summaryRow(row, said) : row.kind === "pending" ? pendingRow(row.pending) : turnRow(row.turn, said, facts));
   const note = $("filter-note");
   note.hidden = !filtered;
   if (filtered) {
-    const shown = visible.reduce((n, row) => n + (row.kind === "summary" ? row.turns.length : 1), 0);
-    setChildren(note, `Showing ${plural(shown, "message")}${query() ? ` matching “${ui.query.trim()}”` : ""}${ui.filter !== "all" ? ` · ${ui.filter === "next" ? "next clean-up" : CATS[ui.filter].tag}` : ""}`,
+    const shownCount = visible.reduce((n, row) => n + (row.kind === "summary" ? row.turns.length : 1), 0);
+    setChildren(note, `Showing ${plural(shownCount, "message")}${query() ? ` matching “${ui.query.trim()}”` : ""}${ui.filter !== "all" ? ` · ${ui.filter === "next" ? "next clean-up" : CATS[ui.filter].tag}` : ""}`,
       h("button", { class: "link-btn", type: "button", onclick: () => { ui.query = ""; $("search").value = ""; setFilter("all"); } }, "Show all"));
   }
-  setChildren($("timeline"), items.length ? items : h("p", { class: "empty", style: "padding:14px 0" },
+  const earlierCount = hidden.reduce((n, row) => n + rowMessageCount(row), 0);
+  const earlierBtn = foldOlder ? h("div", { class: "earlier-row" },
+    h("button", { class: "link-btn", type: "button", "aria-expanded": "false",
+      onclick: () => { ui.earlierOpen = true; renderTimeline(state.knowledge); } }, `Show ${plural(earlierCount, "earlier message")}`)) : null;
+  setChildren($("timeline"), earlierBtn, items.length ? items : h("p", { class: "empty", style: "padding:14px 0" },
     filtered ? "No message matches." : "No messages recorded yet."));
 }
 
@@ -406,6 +434,8 @@ export function jumpTo(turnIndex) {
   const facts = factsByTurn(k);
   const row = turn ? buildRows(k).find((r) => r.kind === "turn" ? r.turn === turn : r.kind === "summary" && r.turns.includes(turn)) : null;
   if (row && !rowVisible(row, said, facts)) { ui.filter = "all"; ui.query = ""; $("search").value = ""; }
+  // A message folded away behind "Show N earlier messages" still needs to be reachable from the map.
+  ui.earlierOpen = true;
   if (turn && turn.fidelity === "summarised") {
     const entryRow = buildRows(k).find((r) => r.kind === "summary" && r.turns.includes(turn));
     ui.open.add(`orig-${entryRow.turns[0].turn_index}`);
