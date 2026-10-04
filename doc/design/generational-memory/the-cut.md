@@ -75,6 +75,12 @@ This is how a generational garbage collector works too: a young-generation
 collection does not run when one object dies, but when the young generation has
 filled enough to be worth a pass.
 
+A pass that finds no batch reports *not enough to compact*; one that compacted a
+batch and found the result would not shrink the context reports *no saving* —
+two different reasons, so they are two different outcomes. The dashboard's
+**Run GC now** is the same pass with rule 1's minimum taken as zero: rules 2–4
+still hold.
+
 ### When a summary or an extraction fails
 
 The cut **retreats to just before the failure**. Those turns stay verbatim in the

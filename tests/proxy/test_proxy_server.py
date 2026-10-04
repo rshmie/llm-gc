@@ -966,3 +966,41 @@ class TestIdleSessionsAreClosed:
                 time.sleep(0.01)
 
         assert service.session_manager.store.count() == 0
+
+
+class TestTheHistoryObserver:
+    """How the dashboard sees what was said: the engine keeps only what the model is sent."""
+
+    def _proxy_with(self, observer):
+        service, _ = _engine()
+        seen: list[httpx2.Request] = []
+
+        def handler(request):
+            seen.append(request)
+            return httpx2.Response(200, json=UPSTREAM_OK)
+
+        app = create_app(service, http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)),
+                         schedule=_run_now, on_client_history=observer)
+        return TestClient(app), seen
+
+    def test_it_receives_the_whole_conversation_the_client_sent(self):
+        observed = []
+        client, _ = self._proxy_with(lambda session_id, messages: observed.append((session_id, messages)))
+
+        _post(client, _body(("user", "the database is postgres"), ("assistant", "noted"), ("user", "and the cache?")))
+
+        session_id, messages = observed[-1]
+        assert session_id.startswith("s_")
+        assert [(m.role, m.content) for m in messages] == [
+            ("user", "the database is postgres"), ("assistant", "noted"), ("user", "and the cache?")]
+
+    def test_a_failing_observer_never_costs_the_request(self):
+        def broken(session_id, messages):
+            raise RuntimeError("dashboard bug")
+
+        client, seen = self._proxy_with(broken)
+        response = _post(client, _body(("user", "hello"), ("assistant", "hi"), ("user", "which database?")))
+
+        assert response.status_code == 200
+        assert len(seen) == 1
+        assert client.get("/stats").json()["gc_bypassed"] == 0, "not even GC is given up for it"

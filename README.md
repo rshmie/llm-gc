@@ -171,10 +171,13 @@ python scripts/chat.py                            # in a second terminal
 # open http://localhost:9901
 ```
 
-Every turn appears as it is recorded. At each cut the strip shows which turns
-were quoted, summarised, or reduced to facts; the facts panel shows which facts
-the model is actually sent; and the next-cut meter shows how close the next cut
-is. `--min-cut-tokens 300` makes cuts happen within a short conversation.
+**The conversation** view shows every turn as it was said beside what the model
+still has of it — word for word, quoted, inside a summary, as facts, or out of
+view — and which facts the model is actually sent. **LLM-GC at work** shows how
+the collector scores each turn, every pass and its outcome, and the proxy's
+counters. **Run GC now** cuts the selected conversation without waiting for the
+batch minimum. `--min-cut-tokens 300` makes cuts happen within a short
+conversation.
 
 ### Everyday commands
 

@@ -155,4 +155,5 @@ class ContextHealth(BaseModel):
     generation_lifecycle: GenerationLifeCycleSignal
     transformation_ratio: float | None  # internal baseline signal - never surfaced as a headline number
     recent_degradations: list[RecordedDegradation] = Field(default_factory=list)  # bounded, oldest first
+    recent_passes: list[GCBreakdownSignal] = Field(default_factory=list)          # bounded, oldest first
     snapshot_taken_at: float            # when this snapshot was built, distinct from gc_breakdown.gc_completed_at

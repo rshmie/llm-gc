@@ -3,6 +3,9 @@ from llm_gc.engine.sweep import BaseSweepStrategy, SweepClassification, SweepEnt
 from llm_gc.models import Message
 from llm_gc.scoring import RelevanceScorerResult
 
+TOO_SHORT_TO_SUMMARISE = "Forced KEEP: too short to be worth summarising (min_compactable_tokens)"
+
+
 class ThresholdSweepStrategy(BaseSweepStrategy):
     """Threshold-based sweep strategy that classifies messages using score and token count.
 
@@ -11,7 +14,10 @@ class ThresholdSweepStrategy(BaseSweepStrategy):
       - archive_threshold <= score < keep_threshold -> COMPACT
       - Score < archive_threshold -> ARCHIVE
 
-    Does not apply override rules - those are handled by the Sweeper orchestrator.
+    A message kept only because it is too short to be worth summarising - its score
+    alone would have compacted or archived it - is recorded as an override, so a
+    reader can tell a size rule from a high score. The universal rules (last N
+    turns, system messages) are applied afterwards by the Sweeper.
     """
     def __init__(self, gc_config: GCConfig):
         super().__init__(sweep_strategy="threshold")
@@ -22,7 +28,9 @@ class ThresholdSweepStrategy(BaseSweepStrategy):
         sweep_entries = []
         for message, score_result in zip(conversation, relevance_scores):
             combined_score: float = score_result.combined_score
-            if combined_score >= self.gc_config.keep_threshold or message.token_count <= self.gc_config.min_compactable_tokens:
+            too_short = (combined_score < self.gc_config.keep_threshold
+                         and message.token_count <= self.gc_config.min_compactable_tokens)
+            if combined_score >= self.gc_config.keep_threshold or too_short:
                 sweep_classification = SweepClassification.KEEP
             elif self.gc_config.archive_threshold <= combined_score < self.gc_config.keep_threshold:
                 sweep_classification = SweepClassification.COMPACT
@@ -30,5 +38,6 @@ class ThresholdSweepStrategy(BaseSweepStrategy):
                 sweep_classification = SweepClassification.ARCHIVE
             sweep_entries.append(SweepEntry(message=message, classification=sweep_classification,
                                         relevance_score=score_result.combined_score, turn_index=message.turn_index,
-                                        override_applied=False))
+                                        override_applied=too_short,
+                                        override_reason=TOO_SHORT_TO_SUMMARISE if too_short else None))
         return sweep_entries

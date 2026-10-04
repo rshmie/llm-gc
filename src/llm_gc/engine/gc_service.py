@@ -216,7 +216,7 @@ class GcService:
         state.snapshot = state.snapshot.with_turn(new_turn)
         await self.gc_age(session_id)
 
-    async def gc_age(self, session_id: str) -> None:
+    async def gc_age(self, session_id: str, *, ignore_batch_minimum: bool = False) -> GCResult:
         """Cold path: cut the session if enough of it is ready to be compacted.
 
         Classification decides what is compacted and how; the batch size decides
@@ -224,7 +224,12 @@ class GcService:
         turns even while a pass is running. At most one pass runs per session: a
         second trigger is reported and skipped rather than queued.
 
-        Emits GC_FINISHED exactly once, after any commit.
+        `ignore_batch_minimum` is the manual lever: the same pass with
+        `min_cut_tokens` taken as zero. Every other rule still holds - the newest
+        turns stay verbatim, no tool round is split, something must be compacted,
+        and the cut must shrink the context.
+
+        Emits GC_FINISHED exactly once, after any commit, and returns the result.
         """
         start = perf_counter()
         gc_run_id = str(uuid.uuid4())
@@ -238,15 +243,18 @@ class GcService:
         else:
             state.aging_in_flight = True
             try:
-                gc_result = await self._age(state, base, gc_run_id, start)
+                min_cut_tokens = 0 if ignore_batch_minimum else self.gc_config.min_cut_tokens
+                gc_result = await self._age(state, base, gc_run_id, start, min_cut_tokens)
             finally:
                 state.aging_in_flight = False
 
         self.event_bus.emit(Event(event_type=EventType.GC_FINISHED,
                                   data={"gc_run_id": gc_run_id, "session_id": session_id,
                                         "gc_result": gc_result}))
+        return gc_result
 
-    async def _age(self, state: SessionState, base: GenerationSnapshot, gc_run_id: str, start: float) -> GCResult:
+    async def _age(self, state: SessionState, base: GenerationSnapshot, gc_run_id: str, start: float,
+                   min_cut_tokens: int) -> GCResult:
         """Plan a cut against `base`, then commit it onto whatever the snapshot is now.
 
         Nothing reaches session state until the commit, which is synchronous: no
@@ -262,14 +270,14 @@ class GcService:
             current_stage = "sweep"
             marked = self._sweep_and_measure(young, scores, self.sweeper)
             sweep_result = marked.sweep_result
-            if not batch_worth_cutting(marked.cut, marked.compactable_tokens, self.gc_config.min_cut_tokens):
+            if not batch_worth_cutting(marked.cut, marked.compactable_tokens, min_cut_tokens):
                 return self._unchanged_result(base, gc_run_id, GCStatus.BYPASSED_BATCH_TOO_SMALL, start)
 
             current_stage = "age"
             intended = marked.batch
             plan, cut = await self._plan_batch(session_id, young, intended)
             batch = intended[:cut]
-            if not batch_worth_cutting(cut, _compactable_tokens(batch), self.gc_config.min_cut_tokens):
+            if not batch_worth_cutting(cut, _compactable_tokens(batch), min_cut_tokens):
                 # A failure shortened the cut below what is worth a cache reset. The
                 # pass still ran to its decision, so it reports what it intended; the
                 # degradations say what stopped it.
@@ -285,7 +293,7 @@ class GcService:
             if self._context_tokens(apply_aging(base, plan.delta()).snapshot) >= self._context_tokens(base):
                 logger.info("cut abandoned: it would not shrink the context",
                             extra={"session_id": session_id, "gc_run_id": gc_run_id})
-                return self._unchanged_result(base, gc_run_id, GCStatus.BYPASSED_BATCH_TOO_SMALL, start,
+                return self._unchanged_result(base, gc_run_id, GCStatus.BYPASSED_NO_SAVING, start,
                                               degradations=plan.degradations)
         except Exception as err:
             logger.exception("gc_age failed",

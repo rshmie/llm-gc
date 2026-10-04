@@ -18,7 +18,7 @@ from llm_gc.monitoring import ContextHealthMonitor
 from llm_gc.scoring import RecencyScorer, RelevanceScorer, RelevanceType
 from llm_gc.session import SessionManager
 from llm_gc.utils import count_tokens
-from llm_gc.visualizer import create_dashboard_app
+from llm_gc.visualizer import TranscriptRecorder, create_dashboard_app
 
 SUMMARY = LLMResponse(text="Earlier turns covered the storage decision and the retention window in brief.",
                       stop_reason=StopReason.COMPLETE, input_tokens=0, output_tokens=14,
@@ -59,7 +59,7 @@ def _converse(service: GcService, session_id: str, turns: int) -> None:
 
 
 def _client(service: GcService, monitor: ContextHealthMonitor, **kwargs) -> TestClient:
-    return TestClient(create_dashboard_app(service, monitor, **kwargs))
+    return TestClient(create_dashboard_app(service, monitor, **kwargs), base_url="http://127.0.0.1")
 
 
 class TestThePage:
@@ -68,11 +68,18 @@ class TestThePage:
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]
 
-    def test_every_route_is_read_only(self):
-        """It shows what the engine did; it never asks the engine to do anything."""
+    def test_its_one_action_is_the_manual_cut(self):
         app = create_dashboard_app(*_engine())
-        methods = {method for route in app.routes if isinstance(route, APIRoute) for method in route.methods}
-        assert methods == {"GET"}
+        writes = [route.path for route in app.routes if isinstance(route, APIRoute) and route.methods - {"GET"}]
+        assert writes == ["/api/sessions/{session_id}/gc"]
+
+    def test_it_answers_only_to_localhost_names(self):
+        """A page on another site can point its own hostname at 127.0.0.1 and read
+        the dashboard as same-origin - every conversation the proxy holds."""
+        service, monitor = _engine()
+        rebound = TestClient(create_dashboard_app(service, monitor), base_url="http://attacker.example")
+        assert rebound.get("/api/overview").status_code == 400
+        assert _client(service, monitor).get("/api/overview").status_code == 200
 
 
 class TestOverview:
@@ -146,3 +153,66 @@ class TestOneSession:
         client.get("/api/overview")
 
         assert service.session_manager.store.get("s").last_updated_at == before
+
+
+class TestRunGcNow:
+    def test_it_cuts_without_waiting_for_the_batch_minimum(self):
+        service, monitor = _engine()
+        service.gc_config.min_cut_tokens = 100_000      # the automatic pass would never cut
+        _converse(service, "s", 20)
+        assert service.session_manager.store.get("s").snapshot.cut_count == 0
+
+        response = _client(service, monitor).post("/api/sessions/s/gc", headers={"x-llm-gc-dashboard": "1"})
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "completed"
+        assert response.json()["tokens_after"] < response.json()["tokens_before"]
+        assert service.session_manager.store.get("s").snapshot.cut_count == 1
+
+    def test_it_is_refused_without_the_action_header(self):
+        """Another site's page can make the browser send a plain POST to localhost;
+        it cannot add a custom header without a preflight this server never grants."""
+        service, monitor = _engine()
+        _converse(service, "s", 20)
+        before = service.session_manager.store.get("s").snapshot
+
+        response = _client(service, monitor).post("/api/sessions/s/gc")
+
+        assert response.status_code == 403
+        assert service.session_manager.store.get("s").snapshot is before, "nothing ran"
+
+    def test_an_unknown_session_is_not_created(self):
+        service, monitor = _engine()
+        response = _client(service, monitor).post("/api/sessions/gone/gc", headers={"x-llm-gc-dashboard": "1"})
+        assert response.status_code == 404
+        assert service.session_manager.store.get("gone") is None
+
+
+class TestTranscript:
+    def test_it_returns_what_the_client_last_sent(self):
+        service, monitor = _engine()
+        _converse(service, "s", 3)
+        recorder = TranscriptRecorder()
+        recorder.record("s", [Message(role="user", content="the database is postgres", token_count=5, turn_index=0),
+                              Message(role="assistant", content="noted", token_count=1, turn_index=1)])
+
+        transcript = _client(service, monitor, transcripts=recorder).get("/api/sessions/s/transcript").json()
+
+        assert transcript["captured"] is True
+        assert [(t["turn_index"], t["role"], t["text"]) for t in transcript["turns"]] == [
+            (0, "user", "the database is postgres"), (1, "assistant", "noted")]
+        assert transcript["total_tokens"] == 6
+
+    def test_without_a_recorder_it_says_nothing_was_captured(self):
+        service, monitor = _engine()
+        _converse(service, "s", 3)
+        transcript = _client(service, monitor).get("/api/sessions/s/transcript").json()
+        assert transcript == {"captured": False, "turns": [], "total_tokens": 0}
+
+    def test_a_closed_sessions_copy_is_dropped(self):
+        service, monitor = _engine()
+        recorder = TranscriptRecorder()
+        recorder.record("gone", [Message(role="user", content="secret", turn_index=0)])
+
+        assert _client(service, monitor, transcripts=recorder).get("/api/sessions/gone/transcript").status_code == 404
+        assert recorder.get("gone") is None

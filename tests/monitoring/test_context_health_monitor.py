@@ -449,3 +449,17 @@ class TestDegradationsOutliveTheirPass:
 
         assert snapshot.gc_breakdown.is_degraded is False, "the last pass itself was clean"
         assert [r.degradation for r in snapshot.recent_degradations] == [refused]
+
+
+class TestPassHistory:
+    def test_every_pass_is_kept_in_order_per_session(self):
+        """The dashboard's activity timeline: what each pass did, not only the last."""
+        monitor, bus, _ = _make_monitor()
+        for run in ("one", "two"):
+            _emit_for(bus, "alice", EventType.GC_FINISHED, gc_result=_make_completed_result(
+                {0: SweepClassification.KEEP}, gc_run_id=run))
+        _emit_for(bus, "bob", EventType.GC_FINISHED, gc_result=_make_completed_result(
+            {0: SweepClassification.KEEP}, gc_run_id="bob-run"))
+
+        assert [p.gc_run_id for p in monitor.get_snapshot("alice").recent_passes] == ["one", "two"]
+        assert [p.gc_run_id for p in monitor.get_snapshot("bob").recent_passes] == ["bob-run"]

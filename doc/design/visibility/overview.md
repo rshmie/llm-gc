@@ -142,8 +142,11 @@ half-updated state.
 It is **passive**. It observes and reports; it never triggers a collection
 pass itself. Deciding *when* to clean context is a decision with consequences
 for what the model produces next, and that decision stays with the developer
-or the application. The dashboard is passive in the same way: it has no
-controls, and every route it serves is a read.
+or the application. The dashboard's one control, **Run GC now**, does not
+contradict this: it is the *developer* pulling the lever explicitly — the human
+judgment the passivity rule exists to protect. It runs the same aging pass with
+only the batch minimum waived, so every other rule of a cut still holds and the
+result is reported like any automatic pass.
 
 ### What it exposes — named signals, no aggregate
 
@@ -261,17 +264,37 @@ monitor into the bus — free of any web-framework code. The doc area
 implementation.
 
 The dashboard runs inside the proxy process, beside it rather than within it:
-the same engine and the same event loop, on its own localhost port. It lists
-every live session; for the one selected it shows the knowledge state and the
-monitor's activity, and the proxy's counters across all of them. It polls once a
-second, and fetches the knowledge state again only when the session's content
-has changed. Server-push (WebSocket) delivery is a planned upgrade of the
-transport, not of the split.
+the same engine and the same event loop, on its own localhost port. It has two
+views, one per question, and the transparency view opens first:
+
+| View | Answers | Shows |
+|---|---|---|
+| **The conversation** | What does the model know, at what fidelity, and what has it lost? | Every turn as it was said, with what the model still has of it — word for word, quoted, inside a summary, as facts, out of view, or contradicted — and the facts the model is and is not sent |
+| **LLM-GC at work** | What did LLM-GC do, and did it work? | How the collector scores the verbatim turns against its thresholds, every pass and its outcome, degradations, transitions, the proxy's counters, and the settings in effect |
+
+It polls once a second, and fetches a session's content again only when it has
+changed. Server-push (WebSocket) delivery is a planned upgrade of the transport,
+not of the split.
+
+**What was said comes from the client, not the engine.** The engine keeps only
+what the model is sent; once a turn is summarised or reduced to facts its words
+are gone, by design. To show what was lost beside what remains, the proxy hands
+each request's conversation to a transcript recorder that exists only when the
+dashboard runs: text only, bounded by session count, dropped with its session.
+*Rejected: the engine keeps the originals* — a turn that was "removed" would
+still be held for the life of the session, in every deployment, dashboard or
+not. *Rejected: no originals* — the view could say turn 6 is facts only, but not
+what was said in it, which is the comparison a developer needs.
 
 **It shows conversation content, so it is opt-in and localhost-only.** The proxy
 and the dashboard have different exposure: the proxy is an API meant, one day,
 to be reached behind authentication; the dashboard shows every conversation the
-process holds. Separate listeners keep the two from being exposed together.
+process holds. Separate listeners keep the two from being exposed together. Two
+further guards close the browser-side routes to localhost: requests whose `Host`
+is not a localhost name are refused, so a hostile page cannot rebind its own
+domain to 127.0.0.1 and read the dashboard as same-origin; and Run GC now
+requires a custom header, which another site's page cannot send without a
+preflight the server never grants.
 
 ---
 

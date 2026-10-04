@@ -12,6 +12,7 @@ from llm_gc.extraction import KnowledgeExtractor
 from llm_gc.models import Message
 from llm_gc.scoring.relevance_scorer_result import RelevanceScorerResult
 from llm_gc.session import SessionManager
+from llm_gc.utils import count_tokens
 
 
 class _StubScorer:
@@ -354,3 +355,62 @@ class TestCutsAreBatched:
 
         assert [m.turn_index for m in service.session_manager.store.get("s1").snapshot.young] == [1]
         assert [m.turn_index for m in captured[0].data["gc_result"].final_messages] == [1]
+
+
+class TestTheManualCut:
+    """The dashboard's "Run GC now": the same pass with only the batch minimum waived."""
+
+    _HIGH_MINIMUM = GCConfig(context_window=1000, min_cut_tokens=10_000, last_n_turns_to_keep=1)
+
+    def test_it_cuts_a_batch_below_the_minimum(self):
+        service, sweeper = _make_service(gc_config=self._HIGH_MINIMUM)
+
+        async def scenario():
+            for index in (1, 2, 3):
+                await service.gc_update("s1", _msg(index))
+            sweeper.classifications = {1: SweepClassification.COMPACT, 2: SweepClassification.COMPACT}
+            automatic = await service.gc_age("s1")
+            manual = await service.gc_age("s1", ignore_batch_minimum=True)
+            return automatic, manual
+
+        automatic, manual = asyncio.run(scenario())
+        assert automatic.status is GCStatus.BYPASSED_BATCH_TOO_SMALL
+        assert manual.status is GCStatus.COMPLETED
+        assert manual.tokens_saved > 0
+
+    def test_every_other_rule_still_holds(self):
+        """The newest turns stay verbatim and a batch of only kept turns is not cut:
+        quoting them would reset the provider's cache and compact nothing."""
+        service, sweeper = _make_service(gc_config=self._HIGH_MINIMUM)
+
+        async def scenario():
+            for index in (1, 2, 3):
+                await service.gc_update("s1", _msg(index))
+            all_kept = await service.gc_age("s1", ignore_batch_minimum=True)
+            sweeper.classifications = {i: SweepClassification.COMPACT for i in (1, 2, 3)}
+            await service.gc_age("s1", ignore_batch_minimum=True)
+            return all_kept
+
+        all_kept = asyncio.run(scenario())
+        assert all_kept.status is GCStatus.BYPASSED_BATCH_TOO_SMALL
+        assert [m.turn_index for m in service.session_manager.store.get("s1").snapshot.young] == [3]
+
+    def test_a_cut_that_would_not_shrink_the_context_says_so(self):
+        """It used to be reported as "batch below the minimum" - false whenever the
+        batch was large enough, and visibly false once a person presses the button."""
+        service, sweeper = _make_service(gc_config=self._HIGH_MINIMUM)
+
+        def honest(turn_index: int) -> Message:
+            text = f"turn {turn_index}"
+            return Message(role="user", content=text, token_count=count_tokens(text), turn_index=turn_index)
+
+        async def scenario():
+            for index in (1, 2, 3):
+                await service.gc_update("s1", honest(index))
+            sweeper.classifications = {1: SweepClassification.COMPACT, 2: SweepClassification.COMPACT}
+            return await service.gc_age("s1", ignore_batch_minimum=True)
+
+        # The no-op compactor wraps turns in a marker, so its "summary" is longer than they were.
+        result = asyncio.run(scenario())
+        assert result.status is GCStatus.BYPASSED_NO_SAVING
+        assert len(service.session_manager.store.get("s1").snapshot.young) == 3

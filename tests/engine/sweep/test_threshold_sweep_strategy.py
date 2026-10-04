@@ -166,7 +166,7 @@ class TestThresholdEntryFields:
 
         assert entries[0].turn_index == 7
 
-    def test_entry_override_is_always_false(self):
+    def test_a_classification_made_by_score_records_no_override(self):
         config = GCConfig(keep_threshold=0.7, min_compactable_tokens=50)
         strategy = ThresholdSweepStrategy(gc_config=config)
         msg = _make_message("Test message", token_count=100)
@@ -176,6 +176,21 @@ class TestThresholdEntryFields:
 
         assert entries[0].override_applied is False
         assert entries[0].override_reason is None
+
+    def test_a_turn_kept_only_for_its_size_says_so(self):
+        """Otherwise a dashboard shows a low score beside a KEEP with nothing to
+        explain it, and a reader concludes the classifier is broken."""
+        config = GCConfig(keep_threshold=0.7, min_compactable_tokens=50)
+        strategy = ThresholdSweepStrategy(gc_config=config)
+        short, relevant = _make_message("ok", token_count=3), _make_message("Long relevant", token_count=3)
+
+        entries = strategy.sweep([short, relevant], [_make_relevance_result(short, 0.1),
+                                                     _make_relevance_result(relevant, 0.9)])
+
+        assert entries[0].classification == SweepClassification.KEEP
+        assert entries[0].override_applied is True
+        assert "too short" in entries[0].override_reason
+        assert entries[1].override_applied is False, "a high score keeps it; size is not the reason"
 
     def test_entry_contains_original_message(self):
         config = GCConfig(keep_threshold=0.7, min_compactable_tokens=50)

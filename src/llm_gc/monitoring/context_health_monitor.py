@@ -4,8 +4,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from llm_gc.config import GCConfig
-from llm_gc.config.constants import DEFAULT_MAX_RECENT_DEGRADATIONS, DEFAULT_MAX_RECENT_TRANSITIONS, \
-    DEFAULT_MONITOR_MAX_SESSIONS
+from llm_gc.config.constants import DEFAULT_MAX_RECENT_DEGRADATIONS, DEFAULT_MAX_RECENT_PASSES, \
+    DEFAULT_MAX_RECENT_TRANSITIONS, DEFAULT_MONITOR_MAX_SESSIONS
 from llm_gc.engine import AgingDegradation, GCResult
 from llm_gc.engine.sweep import SweepClassification, SweepResult
 from llm_gc.events import Event, EventBus, EventType
@@ -44,6 +44,7 @@ class _SessionRecord:
 
     transitions: deque[GenerationTransition]
     degradations: deque[RecordedDegradation]
+    passes: deque[GCBreakdownSignal]
     last_pass: _PassSignals | None = field(default=None)
 
 
@@ -86,7 +87,8 @@ class ContextHealthMonitor:
         record = self._records.get(session_id)
         if record is None:
             record = _SessionRecord(transitions=deque(maxlen=self._max_recent_transitions),
-                                    degradations=deque(maxlen=self._max_recent_degradations))
+                                    degradations=deque(maxlen=self._max_recent_degradations),
+                                    passes=deque(maxlen=DEFAULT_MAX_RECENT_PASSES))
             self._records[session_id] = record
             if len(self._records) > self._max_sessions:
                 self._records.popitem(last=False)
@@ -97,9 +99,11 @@ class ContextHealthMonitor:
     def _on_gc_finished(self, event: Event) -> None:
         gc_result: GCResult = event.data["gc_result"]
         young_turn_indices, young_tokens = self._young_generation(gc_result)
-        self._record_for(event).last_pass = _PassSignals(
-            token_budget=self._build_token_budget(gc_result),
-            gc_breakdown=self._build_gc_breakdown(gc_result, event.timestamp),
+        breakdown = self._build_gc_breakdown(gc_result, event.timestamp)
+        record = self._record_for(event)
+        record.passes.append(breakdown)
+        record.last_pass = _PassSignals(
+            token_budget=self._build_token_budget(gc_result), gc_breakdown=breakdown,
             transformation_ratio=self._compute_transformation_ratio(gc_result.sweep_result),
             young_turn_indices=young_turn_indices, young_tokens=young_tokens)
 
@@ -154,6 +158,7 @@ class ContextHealthMonitor:
         last_pass = record.last_pass if record is not None else None
         transitions = list(record.transitions) if record is not None else []
         degradations = list(record.degradations) if record is not None else []
+        passes = list(record.passes) if record is not None else []
 
         return ContextHealth(
             token_budget=last_pass.token_budget if last_pass is not None else None,
@@ -161,6 +166,7 @@ class ContextHealthMonitor:
             generation_lifecycle=self._build_generation_lifecycle(last_pass, session_id, transitions),
             transformation_ratio=last_pass.transformation_ratio if last_pass is not None else None,
             recent_degradations=degradations,
+            recent_passes=passes,
             snapshot_taken_at=time.time())
 
     def _build_token_budget(self, gc_result: GCResult) -> TokenBudgetSignal | None:

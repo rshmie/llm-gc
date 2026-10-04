@@ -1,9 +1,10 @@
 """The live dashboard: every session the engine is serving, as it happens.
 
-A read-only view. Each value is produced by an engine, monitor or proxy component
-and only displayed here, so a wrong number is wrong in the component that produced
-it. It shows conversation content, so it is opt-in and must only ever listen on
-localhost; see doc/design/visibility/overview.md.
+Each value is produced by an engine, monitor, proxy or transcript component and
+only displayed here, so a wrong number is wrong in the component that produced it.
+Its one action is the developer's manual cut. It shows conversation content, so it
+is opt-in and must only ever listen on localhost; see
+doc/design/visibility/overview.md.
 """
 
 from collections.abc import Callable
@@ -11,16 +12,27 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from llm_gc.config.constants import APP_VERSION
-from llm_gc.engine import GcService
+from llm_gc.engine import AgingDegradation, GcService, GCStatus
 from llm_gc.monitoring import ContextHealth, ContextHealthMonitor
 from llm_gc.monitoring.knowledge_state import KnowledgeState, project_knowledge_state
+from llm_gc.visualizer.transcript import TranscriptRecorder, TranscriptTurn
 
 _STATIC_DIR = Path(__file__).parent / "static"
+
+# Only localhost names are served. A page on another site can make the browser
+# resolve its own hostname to 127.0.0.1 (DNS rebinding) and read the responses as
+# same-origin; checking the Host header defeats that.
+LOCAL_HOSTS = ["127.0.0.1", "localhost"]
+
+# Required on the one route that acts. A page on another site cannot send a custom
+# header without a CORS preflight, which this server never grants.
+ACTION_HEADER = "x-llm-gc-dashboard"
 
 
 class SessionSummary(BaseModel):
@@ -30,6 +42,23 @@ class SessionSummary(BaseModel):
     cuts: int
     aging_in_flight: bool
     last_activity: datetime
+
+
+class Transcript(BaseModel):
+    captured: bool                # False when no transcript was recorded for the session
+    turns: list[TranscriptTurn]
+    total_tokens: int             # what the client's conversation costs sent whole
+
+
+class ManualCutResult(BaseModel):
+    status: GCStatus
+    tokens_before: int
+    tokens_after: int
+    kept: int
+    summarised: int
+    archived: int
+    degradations: list[AgingDegradation]
+    duration_ms: float
 
 
 class DashboardOverview(BaseModel):
@@ -42,20 +71,26 @@ def create_dashboard_app(
     gc_service: GcService,
     monitor: ContextHealthMonitor,
     read_proxy_stats: Callable[[], dict[str, Any]] | None = None,
+    transcripts: TranscriptRecorder | None = None,
+    allowed_hosts: list[str] | None = None,
 ) -> FastAPI:
     """The dashboard over a running engine.
 
     Args:
-        gc_service: The engine whose sessions are shown; read, never written.
+        gc_service: The engine whose sessions are shown.
         monitor: Subscribed to the same bus as `gc_service`.
         read_proxy_stats: The proxy's counters, passed as a function so the
             dashboard does not depend on the proxy package.
+        transcripts: What each client last sent, fed by the proxy. Without it the
+            dashboard still shows what the model receives, but not what was said.
+        allowed_hosts: Host names served; localhost by default.
 
     Every route is `async` on purpose: FastAPI runs plain `def` routes in a thread
-    pool, and the session store and monitor are only safe to read from the event
+    pool, and the session store and monitor are only safe to touch from the event
     loop that writes them.
     """
     app = FastAPI(title="LLM-GC Dashboard", version=APP_VERSION)
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts or LOCAL_HOSTS)
     config = gc_service.gc_config
 
     @app.get("/", include_in_schema=False)
@@ -93,6 +128,34 @@ def create_dashboard_app(
         if gc_service.session_manager.store.get(session_id) is None:
             return _session_not_found(session_id)
         return monitor.get_snapshot(session_id)
+
+    @app.get("/api/sessions/{session_id}/transcript", response_model=Transcript)
+    async def session_transcript(session_id: str) -> Transcript | JSONResponse:
+        if gc_service.session_manager.store.get(session_id) is None:
+            if transcripts is not None:
+                transcripts.forget(session_id)   # its session closed; so does its copy
+            return _session_not_found(session_id)
+        turns = transcripts.get(session_id) if transcripts is not None else None
+        return Transcript(captured=turns is not None, turns=list(turns or ()),
+                          total_tokens=sum(turn.tokens for turn in turns or ()))
+
+    @app.post("/api/sessions/{session_id}/gc", response_model=ManualCutResult)
+    async def run_gc_now(session_id: str, request: Request) -> ManualCutResult | JSONResponse:
+        """The developer's lever: cut now, without waiting for the batch minimum.
+
+        Every other rule of a cut still applies, and it reports what happened the
+        same way an automatic pass does.
+        """
+        if request.headers.get(ACTION_HEADER) != "1":
+            return JSONResponse(status_code=403, content={"error": {
+                "code": "ACTION_HEADER_REQUIRED", "message": f"send {ACTION_HEADER}: 1 to act from the dashboard"}})
+        if gc_service.session_manager.store.get(session_id) is None:
+            return _session_not_found(session_id)
+        result = await gc_service.gc_age(session_id, ignore_batch_minimum=True)
+        return ManualCutResult(status=result.status, tokens_before=result.tokens_before,
+                               tokens_after=result.tokens_in_final, kept=result.kept_count,
+                               summarised=result.compacted_count, archived=result.archived_count,
+                               degradations=result.degradations, duration_ms=result.duration_ms)
 
     return app
 

@@ -20,6 +20,7 @@ DEFAULT_LAST_N_TURNS_TO_KEEP = 5
 DEFAULT_MIN_CUT_TOKENS = 1000
 DEFAULT_MAX_RECENT_TRANSITIONS = 20
 DEFAULT_MAX_RECENT_DEGRADATIONS = 20
+DEFAULT_MAX_RECENT_PASSES = 50    # one pass runs after every request, so most are quiet
 # Sessions the health monitor keeps history for. Above this, the one heard from
 # least recently is dropped; it bounds memory if closed sessions are never forgotten.
 DEFAULT_MONITOR_MAX_SESSIONS = 1000

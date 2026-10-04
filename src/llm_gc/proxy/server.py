@@ -102,6 +102,7 @@ def create_app(
     http_client: httpx2.AsyncClient | None = None,
     upstream_timeout_s: float = DEFAULT_UPSTREAM_TIMEOUT_S,
     schedule: Callable[[Awaitable[None]], None] | None = None,
+    on_client_history: Callable[[str, list[Message]], None] | None = None,
 ) -> FastAPI:
     """Wire the proxy around an already-built engine.
 
@@ -114,6 +115,9 @@ def create_app(
         upstream_timeout_s: Ceiling on the forwarded call.
         schedule: How to run post-response aging. Injectable so a test can drive it
             to completion instead of racing a fire-and-forget task.
+        on_client_history: Called with each request's session and the conversation
+            the client sent, before forwarding. How the dashboard sees what was
+            said; must be fast, and a failure in it never affects the request.
     """
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -140,6 +144,7 @@ def create_app(
     app.state.http_client = http_client or httpx2.AsyncClient()
     app.state.owns_http_client = http_client is None
     app.state.schedule = schedule if schedule is not None else _default_schedule
+    app.state.on_client_history = on_client_history
 
 
     @app.get("/health")
@@ -202,6 +207,8 @@ async def _handle(app: FastAPI, request: Request) -> Response:
     session_id: str | None = None
     try:
         session_id = _record_client_history(app, history, request.headers.get(SESSION_HEADER))
+        if session_id is not None:
+            _observe_history(app, session_id, client_messages)
         forward_body, forwarded_tokens = await _apply_gc(app, session_id, history, new_turn, payload, body)
         logger.info("proxying", extra={"session_id": session_id, "turns_from_client": len(client_messages),
                                        "tokens_from_client": client_history_tokens,
@@ -276,6 +283,17 @@ def _record_client_history(app: FastAPI, history: list[Message], header_value: s
     if agreed < len(history):
         gc_service.gc_record(state.session_id, history[agreed:], hashes[agreed:])
     return state.session_id
+
+
+def _observe_history(app: FastAPI, session_id: str, client_messages: list[Message]) -> None:
+    """Hand the conversation to an observer, if one is attached. Never fails the request."""
+    observer = app.state.on_client_history
+    if observer is None:
+        return
+    try:
+        observer(session_id, client_messages)
+    except Exception:
+        logger.exception("history observer failed; the request is unaffected", extra={"session_id": session_id})
 
 
 def _agreed_length(recorded: Sequence[str], hashes: Sequence[str]) -> int:

@@ -71,7 +71,7 @@ from llm_gc.scoring import (  # noqa: E402
 )
 from llm_gc.session import SessionManager  # noqa: E402
 from llm_gc.utils import count_tokens  # noqa: E402
-from llm_gc.visualizer import create_dashboard_app  # noqa: E402
+from llm_gc.visualizer import TranscriptRecorder, create_dashboard_app  # noqa: E402
 
 SESSION = "demo"
 
@@ -306,7 +306,10 @@ def serve(args: argparse.Namespace, api_key: str | None) -> None:
     config = serve_config(args)
     service, _, label = build_engine(config, api_key=api_key, compactor_kind=args.compactor)
     stub = httpx2.AsyncClient(transport=httpx2.MockTransport(_stub_provider)) if args.stub_upstream else None
-    proxy_app = create_app(service, http_client=stub)
+    # Transcripts are a second copy of every conversation, so they exist only for the dashboard.
+    transcripts = TranscriptRecorder() if args.dashboard else None
+    proxy_app = create_app(service, http_client=stub,
+                           on_client_history=transcripts.record if transcripts is not None else None)
     apps = [(proxy_app, args.port)]
     if args.dashboard:
         store = service.session_manager.store
@@ -314,8 +317,8 @@ def serve(args: argparse.Namespace, api_key: str | None) -> None:
             event_bus=service.event_bus, gc_config=config,
             read_generations=lambda session_id: (state.snapshot if session_id is not None
                                                  and (state := store.get(session_id)) is not None else None))
-        apps.append((create_dashboard_app(service, monitor, read_proxy_stats=proxy_app.state.metrics.as_dict),
-                     args.dashboard_port))
+        apps.append((create_dashboard_app(service, monitor, read_proxy_stats=proxy_app.state.metrics.as_dict,
+                                          transcripts=transcripts), args.dashboard_port))
 
     print(f"\ncompactor: {label}")
     if not api_key and args.compactor != "noop":
