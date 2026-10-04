@@ -414,3 +414,11 @@ class TestTheManualCut:
         result = asyncio.run(scenario())
         assert result.status is GCStatus.BYPASSED_NO_SAVING
         assert len(service.session_manager.store.get("s1").snapshot.young) == 3
+
+        # What it would have done, so a reader can see by how much it fell short.
+        abandoned = result.abandoned_cut
+        assert abandoned is not None
+        assert abandoned.turns == [1, 2]
+        assert (abandoned.quoted, abandoned.summarised, abandoned.archived) == (0, 2, 0)
+        assert abandoned.context_tokens_after >= result.tokens_before
+        assert result.tokens_in_final == result.tokens_before, "and nothing changed"

@@ -8,7 +8,7 @@ from typing import Protocol
 
 from llm_gc.config.gc_config import GCConfig
 from llm_gc.engine.aging_degradation import AgingDegradation, DegradationReason
-from llm_gc.engine.gc_result import GCResult
+from llm_gc.engine.gc_result import AbandonedCut, GCResult
 from llm_gc.engine.gc_status import GCStatus
 from llm_gc.engine.generations.fact_retriever import FactRetriever, LexicalFactRetriever
 from llm_gc.engine.generations.generational_memory import GenerationalMemory
@@ -290,11 +290,13 @@ class GcService:
             # Measured on the context the cut would produce, not summed: the front
             # carries facts and quote markers, so a cut can make the prompt larger
             # than the turns it removes - a cache reset that costs tokens too.
-            if self._context_tokens(apply_aging(base, plan.delta()).snapshot) >= self._context_tokens(base):
+            projected = self._context_tokens(apply_aging(base, plan.delta()).snapshot)
+            if projected >= self._context_tokens(base):
                 logger.info("cut abandoned: it would not shrink the context",
                             extra={"session_id": session_id, "gc_run_id": gc_run_id})
                 return self._unchanged_result(base, gc_run_id, GCStatus.BYPASSED_NO_SAVING, start,
-                                              degradations=plan.degradations)
+                                              degradations=plan.degradations,
+                                              abandoned_cut=_abandoned_cut(batch, projected))
         except Exception as err:
             logger.exception("gc_age failed",
                              extra={"session_id": session_id, "gc_run_id": gc_run_id, "stage": current_stage})
@@ -358,7 +360,7 @@ class GcService:
     def _unchanged_result(
         self, snapshot: GenerationSnapshot, gc_run_id: str, status: GCStatus, start: float,
         failure_reason: str | None = None, failure_stage: str | None = None,
-        degradations: list[AgingDegradation] | None = None,
+        degradations: list[AgingDegradation] | None = None, abandoned_cut: AbandonedCut | None = None,
     ) -> GCResult:
         messages = self._assemble(snapshot)
         tokens = sum(message.token_count for message in messages)
@@ -368,7 +370,7 @@ class GcService:
             tokens_before=tokens, tokens_in_final=tokens,
             kept_count=len(messages), compacted_count=0, archived_count=0,
             sweep_result=None, duration_ms=(perf_counter() - start) * 1000,
-            degradations=degradations or [],
+            degradations=degradations or [], abandoned_cut=abandoned_cut,
         )
 
     async def _plan_batch(
@@ -574,6 +576,15 @@ class GcService:
 
 def _in_order(messages: Sequence[Message]) -> list[Message]:
     return sorted(messages, key=lambda message: message.turn_index)
+
+
+def _abandoned_cut(batch: Sequence[SweepEntry], context_tokens_after: int) -> AbandonedCut:
+    counts = {c: sum(1 for entry in batch if entry.classification == c) for c in SweepClassification}
+    return AbandonedCut(
+        turns=[entry.turn_index for entry in batch], quoted=counts[SweepClassification.KEEP],
+        summarised=counts[SweepClassification.COMPACT], archived=counts[SweepClassification.ARCHIVE],
+        tokens_taken=sum(entry.message.token_count for entry in batch), context_tokens_after=context_tokens_after,
+    )
 
 
 def _compactable_tokens(batch: Sequence[SweepEntry]) -> int:

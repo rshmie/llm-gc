@@ -96,6 +96,24 @@ class TestOverview:
         assert sessions[0]["cuts"] > 0
         assert sessions[1]["cuts"] == 0
 
+    def test_a_conversation_is_named_by_its_opening_words(self):
+        """Session ids are hashes; a person finds their conversation by what they said first."""
+        service, monitor = _engine()
+        _converse(service, "named", 2)
+        _converse(service, "unnamed", 2)
+        recorder = TranscriptRecorder()
+        opening = "We need to decide on the storage layer\nfor the new ingest service " + "before Friday " * 10
+        recorder.record("named", [Message(role="assistant", content="hello", turn_index=0),
+                                  Message(role="user", content=opening, turn_index=1)])
+
+        sessions = _client(service, monitor, transcripts=recorder).get("/api/overview").json()["sessions"]
+        titles = {s["session_id"]: s["title"] for s in sessions}
+
+        assert titles["named"].startswith("We need to decide on the storage layer for the new ingest service")
+        assert titles["named"].endswith("…")
+        assert len(titles["named"]) <= 72
+        assert titles["unnamed"] is None
+
     def test_reports_the_tunable_settings(self):
         config = _client(*_engine()).get("/api/overview").json()["config"]
         assert config["min_cut_tokens"] == 60
@@ -204,11 +222,27 @@ class TestTranscript:
             (0, "user", "the database is postgres"), (1, "assistant", "noted")]
         assert transcript["total_tokens"] == 6
 
+    def test_tokens_are_compared_over_the_same_turns(self):
+        """The client's latest message reaches the session only with the next request.
+        Comparing the whole transcript with the context the model is sent showed a
+        saving equal to that message - a saving that never happened."""
+        service, monitor = _engine()
+        _converse(service, "s", 2)                     # the session has recorded turns 0 and 1
+        recorder = TranscriptRecorder()
+        recorder.record("s", [Message(role="user", content="a", token_count=5, turn_index=0),
+                              Message(role="assistant", content="b", token_count=7, turn_index=1),
+                              Message(role="user", content="c", token_count=11, turn_index=2)])
+
+        transcript = _client(service, monitor, transcripts=recorder).get("/api/sessions/s/transcript").json()
+
+        assert transcript["total_tokens"] == 23
+        assert transcript["recorded_tokens"] == 12
+
     def test_without_a_recorder_it_says_nothing_was_captured(self):
         service, monitor = _engine()
         _converse(service, "s", 3)
         transcript = _client(service, monitor).get("/api/sessions/s/transcript").json()
-        assert transcript == {"captured": False, "turns": [], "total_tokens": 0}
+        assert transcript == {"captured": False, "turns": [], "total_tokens": 0, "recorded_tokens": 0}
 
     def test_a_closed_sessions_copy_is_dropped(self):
         service, monitor = _engine()

@@ -61,7 +61,8 @@ class TurnState(BaseModel):
 class FrontEntryState(BaseModel):
     kind: EntryKind
     source_turns: list[int]
-    text: str
+    text: str                             # as the model receives it, marker included
+    stated_text: str                      # what it says, without the marker - for a person to read
     tokens: int
 
 
@@ -122,7 +123,8 @@ def project_knowledge_state(inspection: SessionInspection) -> KnowledgeState:
         front_text=front.message.content if front is not None else None,
         front_tokens=front.message.token_count if front is not None else 0,
         front_entries=[FrontEntryState(kind=entry.kind, source_turns=list(entry.source_turns),
-                                       text=entry.message.content, tokens=entry.message.token_count)
+                                       text=entry.message.content, stated_text=entry.text,
+                                       tokens=entry.message.token_count)
                        for entry in entries],
         turns=_turn_states(inspection, entries, facts_by_turn, sent),
         facts=_fact_states(snapshot.knowledge, sent),

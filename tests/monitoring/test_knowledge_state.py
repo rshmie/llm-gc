@@ -110,6 +110,8 @@ class TestWhatTheModelSees:
 
         sent = [f for f in state.facts if f.sent]
         assert 0 < len(sent) < len(facts)
+        assert state.front_entries[0].text == "[Quoted exactly] hi", "exactly what the model receives"
+        assert state.front_entries[0].stated_text == "hi", "what a person reads, without the marker"
         for turn in state.turns[:10]:
             assert turn.fidelity is TurnFidelity.FACTS_ONLY
             assert turn.facts_stored == 1

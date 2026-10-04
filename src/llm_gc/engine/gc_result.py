@@ -7,6 +7,23 @@ from llm_gc.engine.sweep.sweep_result import SweepResult
 from llm_gc.models.knowledge_entry import KnowledgeEntry
 from llm_gc.models.message import Message
 
+class AbandonedCut(BaseModel):
+    """A cut that was planned, then not made because it would not have shrunk the context.
+
+    What it would have done, so a reader can see by how much it fell short and
+    why. The outcome is that nothing changed; these numbers are the plan.
+    """
+
+    model_config = {"frozen": True}
+
+    turns: list[int]            # the turns it would have taken out of the verbatim tail
+    quoted: int                 # of those, how many would have been quoted word for word
+    summarised: int
+    archived: int
+    tokens_taken: int           # what those turns cost now, word for word
+    context_tokens_after: int   # what the whole context would have been
+
+
 class GCResult(BaseModel):
     """Output of a garbage collection run.
 
@@ -50,6 +67,9 @@ class GCResult(BaseModel):
     A fourth status value would make every existing `== COMPLETED` check silently
     stop matching, for information already carried here.
     """
+
+    abandoned_cut: Optional[AbandonedCut] = None
+    """Set only on a `BYPASSED_NO_SAVING` pass: the cut it planned and did not make."""
 
     @property
     def tokens_saved(self) -> int:

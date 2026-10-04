@@ -168,7 +168,8 @@ python scripts/chat.py                            # in a second terminal
 # open http://localhost:9901
 ```
 
-**The conversation** view shows every turn as it was said beside what the model
+A short guide explains the page the first time you open it. **The conversation**
+view shows every turn as it was said beside what the model
 still has of it — word for word, quoted, inside a summary, as facts, or out of
 view — and which facts the model is actually sent. **LLM-GC at work** shows how
 the collector scores each turn, every pass and its outcome, and the proxy's

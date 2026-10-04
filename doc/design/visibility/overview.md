@@ -278,6 +278,24 @@ It polls once a second, and fetches a session's content again only when it has
 changed. Server-push (WebSocket) delivery is a planned upgrade of the transport,
 not of the split.
 
+**It speaks to someone who has never read these docs.** The interface says
+*clean-up*, *condensed block*, *message* and *check* where the design says cut,
+front, turn and pass; every remaining term carries an explanation where it
+appears, naming the design's word, and a short guide opens until it is
+dismissed. *Rejected: the design vocabulary with a glossary page* — a reader who
+must leave the screen to decode it has been handed engine telemetry again. Token
+figures compare like with like: the conversation as written counts only the
+messages the session has recorded, because the newest message reaches it with
+the next request, and comparing the whole transcript showed a saving equal to
+that message which never happened.
+
+**Run GC now explains its outcome, including when nothing changed.** When a
+clean-up would not have shrunk the prompt, the engine reports what it would have
+done — which messages, how many quoted, summarised or reduced to facts, and the
+prompt size it would have produced — and the dashboard says why in those terms.
+"It would not have shrunk the context" alone tells a reader nothing they can act
+on.
+
 **What was said comes from the client, not the engine.** The engine keeps only
 what the model is sent; once a turn is summarised or reduced to facts its words
 are gone, by design. To show what was lost beside what remains, the proxy hands

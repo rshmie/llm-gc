@@ -2,7 +2,7 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from llm_gc.engine import AgingDegradation, GCStatus
+from llm_gc.engine import AbandonedCut, AgingDegradation, GCStatus
 from llm_gc.models import KnowledgeEntry
 
 
@@ -63,6 +63,9 @@ class GCBreakdownSignal(BaseModel):
     duration_ms: float
     failure_reason: str | None  # None unless gc_status is BYPASSED_ON_ERROR
     failure_stage: str | None   # "score" | "sweep" | "compose" | None
+    newest_turn_index: int | None = None   # the newest turn the pass saw; None for an empty conversation.
+                                           # Places the pass in the conversation, so its prompt size can be
+                                           # set beside the conversation's own size at that point
 
     degradations: list[AgingDegradation] = Field(default_factory=list)
     """What the pass intended and did not manage - copied from GCResult.
@@ -73,6 +76,8 @@ class GCBreakdownSignal(BaseModel):
     compactions that never happened, which is exactly the kind of confident-looking
     falsehood this component exists to prevent. Empty on a clean pass.
     """
+
+    abandoned_cut: AbandonedCut | None = None   # a cut planned and not made: it would not have shrunk the context
 
     @property
     def is_degraded(self) -> bool:

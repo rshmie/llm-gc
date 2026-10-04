@@ -4,762 +4,197 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LLM-GC Dashboard</title>
-<style>
-  :root {
-    color-scheme: light;
-    --page: #f9f9f7;
-    --surface: #fcfcfb;
-    --raised: #f3f2ee;
-    --ink: #0b0b0b;
-    --ink-secondary: #52514e;
-    --ink-muted: #898781;
-    --hairline: #e1e0d9;
-    --baseline: #c3c2b7;
-    --border: rgba(11, 11, 11, 0.10);
-    /* Fidelity is ordinal - how much of a turn the model still receives - so it is
-       one hue stepped dark (all of it) to light (little of it), never a rainbow. */
-    --fid-verbatim: #1c5cab;
-    --fid-quoted: #2a78d6;
-    --fid-summarised: #5598e7;
-    --fid-facts: #86b6ef;
-    --fid-gone: #898781;
-    --accent: #2a78d6;
-    --meter-track: #cde2fb;
-    --status-good: #0ca30c;
-    --status-warning: #fab219;
-    --status-critical: #d03b3b;
-    --flash: rgba(42, 120, 214, 0.16);
-  }
-  @media (prefers-color-scheme: dark) {
-    :root:where(:not([data-theme="light"])) {
-      color-scheme: dark;
-      --page: #0d0d0d; --surface: #1a1a19; --raised: #232321;
-      --ink: #ffffff; --ink-secondary: #c3c2b7; --ink-muted: #898781;
-      --hairline: #2c2c2a; --baseline: #383835; --border: rgba(255, 255, 255, 0.10);
-      /* On a dark surface the ramp flips its anchor: brightest is most faithful. */
-      --fid-verbatim: #86b6ef; --fid-quoted: #5598e7; --fid-summarised: #2a78d6; --fid-facts: #1c5cab;
-      --accent: #3987e5; --meter-track: #0d366b; --flash: rgba(57, 135, 229, 0.20);
-    }
-  }
-  :root[data-theme="dark"] {
-    color-scheme: dark;
-    --page: #0d0d0d; --surface: #1a1a19; --raised: #232321;
-    --ink: #ffffff; --ink-secondary: #c3c2b7; --ink-muted: #898781;
-    --hairline: #2c2c2a; --baseline: #383835; --border: rgba(255, 255, 255, 0.10);
-    --fid-verbatim: #86b6ef; --fid-quoted: #5598e7; --fid-summarised: #2a78d6; --fid-facts: #1c5cab;
-    --accent: #3987e5; --meter-track: #0d366b; --flash: rgba(57, 135, 229, 0.20);
-  }
-
-  * { box-sizing: border-box; margin: 0; }
-  body { background: var(--page); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  button { font: inherit; }
-  .num { font-variant-numeric: tabular-nums; }
-  .muted { color: var(--ink-muted); }
-  .secondary { color: var(--ink-secondary); }
-  .empty { color: var(--ink-muted); }
-
-  /* ------------------------------------------------------------ top bar */
-  .topbar { position: sticky; top: 0; z-index: 5; background: var(--page); border-bottom: 1px solid var(--hairline); }
-  .topbar-inner { max-width: 1360px; margin: 0 auto; padding: 10px 16px; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
-  .brand { font-weight: 700; font-size: 16px; }
-  .tabs { display: flex; gap: 4px; background: var(--raised); padding: 3px; border-radius: 9px; }
-  .tabs button { border: 0; background: transparent; color: var(--ink-secondary); padding: 6px 12px; border-radius: 7px; cursor: pointer; font-weight: 600; }
-  .tabs button[aria-selected="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12); }
-  .spacer { flex: 1; }
-  select { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; max-width: 380px; }
-  .run-gc { border: 1px solid var(--accent); background: var(--accent); color: #fff; border-radius: 8px; padding: 7px 14px; font-weight: 650; cursor: pointer; }
-  .run-gc:disabled { opacity: 0.55; cursor: wait; }
-  .live { color: var(--ink-muted); font-size: 12px; }
-  .toast { max-width: 1360px; margin: 0 auto; padding: 0 16px 10px; font-size: 13px; }
-  .toast > div { background: var(--raised); border-radius: 8px; padding: 8px 12px; display: flex; gap: 8px; align-items: baseline; }
-
-  main { max-width: 1360px; margin: 0 auto; padding: 16px 16px 48px; }
-  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
-  .card h2 { font-size: 15px; font-weight: 650; margin-bottom: 4px; }
-  .card .sub { color: var(--ink-muted); font-size: 12.5px; margin-bottom: 12px; }
-  .grid { display: grid; gap: 14px; }
-  .chip { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
-
-  /* ------------------------------------------------------------ fidelity swatches */
-  .f-verbatim { --f: var(--fid-verbatim); }
-  .f-quoted { --f: var(--fid-quoted); }
-  .f-summarised { --f: var(--fid-summarised); }
-  .f-facts { --f: var(--fid-facts); }
-  .f-unseen { --f: var(--fid-facts); }
-  .f-superseded { --f: var(--fid-gone); }
-  .swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; background: var(--f); border: 2px solid var(--f); flex: none; }
-  /* Stored but not in front of the model: hollow, so it reads as absent without colour. */
-  .swatch.f-unseen, .seg.f-unseen { background: var(--surface); }
-  .swatch.f-superseded, .seg.f-superseded { background: repeating-linear-gradient(135deg, var(--f) 0 2px, transparent 2px 5px); }
-
-  /* ------------------------------------------------------------ conversation: at a glance */
-  .glance { display: grid; grid-template-columns: minmax(0, 2.2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 0; padding: 0; }
-  .glance > section { padding: 16px 18px; }
-  .glance > section + section { border-left: 1px solid var(--hairline); }
-  @media (max-width: 1000px) { .glance { grid-template-columns: minmax(0, 1fr); } .glance > section + section { border-left: 0; border-top: 1px solid var(--hairline); } }
-  .headline { font-size: 17px; font-weight: 600; line-height: 1.35; }
-  .headline strong { font-size: 22px; }
-  .fidbar { display: flex; gap: 2px; height: 22px; margin: 14px 0 10px; }
-  .seg { min-width: 6px; background: var(--f); border: 2px solid var(--f); cursor: pointer; padding: 0; }
-  .seg:first-child { border-radius: 5px 0 0 5px; }
-  .seg:last-child { border-radius: 0 5px 5px 0; }
-  .seg:only-child { border-radius: 5px; }
-  .seg:hover, .seg:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
-  .fidlegend { display: flex; gap: 6px 16px; flex-wrap: wrap; font-size: 13px; color: var(--ink-secondary); }
-  .fidlegend span { display: inline-flex; align-items: center; gap: 6px; }
-  .fidlegend b { color: var(--ink); font-variant-numeric: tabular-nums; }
-  .warnline { margin-top: 12px; font-size: 13px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
-  .warnline button { all: unset; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
-  .big { font-size: 26px; font-weight: 650; line-height: 1.2; }
-  .big small { font-size: 14px; font-weight: 500; color: var(--ink-secondary); }
-  .meter { height: 8px; border-radius: 4px; background: var(--meter-track); overflow: hidden; margin: 10px 0 8px; }
-  .meter > div { height: 100%; background: var(--accent); border-radius: 4px; transition: width .3s; }
-  .note { font-size: 12.5px; color: var(--ink-muted); }
-
-  /* ------------------------------------------------------------ conversation: timeline + memory */
-  .conv { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 14px; margin-top: 14px; align-items: start; }
-  @media (max-width: 1080px) { .conv { grid-template-columns: minmax(0, 1fr); } }
-  .viewtoggle { display: inline-flex; gap: 2px; background: var(--raised); padding: 3px; border-radius: 8px; margin-bottom: 12px; }
-  .viewtoggle button { border: 0; background: transparent; color: var(--ink-secondary); padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; }
-  .viewtoggle button[aria-pressed="true"] { background: var(--surface); color: var(--ink); font-weight: 600; }
-
-  .turn { display: grid; grid-template-columns: 38px 5px minmax(0, 1fr); gap: 0 12px; }
-  .turn .no { font-size: 12px; color: var(--ink-muted); text-align: right; padding-top: 12px; font-variant-numeric: tabular-nums; }
-  .turn .rail { background: var(--f); border-radius: 3px; }
-  .turn.f-unseen .rail { background: repeating-linear-gradient(180deg, var(--f) 0 5px, transparent 5px 9px); }
-  .turn.f-superseded .rail { background: repeating-linear-gradient(180deg, var(--f) 0 3px, transparent 3px 6px); }
-  .turn .body { padding: 10px 0 12px; border-bottom: 1px solid var(--hairline); min-width: 0; }
-  .turn:last-child .body { border-bottom: 0; }
-  .meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12.5px; color: var(--ink-secondary); margin-bottom: 4px; }
-  .who { font-weight: 650; color: var(--ink); }
-  .tag { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 1px 7px; border-radius: 999px; background: var(--raised); color: var(--ink-secondary); white-space: nowrap; }
-  .tag .swatch { width: 9px; height: 9px; border-width: 1.5px; }
-  .tag.next { background: transparent; border: 1px dashed var(--baseline); }
-  .text { white-space: pre-wrap; overflow-wrap: anywhere; }
-  .clamp { display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
-  .clamp.open { -webkit-line-clamp: unset; }
-  .faded { color: var(--ink-muted); }
-  .lost { font-size: 12.5px; color: var(--ink-muted); font-style: italic; }
-  .keeps { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
-  .fact { display: flex; gap: 8px; align-items: baseline; font-size: 13px; padding: 5px 9px; border-radius: 8px; background: var(--raised); }
-  .fact .what { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-  .fact .topic { color: var(--ink-secondary); }
-  .fact .state { font-size: 12px; white-space: nowrap; color: var(--ink-secondary); }
-  .fact.superseded .what { text-decoration: line-through; color: var(--ink-muted); }
-  .summary-box { margin-top: 6px; border-left: 3px solid var(--fid-summarised); padding: 6px 10px; background: var(--raised); border-radius: 0 8px 8px 0; }
-  .summary-box .label { font-size: 12px; color: var(--ink-secondary); margin-bottom: 2px; }
-  details.originals { margin-top: 8px; }
-  details.originals summary { cursor: pointer; font-size: 12.5px; color: var(--ink-secondary); }
-  .orig { margin-top: 8px; padding-left: 10px; border-left: 2px solid var(--hairline); }
-  .orig + .orig { margin-top: 6px; }
-  .flash { background: var(--flash); border-radius: 8px; }
-  pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--raised); border-radius: 8px; padding: 12px; margin-top: 6px; }
-  .prompt-msg + .prompt-msg { margin-top: 12px; }
-
-  .memory { position: sticky; top: 68px; max-height: calc(100vh - 84px); overflow-y: auto; }
-  .memory h3 { font-size: 13px; font-weight: 650; margin: 14px 0 6px; display: flex; gap: 6px; align-items: center; }
-  .memory > div > div:first-child h3 { margin-top: 4px; }
-  .memory .fact { cursor: pointer; flex-wrap: wrap; }
-  .memory .fact .what { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-  .memory .fact:hover { outline: 1px solid var(--baseline); }
-  .from { font-size: 12px; color: var(--ink-muted); white-space: nowrap; }
-
-  /* ------------------------------------------------------------ engine tab */
-  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; }
-  .tile .label { color: var(--ink-secondary); font-size: 13px; margin-bottom: 4px; }
-  .tile .value { font-size: 22px; font-weight: 650; }
-  .tile .caption { color: var(--ink-muted); font-size: 12px; margin-top: 4px; }
-  .two { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 14px; }
-  .halves { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
-  @media (max-width: 1000px) { .two, .halves { grid-template-columns: minmax(0, 1fr); } }
-
-  .rel { display: grid; grid-template-columns: 118px minmax(0, 1fr) 170px; gap: 6px 10px; align-items: center; font-size: 12.5px; }
-  .rel .lab { color: var(--ink-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .rel .track { position: relative; height: 16px; }
-  .rel .bar { position: absolute; left: 0; top: 2px; height: 12px; border-radius: 0 4px 4px 0; background: var(--f); }
-  .rel .bar.rule { background: repeating-linear-gradient(135deg, var(--f) 0 3px, transparent 3px 6px); border: 1.5px solid var(--f); }
-  .rel .line { position: absolute; top: -3px; bottom: -3px; width: 0; border-left: 1.5px dashed var(--baseline); }
-  .rel .why { color: var(--ink-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .rel-axis { position: relative; height: 18px; font-size: 11.5px; color: var(--ink-muted); }
-  .rel-axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
-
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th { text-align: left; font-weight: 600; color: var(--ink-secondary); font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--hairline); position: sticky; top: 0; background: var(--surface); }
-  td { padding: 7px 8px; border-bottom: 1px solid var(--hairline); vertical-align: top; }
-  tr.quiet td { color: var(--ink-muted); }
-  tr.cut td { font-weight: 600; }
-  .scroll { max-height: 420px; overflow-y: auto; }
-  ul.plain { list-style: none; padding: 0; }
-  ul.plain li { display: flex; gap: 8px; align-items: baseline; padding: 7px 0; border-top: 1px solid var(--hairline); flex-wrap: wrap; font-size: 13px; }
-  ul.plain li:first-child { border-top: 0; }
-  .when { margin-left: auto; color: var(--ink-muted); font-size: 12px; white-space: nowrap; }
-  dl.settings { display: grid; grid-template-columns: auto auto; gap: 6px 16px; font-size: 13px; }
-  dl.settings dt { color: var(--ink-secondary); }
-  dl.settings dd { font-variant-numeric: tabular-nums; text-align: right; }
-
-  #tooltip { position: fixed; z-index: 20; pointer-events: none; max-width: 300px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.16); }
-  [hidden] { display: none !important; }
-</style>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='1' y='2' width='4' height='12' rx='1.5' fill='%2386b6ef'/%3E%3Crect x='6' y='5' width='4' height='9' rx='1.5' fill='%233987e5'/%3E%3Crect x='11' y='8' width='4' height='6' rx='1.5' fill='%231c5cab'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/css/tokens.css">
+<link rel="stylesheet" href="/static/css/dashboard.css">
+<script type="module" src="/static/js/main.js"></script>
 </head>
 <body>
-<div class="topbar">
-  <div class="topbar-inner">
-    <span class="brand">LLM-GC</span>
-    <div class="tabs" role="tablist" aria-label="Views">
+<header class="topbar">
+  <div class="wrap topbar-inner">
+    <span class="brand">
+      <svg width="20" height="20" viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="2" width="4" height="12" rx="1.5" fill="#86b6ef"/><rect x="6" y="5" width="4" height="9" rx="1.5" fill="#3987e5"/><rect x="11" y="8" width="4" height="6" rx="1.5" fill="#1c5cab"/></svg>
+      LLM-GC
+    </span>
+    <nav class="tabs" role="tablist" aria-label="Views">
       <button role="tab" id="tab-conversation" aria-selected="true" aria-controls="view-conversation">The conversation</button>
       <button role="tab" id="tab-engine" aria-selected="false" aria-controls="view-engine">LLM-GC at work</button>
-    </div>
+    </nav>
     <span class="spacer"></span>
-    <label class="muted" for="session-select" style="font-size:12.5px">Session</label>
-    <select id="session-select"><option>no sessions yet</option></select>
-    <button class="run-gc" id="run-gc" disabled title="Cut now, without waiting for the batch to reach min_cut_tokens. Every other rule of a cut still applies.">Run GC now</button>
-    <span class="live" id="live">connecting…</span>
+    <div class="picker">
+      <label for="session-select">Conversation</label>
+      <select id="session-select"><option>none yet</option></select>
+    </div>
+    <button class="run-gc" id="run-gc" disabled title="Clean up this conversation now: condense its older messages without waiting until enough have built up.">Run GC now</button>
+    <span class="live" id="live" data-state="connecting" role="status"><span class="dot"></span><span id="live-text">connecting…</span></span>
+    <button class="icon-btn" id="theme" type="button" title="Theme: follow the system">◐</button>
+    <button class="icon-btn" id="open-guide" type="button" title="How LLM-GC works, and what the words mean" aria-label="How it works">?</button>
   </div>
-  <div class="toast" id="toast" hidden><div></div></div>
-</div>
+</header>
 
-<main>
-  <div id="no-session" class="card empty">
-    No conversation yet. Start the proxy with <code>--dashboard</code>, then talk through it
-    (<code>python scripts/chat.py</code>); a session appears from its second message.
-  </div>
+<main class="wrap">
+  <section class="intro" id="intro" hidden>
+    <p><b>LLM-GC keeps a long conversation's prompt from growing without limit.</b> It condenses older
+      messages, and this page shows exactly what the model can still see of them.</p>
+    <button class="btn" id="intro-guide" type="button">How it works</button>
+    <button class="x" id="intro-close" type="button" aria-label="Dismiss">×</button>
+  </section>
+
+  <section class="card result" id="result" hidden aria-live="polite"></section>
+
+  <section class="card no-session" id="no-session">
+    <h2>No conversation yet</h2>
+    <p class="secondary" style="margin-top:6px">Conversations appear here as they pass through the proxy, from their second message.</p>
+    <ol>
+      <li>Start the proxy with the dashboard: <code>python scripts/run_proxy.py --serve --dashboard</code></li>
+      <li>Talk through it: <code>python scripts/chat.py</code>, or point any Anthropic client at <code>http://127.0.0.1:9900</code></li>
+      <li>Watch each message move from word for word into the condensed block as the conversation grows.</li>
+    </ol>
+  </section>
 
   <!-- ===================================================== the conversation -->
-  <div id="view-conversation" role="tabpanel" aria-labelledby="tab-conversation" hidden>
-    <div class="card glance">
-      <section>
-        <div class="headline" id="headline"></div>
-        <div class="fidbar" id="fidbar" role="list" aria-label="Turns by how much of them the model receives"></div>
-        <div class="fidlegend" id="fidlegend"></div>
-        <div class="warnline" id="warnline" hidden></div>
-      </section>
-      <section id="glance-context"></section>
-      <section id="glance-next"></section>
-    </div>
+  <div id="view-conversation" class="view" role="tabpanel" aria-labelledby="tab-conversation" hidden>
+    <section class="card hero" aria-labelledby="hero-title">
+      <div class="card-head" style="margin-bottom:0">
+        <div>
+          <h1 id="hero-title">What the model can see</h1>
+          <p class="hero-summary" id="hero-summary"></p>
+        </div>
+        <div class="hero-meta" id="hero-meta"></div>
+      </div>
+      <div class="map" id="map" role="img"></div>
+      <div class="map-ends" id="map-ends" aria-hidden="true"><span>first message</span><span>newest</span></div>
+      <div class="legend" id="legend"></div>
+      <div class="hero-grid">
+        <section id="panel-size"></section>
+        <section id="panel-next"></section>
+        <section id="panel-window"></section>
+      </div>
+    </section>
+
+    <div class="attention" id="attention"></div>
 
     <div class="conv">
-      <div class="card">
-        <h2>The conversation, turn by turn</h2>
-        <div class="sub">What was said, and what the model still has of each turn. Click a long turn to expand it.</div>
-        <div class="viewtoggle" role="group" aria-label="View">
-          <button id="view-timeline" aria-pressed="true">As it happened</button>
-          <button id="view-prompt" aria-pressed="false">Exactly what the model receives</button>
+      <section class="card" id="messages" aria-labelledby="messages-title">
+        <div class="card-head">
+          <div>
+            <h2 id="messages-title">Message by message</h2>
+            <div class="sub">What was said, and what the model still has of it.</div>
+          </div>
+          <div class="toggle" role="group" aria-label="View">
+            <button id="view-timeline" aria-pressed="true">As it happened</button>
+            <button id="view-prompt" aria-pressed="false">Exactly what the model receives</button>
+          </div>
         </div>
-        <div id="timeline"></div>
+        <div class="toolbar" id="toolbar">
+          <div class="search">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="7" cy="7" r="4.8"/><path d="m10.6 10.6 3.6 3.6" stroke-linecap="round"/></svg>
+            <input type="search" id="search" placeholder="Find in this conversation — for example “database”" aria-label="Find in this conversation" autocomplete="off">
+          </div>
+          <div class="chips" id="chips" role="group" aria-label="Show"></div>
+          <div class="filter-note" id="filter-note" hidden></div>
+        </div>
+        <div class="timeline" id="timeline"></div>
         <div id="prompt" hidden></div>
-      </div>
+      </section>
       <aside class="card memory" aria-labelledby="memory-title">
-        <h2 id="memory-title">What the model remembers as facts</h2>
-        <div class="sub">Facts extracted from turns that were reduced. Click one to see where it came from.</div>
+        <h2 id="memory-title">Facts the model remembers</h2>
+        <div class="sub" style="margin-bottom:10px">Pulled out of messages as they were condensed. Click one to see where it came from.</div>
         <div id="memory"></div>
       </aside>
     </div>
   </div>
 
   <!-- ===================================================== the engine -->
-  <div id="view-engine" role="tabpanel" aria-labelledby="tab-engine" hidden>
-    <div class="tiles" id="proxy-tiles"></div>
-    <div class="two" style="margin-top:14px">
-      <section class="card">
-        <h2>How the collector scores the verbatim turns</h2>
-        <div class="sub">Relevance decides what each turn becomes at the next cut: below <span id="arch-t"></span> it is reduced to facts, from <span id="keep-t"></span> it is kept word for word, and in between it is summarised.</div>
-        <div id="relevance"></div>
-      </section>
-      <div class="grid">
-        <section class="card" id="last-pass"></section>
-        <section class="card">
-          <h2>Settings in effect</h2>
-          <div class="sub">Drafts, to be tuned by watching.</div>
-          <dl class="settings" id="settings"></dl>
+  <div id="view-engine" class="view" role="tabpanel" aria-labelledby="tab-engine" hidden>
+    <div class="tiles" id="tiles"></div>
+
+    <section class="card" aria-labelledby="chart-title">
+      <div class="card-head" style="margin-bottom:6px">
+        <div>
+          <h2 id="chart-title">Prompt size, check by check</h2>
+          <div class="sub">After every reply LLM-GC checks whether a clean-up is due. Each drop is a clean-up; the gap to the grey line is what it saves on every request.</div>
+        </div>
+        <div id="last-check"></div>
+      </div>
+      <div class="chart-legend" id="chart-legend"></div>
+      <div class="chart" id="chart"></div>
+    </section>
+
+    <div class="two">
+      <div class="stack">
+        <section class="card" aria-labelledby="rel-title">
+          <div class="card-head">
+            <div>
+              <h2 id="rel-title">How the next clean-up rates each recent message</h2>
+              <div class="sub" id="rel-sub"></div>
+            </div>
+          </div>
+          <div class="rel" id="relevance"></div>
+        </section>
+        <section class="card" aria-labelledby="checks-title">
+          <div class="card-head" style="margin-bottom:6px">
+            <div>
+              <h2 id="checks-title">Every check</h2>
+              <div class="sub">The chart's numbers, newest first. Checks that found nothing to do are grouped; clean-ups are in bold.</div>
+            </div>
+          </div>
+          <div class="table-scroll scroll"><table id="checks"></table></div>
+        </section>
+      </div>
+      <div class="stack">
+        <section class="card" aria-labelledby="settings-title">
+          <div class="card-head" style="margin-bottom:6px">
+            <div>
+              <h2 id="settings-title">Settings in effect</h2>
+              <div class="sub">First guesses, meant to be tuned by watching conversations here.</div>
+            </div>
+          </div>
+          <div class="settings" id="settings"></div>
+        </section>
+        <section class="card" aria-labelledby="problems-title">
+          <h2 id="problems-title">Problems</h2>
+          <div class="sub" style="margin-bottom:10px">What a clean-up meant to do and could not. Those messages stay word for word: nothing is lost, the prompt is just bigger.</div>
+          <ul class="events" id="problems"></ul>
+        </section>
+        <section class="card" aria-labelledby="history-title">
+          <h2 id="history-title">What moved, and when</h2>
+          <div class="sub" style="margin-bottom:10px">The most recent moves, grouped by the clean-up that made them.</div>
+          <ul class="events scroll" id="history"></ul>
         </section>
       </div>
     </div>
-    <section class="card" style="margin-top:14px">
-      <h2>Every pass</h2>
-      <div class="sub">An aging pass runs after each reply. Most find nothing worth a cut; the ones that cut are in bold.</div>
-      <div class="scroll"><table id="passes"></table></div>
-    </section>
-    <div class="halves" style="margin-top:14px">
-      <section class="card">
-        <h2>Degradations</h2>
-        <div class="sub">What a pass intended and could not do. The turns stay word for word: correct, only larger.</div>
-        <ul class="plain" id="degradations"></ul>
-      </section>
-      <section class="card">
-        <h2>Transitions</h2>
-        <div class="sub">Every move between generations, newest first.</div>
-        <ul class="plain scroll" id="transitions"></ul>
-      </section>
-    </div>
   </div>
 </main>
+
+<div class="backdrop" id="backdrop" hidden></div>
+<div class="drawer-frame">
+<aside class="drawer" id="guide" role="dialog" aria-modal="true" aria-labelledby="guide-title" inert>
+  <div class="drawer-head">
+    <h2 id="guide-title">How LLM-GC works</h2>
+    <button class="x" id="close-guide" type="button" aria-label="Close">×</button>
+  </div>
+  <p>Every request your app makes carries the whole conversation, so it grows with every message. LLM-GC sits in
+    between and keeps it from growing without limit, while showing you exactly what the model can still see.</p>
+  <div class="anatomy" aria-hidden="true"><div class="blk">condensed block</div><div class="msgx">message</div><div class="msgx">message</div><div class="msgx">newest</div></div>
+  <div class="anatomy-caption" aria-hidden="true"><div style="flex:1.5">older messages, condensed</div><div style="flex:3">recent messages, word for word</div></div>
+  <h3>What happens to a message</h3>
+  <ol>
+    <li><b>Recent messages</b> go to the model word for word.</li>
+    <li>LLM-GC rates every older message for relevance. Once enough low-rated ones build up, it condenses them in one
+      <b>clean-up</b> into a single <b>condensed block</b> at the start of the prompt: important messages quoted whole,
+      routine ones summarised, cold ones reduced to facts like <code>database: postgres</code>.</li>
+    <li>The condensed block carries only a few facts. A message whose facts did not make it is <b>out of view</b>:
+      stored, but the model cannot see it. That is what to watch for.</li>
+    <li><b>Run GC now</b> does a clean-up immediately instead of waiting, and tells you what changed, or why nothing did.</li>
+  </ol>
+  <h3>The colours</h3>
+  <div class="colours" id="guide-colours"></div>
+  <h3>The words</h3>
+  <dl class="glossary" id="glossary"></dl>
+</aside>
+</div>
 <div id="tooltip" role="tooltip" hidden></div>
 
-<script>
-"use strict";
-// Every value comes from an endpoint; this page formats and arranges, and derives
-// nothing beyond grouping and counting what it was given. Conversation text is
-// untrusted, so it only ever enters the DOM as text, through h().
-
-const ACTION_HEADER = { "x-llm-gc-dashboard": "1" };
-
-const FIDELITY = {
-  verbatim:   { label: "word for word", note: "recent: sent exactly as it was said" },
-  quoted:     { label: "quoted", note: "moved into the front, still word for word" },
-  summarised: { label: "summarised", note: "condensed with its neighbours into one summary" },
-  facts:      { label: "as facts", note: "only facts extracted from it remain, and the model is sent them" },
-  unseen:     { label: "out of view", note: "its facts are stored, but none is in front of the model" },
-  superseded: { label: "contradicted", note: "its facts were contradicted by a later turn" },
-};
-const ORDER = ["verbatim", "quoted", "summarised", "facts", "unseen", "superseded"];
-const BECOMES = { quoted: "quoted", summarised: "summarised", facts_only: "reduced to facts" };
-const CLASS_TO_FID = { keep: "verbatim", compact: "summarised", archive: "facts" };
-const CLASS_LABEL = { keep: "keep", compact: "summarise", archive: "reduce to facts" };
-const STATUS = {
-  completed:                { color: "var(--status-good)", icon: "✓", text: "cut made" },
-  bypassed_batch_too_small: { color: "var(--ink-muted)", icon: "–", text: "no cut: not enough to compact yet" },
-  bypassed_no_saving:       { color: "var(--ink-muted)", icon: "–", text: "no cut: it would not have shrunk the context" },
-  bypassed_aging_in_flight: { color: "var(--ink-muted)", icon: "–", text: "skipped: a pass was already running" },
-  bypassed_below_threshold: { color: "var(--ink-muted)", icon: "–", text: "bypassed: below threshold" },
-  bypassed_on_error:        { color: "var(--status-critical)", icon: "✕", text: "failed: nothing changed" },
-  discarded_session_closed: { color: "var(--ink-muted)", icon: "–", text: "discarded: session closed" },
-};
-const TRANSITION = { promoted: "summarised into the front", archived: "reduced to facts", superseded: "fact contradicted" };
-
-const state = { config: null, sessions: [], selected: null, version: null, knowledge: null, transcript: null };
-
-// Absent parts (null, undefined, false) are skipped and nested arrays flattened.
-// The DOM's own append and replaceChildren would print them as "null" and
-// "[object HTMLDivElement]", so children are only ever set through these two.
-function nodes(children) {
-  return children.flat(Infinity).filter((child) => child !== null && child !== undefined && child !== false)
-    .map((child) => child instanceof Node ? child : document.createTextNode(String(child)));
-}
-function setChildren(target, ...children) { target.replaceChildren(...nodes(children)); }
-function h(tag, props = {}, ...children) {
-  const el = document.createElement(tag);
-  for (const [key, value] of Object.entries(props)) {
-    if (value === null || value === undefined || value === false) continue;
-    if (key === "class") el.className = value;
-    else if (key === "style") el.style.cssText = value;
-    else if (key.startsWith("on")) el.addEventListener(key.slice(2), value);
-    else el.setAttribute(key, value === true ? "" : value);
-  }
-  setChildren(el, ...children);
-  return el;
-}
-const fill = (id, ...children) => setChildren(document.getElementById(id), ...children);
-const fmt = (n) => Number(n).toLocaleString();
-const span = (turns) => turns.length > 1 ? `turns ${turns[0]}–${turns[turns.length - 1]}` : `turn ${turns[0]}`;
-const plural = (n, word) => `${fmt(n)} ${word}${n === 1 ? "" : "s"}`;
-function ago(seconds) {
-  if (seconds < 60) return `${Math.max(0, Math.round(seconds))}s ago`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
-  return `${Math.round(seconds / 3600)}h ago`;
-}
-const agoIso = (iso) => ago((Date.now() - new Date(iso).getTime()) / 1000);
-const agoTs = (ts) => ago(Date.now() / 1000 - ts);
-const swatch = (key) => h("span", { class: `swatch f-${key}` });
-const categoryOf = (turn) => turn.fidelity === "facts_only" ? (turn.facts_sent > 0 ? "facts" : "unseen") : turn.fidelity;
-
-async function getJSON(path) {
-  const response = await fetch(path, { cache: "no-store" });
-  if (response.status === 404) return null;
-  if (!response.ok) throw new Error(`${path}: ${response.status}`);
-  return response.json();
-}
-const sessionPath = (suffix = "") => `/api/sessions/${encodeURIComponent(state.selected)}${suffix}`;
-
-// ----------------------------------------------------------------- tabs, tooltip, toast
-
-function storeGet(key) { try { return localStorage.getItem(key); } catch { return null; } }
-function storeSet(key, value) { try { localStorage.setItem(key, value); } catch { /* a per-viewer convenience only */ } }
-
-let activeTab = (location.hash === "#engine" || (location.hash !== "#conversation" && storeGet("llmgc.tab") === "engine"))
-  ? "engine" : "conversation";
-function showTab(name) {
-  activeTab = name;
-  for (const tab of ["conversation", "engine"]) {
-    document.getElementById(`tab-${tab}`).setAttribute("aria-selected", String(tab === name));
-    document.getElementById(`view-${tab}`).hidden = tab !== name || !state.selected;
-  }
-  storeSet("llmgc.tab", name);
-  if (location.hash !== `#${name}`) history.replaceState(null, "", `#${name}`);
-}
-
-function showTooltip(event, ...rows) {
-  const tip = document.getElementById("tooltip");
-  setChildren(tip, ...rows.map((row, i) => h("div", { style: i === 0 ? "font-weight:650" : "color:var(--ink-secondary)" }, row)));
-  tip.hidden = false;
-  const rect = event.currentTarget.getBoundingClientRect();
-  tip.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - tip.offsetWidth - 8))}px`;
-  const below = rect.bottom + 8 + tip.offsetHeight < window.innerHeight;
-  tip.style.top = `${below ? rect.bottom + 8 : rect.top - tip.offsetHeight - 8}px`;
-}
-const hideTooltip = () => { document.getElementById("tooltip").hidden = true; };
-
-let toastTimer = null;
-function toast(color, icon, text) {
-  const box = document.getElementById("toast");
-  setChildren(box.firstElementChild, h("span", { class: "dot", style: `background:${color}` }), h("span", {}, `${icon} ${text}`));
-  box.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { box.hidden = true; }, 9000);
-}
-
-function jumpTo(turnIndex) {
-  showTab("conversation");
-  setPromptView(false);
-  const target = document.getElementById(`turn-${turnIndex}`);
-  if (!target) return;
-  const originals = target.closest("details");
-  if (originals) originals.open = true;
-  target.scrollIntoView({ behavior: "smooth", block: "center" });
-  target.classList.add("flash");
-  setTimeout(() => target.classList.remove("flash"), 1600);
-}
-
-// ----------------------------------------------------------------- the conversation
-
-function renderGlance(k, transcript) {
-  const counts = Object.fromEntries(ORDER.map((key) => [key, 0]));
-  for (const turn of k.turns) counts[categoryOf(turn)] += 1;
-  const present = ORDER.filter((key) => counts[key] > 0);
-  const saidTokens = transcript && transcript.captured ? transcript.total_tokens : null;
-
-  fill("headline",
-    "The model receives ", h("strong", { class: "num" }, fmt(k.context_tokens)), " tokens standing in for ",
-    h("strong", { class: "num" }, fmt(k.recorded_turns)), " turns",
-    saidTokens !== null ? [" — ", h("span", { class: "num" }, fmt(saidTokens)), " tokens as they were said"] : "", ".");
-
-  const total = k.turns.length || 1;
-  setChildren(document.getElementById("fidbar"), ...present.map((key) => h("button", {
-    class: `seg f-${key}`, role: "listitem", style: `flex:${counts[key]}`, "aria-label": `${counts[key]} ${FIDELITY[key].label}`,
-    onpointerenter: (e) => showTooltip(e, `${plural(counts[key], "turn")} ${FIDELITY[key].label}`, FIDELITY[key].note,
-      `${Math.round((counts[key] / total) * 100)}% of the conversation · click to find the first`),
-    onpointerleave: hideTooltip,
-    onclick: () => { const first = k.turns.find((t) => categoryOf(t) === key); if (first) jumpTo(first.turn_index); },
-  })));
-  fill("fidlegend", present.map((key) => h("span", {}, swatch(key), h("b", {}, counts[key]), FIDELITY[key].label)));
-
-  const unsent = k.facts.filter((f) => f.status === "active" && !f.sent).length;
-  const warn = document.getElementById("warnline");
-  warn.hidden = unsent === 0 && counts.unseen === 0;
-  if (!warn.hidden) {
-    const parts = [unsent ? `${plural(unsent, "fact")} kept but not in front of the model` : null,
-      counts.unseen ? `${plural(counts.unseen, "turn")} the model sees nothing of` : null].filter(Boolean);
-    setChildren(warn, h("span", { class: "dot", style: "background:var(--status-warning)" }), h("span", {}, `⚠ ${parts.join(" · ")}`),
-      h("button", { onclick: () => document.getElementById("memory-unsent")?.scrollIntoView({ behavior: "smooth", block: "start" }) }, "show them"));
-  }
-
-  const windowTokens = state.config ? state.config.context_window : null;
-  fill("glance-context",
-    h("div", { class: "secondary", style: "font-size:13px" }, "Sent with the next request"),
-    h("div", { class: "big num" }, fmt(k.context_tokens), h("small", {}, " tok")),
-    h("div", { class: "meter" }, h("div", { style: `width:${windowTokens ? Math.min(100, (k.context_tokens / windowTokens) * 100) : 0}%` })),
-    h("div", { class: "note" }, windowTokens ? `${((k.context_tokens / windowTokens) * 100).toFixed(1)}% of the ${fmt(windowTokens)}-token window` : "",
-      k.front_tokens ? ` · the front is ${fmt(k.front_tokens)} tok` : " · no front yet"));
-
-  const cut = k.next_cut;
-  const share = cut.min_cut_tokens > 0 ? cut.compactable_tokens / cut.min_cut_tokens : (cut.compactable_tokens > 0 ? 1 : 0);
-  fill("glance-next",
-    h("div", { class: "secondary", style: "font-size:13px" }, `Next cut · ${k.cuts} so far`),
-    h("div", { class: "big num" }, fmt(cut.compactable_tokens), h("small", {}, ` / ${fmt(cut.min_cut_tokens)} tok`)),
-    h("div", { class: "meter" }, h("div", { style: `width:${Math.min(100, share * 100)}%` })),
-    h("div", { class: "note" }, cut.batch_ready ? "✓ ready: the pass after the next reply will cut"
-      : cut.turns.length === 0 ? "nothing can be cut yet: the newest turns stay word for word"
-      : cut.compactable_tokens === 0 ? `the ${plural(cut.turns.length, "turn")} before the cut point would all be kept, so a cut would save nothing`
-      : `compactable in the ${plural(cut.turns.length, "turn")} the next cut would take · Run GC now cuts without waiting`));
-}
-
-function factRow(fact, { withFrom = true, onclick = null, besideItsTurn = false } = {}) {
-  const status = fact.status === "superseded"
-    ? (fact.superseded_by_turn !== null ? `contradicted by turn ${fact.superseded_by_turn}` : "contradicted")
-    : fact.sent ? "✓ sent" : "⚠ not sent";
-  // Beside its own turn, an excerpt of that whole turn would only repeat the words above it.
-  const wholeTurn = besideItsTurn && fact.knowledge_type === "raw" && fact.source_turns.length === 1;
-  return h("div", { class: `fact ${fact.status}`, onclick, title: onclick ? "show where it came from" : null },
-    wholeTurn ? h("span", { class: "what topic" }, "the turn itself, kept as an excerpt (nothing more specific could be extracted)")
-      : h("span", { class: "what" }, h("span", { class: "topic" }, fact.knowledge_type === "raw" ? "excerpt: " : `${fact.topic}: `), fact.content),
-    withFrom ? h("span", { class: "from" }, span(fact.source_turns)) : null,
-    h("span", { class: "state" }, status));
-}
-
-function turnText(text, faded) {
-  if (text === null || text === undefined) return h("div", { class: "lost" }, "the original words were not captured (the dashboard started after this turn)");
-  if (!text) return h("div", { class: "lost" }, "no text: tool calls or attachments only");
-  return h("div", { class: `text clamp${faded ? " faded" : ""}`, onclick: (e) => e.currentTarget.classList.toggle("open") }, text);
-}
-
-const speaker = (role) => role === "user" ? "you" : role || "—";
-
-function renderTimeline(k, transcript) {
-  const said = new Map((transcript && transcript.captured ? transcript.turns : []).map((t) => [t.turn_index, t]));
-  const factsByTurn = new Map();
-  for (const fact of k.facts) for (const turn of fact.source_turns) {
-    if (!factsByTurn.has(turn)) factsByTurn.set(turn, []);
-    factsByTurn.get(turn).push(fact);
-  }
-  const items = [];
-  for (let i = 0; i < k.turns.length; i++) {
-    const turn = k.turns[i];
-    const key = categoryOf(turn);
-    if (turn.fidelity === "summarised") {
-      // One block per summary: what the model reads, then what was said in its place.
-      const group = [turn];
-      while (i + 1 < k.turns.length && k.turns[i + 1].fidelity === "summarised" && k.turns[i + 1].front_entry === turn.front_entry) group.push(k.turns[++i]);
-      const entry = k.front_entries[turn.front_entry];
-      items.push(h("div", { class: `turn f-${key}` },
-        h("div", { class: "no" }, group.length > 1 ? `${group[0].turn_index}–${group[group.length - 1].turn_index}` : group[0].turn_index),
-        h("div", { class: "rail" }),
-        h("div", { class: "body" },
-          h("div", { class: "meta" }, h("span", { class: "who" }, plural(group.length, "turn")),
-            h("span", { class: "tag" }, swatch(key), FIDELITY.summarised.label), h("span", {}, "the model reads this summary instead of what was said")),
-          h("div", { class: "summary-box" }, h("div", { class: "label" }, `summary · ${fmt(entry.tokens)} tok`), turnText(entry.text, false)),
-          h("details", { class: "originals" }, h("summary", {}, `what was said in ${span(entry.source_turns)}`),
-            group.map((t) => h("div", { class: "orig", id: `turn-${t.turn_index}` },
-              h("div", { class: "meta" }, h("span", { class: "who" }, speaker(said.get(t.turn_index)?.role)), h("span", { class: "num" }, `turn ${t.turn_index}`)),
-              turnText(said.get(t.turn_index)?.text, true)))))));
-      continue;
-    }
-    const words = said.get(turn.turn_index);
-    const facts = factsByTurn.get(turn.turn_index) || [];
-    let body;
-    if (turn.fidelity === "verbatim") body = turnText(turn.text, false);
-    else if (turn.fidelity === "quoted") body = turnText(words ? words.text : k.front_entries[turn.front_entry].text, false);
-    else body = [turnText(words?.text, true), h("div", { class: "keeps" },
-      h("div", { class: "note" }, key === "unseen" ? "⚠ The model sees none of this turn. What was kept of it:" : "The model no longer sees this turn. It keeps:"),
-      facts.length ? facts.map((f) => factRow(f, { withFrom: false, besideItsTurn: true })) : h("div", { class: "lost" }, "nothing"))];
-    items.push(h("div", { class: `turn f-${key}`, id: `turn-${turn.turn_index}` },
-      h("div", { class: "no" }, turn.turn_index),
-      h("div", { class: "rail" }),
-      h("div", { class: "body" },
-        h("div", { class: "meta" },
-          h("span", { class: "who" }, speaker(words ? words.role : turn.role)),
-          h("span", { class: "tag", onpointerenter: (e) => showTooltip(e, FIDELITY[key].label, FIDELITY[key].note), onpointerleave: hideTooltip }, swatch(key), FIDELITY[key].label),
-          turn.becomes ? h("span", { class: "tag next" }, `next cut: ${BECOMES[turn.becomes] || turn.becomes}`) : null,
-          turn.tokens ? h("span", { class: "num muted" }, `${fmt(turn.tokens)} tok`) : null),
-        body)));
-  }
-  // Turns the client has sent that the session records only with the next request.
-  for (const pending of (transcript && transcript.captured ? transcript.turns : []).filter((t) => t.turn_index >= k.recorded_turns)) {
-    items.push(h("div", { class: "turn f-verbatim", id: `turn-${pending.turn_index}` },
-      h("div", { class: "no" }, pending.turn_index), h("div", { class: "rail", style: "opacity:.35" }),
-      h("div", { class: "body" },
-        h("div", { class: "meta" }, h("span", { class: "who" }, speaker(pending.role)),
-          h("span", { class: "tag" }, "latest message"), h("span", {}, "recorded, with its reply, when the next request arrives")),
-        turnText(pending.text, false))));
-  }
-  setChildren(document.getElementById("timeline"), ...(items.length ? items : [h("p", { class: "empty" }, "No turns recorded yet.")]));
-}
-
-function renderPrompt(k) {
-  const tail = k.turns.filter((t) => t.fidelity === "verbatim");
-  setChildren(document.getElementById("prompt"),
-    h("div", { class: "note", style: "margin-bottom:10px" }, "The conversation as forwarded to the provider, before the next request's new message. ",
-      k.front_text ? "The front stays byte-for-byte the same until the next cut, which keeps the provider's prompt cache valid." : "Nothing has been cut, so the client's own request is forwarded untouched."),
-    k.front_text ? h("div", { class: "prompt-msg" }, h("div", { class: "meta" }, h("span", { class: "who" }, "user"), h("span", { class: "tag" }, `the front · ${fmt(k.front_tokens)} tok`)), h("pre", {}, k.front_text)) : null,
-    tail.map((t) => h("div", { class: "prompt-msg" }, h("div", { class: "meta" }, h("span", { class: "who" }, t.role), h("span", { class: "num muted" }, `turn ${t.turn_index} · ${fmt(t.tokens)} tok`)), h("pre", {}, t.text || "(no text)"))));
-}
-
-function setPromptView(on) {
-  document.getElementById("view-prompt").setAttribute("aria-pressed", String(on));
-  document.getElementById("view-timeline").setAttribute("aria-pressed", String(!on));
-  document.getElementById("prompt").hidden = !on;
-  document.getElementById("timeline").hidden = on;
-}
-
-function renderMemory(k) {
-  const groups = [
-    { id: "memory-sent", title: "In front of the model", dot: "var(--status-good)", icon: "✓", facts: k.facts.filter((f) => f.status === "active" && f.sent) },
-    { id: "memory-unsent", title: "Kept, but not in front of the model", dot: "var(--status-warning)", icon: "⚠", facts: k.facts.filter((f) => f.status === "active" && !f.sent) },
-    { id: "memory-superseded", title: "Contradicted later", dot: "var(--ink-muted)", icon: "–", facts: k.facts.filter((f) => f.status === "superseded") },
-  ].filter((g) => g.facts.length);
-  setChildren(document.getElementById("memory"), ...(groups.length ? groups.map((g) => h("div", { id: g.id },
-    h("h3", {}, h("span", { class: "dot", style: `background:${g.dot}` }), `${g.icon} ${g.title}`, h("span", { class: "muted", style: "font-weight:400" }, `· ${g.facts.length}`)),
-    h("div", { class: "keeps", style: "margin-top:0" }, g.facts.map((f) => factRow(f, { onclick: () => jumpTo(f.source_turns[0]) })))))
-    : [h("p", { class: "empty" }, "Nothing has been reduced to facts yet. Facts appear when a cut archives a turn that has gone cold.")]));
-}
-
-// ----------------------------------------------------------------- the engine
-
-function renderProxy(proxy) {
-  const tile = (label, value, caption, title) => h("div", { class: "card tile", title }, h("div", { class: "label" }, label), h("div", { class: "value num" }, value), caption ? h("div", { class: "caption" }, caption) : null);
-  setChildren(document.getElementById("proxy-tiles"), ...(proxy ? [
-    tile("Requests through the proxy", fmt(proxy.requests), `${fmt(proxy.gc_applied)} with GC · ${fmt(proxy.gc_bypassed)} forwarded untouched after a failure`),
-    tile("Tokens forwarded", fmt(proxy.tokens_forwarded), `of ${fmt(proxy.tokens_in_client_history)} the clients sent${proxy.ratio !== null ? ` · ${Math.round(proxy.ratio * 100)}%` : ""}`, "across every session; prompt caching is not reflected"),
-    tile("Histories reconciled", `${proxy.history_rewinds} · ${proxy.history_restarts} · ${proxy.sessions_seeded}`, "rewinds · restarts · seeds", "a restart or a seed costs one uncompressed request"),
-  ] : []));
-}
-
-function renderRelevance(k) {
-  const c = state.config;
-  document.getElementById("arch-t").textContent = c ? c.archive_threshold.toFixed(2) : "?";
-  document.getElementById("keep-t").textContent = c ? c.keep_threshold.toFixed(2) : "?";
-  const rows = k.turns.filter((t) => t.fidelity === "verbatim" && t.score !== null);
-  if (!rows.length) { setChildren(document.getElementById("relevance"), h("p", { class: "empty" }, "No verbatim turns to score.")); return; }
-  const line = (value) => h("div", { class: "line", style: `left:${value * 100}%` });
-  const why = (t) => !t.forced_keep ? CLASS_LABEL[t.classification]
-    : t.forced_keep.includes("too short") ? "kept: too short"
-    : t.forced_keep.includes("last_n") ? "kept: newest turns" : "kept by a rule";
-  setChildren(document.getElementById("relevance"),
-    h("div", { class: "rel" }, h("div", {}), h("div", { class: "rel-axis" },
-      h("span", { style: "left:0%;transform:none" }, "0"),
-      c ? h("span", { style: `left:${c.archive_threshold * 100}%` }, `facts below ${c.archive_threshold}`) : null,
-      c ? h("span", { style: `left:${c.keep_threshold * 100}%` }, `keep from ${c.keep_threshold}`) : null,
-      h("span", { style: "left:100%;transform:translateX(-100%)" }, "1")), h("div", {})),
-    h("div", { class: "rel" }, rows.map((t) => [
-      h("div", { class: "lab num" }, `turn ${t.turn_index} · ${speaker(t.role)}`),
-      h("div", { class: "track", onpointerenter: (e) => showTooltip(e, `turn ${t.turn_index}: relevance ${t.score.toFixed(2)}`,
-        t.forced_keep || `classified to ${CLASS_LABEL[t.classification]}`, t.becomes ? `the next cut makes it ${BECOMES[t.becomes]}` : "not in the next cut"), onpointerleave: hideTooltip },
-        h("div", { class: `bar f-${CLASS_TO_FID[t.classification]}${t.forced_keep ? " rule" : ""}`, style: `width:${Math.max(2, t.score * 100)}%` }),
-        c ? line(c.archive_threshold) : null, c ? line(c.keep_threshold) : null),
-      h("div", { class: "why" }, `${t.score.toFixed(2)} · ${why(t)}`)])),
-    h("div", { class: "fidlegend", style: "margin-top:12px" },
-      h("span", {}, swatch("verbatim"), "keep"), h("span", {}, swatch("summarised"), "summarise"), h("span", {}, swatch("facts"), "reduce to facts"),
-      h("span", {}, h("span", { class: "swatch f-verbatim", style: "background:repeating-linear-gradient(135deg, var(--f) 0 3px, transparent 3px 6px)" }), "kept by a rule, whatever the score")));
-}
-
-function statusChip(status) {
-  const s = STATUS[status] || { color: "var(--ink-muted)", icon: "?", text: status };
-  return h("span", { class: "chip" }, h("span", { class: "dot", style: `background:${s.color}` }), `${s.icon} ${s.text}`);
-}
-
-function renderActivity(activity) {
-  const pass = activity && activity.gc_breakdown;
-  fill("last-pass", h("h2", {}, "Last pass"),
-    pass ? [h("div", { style: "margin:8px 0 6px" }, statusChip(pass.gc_status)),
-      h("div", { class: "note" }, [`${pass.duration_ms.toFixed(0)} ms`, agoTs(pass.gc_completed_at),
-        pass.gc_status === "completed" ? `context ${fmt(pass.tokens_before)} → ${fmt(pass.tokens_before - pass.tokens_saved)} tok` : null,
-        pass.failure_reason ? `${pass.failure_stage}: ${pass.failure_reason}` : null].filter(Boolean).join(" · ")),
-      pass.degradations.length ? h("div", { class: "chip", style: "margin-top:6px;font-weight:500" }, h("span", { class: "dot", style: "background:var(--status-warning)" }), `⚠ ${plural(pass.degradations.length, "degradation")}`) : null]
-      : h("p", { class: "empty" }, "No pass has finished yet."));
-
-  const passes = activity ? activity.recent_passes.slice().reverse() : [];
-  setChildren(document.getElementById("passes"),
-    h("thead", {}, h("tr", {}, ["When", "Outcome", "Context", "Kept · summarised · facts", "Took"].map((title) => h("th", {}, title)))),
-    h("tbody", {}, passes.length ? passes.map((p) => {
-      const cut = p.gc_status === "completed" && p.tokens_saved > 0;
-      return h("tr", { class: cut ? "cut" : p.gc_status === "completed" ? "" : "quiet" },
-        h("td", { class: "num" }, agoTs(p.gc_completed_at)),
-        h("td", {}, statusChip(p.gc_status), p.degradations.length ? h("span", { class: "muted" }, ` · ⚠ ${p.degradations.length}`) : null),
-        h("td", { class: "num" }, cut ? `${fmt(p.tokens_before)} → ${fmt(p.tokens_before - p.tokens_saved)} tok` : `${fmt(p.tokens_before)} tok`),
-        h("td", { class: "num" }, p.gc_status === "completed" ? `${p.keep_count} · ${p.compact_count} · ${p.archive_count}` : "—"),
-        h("td", { class: "num" }, `${p.duration_ms.toFixed(0)} ms`));
-    }) : h("tr", {}, h("td", { colspan: 5, class: "empty" }, "No passes yet."))));
-
-  const degradations = activity ? activity.recent_degradations.slice().reverse() : [];
-  setChildren(document.getElementById("degradations"), ...(degradations.length ? degradations.map((r) => h("li", {},
-    h("span", { class: "chip", style: "font-weight:500" }, h("span", { class: "dot", style: "background:var(--status-warning)" }), `⚠ ${r.degradation.reason.replaceAll("_", " ")}`),
-    h("span", {}, `${span(r.degradation.turn_indices)} stayed word for word · ${r.degradation.detail}`), h("span", { class: "when" }, agoTs(r.occurred_at))))
-    : [h("li", { class: "empty" }, "None: every pass did what it set out to.")]));
-
-  const transitions = activity ? activity.generation_lifecycle.recent_transitions.slice().reverse() : [];
-  setChildren(document.getElementById("transitions"), ...(transitions.length ? transitions.map((t) => h("li", {},
-    h("span", { class: "num", style: "min-width:58px;color:var(--ink-muted)" }, `turn ${t.turn_index}`),
-    h("span", {}, TRANSITION[t.transition_type] || t.transition_type, t.topic_label ? ` · ${t.topic_label}` : ""),
-    h("span", { class: "when" }, agoTs(t.occurred_at))))
-    : [h("li", { class: "empty" }, "Nothing has moved yet.")]));
-}
-
-function renderSettings() {
-  const c = state.config;
-  if (!c) return;
-  const rows = [["min_cut_tokens", c.min_cut_tokens], ["last_n_turns_to_keep", c.last_n_turns_to_keep],
-    ["keep_threshold", c.keep_threshold], ["archive_threshold", c.archive_threshold],
-    ["fact budget (tok)", c.max_memory_tokens], ["context_window", c.context_window]];
-  setChildren(document.getElementById("settings"), ...rows.flatMap(([name, value]) => [h("dt", {}, name), h("dd", {}, fmt(value))]));
-}
-
-// ----------------------------------------------------------------- session picker, Run GC now
-
-function renderSessions() {
-  const select = document.getElementById("session-select");
-  const options = state.sessions.map((s) => h("option", { value: s.session_id },
-    `${s.session_id} · ${s.recorded_turns} turns · ${s.cuts} cut${s.cuts === 1 ? "" : "s"}${s.aging_in_flight ? " · aging…" : ""}`));
-  setChildren(select, ...(options.length ? options : [h("option", {}, "no sessions yet")]));
-  if (state.selected) select.value = state.selected;
-  const button = document.getElementById("run-gc");
-  button.disabled = !state.selected || button.dataset.running === "1";
-}
-
-async function runGcNow() {
-  const button = document.getElementById("run-gc");
-  button.dataset.running = "1";
-  button.disabled = true;
-  button.textContent = "Running…";
-  try {
-    const response = await fetch(sessionPath("/gc"), { method: "POST", headers: ACTION_HEADER });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const result = await response.json();
-    const s = STATUS[result.status] || { color: "var(--ink-muted)", icon: "?", text: result.status };
-    const detail = result.status === "completed" && result.tokens_after < result.tokens_before
-      ? `: context ${fmt(result.tokens_before)} → ${fmt(result.tokens_after)} tok · ${result.summarised} summarised, ${result.archived} reduced to facts, ${result.kept} kept`
-      : "";
-    const degraded = result.degradations.length ? ` · ⚠ ${plural(result.degradations.length, "degradation")}` : "";
-    toast(s.color, s.icon, `${s.text}${detail}${degraded}`);
-  } catch (err) {
-    toast("var(--status-critical)", "✕", `Run GC now failed (${err.message}); nothing changed`);
-  } finally {
-    button.dataset.running = "0";
-    button.textContent = "Run GC now";
-    state.version = null;
-    await refresh();
-  }
-}
-
-// ----------------------------------------------------------------- polling
-
-async function refresh() {
-  try {
-    const overview = await getJSON("/api/overview");
-    state.config = overview.config;
-    state.sessions = overview.sessions;
-    if (!state.sessions.some((s) => s.session_id === state.selected)) {
-      state.selected = state.sessions.length ? state.sessions[0].session_id : null;
-      state.version = null;
-    }
-    renderSessions();
-    renderProxy(overview.proxy);
-    renderSettings();
-    document.getElementById("no-session").hidden = !!state.selected;
-    showTab(activeTab);
-
-    if (state.selected) {
-      const current = state.sessions.find((s) => s.session_id === state.selected);
-      // Content changes only with the session's version; activity is cheap and polled every time.
-      if (current.version !== state.version) {
-        const [k, transcript] = await Promise.all([getJSON(sessionPath()), getJSON(sessionPath("/transcript"))]);
-        if (k) {
-          hideTooltip();
-          state.knowledge = k;
-          state.transcript = transcript;
-          state.version = k.version;
-          renderTimeline(k, transcript);
-          renderPrompt(k);
-          renderMemory(k);
-          renderRelevance(k);
-        }
-      }
-      if (state.knowledge) renderGlance(state.knowledge, state.transcript);
-      renderActivity(await getJSON(sessionPath("/activity")));
-    }
-    document.getElementById("live").textContent = `live · ${new Date().toLocaleTimeString()}`;
-  } catch {
-    document.getElementById("live").textContent = "dashboard server unreachable";
-  }
-}
-
-document.getElementById("tab-conversation").addEventListener("click", () => showTab("conversation"));
-document.getElementById("tab-engine").addEventListener("click", () => showTab("engine"));
-document.getElementById("view-timeline").addEventListener("click", () => setPromptView(false));
-document.getElementById("view-prompt").addEventListener("click", () => setPromptView(true));
-document.getElementById("run-gc").addEventListener("click", runGcNow);
-document.getElementById("session-select").addEventListener("change", (e) => { state.selected = e.target.value; state.version = null; refresh(); });
-
-refresh();
-setInterval(refresh, 1000);
-</script>
 </body>
 </html>

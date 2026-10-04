@@ -77,7 +77,10 @@ filled enough to be worth a pass.
 
 A pass that finds no batch reports *not enough to compact*; one that compacted a
 batch and found the result would not shrink the context reports *no saving* —
-two different reasons, so they are two different outcomes. The dashboard's
+two different reasons, so they are two different outcomes. A no-saving pass also
+records the cut it abandoned: the turns, what each would have become, and the
+context it would have produced, so the shortfall can be explained rather than
+only stated. The dashboard's
 **Run GC now** is the same pass with rule 1's minimum taken as zero: rules 2–4
 still hold.
 

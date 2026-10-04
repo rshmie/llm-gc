@@ -169,16 +169,21 @@ class ContextHealthMonitor:
             recent_passes=passes,
             snapshot_taken_at=time.time())
 
-    def _build_token_budget(self, gc_result: GCResult) -> TokenBudgetSignal | None:
-        if gc_result.sweep_result is not None:
-            current_msg_turn_index = gc_result.sweep_result.sweep_entries[-1].turn_index
-        elif gc_result.final_messages:
+    @staticmethod
+    def _newest_turn_index(gc_result: GCResult) -> int | None:
+        """How far into the conversation the pass ran, or None for an empty one."""
+        if gc_result.sweep_result is not None and gc_result.sweep_result.sweep_entries:
+            return gc_result.sweep_result.sweep_entries[-1].turn_index
+        if gc_result.final_messages:
             # Bypassed run: nothing was swept, so the untouched originals in
             # final_messages are the only source for the current turn index.
-            current_msg_turn_index = gc_result.final_messages[-1].turn_index
-        else:
-            # Bypassed run on an empty conversation - there is no turn to point at.
-            return None
+            return gc_result.final_messages[-1].turn_index
+        return None
+
+    def _build_token_budget(self, gc_result: GCResult) -> TokenBudgetSignal | None:
+        current_msg_turn_index = self._newest_turn_index(gc_result)
+        if current_msg_turn_index is None:
+            return None   # an empty conversation has no turn to point at
         return TokenBudgetSignal(current_tokens=gc_result.tokens_in_final,
                                  context_window=self.gc_config.context_window,
                                  pressure_ratio=gc_result.tokens_in_final / self.gc_config.context_window,
@@ -202,7 +207,8 @@ class ContextHealthMonitor:
                                  gc_run_id=gc_result.gc_run_id, gc_status=gc_result.status,
                                  gc_completed_at=gc_completed_at, duration_ms=gc_result.duration_ms,
                                  failure_reason=gc_result.failure_reason, failure_stage=gc_result.failure_stage,
-                                 degradations=gc_result.degradations)
+                                 newest_turn_index=self._newest_turn_index(gc_result),
+                                 degradations=gc_result.degradations, abandoned_cut=gc_result.abandoned_cut)
 
     @staticmethod
     def _compute_transformation_ratio(sweep_result: SweepResult | None) -> float | None:

@@ -1,0 +1,68 @@
+/* Colour and surface tokens, light and dark. Fidelity is an ordinal one-hue ramp,
+   validated against both surfaces. */
+:root {
+  color-scheme: light;
+  --page: #f5f5f2;
+  --surface: #fcfcfb;
+  --raised: #f0efeb;
+  --sunken: #f4f3ef;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --ink-3: #6e6d68;
+  --hairline: #e4e3dc;
+  --baseline: #c3c2b7;
+  --border: rgba(11, 11, 11, 0.09);
+  --shadow: 0 1px 2px rgba(11, 11, 11, 0.04), 0 6px 20px rgba(11, 11, 11, 0.04);
+  --accent: #2a78d6;
+  --accent-wash: rgba(42, 120, 214, 0.10);
+  --button: #2a78d6;
+  --button-hover: #256abf;
+  /* Fidelity is ordinal - how much of a message the model still receives - so it
+     is one hue stepped dark (all of it) to light (little of it), never a rainbow.
+     Validated as an ordinal ramp against both surfaces. */
+  --fid-verbatim: #1c5cab;
+  --fid-quoted: #2a78d6;
+  --fid-summarised: #5598e7;
+  --fid-facts: #86b6ef;
+  --fid-gone: #a9a89f;
+  --written: #898781;
+  --meter-track: #e1ecfa;
+  --good: #0ca30c;
+  --warn: #fab219;
+  --critical: #d03b3b;
+  --good-wash: rgba(12, 163, 12, 0.07);
+  --warn-wash: rgba(250, 178, 25, 0.13);
+  --critical-wash: rgba(208, 59, 59, 0.08);
+  --mark: rgba(250, 178, 25, 0.38);
+  --flash: rgba(42, 120, 214, 0.18);
+  --topbar: rgba(245, 245, 242, 0.86);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --raised: #252523; --sunken: #141413;
+    --ink: #ffffff; --ink-2: #c3c2b7; --ink-3: #94938b;
+    --hairline: #2c2c2a; --baseline: #3d3d3a; --border: rgba(255, 255, 255, 0.09);
+    --shadow: none;
+    --accent: #3987e5; --accent-wash: rgba(57, 135, 229, 0.16);
+    /* On a dark surface the ramp flips its anchor: brightest is most faithful. */
+    --fid-verbatim: #86b6ef; --fid-quoted: #5598e7; --fid-summarised: #2a78d6; --fid-facts: #1c5cab; --fid-gone: #5c5b56;
+    --meter-track: rgba(57, 135, 229, 0.17);
+    --good-wash: rgba(12, 163, 12, 0.12); --warn-wash: rgba(250, 178, 25, 0.12); --critical-wash: rgba(208, 59, 59, 0.14);
+    --mark: rgba(250, 178, 25, 0.32); --flash: rgba(57, 135, 229, 0.22);
+    --topbar: rgba(13, 13, 13, 0.84);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --raised: #252523; --sunken: #141413;
+  --ink: #ffffff; --ink-2: #c3c2b7; --ink-3: #94938b;
+  --hairline: #2c2c2a; --baseline: #3d3d3a; --border: rgba(255, 255, 255, 0.09);
+  --shadow: none;
+  --accent: #3987e5; --accent-wash: rgba(57, 135, 229, 0.16);
+  --fid-verbatim: #86b6ef; --fid-quoted: #5598e7; --fid-summarised: #2a78d6; --fid-facts: #1c5cab; --fid-gone: #5c5b56;
+  --meter-track: rgba(57, 135, 229, 0.17);
+  --good-wash: rgba(12, 163, 12, 0.12); --warn-wash: rgba(250, 178, 25, 0.12); --critical-wash: rgba(208, 59, 59, 0.14);
+  --mark: rgba(250, 178, 25, 0.32); --flash: rgba(57, 135, 229, 0.22);
+  --topbar: rgba(13, 13, 13, 0.84);
+}

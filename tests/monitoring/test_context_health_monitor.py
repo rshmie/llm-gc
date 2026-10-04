@@ -257,6 +257,7 @@ class TestSnapshotCompleted:
         assert breakdown.gc_status == GCStatus.COMPLETED
         assert breakdown.gc_completed_at == 500.0  # the event's timestamp, not snapshot build time
         assert breakdown.failure_reason is None and breakdown.failure_stage is None
+        assert breakdown.newest_turn_index == 3     # places the pass in the conversation
 
     def test_transformation_ratio_is_transformed_over_total(self):
         monitor, bus, _ = _make_monitor()
@@ -321,6 +322,7 @@ class TestSnapshotBypassed:
         _emit_gc_finished(bus, _make_bypassed_result([_make_message(turn_index=t) for t in range(5)]))
 
         assert monitor.get_snapshot().token_budget.current_msg_turn_index == 4
+        assert monitor.get_snapshot().gc_breakdown.newest_turn_index == 4
 
     def test_below_threshold_lifecycle_all_young(self):
         monitor, bus, _ = _make_monitor()
@@ -348,6 +350,7 @@ class TestSnapshotBypassed:
         snapshot = monitor.get_snapshot()
         assert snapshot.token_budget is None  # no turn exists to point at
         assert snapshot.gc_breakdown is not None  # the bypassed pass itself is still visible
+        assert snapshot.gc_breakdown.newest_turn_index is None
 
 
 # ---- Snapshot immutability and freshness ---------------------------------------
