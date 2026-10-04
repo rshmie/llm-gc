@@ -486,6 +486,16 @@ announced on the bus as it happens as well as collected onto the result, so a
 subscriber does not have to wait for the pass to end, and degradation is never
 something a consumer has to infer from counts that fail to add up.
 
+Failure is not the only gap between intent and outcome. The pass that makes a cut
+also sweeps the front, and can archive an entry the cut has just made (see
+`generational-memory/the-cut.md`). Read as what happened, the decision counts then
+described a clean-up as "1 summarised, 6 reduced to facts" beside a panel listing
+all 12 messages it had reduced to facts — the transparency layer contradicting
+itself. So a committed cut also carries its **outcome**: where its turns ended up,
+and how many earlier-condensed turns went to facts in the same pass. The dashboard
+draws what a clean-up did only from the outcome, and what it could not do only
+from the degradations; the decision counts are for tuning the sweeper.
+
 Two decisions inside this that are easy to get wrong:
 
 - **The run status stays "completed".** A separate status value for a degraded

@@ -2,7 +2,7 @@
 // runs and why each message gets what it gets, what clean-ups did and couldn't do, every check,
 // and last the proxy's totals and settings, which apply to every conversation.
 
-import { BECOMES, BECOMES_CAT, CARD_INFO, CHART_HEIGHT, CHECKS_SHOWN, MOVES_SHOWN, MOVE_CAT, MOVE_KIND, NOT_MOVED, STATUS, TRANSITION, swatch } from "./vocabulary.js";
+import { BECOMES, BECOMES_CAT, CARD_INFO, CHART_HEIGHT, CHECKS_SHOWN, MOVES_SHOWN, MOVE_CAT, MOVE_KIND, NOT_MOVED, STATUS, TRANSITION, describeOutcome, swatch } from "./vocabulary.js";
 import { $, agoTs, compact, countEl, fill, fmt, h, meterBar, plural, reducedMotion, setChildren, storeGet, storeSet, svg } from "./dom.js";
 import { captured, keepLast, preview, state, ui } from "./state.js";
 import { hideTooltip, info, placeTooltip, showTooltip, tipQuote, tooltipContent, hoverTip } from "./tooltip.js";
@@ -380,7 +380,7 @@ export function renderChart() {
       figure("sent to the model", d.after < d.before ? `${fmt(d.before)} → ${fmt(d.after)}` : fmt(d.before)),
       d.written !== null ? figure("as written", fmt(d.written)) : null,
       d.p.abandoned_cut ? figure("a clean-up would have made it", fmt(d.p.abandoned_cut.context_tokens_after)) : null,
-      d.after < d.before ? figure("summarised · facts", `${d.p.compact_count} · ${d.p.archive_count}`) : null,
+      d.after < d.before && d.p.outcome ? figure("messages", describeOutcome(d.p.outcome)) : null,
       d.p.degradations.length ? h("div", { class: "tip-row" }, h("span", { class: "st warn" }, "⚠ "), plural(d.p.degradations.length, "move"), " didn't happen") : null,
     ]);
     const cx = box.left + x(i) * scaleX;
@@ -413,7 +413,7 @@ export function renderChecks() {
       return h("tr", { class: cut ? "cut" : p.gc_status === "completed" ? "" : "quiet" },
         h("td", { class: "num", style: "white-space:nowrap" }, span(agoTs(oldest.gc_completed_at), agoTs(p.gc_completed_at))),
         h("td", {}, statusChip(p.gc_status), g.items.length > 1 ? h("span", { class: "times" }, `×${g.items.length}`) : null,
-          cut ? h("div", { class: "muted", style: "font-weight:400;font-size:12.5px" }, `${p.compact_count} summarised · ${p.archive_count} reduced to facts`) : null,
+          cut && p.outcome ? h("div", { class: "muted", style: "font-weight:400;font-size:12.5px" }, describeOutcome(p.outcome)) : null,
           p.degradations.length ? h("div", { style: "font-weight:400" }, h("span", { class: "st warn" }, "⚠ "), plural(p.degradations.length, "move"), " didn't happen") : null),
         h("td", { class: "num", style: "white-space:nowrap" }, cut ? `${fmt(p.tokens_before)} → ${fmt(p.tokens_before - p.tokens_saved)}`
           : p.abandoned_cut ? [fmt(p.tokens_before), h("div", { class: "muted", style: "font-size:12px" }, `would have been ${fmt(p.abandoned_cut.context_tokens_after)}`)]

@@ -3,7 +3,7 @@
 // Every value comes from an endpoint; this view formats and explains, and derives
 // nothing beyond grouping, counting, and sums and differences of numbers it was given.
 
-import { BECOMES, BECOMES_CAT, CATS, CLAMP_CHARS, EARLIER_SHOWN, FACTS_SHOWN, GLOSSARY, GONE, HEIGHT, MIN_BAR_PX, ORDER, RUN_MIN, categoryOf, swatch } from "./vocabulary.js";
+import { BECOMES, BECOMES_CAT, CATS, CLAMP_CHARS, EARLIER_SHOWN, FACTS_SHOWN, GLOSSARY, GONE, HEIGHT, MIN_BAR_PX, ORDER, RUN_MIN, categoryOf, describeOutcome, swatch } from "./vocabulary.js";
 import { $, agoTs, countEl, fill, fmt, h, meterBar, percent, plural, ranges, reducedMotion, setChildren, storeSet, svg } from "./dom.js";
 import { captured, countCats, factsByTurn, has, marked, maxFacts, pendingTurns, preview, query, saidByTurn, state, turnMatches, ui } from "./state.js";
 import { hideTooltip, info, showTooltip, tipQuote, hoverTip } from "./tooltip.js";
@@ -641,7 +641,7 @@ export function renderCleanupLog() {
   fill("cleanup-log",
     cuts.length ? cuts.map((p) => h("li", {}, h("div", {},
       h("b", {}, "Clean-up"), h("span", { class: "when" }, ` · ${agoTs(p.gc_completed_at)}`),
-      h("div", { class: "muted" }, `${p.compact_count} summarised · ${p.archive_count} reduced to facts · ${fmt(p.tokens_before)} → ${fmt(p.tokens_before - p.tokens_saved)} tokens`))))
+      h("div", { class: "muted" }, `${p.outcome ? `${describeOutcome(p.outcome)} · ` : ""}${fmt(p.tokens_before)} → ${fmt(p.tokens_before - p.tokens_saved)} tokens`))))
       : k.cuts ? null : h("li", { class: "future" }, h("div", { class: "muted" }, "No clean-ups yet.")),
     h("li", { class: "future" }, h("div", {}, h("b", {}, "Next clean-up"),
       h("div", { class: "muted" }, next ? `${next === 1 ? "1 message" : `${next} messages`} will change form. ` : "Nothing is queued to change yet. ", whenWhy))));

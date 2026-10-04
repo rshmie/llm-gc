@@ -61,6 +61,13 @@ export const STATUS = {
   discarded_session_closed: { tone: "", icon: "–", text: "discarded: the conversation had closed" },
 };
 export const TRANSITION = { promoted: "Summarised", archived: "Reduced to facts", superseded: "Fact contradicted" };
+// What a clean-up did to the messages it took. Always from the engine's outcome, never the sweeper's plan:
+// the same clean-up can overrule the plan, so a message planned to be quoted can end it as facts.
+export function describeOutcome(o) {
+  return [o.quoted ? `${o.quoted} quoted whole` : null, o.summarised ? `${o.summarised} summarised` : null,
+    o.archived ? `${o.archived} reduced to facts` : null,
+    o.front_archived ? `${o.front_archived} condensed earlier, now facts` : null].filter(Boolean).join(" · ");
+}
 // The kind of move behind each transition and each degradation, in the engine's own terms.
 export const MOVE_KIND = { promoted: "compaction", archived: "archive", superseded: null };
 export const MOVE_CAT = { promoted: "summarised", archived: "facts", superseded: "superseded" };

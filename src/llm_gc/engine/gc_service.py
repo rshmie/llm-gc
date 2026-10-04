@@ -8,7 +8,7 @@ from typing import Protocol
 
 from llm_gc.config.gc_config import GCConfig
 from llm_gc.engine.aging_degradation import AgingDegradation, DegradationReason
-from llm_gc.engine.gc_result import AbandonedCut, GCResult
+from llm_gc.engine.gc_result import AbandonedCut, CutOutcome, GCResult
 from llm_gc.engine.gc_status import GCStatus
 from llm_gc.engine.generations.fact_retriever import FactRetriever, LexicalFactRetriever
 from llm_gc.engine.generations.generational_memory import GenerationalMemory
@@ -287,6 +287,7 @@ class GcService:
                                               len(young) - len(intended), plan.degradations, start)
             current_stage = "sweep_old_gen"
             self._sweep_old_gen(session_id, base, plan)
+            outcome = _cut_outcome(plan)
             # Measured on the context the cut would produce, not summed: the front
             # carries facts and quote markers, so a cut can make the prompt larger
             # than the turns it removes - a cache reset that costs tokens too.
@@ -296,7 +297,10 @@ class GcService:
                             extra={"session_id": session_id, "gc_run_id": gc_run_id})
                 return self._unchanged_result(base, gc_run_id, GCStatus.BYPASSED_NO_SAVING, start,
                                               degradations=plan.degradations,
-                                              abandoned_cut=_abandoned_cut(batch, projected))
+                                              abandoned_cut=AbandonedCut(
+                                                  turns=[entry.turn_index for entry in batch], outcome=outcome,
+                                                  tokens_taken=sum(entry.message.token_count for entry in batch),
+                                                  context_tokens_after=projected))
         except Exception as err:
             logger.exception("gc_age failed",
                              extra={"session_id": session_id, "gc_run_id": gc_run_id, "stage": current_stage})
@@ -315,17 +319,19 @@ class GcService:
         logger.debug("cut committed", extra={"session_id": session_id, "gc_run_id": gc_run_id,
                                              "turns_cut": len(batch), "young_remaining": len(state.snapshot.young)})
         return self._completed_result(base, state.snapshot, gc_run_id, sweep_result, batch, len(young) - cut,
-                                      plan.degradations, start)
+                                      plan.degradations, start, outcome=outcome)
 
     def _completed_result(
         self, base: GenerationSnapshot, final: GenerationSnapshot, gc_run_id: str, sweep_result: SweepResult,
         batch: Sequence[SweepEntry], tail_length: int, degradations: list[AgingDegradation], start: float,
+        outcome: CutOutcome | None = None,
     ) -> GCResult:
         """A pass that ran to its decision, whether or not every intention was met.
 
         The counts are the cut's decision profile - turns kept (verbatim in the tail
-        or quoted in the front), summarised, or reduced to facts - and `degradations`
-        is the only place the difference between decision and outcome is recorded.
+        or quoted in the front), summarised, or reduced to facts. `outcome` is where
+        the turns ended up, None when nothing was committed; `degradations` names
+        the moves that failed.
         """
         final_messages = self._assemble(final)
         counts = {c: sum(1 for entry in batch if entry.classification == c) for c in SweepClassification}
@@ -337,7 +343,7 @@ class GcService:
             compacted_count=counts[SweepClassification.COMPACT],
             archived_count=counts[SweepClassification.ARCHIVE],
             sweep_result=sweep_result, duration_ms=(perf_counter() - start) * 1000,
-            degradations=degradations,
+            degradations=degradations, outcome=outcome,
         )
 
     def _context_tokens(self, snapshot: GenerationSnapshot) -> int:
@@ -578,13 +584,17 @@ def _in_order(messages: Sequence[Message]) -> list[Message]:
     return sorted(messages, key=lambda message: message.turn_index)
 
 
-def _abandoned_cut(batch: Sequence[SweepEntry], context_tokens_after: int) -> AbandonedCut:
-    counts = {c: sum(1 for entry in batch if entry.classification == c) for c in SweepClassification}
-    return AbandonedCut(
-        turns=[entry.turn_index for entry in batch], quoted=counts[SweepClassification.KEEP],
-        summarised=counts[SweepClassification.COMPACT], archived=counts[SweepClassification.ARCHIVE],
-        tokens_taken=sum(entry.message.token_count for entry in batch), context_tokens_after=context_tokens_after,
-    )
+def _cut_outcome(plan: _AgingPlan) -> CutOutcome:
+    """Where a planned cut's turns end up, read from the plan after the front was swept.
+
+    A departed turn is quoted or summarised only if the entry standing for it is
+    still in the plan; otherwise it was archived, directly or with its new entry.
+    """
+    in_front = {turn: entry.kind for entry in plan.new_entries for turn in entry.source_turns}
+    quoted = sum(1 for kind in in_front.values() if kind is EntryKind.QUOTE)
+    return CutOutcome(quoted=quoted, summarised=len(in_front) - quoted,
+                      archived=len(plan.departed_turns) - len(in_front),
+                      front_archived=sum(len(entry.source_turns) for entry in plan.evicted_entries))
 
 
 def _compactable_tokens(batch: Sequence[SweepEntry]) -> int:

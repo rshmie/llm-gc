@@ -7,6 +7,22 @@ from llm_gc.engine.sweep.sweep_result import SweepResult
 from llm_gc.models.knowledge_entry import KnowledgeEntry
 from llm_gc.models.message import Message
 
+class CutOutcome(BaseModel):
+    """Where the turns a cut took ended up once the whole pass had run.
+
+    Not the sweeper's decision: the same pass also sweeps the front, so an entry
+    the cut has just made can be archived at once when it scores cold against the
+    context the cut leaves - a turn the sweeper quoted can end the pass as facts.
+    """
+
+    model_config = {"frozen": True}
+
+    quoted: int                 # turns quoted word for word in the front
+    summarised: int             # turns inside a summary in the front
+    archived: int               # turns reduced to facts
+    front_archived: int = 0     # turns earlier cuts had condensed, reduced to facts by this pass
+
+
 class AbandonedCut(BaseModel):
     """A cut that was planned, then not made because it would not have shrunk the context.
 
@@ -17,9 +33,7 @@ class AbandonedCut(BaseModel):
     model_config = {"frozen": True}
 
     turns: list[int]            # the turns it would have taken out of the verbatim tail
-    quoted: int                 # of those, how many would have been quoted word for word
-    summarised: int
-    archived: int
+    outcome: CutOutcome         # where those turns would have ended up
     tokens_taken: int           # what those turns cost now, word for word
     context_tokens_after: int   # what the whole context would have been
 
@@ -57,16 +71,17 @@ class GCResult(BaseModel):
 
     Empty on a clean pass, which is the common case and why it defaults rather
     than being required. Note that `kept_count` / `compacted_count` /
-    `archived_count` describe the *sweeper's decision*; this field is the only
-    place the difference between decision and outcome is recorded, so a consumer
-    rendering those counts has to read this too or it will draw compactions that
-    never happened.
+    `archived_count` describe the *sweeper's decision*: a consumer showing what a
+    pass did reads `outcome`, and reads this for the moves that failed.
 
     `status` deliberately stays COMPLETED when this list is non-empty. Status
     answers "did the pass run"; this answers "did everything it intended happen".
     A fourth status value would make every existing `== COMPLETED` check silently
     stop matching, for information already carried here.
     """
+
+    outcome: Optional[CutOutcome] = None
+    """Set only when a cut was committed: where its turns ended up."""
 
     abandoned_cut: Optional[AbandonedCut] = None
     """Set only on a `BYPASSED_NO_SAVING` pass: the cut it planned and did not make."""

@@ -3,6 +3,7 @@
 import asyncio
 
 from llm_gc.config import GCConfig
+from llm_gc.engine import GCResult, GCStatus
 from llm_gc.engine.compaction import LLMCompactor
 from llm_gc.engine.gc_service import GcService
 from llm_gc.engine.generations import GenerationalMemory
@@ -96,6 +97,39 @@ class TestWhereEachTurnIs:
 
         assert archived
         assert all(t.facts_stored > 0 for t in archived)
+
+
+class TestThePassOutcome:
+    def test_every_cut_reports_where_its_turns_actually_went(self):
+        """Read off the knowledge state before and after each pass, a cut's outcome
+        must match it - including turns the same pass moved from the front to facts."""
+        service = _service()
+        condensed = {TurnFidelity.QUOTED, TurnFidelity.SUMMARISED}
+        as_facts = {TurnFidelity.FACTS_ONLY, TurnFidelity.SUPERSEDED}
+
+        async def scenario() -> list[tuple[KnowledgeState, GCResult, KnowledgeState]]:
+            passes = []
+            for index in range(80):
+                service.gc_record(SESSION, [_turn(index)], [f"h{index}"])
+                before = project_knowledge_state(service.inspect(SESSION))
+                result = await service.gc_age(SESSION)
+                passes.append((before, result, project_knowledge_state(service.inspect(SESSION))))
+            return passes
+
+        cuts = [(before, result, after) for before, result, after in asyncio.run(scenario())
+                if result.status is GCStatus.COMPLETED]
+        assert cuts
+        for before, result, after in cuts:
+            was = {t.turn_index: t.fidelity for t in before.turns}
+            now = {t.turn_index: t.fidelity for t in after.turns}
+            taken = [turn for turn, fidelity in was.items() if fidelity is TurnFidelity.VERBATIM
+                     and now[turn] is not TurnFidelity.VERBATIM]
+            assert result.outcome is not None
+            assert result.outcome.quoted == sum(now[t] is TurnFidelity.QUOTED for t in taken)
+            assert result.outcome.summarised == sum(now[t] is TurnFidelity.SUMMARISED for t in taken)
+            assert result.outcome.archived == sum(now[t] in as_facts for t in taken)
+            assert result.outcome.front_archived == sum(was[t] in condensed and now[t] in as_facts for t in was)
+        assert any(result.outcome.front_archived for _, result, _ in cuts), "the front sweep was exercised"
 
 
 class TestWhatTheModelSees:

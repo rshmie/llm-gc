@@ -2,7 +2,7 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from llm_gc.engine import AbandonedCut, AgingDegradation, GCStatus
+from llm_gc.engine import AbandonedCut, AgingDegradation, CutOutcome, GCStatus
 from llm_gc.models import KnowledgeEntry
 
 
@@ -77,6 +77,7 @@ class GCBreakdownSignal(BaseModel):
     falsehood this component exists to prevent. Empty on a clean pass.
     """
 
+    outcome: CutOutcome | None = None           # where a committed cut's turns ended up; the counts are the decision
     abandoned_cut: AbandonedCut | None = None   # a cut planned and not made: it would not have shrunk the context
 
     @property

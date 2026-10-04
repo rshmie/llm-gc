@@ -1,6 +1,6 @@
 // Run GC now: the dashboard's one action, and the explanation of its outcome.
 
-import { ACTION_HEADER, STATUS } from "./vocabulary.js";
+import { ACTION_HEADER, STATUS, describeOutcome } from "./vocabulary.js";
 import { $, fmt, h, plural, setChildren } from "./dom.js";
 import { keepLast, sessionPath, state } from "./state.js";
 import { showTab } from "./shell.js";
@@ -10,17 +10,19 @@ export function explainResult(r, before) {
   const problems = r.degradations.length
     ? `⚠ ${plural(r.degradations.length, "planned move")} didn't happen, so those messages stayed word for word: see What didn't move, on the Engine tab.` : null;
   if (r.status === "completed" && r.tokens_after < r.tokens_before) {
-    const condensed = r.summarised + r.archived;
+    const o = r.outcome;
+    const moved = o.quoted + o.summarised + o.archived;
     return { tone: "good", title: `✓ Cleaned up: the model now gets ${fmt(r.tokens_before - r.tokens_after)} fewer tokens`,
-      body: [`${plural(condensed, "message")} were condensed into the block at the start of the prompt: ${r.summarised} summarised and ${r.archived} reduced to facts. Messages rated important were quoted whole, and the newest ones are untouched.`,
-        "From now on every request carries this smaller version. Below, condensed messages show what the model reads instead of them."],
+      body: [`${plural(moved, "older message")} moved into the block at the start of the prompt: ${describeOutcome({ ...o, front_archived: 0 })}. The newest ones are untouched.`,
+        o.front_archived ? `${plural(o.front_archived, "message")} condensed by an earlier clean-up had gone cold and ${o.front_archived === 1 ? "was" : "were"} reduced to facts too.` : null,
+        "From now on every request carries this smaller version. Below, condensed messages show what the model reads instead of them."].filter(Boolean),
       figures: figures(r.tokens_after), extra: problems, show: true };
   }
   if (r.status === "completed") {
     return { tone: "muted", title: "– Nothing changed", body: ["Some of the messages could not be summarised, and what was left was too little to be worth a clean-up. They stay word for word and will be tried again later."], extra: problems };
   }
   if (r.status === "bypassed_no_saving" && r.abandoned_cut) {
-    const a = r.abandoned_cut;
+    const a = { ...r.abandoned_cut, ...r.abandoned_cut.outcome };
     const why = [
       a.quoted ? `${plural(a.quoted, "message")} would be quoted whole (short or important messages are never summarised), and each quote carries a small label, so it grows a little` : null,
       a.archived ? `${plural(a.archived, "message")} would be reduced to facts, but a message with nothing specific to pull out is kept as a full excerpt, no smaller than before` : null,

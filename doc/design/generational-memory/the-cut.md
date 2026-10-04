@@ -84,6 +84,30 @@ only stated. The dashboard's
 **Run GC now** is the same pass with rule 1's minimum taken as zero: rules 2–4
 still hold.
 
+### The same pass sweeps the front, and can overrule the sweeper
+
+Without a sweep of its own, the front would grow by one summary per cut forever.
+So after the cut is planned, every front entry — the ones earlier cuts made *and*
+the ones this cut has just made — is scored against the context the cut will
+leave, and a cold one is archived into facts. A turn the sweeper quoted can
+therefore end the pass as facts:
+
+```
+sweeper's decision        t0–t11 quoted or archived, t12 quoted, t13 summarised, t14 quoted
+front sweep (same pass)   the quotes of t0–t11 score cold in the context the cut leaves → facts
+what the pass reports     outcome: 2 quoted · 1 summarised · 12 reduced to facts
+```
+
+A pass therefore reports two different things. Its classification counts are the
+**sweeper's decision**; its **outcome** is where the cut's turns actually ended up,
+plus how many turns earlier cuts had condensed went to facts in the same pass.
+Anything showing what a cut *did* reads the outcome; a decision count shown as
+"what happened" once reported "6 reduced to facts" for a clean-up that had reduced
+12. *Rejected: changing the counts to mean the outcome* — they sit beside the
+sweeper's token totals, which tuning the thresholds reads as the sweeper's profile,
+and the two would then describe different turns. An abandoned cut reports its
+outcome the same way: what each turn would have become after the front sweep.
+
 ### When a summary or an extraction fails
 
 The cut **retreats to just before the failure**. Those turns stay verbatim in the

@@ -3,8 +3,10 @@ import asyncio
 from llm_gc.config import GCConfig
 from llm_gc.engine.compaction import BaseCompactor, NoOpCompactor
 from llm_gc.engine.compaction.compaction_strategy import CompactionStrategy
+from llm_gc.engine.gc_result import CutOutcome
 from llm_gc.engine.gc_service import GcService
 from llm_gc.engine.gc_status import GCStatus
+from llm_gc.engine.generations.front import QUOTE_PREFIX
 from llm_gc.engine.generations.generational_memory import GenerationalMemory
 from llm_gc.engine.sweep import SweepClassification, SweepEntry, SweepResult
 from llm_gc.events import Event, EventBus, EventType
@@ -26,6 +28,21 @@ class _StubScorer:
 
     def score(self, message, conversation):
         return RelevanceScorerResult(message=message, combined_score=1.0, scorer_results=[])
+
+
+class _QuotesGoColdScorer:
+    """Scores a quote in the front 0.0 once `cold` is set, and everything else 1.0.
+
+    Only the front sweep reads scores (the stub sweeper ignores them), so this
+    decides exactly which front entries a pass archives.
+    """
+
+    def __init__(self, cold: bool = True) -> None:
+        self.cold = cold
+
+    def score(self, message, conversation):
+        cold = self.cold and message.content.startswith(QUOTE_PREFIX)
+        return RelevanceScorerResult(message=message, combined_score=0.0 if cold else 1.0, scorer_results=[])
 
 
 class _StubSweeper:
@@ -419,6 +436,60 @@ class TestTheManualCut:
         abandoned = result.abandoned_cut
         assert abandoned is not None
         assert abandoned.turns == [1, 2]
-        assert (abandoned.quoted, abandoned.summarised, abandoned.archived) == (0, 2, 0)
+        assert abandoned.outcome == CutOutcome(quoted=0, summarised=2, archived=0)
         assert abandoned.context_tokens_after >= result.tokens_before
         assert result.tokens_in_final == result.tokens_before, "and nothing changed"
+
+
+class TestTheCutOutcome:
+    """Where a cut's turns ended up, which the sweeper's decision counts cannot say.
+
+    The same pass sweeps the front after the cut, so it can archive an entry the cut
+    has just made. A dashboard that showed the decision reported "1 summarised, 6
+    reduced to facts" for a clean-up that had reduced 12 messages to facts.
+    """
+
+    def test_a_quote_archived_in_the_pass_that_made_it_is_reported_as_archived(self):
+        service, sweeper = _make_service(scorer=_QuotesGoColdScorer())
+
+        async def scenario():
+            for index in (1, 2, 3):
+                await service.gc_update("s1", _msg(index))
+            sweeper.classifications = {2: SweepClassification.ARCHIVE}   # 1 is quoted, 3 is the tail
+            return await service.gc_age("s1")
+
+        result = asyncio.run(scenario())
+        assert result.status is GCStatus.COMPLETED
+        assert result.kept_count == 2, "the decision: quote turn 1, keep turn 3"
+        assert result.outcome == CutOutcome(quoted=0, summarised=0, archived=2)
+        assert _old_gen(service) == [], "the quote went straight to facts"
+
+    def test_an_earlier_entry_gone_cold_is_reported_apart_from_the_cut(self):
+        scorer = _QuotesGoColdScorer(cold=False)
+        service, sweeper = _make_service(scorer=scorer)
+
+        async def scenario():
+            for index in (1, 2, 3):
+                await service.gc_update("s1", _msg(index))
+            sweeper.classifications = {2: SweepClassification.ARCHIVE}
+            first = await service.gc_age("s1")
+            await service.gc_update("s1", _msg(4))
+            sweeper.classifications = {3: SweepClassification.ARCHIVE}
+            scorer.cold = True
+            return first, await service.gc_age("s1")
+
+        first, second = asyncio.run(scenario())
+        assert first.outcome == CutOutcome(quoted=1, summarised=0, archived=1)
+        assert second.outcome == CutOutcome(quoted=0, summarised=0, archived=1, front_archived=1)
+
+    def test_a_pass_that_cuts_nothing_has_no_outcome(self):
+        service, _ = _make_service()
+
+        async def scenario():
+            for index in (1, 2):
+                await service.gc_update("s1", _msg(index))
+            return await service.gc_age("s1")
+
+        result = asyncio.run(scenario())
+        assert result.status is GCStatus.BYPASSED_BATCH_TOO_SMALL
+        assert result.outcome is None

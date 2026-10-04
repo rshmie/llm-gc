@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from llm_gc.config.constants import APP_VERSION
-from llm_gc.engine import AbandonedCut, AgingDegradation, GcService, GCStatus
+from llm_gc.engine import AbandonedCut, AgingDegradation, CutOutcome, GcService, GCStatus
 from llm_gc.monitoring import ContextHealth, ContextHealthMonitor
 from llm_gc.monitoring.knowledge_state import KnowledgeState, project_knowledge_state
 from llm_gc.visualizer.transcript import TranscriptRecorder, TranscriptTurn
@@ -61,9 +61,7 @@ class ManualCutResult(BaseModel):
     status: GCStatus
     tokens_before: int
     tokens_after: int
-    kept: int
-    summarised: int
-    archived: int
+    outcome: CutOutcome | None            # set when a cut was made: where its turns ended up
     degradations: list[AgingDegradation]
     abandoned_cut: AbandonedCut | None    # set when the cut would not have shrunk the context
     duration_ms: float
@@ -170,8 +168,7 @@ def create_dashboard_app(
             return _session_not_found(session_id)
         result = await gc_service.gc_age(session_id, ignore_batch_minimum=True)
         return ManualCutResult(status=result.status, tokens_before=result.tokens_before,
-                               tokens_after=result.tokens_in_final, kept=result.kept_count,
-                               summarised=result.compacted_count, archived=result.archived_count,
+                               tokens_after=result.tokens_in_final, outcome=result.outcome,
                                degradations=result.degradations, abandoned_cut=result.abandoned_cut,
                                duration_ms=result.duration_ms)
 
