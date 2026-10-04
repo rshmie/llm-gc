@@ -9,6 +9,9 @@ class KnowledgeType(Enum):
     PREFERENCE = "preference"
     RAW = "raw"
 
+# The label of an entry whose statement names no topic: "we decided to ship on Friday".
+GENERAL_TOPIC = "general"
+
 class KnowledgeStatus(Enum):
     """Lifecycle status of a knowledge entry in permanent generation."""
     ACTIVE = "active"
@@ -38,4 +41,14 @@ class KnowledgeEntry:
     def covered_turns(self) -> tuple[int, ...]:
         """Every turn this entry was derived from."""
         return self.source_turns or (self.message_turn,)
+
+    @property
+    def can_supersede(self) -> bool:
+        """Whether filing this entry retires the active entries on its topic.
+
+        A verbatim excerpt claims nothing, and an entry with no topic cannot be
+        matched to the claim it replaces: matched on "general", every topic-less
+        decision retired every earlier one, however unrelated.
+        """
+        return self.knowledge_type is not KnowledgeType.RAW and self.topic_label != GENERAL_TOPIC
 

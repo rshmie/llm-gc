@@ -124,8 +124,9 @@ The key insight: **summaries grow linearly, but knowledge entries grow sublinear
 discussed PostgreSQL across turns 5, 15, and 45 — the permanent gen holds ONE entry. This is
 what prevents unbounded context growth.
 
-One caveat to that bound: turns the extractor cannot read are preserved **verbatim** as `RAW`
-entries — the no-information-loss guarantee. Those are full-size and not deduplicated, so the
+One caveat to that bound: what the extractor cannot read is preserved **verbatim** as a `RAW`
+entry — the whole turn when it reads nothing, or the sentences no fact came from when it reads
+part of one. That is the no-information-loss guarantee. Those are full-size and not deduplicated, so the
 sublinear bound holds for *recognised* knowledge, plus a verbatim term that scales with how often
 extraction finds nothing. The project accepts that storage cost in exchange for never dropping a
 turn without a trace.
@@ -392,7 +393,7 @@ topic label, so a label that is really a sentence fragment can never be
 contradicted by anything and stays active permanently. A bad label does not just
 look untidy; it disables the mechanism that was supposed to correct it.
 
-Four rules follow, and each one trades recall for precision deliberately:
+The rules follow, and each one trades recall for precision deliberately:
 
 - **A subject is one to four words.** Counting words, not characters and not
   "whatever precedes the verb". Without a bound, a topic grows until it happens to
@@ -407,11 +408,35 @@ Four rules follow, and each one trades recall for precision deliberately:
 - **A subject made only of pronouns, articles or interrogatives is rejected.** "it
   is fine" and "what are the constraints" state nothing retrievable later. The
   rejection is what sends the turn to a verbatim archive instead.
+- **Openers and labels are not part of the sentence.** "OK,", "So," and a short
+  label before a colon ("Decision:", "Change of plan:") are removed before the
+  start-of-sentence rule applies; otherwise "OK, decision: the database is
+  postgres" states nothing the extractor can read. The openers are a fixed list
+  rather than "any leading clause", because a qualifier is not an opener: "In
+  production, the database is postgres" is refused rather than filed without its
+  qualifier.
+- **Closing punctuation is removed before matching.** A topic slot at the end of a
+  pattern ("…for the database") must meet the end of the sentence; with the full
+  stop still there it never did, and every such decision was filed as general.
+- **A question claims nothing.** "The database is postgres, right?" asks for
+  confirmation; filed as a fact, it would supersede the answer. It is kept as text.
+- **A trailing topic names one thing.** In "use Postgres for the database, and
+  Redis for the cache" the slot catches "cache" for a decision mostly about the
+  database, and a later cache decision would retire it. When the content before
+  the slot lists several things, the decision is filed as general instead.
 
-Labels are also normalised — lowercased, internal whitespace collapsed — because
-contradiction detection compares them exactly, and "the Database is X" followed by
-"the database is Y" has to be one topic with two values rather than two unrelated
-facts.
+**What extraction cannot read is kept beside what it can.** A turn is rarely one
+statement. Archived as only its facts, "the database is postgres; the API must
+answer p99 under 200 ms" kept the database and lost the requirement — the loss the
+verbatim fallback exists to prevent, hidden because the turn still showed a fact.
+The sentences no entry came from are kept as a `RAW` entry beside the facts;
+content-free ones ("OK.", "Thanks!") are not.
+
+Labels are also normalised — lowercased, internal whitespace collapsed, a leading
+article or possessive dropped — because contradiction detection compares them
+exactly: "the Database is X" followed by "the database is Y", or "we decided to use
+X for the database" followed by "the database is Y", has to be one topic with two
+values rather than two unrelated facts.
 
 The known remaining weakness is a subject that is a quantity or a long noun
 phrase: "forty thousand a second is above what a single writer handles" yields a
@@ -444,7 +469,7 @@ transparency, the human provides judgment.
 | Heuristic extraction before LLM-based | Free, deterministic, testable. LLM-based extraction is more accurate and can be added behind the same interface. |
 | Supersede entries, don't delete | Deletion destroys history. Supersession preserves the decision chain for audit and visualization. |
 | Choose facts for the front at the cut, by type then recency | Injecting everything wastes tokens and grows with the session. Choosing per question would change the prompt on every request, breaking the provider's cache and the model's thinking blocks, so facts are chosen when a cut makes the front: decisions, then facts, then preferences, raw excerpts last. Accepted cost: a stored fact can miss the budget and not be sent, which the dashboard reports. |
-| ARCHIVE always leaves a trace | A turn is run through the extractor before it leaves active context; if extraction yields no entry, the turn is preserved **verbatim** as a `RAW` knowledge entry. Extraction recall is imperfect, so the verbatim fallback is what makes the no-information-loss guarantee actually hold. |
+| ARCHIVE always leaves a trace | A turn is run through the extractor before it leaves active context; what extraction does not read — the whole turn, or the sentences of it no entry came from — is preserved **verbatim** as a `RAW` knowledge entry. Extraction recall is imperfect, so the verbatim fallback is what makes the no-information-loss guarantee actually hold. |
 | Young gen is NOT purely "last N" | Last N is a floor guarantee (those are always KEEP). But any turn scoring above keep_threshold also stays in young gen regardless of age. |
 | Aging happens in `gc.update` (cold path), not `gc.collect` | Compaction and extraction are the expensive work; doing them per request would add latency to every forwarded call. The ager runs after the response; the hot-path collect only assembles what the ager already produced. |
 | State-based aging (act on current classification), not a transition diff | Once an aged-out turn is removed from the young generation it can never be re-swept, so remembering its prior classification buys nothing. The observer (health monitor) needs the across-pass diff; the actor (`gc.update`) does not. |
@@ -510,7 +535,11 @@ users injected the first user's facts into the second user's prompt, presented
 as the second user's own memory.
 
 Supersession is part of filing, not of storage: when a fact is filed, every
-active fact on the same topic in *that session* is marked superseded. Superseded
+active fact on the same topic in *that session* is marked superseded. Two labels
+are shared rather than topics, and entries under them neither supersede nor get
+superseded: `RAW` excerpts, which claim nothing, and "general", the label of every
+decision that names no topic. Matched as a topic, "we decided to ship on Friday"
+retired every earlier topic-less decision, however unrelated. Superseded
 facts are kept, because the record of what a conversation contradicted is part
 of what the transparency layer reports; only active facts reach the prompt.
 

@@ -1,6 +1,9 @@
+import pytest
+
 from llm_gc.events import EventBus, EventType
 from llm_gc.models import Message
-from llm_gc.models.knowledge_entry import KnowledgeType
+from llm_gc.models.generation_snapshot import file_knowledge
+from llm_gc.models.knowledge_entry import KnowledgeStatus, KnowledgeType
 from llm_gc.extraction import KnowledgeExtractor
 
 
@@ -364,3 +367,66 @@ class TestTheEventStillFires:
         _make_extractor(bus).extract_knowledge(_make_message("What is that?"), message_turn=1)
 
         assert received == []
+
+
+class TestSentencesAsPeopleWriteThem:
+    """Real sentences end in a full stop and often open with "OK," or "Decision:".
+    The tests above mostly used neither, and every one of these failed in use."""
+
+    @pytest.mark.parametrize("text, topic, content", [
+        ("We decided to use Postgres for the database.", "database", "use Postgres"),
+        ("Let's go with Redis for caching.", "caching", "Redis"),
+        ("I prefer tabs for indentation!", "indentation", "tabs"),
+    ])
+    def test_a_trailing_topic_is_read_through_the_full_stop(self, text, topic, content):
+        entries = _make_extractor().extract_knowledge(_make_message(text), message_turn=1)
+        assert [(e.topic_label, e.content) for e in entries] == [(topic, content)]
+
+    @pytest.mark.parametrize("text", [
+        "OK, the database is postgres.",
+        "Decision: the database is postgres.",
+        "OK, decision: the database is postgres.",
+        "So, the database is postgres!",
+    ])
+    def test_an_opener_or_a_label_does_not_hide_the_subject(self, text):
+        entries = _make_extractor().extract_knowledge(_make_message(text), message_turn=1)
+        assert [(e.topic_label, e.content) for e in entries] == [("database", "postgres")]
+
+    def test_a_qualifying_lead_in_is_not_stripped(self):
+        """"In production" narrows the claim; dropping it would file a fact the
+        conversation never stated, so the sentence is refused instead."""
+        message = _make_message("In production, the database is postgres.")
+        assert _make_extractor().extract_knowledge(message, message_turn=1) == []
+
+    def test_a_colon_inside_a_value_is_not_a_label(self):
+        entries = _make_extractor().extract_knowledge(_make_message("The deadline is 10:30 on Friday."), 1)
+        assert [(e.topic_label, e.content) for e in entries] == [("deadline", "10:30 on Friday")]
+
+    @pytest.mark.parametrize("text", ["The database is postgres, right?", "Should we go with Postgres for the database?"])
+    def test_a_question_states_nothing(self, text):
+        assert _make_extractor().extract_knowledge(_make_message(text), message_turn=1) == []
+
+    def test_a_trailing_topic_is_not_given_to_a_compound_decision(self):
+        """The topic slot would catch "cache" for a decision that is mostly about the
+        database; a later cache decision would then retire the database one."""
+        message = _make_message("We decided to use Postgres for the database, and Redis for the cache.")
+        [entry] = _make_extractor().extract_knowledge(message, message_turn=1)
+        assert entry.topic_label == "general"
+
+    def test_a_decision_and_a_fact_about_one_thing_share_a_label(self):
+        extractor = _make_extractor()
+        decision = extractor.extract_knowledge(_make_message("We decided to use Postgres for the database."), 1)
+        fact = extractor.extract_knowledge(_make_message("The database is mysql."), 2)
+        assert decision[0].topic_label == fact[0].topic_label == "database"
+
+    def test_a_change_of_mind_supersedes_and_unrelated_decisions_do_not(self):
+        extractor = _make_extractor()
+        said = ["OK, decision: the database is postgres.", "We decided to ship on Friday.",
+                "We decided to use microservices.", "Actually, change of plan: the database is mysql."]
+        entries = [entry for turn, text in enumerate(said)
+                   for entry in extractor.extract_knowledge(_make_message(text), message_turn=turn)]
+
+        filed, _ = file_knowledge((), tuple(entries))
+
+        active = {e.content for e in filed if e.knowledge_status is KnowledgeStatus.ACTIVE}
+        assert active == {"ship on Friday", "use microservices", "mysql"}

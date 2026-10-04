@@ -156,3 +156,12 @@ class TestSupersessionRules:
         knowledge, supersessions = file_knowledge((), tuple(raw))
         assert supersessions == ()
         assert all(e.knowledge_status == KnowledgeStatus.ACTIVE for e in knowledge)
+
+    def test_topic_less_entries_never_supersede_each_other(self):
+        """"general" is a shared label too: every decision that names no topic gets it.
+        Matched like a topic, "we decided to ship on Friday" retired an unrelated
+        earlier decision, which the model then never saw again."""
+        knowledge, supersessions = file_knowledge(
+            (), (_fact("general", "use microservices"), _fact("general", "ship on Friday")))
+        assert supersessions == ()
+        assert all(e.knowledge_status == KnowledgeStatus.ACTIVE for e in knowledge)

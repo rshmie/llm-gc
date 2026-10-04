@@ -12,7 +12,7 @@ from enum import Enum
 
 from llm_gc.models.knowledge_entry import KnowledgeEntry
 from llm_gc.models.message import Message
-from llm_gc.models.knowledge_entry import KnowledgeStatus, KnowledgeType
+from llm_gc.models.knowledge_entry import KnowledgeStatus
 
 
 class EntryKind(Enum):
@@ -178,16 +178,16 @@ def apply_aging(snapshot: GenerationSnapshot, delta: AgingDelta) -> AppliedAging
 def file_knowledge(
     knowledge: tuple[KnowledgeEntry, ...], new_entries: tuple[KnowledgeEntry, ...]
 ) -> tuple[tuple[KnowledgeEntry, ...], tuple[Supersession, ...]]:
-    """File entries in order; each non-RAW entry supersedes active ones on its topic.
+    """File entries in order; each entry that can supersede retires active ones on its topic.
 
     Sequential, so an entry filed earlier in the same batch can be superseded by a
     later one: the conversation changed its mind, and the later statement wins.
-    RAW entries supersede nothing, since a verbatim fallback states no claim.
+    RAW and topic-less entries supersede nothing - see `KnowledgeEntry.can_supersede`.
     """
     filed = list(knowledge)
     supersessions: list[Supersession] = []
     for new_entry in new_entries:
-        if new_entry.knowledge_type != KnowledgeType.RAW:
+        if new_entry.can_supersede:
             superseded = []
             for i, existing in enumerate(filed):
                 if existing.topic_label == new_entry.topic_label and existing.knowledge_status == KnowledgeStatus.ACTIVE:

@@ -11,10 +11,11 @@ contradicted. See doc/design/generational-memory/overview.md.
 """
 
 import re
+from dataclasses import dataclass
 
 from llm_gc.events import Event, EventBus, EventType
 from llm_gc.models import KnowledgeEntry, Message
-from llm_gc.models.knowledge_entry import KnowledgeType
+from llm_gc.models.knowledge_entry import GENERAL_TOPIC, KnowledgeType
 
 # Split on sentence-ending punctuation followed by whitespace, keeping the
 # punctuation with the sentence it ends (that is what the lookbehind buys).
@@ -44,12 +45,41 @@ _TOPIC_STOPWORDS = frozenset({
     "and", "but", "or", "so", "if", "then", "also", "both", "all", "some", "any",
 })
 
+# Dropped from the front of a topic, so "for the database" and "the database is"
+# file under one label: supersession compares labels exactly.
+_LEADING_DETERMINERS = frozenset({"the", "a", "an", "our", "my", "your", "their"})
+
 # Shorter than this and the "content" is a fragment, not a fact worth retrieving.
 _MIN_CONTENT_CHARS = 3
 
-_GENERAL_TOPIC = "general"
-"""For patterns with no topic slot filled ("we decided to ship on Friday").
-Distinct from a rejected topic, which discards the match."""
+# What a person puts before a statement without adding to it: content-free openers
+# ("OK, the database is postgres") and a short label before a colon ("Decision: the
+# database is postgres"). Stripped before matching, because the subject is anchored
+# at the sentence start and either would hide it.
+_OPENER = re.compile(
+    r"^(?:(?:ok(?:ay)?|so|alright|right|well|actually|also|and|but|now|yes|yeah|sure|fine|great|good|cool"
+    r"|perfect|thanks|thank you|got it|understood|noted|sounds good)\b[\s,]*)+",
+    re.IGNORECASE,
+)
+_LABEL = re.compile(r"^\w+(?:[\s-]+\w+){0,3}:\s+")
+
+# The sentence splitter keeps the full stop with its sentence, so the end-of-sentence
+# anchors in the patterns never met the topic slot before it: "for the database."
+# ends in a full stop, not in "database", and every such decision filed as general.
+_END_PUNCTUATION = re.compile(r"[.!;:,]+$")
+
+# Separators inside a decision's content. A trailing "for <topic>" names the topic
+# of everything before it, which is only safe when that is one thing: in "use
+# postgres for the database, and redis for the cache" the topic slot catches "cache".
+_COMPOUND = re.compile(r",|;|\band\b|\bfor\b", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class Reading:
+    """What the extractor made of one turn."""
+
+    entries: list[KnowledgeEntry]
+    unread: str   # the sentences that yielded nothing, as written; empty when none did
 
 
 class KnowledgeExtractor:
@@ -83,25 +113,49 @@ class KnowledgeExtractor:
         caller treats as "store the turn verbatim". That is the intended outcome for
         an ordinary conversational turn, not a failure.
         """
-        knowledge_entries: list[KnowledgeEntry] = []
+        return self.read(message, message_turn).entries
 
+    def read(self, message: Message, message_turn: int) -> Reading:
+        """Extract the turn's entries, and keep the sentences none came from.
+
+        A turn is rarely one statement. Archived as only the facts found in it, a
+        turn that stated a database and a latency requirement kept the database
+        and lost the requirement, so what extraction cannot read is returned for
+        the caller to keep. Content-free sentences ("OK.", "Thanks!") are not.
+        """
+        entries: list[KnowledgeEntry] = []
+        unread: list[str] = []
         for sentence in self._split_sentences(message.content):
-            for knowledge_type, patterns in self.EXTRACTION_PATTERNS.items():
-                for pattern in patterns:
-                    entry = self._entry_from(pattern, sentence, knowledge_type, message_turn)
-                    if entry is not None:
-                        knowledge_entries.append(entry)
-                        # First match per type per sentence wins. The patterns within
-                        # a type are alternative phrasings of one idea, so two of them
-                        # matching means two descriptions of the same fact, not two
-                        # facts — and storing both would make the later one supersede
-                        # the earlier one for no reason.
-                        break
+            statement = self._strip(sentence)
+            if not statement:
+                continue
+            # A question claims nothing: "the database is postgres, right?" asks for
+            # confirmation, and filing it would let it supersede the answer.
+            found = [] if sentence.endswith("?") else self._entries_in(statement, message_turn)
+            if found:
+                entries.extend(found)
+            else:
+                unread.append(sentence)
 
-        if knowledge_entries:
+        if entries:
             self.event_bus.emit(Event(event_type=EventType.KNOWLEDGE_ENTRIES_EXTRACTED,
-                                      data={"entries": knowledge_entries, "message_turn": message_turn}))
-        return knowledge_entries
+                                      data={"entries": entries, "message_turn": message_turn}))
+        return Reading(entries=entries, unread=" ".join(unread))
+
+    def _entries_in(self, statement: str, message_turn: int) -> list[KnowledgeEntry]:
+        entries = []
+        for knowledge_type, patterns in self.EXTRACTION_PATTERNS.items():
+            for pattern in patterns:
+                entry = self._entry_from(pattern, statement, knowledge_type, message_turn)
+                if entry is not None:
+                    entries.append(entry)
+                    # First match per type per sentence wins. The patterns within a
+                    # type are alternative phrasings of one idea, so two of them
+                    # matching means two descriptions of the same fact, not two
+                    # facts — and storing both would make the later one supersede
+                    # the earlier one for no reason.
+                    break
+        return entries
 
     def _entry_from(
         self, pattern: re.Pattern[str], sentence: str, knowledge_type: KnowledgeType, message_turn: int
@@ -118,6 +172,8 @@ class KnowledgeExtractor:
         topic_label = self._normalise_topic(match.group("topic"))
         if topic_label is None:
             return None
+        if match.start("topic") > match.start("content") and _COMPOUND.search(content):
+            topic_label = GENERAL_TOPIC   # the trailing topic names only the last of several things
 
         return KnowledgeEntry(
             message_turn=message_turn,
@@ -125,6 +181,13 @@ class KnowledgeExtractor:
             topic_label=topic_label,
             knowledge_type=knowledge_type,
         )
+
+    @staticmethod
+    def _strip(sentence: str) -> str:
+        """The sentence without its openers, leading label or closing punctuation."""
+        sentence = _OPENER.sub("", sentence)
+        sentence = _OPENER.sub("", _LABEL.sub("", sentence))
+        return _END_PUNCTUATION.sub("", sentence).strip()
 
     @staticmethod
     def _split_sentences(text: str) -> list[str]:
@@ -142,18 +205,19 @@ class KnowledgeExtractor:
 
         Three outcomes:
 
-        - `None` capture -> `_GENERAL_TOPIC`; the pattern has no topic slot.
-        - A usable capture -> lowercased, whitespace collapsed, because
-          supersession compares labels exactly.
+        - `None` capture -> `GENERAL_TOPIC`; the pattern has no topic slot.
+        - A usable capture -> lowercased, whitespace collapsed and a leading
+          article or possessive dropped, because supersession compares labels
+          exactly.
         - Stopwords only, or empty -> `None`, meaning discard the match so the
           caller archives the turn verbatim instead.
         """
         if raw is None:
-            return _GENERAL_TOPIC
+            return GENERAL_TOPIC
 
-        collapsed = " ".join(raw.split()).lower()
-        if not collapsed:
+        words = raw.lower().split()
+        while len(words) > 1 and words[0] in _LEADING_DETERMINERS:
+            words = words[1:]
+        if not words or all(word in _TOPIC_STOPWORDS for word in words):
             return None
-        if all(word in _TOPIC_STOPWORDS for word in collapsed.split()):
-            return None
-        return collapsed
+        return " ".join(words)
