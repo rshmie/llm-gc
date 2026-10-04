@@ -4,7 +4,7 @@
 // nothing beyond grouping, counting, and sums and differences of numbers it was given.
 
 import { BECOMES, BECOMES_CAT, CATS, CELL_MAX_PX, CLAMP_CHARS, EARLIER_SHOWN, FACTS_SHOWN, GLOSSARY, GONE, ORDER, RUN_MIN, categoryOf, speaker, swatch } from "./vocabulary.js";
-import { $, agoIso, countEl, fill, fmt, h, meterBar, percent, plural, ranges, setChildren } from "./dom.js";
+import { $, agoIso, countEl, fill, fmt, h, meterBar, percent, plural, ranges, setChildren, storeSet, svg } from "./dom.js";
 import { captured, countCats, factsByTurn, has, keepLast, marked, maxFacts, pendingTurns, preview, query, saidByTurn, state, turnMatches, ui } from "./state.js";
 import { hideTooltip, info, showTooltip, tipQuote, hoverTip } from "./tooltip.js";
 import { showTab } from "./shell.js";
@@ -209,6 +209,7 @@ export function renderAttention() {
 
 export function setFilter(key) {
   ui.filter = key;
+  ui.listOpen = true;
   if (ui.promptView) setPromptView(false);
   renderMessages();
   if (state.knowledge) renderLegend(state.knowledge, countCats(state.knowledge));
@@ -229,9 +230,14 @@ export function renderChips(k) {
   const nextCount = k.turns.filter((t) => t.becomes).length;
   const chip = (key, label, count, mark) => h("button", { class: "chip-btn", type: "button", "aria-pressed": String(ui.filter === key),
     onclick: () => setFilter(ui.filter === key && key !== "all" ? "all" : key) }, mark, label, h("span", { class: "count" }, countEl(`chip-${key}`, count)));
+  const toggle = h("button", { class: "list-toggle", type: "button", "aria-controls": "timeline", "aria-expanded": String(ui.listOpen),
+    "aria-label": ui.listOpen ? "Hide the messages" : "Show the messages", title: ui.listOpen ? "Hide the messages" : "Show the messages",
+    onclick: () => { ui.listOpen = !ui.listOpen; storeSet("llmgc.messages", ui.listOpen ? "open" : "closed"); renderChips(k); renderTimeline(k); } },
+    svg("svg", { width: 14, height: 14, viewBox: "0 0 16 16", "aria-hidden": "true" },
+      svg("path", { d: "M4 6l4 4 4-4", fill: "none", stroke: "currentColor", "stroke-width": 1.8, "stroke-linecap": "round", "stroke-linejoin": "round" })));
   fill("chips", chip("all", "All", k.turns.length + pending),
     ORDER.filter((key) => counts[key]).map((key) => chip(key, CATS[key].label, counts[key], swatch(key))),
-    nextCount ? chip("next", "Next clean-up", nextCount, h("span", { class: "swatch will-swatch" })) : null);
+    nextCount ? chip("next", "Next clean-up", nextCount, h("span", { class: "swatch will-swatch" })) : null, toggle);
 }
 
 export function buildRows(k) {
@@ -285,29 +291,37 @@ export function renderTimeline(k) {
   const facts = factsByTurn(k);
   const all = buildRows(k);
   const visible = all.filter((row) => rowVisible(row, said, facts));
-  const folded = foldRuns(visible);
+  // Newest first: what the model sees now leads, and older history reads on below it.
+  const folded = foldRuns(visible).reverse();
   const filtered = ui.filter !== "all" || query();
-  // Unfiltered, a long conversation leads with its newest messages; the rest sit behind a button,
-  // so opening the page does not mean reading the whole history. Filtering, searching or jumping to
-  // a message (ui.earlierOpen) always shows everything that matches, regardless of this fold.
-  const foldOlder = !filtered && !ui.earlierOpen && folded.length - EARLIER_SHOWN >= RUN_MIN;
-  const hidden = foldOlder ? folded.slice(0, folded.length - EARLIER_SHOWN) : [];
-  const shown = foldOlder ? folded.slice(folded.length - EARLIER_SHOWN) : folded;
+  // Unfiltered, a long conversation shows only its newest messages; the rest sit behind a button at
+  // the foot. Filtering, searching or jumping to a message shows everything that matches.
+  const canFold = !filtered && folded.length - EARLIER_SHOWN >= RUN_MIN;
+  const foldOlder = canFold && !ui.earlierOpen;
+  const shown = foldOlder ? folded.slice(0, EARLIER_SHOWN) : folded;
   const items = shown.map((row) => row.kind === "run" ? runRow(row, said, facts)
     : row.kind === "summary" ? summaryRow(row, said) : row.kind === "pending" ? pendingRow(row.pending) : turnRow(row.turn, said, facts));
+  const timeline = $("timeline");
+  timeline.hidden = !ui.listOpen;
   const note = $("filter-note");
-  note.hidden = !filtered;
+  note.hidden = !filtered || !ui.listOpen;
   if (filtered) {
     const shownCount = visible.reduce((n, row) => n + (row.kind === "summary" ? row.turns.length : 1), 0);
     setChildren(note, `Showing ${plural(shownCount, "message")}${query() ? ` matching “${ui.query.trim()}”` : ""}${ui.filter !== "all" ? ` · ${ui.filter === "next" ? "next clean-up" : CATS[ui.filter].tag}` : ""}`,
       h("button", { class: "link-btn", type: "button", onclick: () => { ui.query = ""; $("search").value = ""; setFilter("all"); } }, "Show all"));
   }
-  const earlierCount = hidden.reduce((n, row) => n + rowMessageCount(row), 0);
-  const earlierBtn = foldOlder ? h("div", { class: "earlier-row" },
-    h("button", { class: "link-btn", type: "button", "aria-expanded": "false",
-      onclick: () => { ui.earlierOpen = true; renderTimeline(state.knowledge); } }, `Show ${plural(earlierCount, "earlier message")}`)) : null;
-  setChildren($("timeline"), earlierBtn, items.length ? items : h("p", { class: "empty", style: "padding:14px 0" },
-    filtered ? "No message matches." : "No messages recorded yet."));
+  const olderCount = folded.slice(EARLIER_SHOWN).reduce((n, row) => n + rowMessageCount(row), 0);
+  const setOlder = (open) => {
+    ui.earlierOpen = open;
+    renderTimeline(state.knowledge);
+    // Folding back shortens the list from below; keep the button in view rather than the page's foot.
+    if (!open) $("older-toggle")?.scrollIntoView({ block: "nearest" });
+  };
+  const olderBtn = canFold ? h("div", { class: "earlier-row" },
+    h("button", { class: "link-btn", id: "older-toggle", type: "button", "aria-expanded": String(!foldOlder), onclick: () => setOlder(foldOlder) },
+      foldOlder ? `Show ${plural(olderCount, "older message")}` : "Show fewer messages")) : null;
+  setChildren(timeline, items.length ? items : h("p", { class: "empty", style: "padding:14px 0" },
+    filtered ? "No message matches." : "No messages recorded yet."), olderBtn);
 }
 
 export function textBlock(text, { faded = false, key = null } = {}) {
@@ -421,7 +435,7 @@ export function runRow(run, said, facts) {
         h("span", { class: "run-sub" }, h("span", { class: "minis" }, run.rows.map((row) => h("span", { class: `mini f-${row.cat}` }))),
           ORDER.filter((c) => counts[c]).map((c) => `${counts[c]} ${CATS[c].tag}`).join(" · "))),
       h("span", { class: "run-toggle" }, open ? "Hide" : "Show")),
-    open ? run.rows.map((row) => turnRow(row.turn, said, facts)) : null);
+    open ? [...run.rows].reverse().map((row) => turnRow(row.turn, said, facts)) : null);
 }
 
 export function jumpTo(turnIndex) {
@@ -434,8 +448,9 @@ export function jumpTo(turnIndex) {
   const facts = factsByTurn(k);
   const row = turn ? buildRows(k).find((r) => r.kind === "turn" ? r.turn === turn : r.kind === "summary" && r.turns.includes(turn)) : null;
   if (row && !rowVisible(row, said, facts)) { ui.filter = "all"; ui.query = ""; $("search").value = ""; }
-  // A message folded away behind "Show N earlier messages" still needs to be reachable from the map.
+  // A message folded away, or in a hidden list, still needs to be reachable from the map.
   ui.earlierOpen = true;
+  ui.listOpen = true;
   if (turn && turn.fidelity === "summarised") {
     const entryRow = buildRows(k).find((r) => r.kind === "summary" && r.turns.includes(turn));
     ui.open.add(`orig-${entryRow.turns[0].turn_index}`);
@@ -474,9 +489,9 @@ export function setPromptView(on) {
   $("view-prompt").setAttribute("aria-pressed", String(on));
   $("view-timeline").setAttribute("aria-pressed", String(!on));
   $("prompt").hidden = !on;
-  $("timeline").hidden = on;
+  $("timeline").hidden = on || !ui.listOpen;
   $("chips").hidden = on;
-  $("filter-note").hidden = on || (ui.filter === "all" && !query());
+  $("filter-note").hidden = on || !ui.listOpen || (ui.filter === "all" && !query());
   if (state.knowledge) { if (on) renderPrompt(state.knowledge); else renderTimeline(state.knowledge); }
 }
 

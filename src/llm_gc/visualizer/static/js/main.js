@@ -110,7 +110,7 @@ $("session-select").addEventListener("change", (e) => {
 let searchTimer = null;
 $("search").addEventListener("input", (e) => {
   clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => { ui.query = e.target.value; renderMessages(); }, 120);
+  searchTimer = setTimeout(() => { ui.query = e.target.value; if (ui.query.trim()) ui.listOpen = true; renderMessages(); }, 120);
 });
 $("theme").addEventListener("click", () => {
   const order = Object.keys(THEMES);
@@ -122,6 +122,7 @@ new ResizeObserver(() => renderChart()).observe($("chart"));
 
 applyTheme(storeGet("llmgc.theme") || "system");
 $("intro").hidden = storeGet("llmgc.intro") === "dismissed";
+ui.listOpen = storeGet("llmgc.messages") !== "closed";
 fill("glossary", GUIDE_TERMS.map((term) => [h("dt", {}, GLOSSARY[term][0]), h("dd", {}, GLOSSARY[term][1])]));
 fill("guide-colours", ORDER.map((key) => h("div", {}, swatch(key), h("div", {}, h("b", {}, CATS[key].label), h("span", {}, ` — ${GLOSSARY[key][1]}`)))),
   h("div", {}, h("span", { class: "swatch will-swatch" }), h("div", {}, h("b", {}, "Taken by the next clean-up"), h("span", {}, " — the band at the foot is what the message will become."))));

@@ -5,7 +5,7 @@ import { ORDER, categoryOf } from "./vocabulary.js";
 import { $, h } from "./dom.js";
 
 export const state = { config: null, proxy: null, sessions: [], selected: null, version: null, knowledge: null, transcript: null, activity: null };
-export const ui = { tab: "conversation", filter: "all", query: "", promptView: false, open: new Set(), chartKey: null, earlierOpen: false };
+export const ui = { tab: "conversation", filter: "all", query: "", promptView: false, open: new Set(), chartKey: null, earlierOpen: false, listOpen: true };
 
 export const keepLast = () => (state.config ? state.config.last_n_turns_to_keep : 5);
 export const maxFacts = () => (state.config ? state.config.max_memory_facts : "a few");
