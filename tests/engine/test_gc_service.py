@@ -80,13 +80,15 @@ def _facts(service: GcService, session_id: str = "s1") -> list:
 
 
 def _msg(turn_index: int) -> Message:
-    return Message(role="user", content=f"turn {turn_index}", token_count=10, turn_index=turn_index)
+    # Sized like a real turn: a cut has to remove more than the front's own
+    # headers cost, or it would grow the context and be refused.
+    return Message(role="user", content=f"turn {turn_index}", token_count=100, turn_index=turn_index)
 
 
-# gc_threshold=0.0 means "always age": tokens_before < 0 is never true, so the
-# pressure gate never fires. The aging tests below are about *what* ages, not
-# about *when*; the gate gets its own class.
-_ALWAYS_AGE = GCConfig(context_window=1000, gc_threshold=0.0)
+# Any compactable turn is worth a cut, and only the newest turn is kept verbatim.
+# The tests below are about *what* a cut does, not *when*; the trigger has its own
+# class.
+_ALWAYS_AGE = GCConfig(context_window=1000, min_cut_tokens=0, last_n_turns_to_keep=1)
 
 
 def _make_service(compactor: BaseCompactor | None = None, scorer=None,
@@ -161,37 +163,53 @@ class TestGcUpdateActsOnClassification:
 
         assert asyncio.run(scenario()) == []
 
-    def test_produce_failure_leaves_turn_in_young_and_does_not_propagate(self):
+    def test_a_failed_summary_leaves_the_turn_in_the_tail_and_does_not_propagate(self):
+        """The cut retreats to just before the failure: the turn stays verbatim, and
+        the next pass meets it in a longer run."""
         service, sweeper = _make_service(compactor=_RaisingCompactor(event_bus=EventBus()))
+        captured = _capture_gc_finished(service)
 
         async def scenario():
             await service.gc_update("s1", _msg(1))              # turn 1 KEEP
             sweeper.classifications = {1: SweepClassification.COMPACT}
-            await service.gc_update("s1", _msg(2))              # turn 1 COMPACT -> promotion raises
+            await service.gc_update("s1", _msg(2))              # turn 1 COMPACT -> summary raises
             state = service.session_manager.store.get("s1")
             return [m.turn_index for m in list(state.snapshot.young)], _old_gen(service)
 
-        # gc_update must NOT re-raise (asyncio.run would surface it), and the failed
-        # turn must stay in young with nothing written - no loss, no duplicate.
         young, old_gen = asyncio.run(scenario())
         assert young == [1, 2]
         assert old_gen == []
+        assert captured[-1].data["gc_result"].degradations, "the failure is reported, not hidden"
+
+    def test_a_kept_turn_inside_a_cut_is_quoted_word_for_word(self):
+        service, sweeper = _make_service()
+
+        async def scenario():
+            for index in (1, 2, 3):
+                await service.gc_update("s1", _msg(index))
+            sweeper.classifications = {2: SweepClassification.COMPACT}   # turn 1 stays KEEP
+            await service.gc_update("s1", _msg(4))
+            return _old_gen(service)
+
+        old_gen = asyncio.run(scenario())
+        quoted = [m for m in old_gen if "[Quoted exactly]" in m.content]
+        assert [m.turn_index for m in quoted] == [1, 3]
 
 
 class TestGcCollectAssembly:
-    def test_assembles_old_gen_summary_then_young_turn_in_order(self):
+    def test_the_front_comes_first_then_the_verbatim_tail(self):
+        """Every change to the prompt lives in the front; the tail is untouched."""
         service, sweeper = _make_service()
 
         async def scenario():
             await service.gc_update("s1", _msg(1))
             sweeper.classifications = {1: SweepClassification.COMPACT}
-            await service.gc_update("s1", _msg(2))  # turn 1 -> old-gen summary, turn 2 stays young
+            await service.gc_update("s1", _msg(2))  # turn 1 -> summary in the front
             return await service.gc_collect("s1")
 
         assembled = asyncio.run(scenario())
-        # old-gen summary (covers turn 1) first, then the young turn 2 - chronological.
-        assert [m.turn_index for m in assembled] == [1, 2]
-        assert assembled[0].role == "assistant"
+        assert [m.turn_index for m in assembled] == [-1, 2]
+        assert assembled[0].role == "user", "the provider requires the conversation to open with a user turn"
         assert "Compacted" in assembled[0].content
         assert assembled[1].content == "turn 2"
 
@@ -213,7 +231,7 @@ class TestGcUpdateReportsOnTheBus:
 
         assert len(captured) == 1
         assert captured[0].data["session_id"] == "s1"
-        assert captured[0].data["gc_result"].status == GCStatus.COMPLETED
+        assert captured[0].data["gc_result"].status == GCStatus.BYPASSED_BATCH_TOO_SMALL
 
     def test_collect_emits_nothing(self):
         service, _ = _make_service()
@@ -242,10 +260,10 @@ class TestGcUpdateReportsOnTheBus:
         assert [m.turn_index for m in reported] == [m.turn_index for m in assembled]
         assert [m.content for m in reported] == [m.content for m in assembled]
 
-    def test_tokens_in_final_counts_old_gen_not_just_young(self):
-        """A budget meter that omitted old-gen summaries would under-report the
-        real prompt size - in the reassuring direction, which is the one kind of
-        wrong this project refuses to ship."""
+    def test_tokens_in_final_counts_the_front_not_just_young(self):
+        """A budget meter that omitted the front would under-report the real prompt
+        size - in the reassuring direction, which is the one kind of wrong this
+        project refuses to ship."""
         service, sweeper = _make_service()
         captured = _capture_gc_finished(service)
 
@@ -259,9 +277,9 @@ class TestGcUpdateReportsOnTheBus:
         young = asyncio.run(scenario())
         gc_result = captured[-1].data["gc_result"]
         young_tokens = sum(m.token_count for m in young)
-        old_gen_tokens = sum(m.token_count for m in _old_gen(service))
-        assert old_gen_tokens > 0                                    # there is something to omit
-        assert gc_result.tokens_in_final == young_tokens + old_gen_tokens
+        front = asyncio.run(service.gc_collect("s1"))[0]
+        assert front.turn_index == -1 and front.token_count > 0      # there is something to omit
+        assert gc_result.tokens_in_final == young_tokens + front.token_count
 
     def test_mark_failure_is_reported_bypassed_and_never_escapes(self):
         """gc_update is fire-and-forget: an exception that escapes it dies as an
@@ -280,52 +298,56 @@ class TestGcUpdateReportsOnTheBus:
         assert _old_gen(service) == []
 
 
-class TestAgingIsPressureTriggered:
-    """Aging costs something: it replaces verbatim text with a summary, and once
-    the compactor is a real LLM it costs a call. Below the threshold there is no
-    pressure to relieve, so the right amount of aging is none."""
+class TestCutsAreBatched:
+    """Classification decides what a cut compacts; the batch size decides when.
+    Every cut resets the provider's prompt cache once, so cutting for a handful of
+    tokens costs more than it saves."""
 
-    def test_below_threshold_nothing_ages_and_the_run_is_reported_bypassed(self):
-        # Threshold is 500 tokens; two 10-token turns are nowhere near it.
-        service, sweeper = _make_service(gc_config=GCConfig(context_window=1000, gc_threshold=0.5))
+    def test_a_batch_below_the_minimum_is_not_cut(self):
+        service, sweeper = _make_service(gc_config=GCConfig(min_cut_tokens=250, last_n_turns_to_keep=1))
         captured = _capture_gc_finished(service)
 
         async def scenario():
             await service.gc_update("s1", _msg(1))
             sweeper.classifications = {1: SweepClassification.COMPACT}
-            await service.gc_update("s1", _msg(2))     # would age turn 1 under pressure
-            state = service.session_manager.store.get("s1")
-            return [m.turn_index for m in list(state.snapshot.young)]
+            await service.gc_update("s1", _msg(2))     # 100 compactable tokens: under 250
+            return [m.turn_index for m in service.session_manager.store.get("s1").snapshot.young]
 
-        young = asyncio.run(scenario())
-        assert young == [1, 2]                                   # turn 1 kept verbatim
-        assert _old_gen(service) == []
-        assert captured[-1].data["gc_result"].status == GCStatus.BYPASSED_BELOW_THRESHOLD
+        assert asyncio.run(scenario()) == [1, 2]
+        assert captured[-1].data["gc_result"].status == GCStatus.BYPASSED_BATCH_TOO_SMALL
 
-    def test_crossing_the_threshold_starts_aging(self):
-        # Threshold is 25 tokens; each turn is 10, so the third turn crosses it.
-        service, sweeper = _make_service(gc_config=GCConfig(context_window=100, gc_threshold=0.25))
+    def test_a_batch_that_reaches_the_minimum_is_cut(self):
+        service, sweeper = _make_service(gc_config=GCConfig(min_cut_tokens=250, last_n_turns_to_keep=1))
         captured = _capture_gc_finished(service)
-        sweeper.classifications = {1: SweepClassification.COMPACT}
+        sweeper.classifications = {1: SweepClassification.COMPACT, 2: SweepClassification.COMPACT,
+                                   3: SweepClassification.COMPACT}
 
         async def scenario():
-            await service.gc_update("s1", _msg(1))    # 10 tokens - under
-            await service.gc_update("s1", _msg(2))    # 20 tokens - under
-            await service.gc_update("s1", _msg(3))    # 30 tokens - over, ages
-            state = service.session_manager.store.get("s1")
-            return [m.turn_index for m in list(state.snapshot.young)]
+            for index in (1, 2, 3, 4):                 # turns 1-3: 300 compactable tokens
+                await service.gc_update("s1", _msg(index))
+            return [m.turn_index for m in service.session_manager.store.get("s1").snapshot.young]
 
-        young = asyncio.run(scenario())
-        statuses = [e.data["gc_result"].status for e in captured]
-        assert statuses[:2] == [GCStatus.BYPASSED_BELOW_THRESHOLD, GCStatus.BYPASSED_BELOW_THRESHOLD]
-        assert statuses[2] == GCStatus.COMPLETED
-        assert young == [2, 3]                                   # turn 1 finally aged out
-        assert len(_old_gen(service)) == 1
+        assert asyncio.run(scenario()) == [4]
+        assert captured[-1].data["gc_result"].status == GCStatus.COMPLETED
+
+    def test_a_batch_of_only_kept_turns_is_never_cut(self):
+        """Quoting turns verbatim compacts nothing; cutting for it would reset the
+        cache for no saving at all."""
+        service, _ = _make_service()
+        captured = _capture_gc_finished(service)
+
+        async def scenario():
+            for index in (1, 2, 3):
+                await service.gc_update("s1", _msg(index))
+
+        asyncio.run(scenario())
+        assert _old_gen(service) == []
+        assert all(e.data["gc_result"].status == GCStatus.BYPASSED_BATCH_TOO_SMALL for e in captured)
 
     def test_a_bypassed_update_still_records_the_new_turn(self):
         """Bypassing aging must not bypass bookkeeping - the turn is part of the
         conversation whether or not there is pressure to act on it."""
-        service, _ = _make_service(gc_config=GCConfig(context_window=1000, gc_threshold=0.5))
+        service, _ = _make_service(gc_config=GCConfig(min_cut_tokens=1000))
         captured = _capture_gc_finished(service)
 
         asyncio.run(service.gc_update("s1", _msg(1)))

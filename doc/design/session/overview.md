@@ -54,8 +54,8 @@ The engine performs three operations on a session, each with its own guarantee:
 | Operation | Who calls it | Guarantee |
 |---|---|---|
 | **collect** (assemble the context) | the proxy, before forwarding a request | Never waits. Reads the current snapshot once. |
-| **record** a turn | the proxy, after a successful response | Immediate. The next collect sees the turn. |
-| **age** (score, sweep, compact, archive) | runs after recording, when under pressure | At most one per session at a time; commits onto whatever the snapshot is *now*. |
+| **record** turns | the proxy, from the client's history on each request | Immediate. The next collect sees them. |
+| **age** (score, sweep, cut) | after each response, in the background | At most one per session at a time; commits onto whatever the snapshot is *now*. |
 
 Aging is the slow one: compaction is a model call that can take seconds. It is
 split so that the slow part holds nothing:
@@ -112,27 +112,26 @@ emits nothing: it changes no state.
 
 Both the context the ager reports and the list the assembler returns come from a
 single assembly step, so the number a dashboard shows and the payload a caller
-forwards cannot drift apart. That context is measured whole — summaries and the
-memory block included — because those are real tokens in the real prompt.
+forwards cannot drift apart. That context is measured whole — the front
+included — because it is real tokens in the real prompt.
 
-### Aging is triggered by pressure, not by arrival
+### Aging cuts the conversation in batches
 
-Every update records the new turn — that is bookkeeping — but the ager only
-scores, sweeps, and moves turns when the assembled context has crossed the GC
-threshold. Below it the pass reports itself bypassed and changes nothing. Aging
-is not free: it replaces verbatim text with a summary and costs a model call per
-promotion, and with plenty of window left there is nothing to buy with that cost.
-
-*Rejected: aging on every update.* It compacted turns nobody needed compacted —
-observed promoting a turn at 13% context pressure.
+An aging pass changes the prompt only by a **cut**: the oldest turns are replaced
+with one front message holding their summaries, quotes and facts, and every later
+turn stays verbatim. Classification decides what a cut compacts; a cut is made only
+when the turns classified for compaction add up to a batch worth it, because each
+cut resets the provider's prompt cache once. Below that, the pass reports itself
+bypassed and changes nothing. The mechanism, its rules, and the rejected
+alternatives are in [the-cut.md](../generational-memory/the-cut.md).
 
 ### Failures are contained
 
-A single run that fails to compact, or a turn that fails to archive, stays where
-it was for the next pass and is reported as a degradation; the rest of the pass
-continues. A failure anywhere in planning leaves the session exactly as it was
-plus the new turn, and is reported as a bypassed run rather than raised: the
-ager is called fire-and-forget, so an exception escaping it would be invisible.
+A run that fails to compact, or a turn that fails to archive, stops the cut just
+before it: those turns stay verbatim for a later pass, and the failure is reported
+as a degradation. A failure anywhere else in planning leaves the session exactly as
+it was, and is reported as a bypassed run rather than raised: the ager is called
+fire-and-forget, so an exception escaping it would be invisible.
 
 ## Why it exists
 
@@ -216,9 +215,9 @@ LLM-GC's background work directly into the user's latency.
 - **Persistence** — the in-memory store is replaced by a persistent one; a commit
   becomes a conditional write on `version`, and the liveness check becomes what
   stops a late commit from resurrecting a closed session.
-- **Per-session health** — the health monitor still reads generation state from
-  the shared `GenerationalMemory`, so it does not yet describe one session.
-- **Per-query re-ranking** — collect injects the facts relevant to the incoming
-  turn but does not yet re-rank young turns against it. Any work added to collect
-  must stay within a latency budget, and CPU-bound work there must move off the
-  event loop: an asyncio timeout cannot interrupt code that never awaits.
+- **Per-session health in the dashboard** — the health monitor reads one
+  session's generations, but its event-fed history (transitions, the last pass)
+  still mixes every session the event bus carries.
+- **Work on the collect path** must stay within a latency budget, and CPU-bound
+  work there must move off the event loop: an asyncio timeout cannot interrupt
+  code that never awaits.

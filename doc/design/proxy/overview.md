@@ -140,18 +140,24 @@ conversation are tested against what clients actually do.
   plain text dropped attached images and tool calls, and any rewrite resets the
   provider's prompt cache.
 
+### After a cut
+
+Once the engine has cut a session, the forwarded conversation is the front (one
+user-role message) followed by every later turn as the client's **original
+content** — images, tool calls and all. Thinking blocks are removed from the turns
+recorded before the cut, because they were produced against the history the cut
+replaced; turns after it keep theirs. Between cuts the forwarded conversation only
+grows at the end, so the provider's prompt cache holds. See
+[the cut](../generational-memory/the-cut.md).
+
+### Request size
+
+A body larger than the provider's own request limit (32 MB) is refused with a 413
+before it is buffered. The provider would reject it anyway, so refusing it costs no
+user anything; the limit is enforced while reading, because `content-length` may be
+absent or wrong.
+
 ## Known limitations (planned, not yet built)
 
-- **Aged conversations are rebuilt as text.** Once the engine has aged a session,
-  the forwarded conversation is assembled from its text, so verbatim turns lose
-  non-text content, and the history is rewritten from the middle. Current models
-  bind their thinking blocks to the exact history before them, and the provider
-  rejects a history rewritten from the middle for newer accounts. The fix is to
-  change the prompt only by replacing an old *prefix* with a summary, rarely, and
-  to forward every other turn as the client's original content.
-- **The first forwarded message can be an assistant turn** after aging, which the
-  Messages API rejects. Fixed by the same prefix shape, whose summary opens as a
-  user turn.
-- **A compaction cut must not separate a `tool_use` from its `tool_result`.**
-- **No request-size limit.**
+- **A cut turn's non-text content** survives in the front only as text.
 - **Anthropic Messages only.** The OpenAI-compatible endpoint is not built.

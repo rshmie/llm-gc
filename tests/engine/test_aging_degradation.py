@@ -41,6 +41,8 @@ CONFIG = GCConfig(
     archive_threshold=0.05,
     min_compactable_tokens=5,
     last_n_turns_to_keep=2,
+    # About four turns: runs long enough to beat the summary marker.
+    min_cut_tokens=60,
 )
 
 # Under CONFIG, cooling turns are reclassified COMPACT and leave the young
@@ -142,8 +144,10 @@ def _llm_compactor(bus: EventBus, response: LLMResponse | Exception):
 class TestACleanPassReportsNothing:
     def test_a_successful_pass_has_no_degradations(self):
         """The common case, pinned so the field cannot become noise that consumers
-        learn to ignore."""
-        service, _, _ = _build()
+        learn to ignore. A compactor that really compresses: a no-op one never makes
+        a cut pay off, so it never produces a completed pass at all."""
+        bus = EventBus()
+        service, _, _ = _build(_llm_compactor(bus, _response("Turns covered storage and retention.")))
         results = _run(service)
 
         completed = [r for r in results if r.status is GCStatus.COMPLETED]
@@ -154,7 +158,7 @@ class TestACleanPassReportsNothing:
         service, _, _ = _build()
         results = _run(service, turns=2)
 
-        assert all(r.status is GCStatus.BYPASSED_BELOW_THRESHOLD for r in results)
+        assert all(r.status is GCStatus.BYPASSED_BATCH_TOO_SMALL for r in results)
         assert all(r.degradations == [] for r in results)
 
 

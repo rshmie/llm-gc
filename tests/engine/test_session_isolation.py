@@ -45,7 +45,8 @@ class _SweepFirstTurn:
 def _service(classification: SweepClassification) -> GcService:
     bus = EventBus()
     # gc_threshold=0.0: always under pressure, so every update ages.
-    config = GCConfig(context_window=1000, gc_threshold=0.0, max_memory_ratio=0.5, min_compactable_tokens=1)
+    config = GCConfig(context_window=1000, max_memory_ratio=0.5, min_compactable_tokens=1,
+                      min_cut_tokens=0, last_n_turns_to_keep=1)
     return GcService(
         session_manager=SessionManager(),
         generational_memory=GenerationalMemory(
@@ -79,8 +80,8 @@ def test_archived_facts_stay_in_their_own_session():
     async def scenario():
         await _alice_ages_her_first_turn(service)
         await service.gc_update("bob", _turn(0, "hello, I am planning a party"))
-        alice = await service.gc_collect("alice", query="where does the database live")
-        bob = await service.gc_collect("bob", query="where does the database live")
+        alice = await service.gc_collect("alice")
+        bob = await service.gc_collect("bob")
         return alice, bob
 
     alice, bob = asyncio.run(scenario())
@@ -110,7 +111,7 @@ def test_a_removed_session_takes_its_memory_with_it():
         await _alice_ages_her_first_turn(service)
         service.session_manager.store.remove("alice")
         await service.gc_update("alice", _turn(0, "a brand new conversation"))
-        return await service.gc_collect("alice", query="where does the database live")
+        return await service.gc_collect("alice")
 
     assert "frankfurt" not in _text(asyncio.run(scenario()))
 

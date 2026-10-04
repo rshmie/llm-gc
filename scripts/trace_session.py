@@ -273,11 +273,9 @@ def _bar(current: int, window: int, width: int = 28) -> str:
 
 async def trace(config: GCConfig, *, verbose: bool, compactor_kind: str, api_key: str | None) -> None:
     service, memory, tracer, compactor_label = build_engine(config, compactor_kind, api_key)
-    threshold_tokens = int(config.context_window * config.gc_threshold)
-
     print(f"\ncompactor: {compactor_label}")
-    print(f"context_window={config.context_window}  gc_threshold={config.gc_threshold} "
-          f"-> GC engages at {threshold_tokens} tokens")
+    print(f"context_window={config.context_window}  min_cut_tokens={config.min_cut_tokens} "
+          f"-> a cut happens once that many tokens are classified for compaction")
     print(f"keep>={config.keep_threshold}  archive<{config.archive_threshold}  "
           f"min_compactable_tokens={config.min_compactable_tokens}  "
           f"last_n_turns_to_keep={config.last_n_turns_to_keep}\n")
@@ -340,10 +338,7 @@ async def trace(config: GCConfig, *, verbose: bool, compactor_kind: str, api_key
               f"saved {'+' if saved > 0 else ''}{saved}{degraded_note}")
 
     # ---------------------------------------------------------------- final state
-    # The query is the turn about to be sent. The proxy has it; a dashboard
-    # reading the context does not, which is why it is optional.
-    last_turn_text = CONVERSATION[-1][1]
-    final_context = await service.gc_collect(SESSION_ID, query=last_turn_text)
+    final_context = await service.gc_collect(SESSION_ID)
     memory_block = final_context[0] if final_context and final_context[0].turn_index == -1 else None
     sent_tokens = sum(message.token_count for message in final_context)
     # Read from the session's own state: generations belong to the session, not
@@ -362,13 +357,13 @@ async def trace(config: GCConfig, *, verbose: bool, compactor_kind: str, api_key
     print("\nWHAT THE MODEL ACTUALLY RECEIVES\n")
     for message in final_context:
         if message is memory_block:
-            print(f"  MEM turn   -  {message.token_count:>3} tok  (retrieved facts, see below)")
+            print(f"  FRONT      {message.token_count:>4} tok  (summaries, quotes and facts, see below)")
             continue
         marker = "old" if message in old_gen else "   "
         print(f"  {marker} turn {message.turn_index:>2}  {message.token_count:>3} tok  {message.content[:70]!r}")
 
     if memory_block is not None:
-        print(f"\n  the injected memory block, ranked against {last_turn_text[:40]!r}:")
+        print("\n  the front, as the model receives it (frozen until the next cut):")
         for line in memory_block.content.split("\n"):
             print(f"    {line[:94]}")
 
@@ -421,14 +416,10 @@ def _print_honesty_check(tracer, memory_block, permanent, old_gen, raw_tokens, s
     if not permanent:
         _check(False, "archived turns reach the model: NOT EXERCISED",
                "nothing was archived, so no fact could be injected")
-    elif memory_block is None:
-        _check(False, f"archived turns reach the model: 0 of {len(permanent)} injected",
-               "nothing stored matched the final turn - retrieval is lexical, so a "
-               "paraphrase misses")
     else:
-        injected = memory_block.content.count("\n")
-        _check(True, f"archived turns reach the model: {injected} of {len(permanent)} facts injected",
-               f"{memory_block.token_count} tok of memory; the rest did not match this turn")
+        injected = memory_block.content.count("\n- (turn") if memory_block is not None else 0
+        _check(injected > 0, f"archived turns reach the model: {injected} of {len(permanent)} facts in the front",
+               "chosen when the cut was made, within the memory budget")
 
     if tracer.old_gen_evictions == 0 and len(old_gen) <= 1:
         _check(False, "old generation is bounded: NOT EXERCISED",
@@ -465,6 +456,8 @@ def main() -> None:
     # and old-gen eviction is never exercised - a default that leaves half the
     # engine untouched is a poor default for a tool meant to show the engine.
     parser.add_argument("--window", type=int, default=400, help="context_window in tokens")
+    parser.add_argument("--min-cut", type=int, default=80,
+                        help="tokens classified for compaction that make a cut worth it (default: 80)")
     parser.add_argument("--threshold", type=float, default=0.5, help="fraction of the window that triggers GC")
     parser.add_argument("--keep", type=float, default=0.55, help="score at or above which a turn stays verbatim")
     parser.add_argument("--archive", type=float, default=0.25, help="score below which a turn is archived")
@@ -486,6 +479,7 @@ def main() -> None:
         archive_threshold=args.archive,
         min_compactable_tokens=10,
         last_n_turns_to_keep=3,
+        min_cut_tokens=args.min_cut,
         max_memory_ratio=args.memory_ratio,
     )
     asyncio.run(trace(config, verbose=args.verbose, compactor_kind=args.compactor, api_key=api_key))

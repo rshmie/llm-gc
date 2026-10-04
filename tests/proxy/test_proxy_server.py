@@ -58,6 +58,8 @@ def _engine(**config_overrides):
         "last_n_turns_to_keep": 2,
         "max_memory_ratio": 0.1,
         "max_memory_facts": 5,
+        # Scaled to the 200-token window: a few turns' worth is worth a cut.
+        "min_cut_tokens": 30,
     }
     base.update(config_overrides)
     config = GCConfig(**base)
@@ -782,3 +784,108 @@ class TestOneUsersConversationNeverReachesAnother:
         forwarded_for_bob = json.dumps(_sent(seen)["messages"])
         assert "patient" not in forwarded_for_bob
         assert "clinic" not in forwarded_for_bob
+
+
+def _converse_through(client, seen, turns: int, *, extra_content=None, header="s"):
+    """Drive a conversation the way a client does: full history, replies included.
+
+    Returns the messages forwarded on each request. `extra_content(i)` may return a
+    content-block list to send for user turn i instead of plain text.
+    """
+    history: list[dict] = []
+    forwarded = []
+    for i in range(turns):
+        content = extra_content(i) if extra_content else None
+        history.append({"role": "user", "content": content or
+                        f"question {i}: we went over the storage layer, retention, and the rollout plan again"})
+        client.post("/v1/messages", json={"model": "m", "max_tokens": 64, "messages": history},
+                    headers={"x-api-key": API_KEY, SESSION_HEADER: header})
+        forwarded.append(json.loads(seen[-1].content)["messages"])
+        history.append({"role": "assistant", "content": UPSTREAM_OK["content"]})
+    return forwarded
+
+
+def _is_front(message: dict) -> bool:
+    return isinstance(message["content"], str) and message["content"].startswith("[Earlier in this conversation")
+
+
+class TestTheCutShape:
+    """Every change LLM-GC makes to a prompt happens at its front, at a cut; between
+    cuts the forwarded conversation only grows at the end."""
+
+    def test_after_a_cut_the_conversation_opens_with_a_user_turn(self):
+        """A rewritten history that opened with an assistant turn was rejected by
+        the provider - the user's request failing because of LLM-GC."""
+        client, _, _, seen = _proxy()
+        forwarded = _converse_through(client, seen, 16)
+
+        cut_requests = [messages for messages in forwarded if _is_front(messages[0])]
+        assert cut_requests, "the conversation must be long enough to cut"
+        assert all(messages[0]["role"] == "user" for messages in forwarded)
+
+    def test_between_cuts_each_request_extends_the_last(self):
+        """Append-only between cuts is what lets the provider cache the prompt and
+        keeps the model's thinking blocks valid."""
+        client, _, _, seen = _proxy()
+        forwarded = _converse_through(client, seen, 16)
+
+        extended = 0
+        for earlier, later in zip(forwarded, forwarded[1:]):
+            if earlier[0] == later[0]:          # same front: no cut in between
+                assert later[: len(earlier)] == earlier
+                extended += 1
+        assert extended >= 3, "the test must observe several requests between cuts"
+
+    def test_tail_turns_are_forwarded_as_the_clients_original_content(self):
+        image = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}}
+
+        def with_image(i):
+            return [{"type": "text", "text": f"question {i}: what does this diagram show about the rollout?"},
+                    image] if i == 14 else None
+
+        client, _, _, seen = _proxy()
+        forwarded = _converse_through(client, seen, 16, extra_content=with_image)
+
+        last = forwarded[-1]
+        assert _is_front(last[0]), "the image turn must sit in the tail of a cut conversation"
+        assert any(isinstance(m["content"], list) and image in m["content"] for m in last)
+
+    def test_thinking_is_stripped_only_from_turns_that_predate_the_cut(self):
+        thinking_reply = [{"type": "thinking", "thinking": "", "signature": "sig"},
+                          {"type": "text", "text": "Postgres."}]
+        client, service, _, seen = _proxy()
+        history: list[dict] = []
+        for i in range(16):
+            history.append({"role": "user", "content":
+                            f"question {i}: we went over the storage layer, retention, and the rollout plan again"})
+            client.post("/v1/messages", json={"model": "m", "max_tokens": 64, "messages": history},
+                        headers={"x-api-key": API_KEY, SESSION_HEADER: "s"})
+            history.append({"role": "assistant", "content": thinking_reply})
+
+        state = service.session_manager.store.get("s")
+        boundary = state.snapshot.cut_turn_count
+        assert boundary > 0, "a cut must have happened"
+        sent = json.loads(seen[-1].content)["messages"]
+        tail = sent[1:]
+        tail_indices = sorted(m.turn_index for m in state.snapshot.young)
+        for index, message in zip(tail_indices, tail):
+            blocks = message["content"] if isinstance(message["content"], list) else []
+            has_thinking = any(b.get("type") == "thinking" for b in blocks)
+            if message["role"] == "assistant":
+                assert has_thinking == (index >= boundary), f"turn {index}, cut at {boundary}"
+
+
+class TestRequestSize:
+    def test_a_body_over_the_providers_limit_is_refused_without_forwarding(self, monkeypatch):
+        monkeypatch.setattr("llm_gc.proxy.server.MAX_REQUEST_BYTES", 1024)
+        client, _, _, seen = _proxy()
+        response = client.post("/v1/messages", content=b"x" * 2048, headers={"content-type": "application/json"})
+        assert response.status_code == 413
+        assert response.json()["error"]["type"] == "request_too_large"
+        assert seen == []
+
+    def test_a_body_under_the_limit_is_forwarded(self, monkeypatch):
+        monkeypatch.setattr("llm_gc.proxy.server.MAX_REQUEST_BYTES", 4096)
+        client, _, _, seen = _proxy()
+        assert _post(client, _body(("user", "hello"))).status_code == 200
+        assert len(seen) == 1

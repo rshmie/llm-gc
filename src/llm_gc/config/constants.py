@@ -13,6 +13,11 @@ DEFAULT_KEEP_THRESHOLD = 0.7
 DEFAULT_ARCHIVE_THRESHOLD = 0.3
 DEFAULT_MIN_COMPACTABLE_TOKENS = 30
 DEFAULT_LAST_N_TURNS_TO_KEEP = 5
+# Smallest batch of compactable turns worth a cut. Every cut resets the provider's
+# prompt cache once and strips thinking blocks from the turns it keeps, so cutting
+# for a few tokens costs more than it saves. A draft value, to be tuned by watching
+# real conversations.
+DEFAULT_MIN_CUT_TOKENS = 1000
 DEFAULT_MAX_RECENT_TRANSITIONS = 20
 
 # Permanent-generation injection. The cap is what makes the system stable, not a

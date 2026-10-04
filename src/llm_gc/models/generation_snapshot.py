@@ -34,6 +34,9 @@ class GenerationSnapshot:
     knowledge: tuple[KnowledgeEntry, ...] = ()
     version: int = 0
     lineage: tuple[str, ...] = ()
+    # Turns recorded when the most recent cut committed. Thinking blocks in kept
+    # turns before this point were produced against the history the cut replaced.
+    cut_turn_count: int = 0
 
     @property
     def active_knowledge(self) -> list[KnowledgeEntry]:

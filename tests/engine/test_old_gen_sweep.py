@@ -51,6 +51,7 @@ def _build(*, archive_threshold: float = 0.25, memory_cls=GenerationalMemory):
         archive_threshold=archive_threshold,
         min_compactable_tokens=10,
         last_n_turns_to_keep=3,
+        min_cut_tokens=60,
     )
     memory = memory_cls(
         knowledge_extractor=KnowledgeExtractor(event_bus=bus),
@@ -144,8 +145,11 @@ class TestWhereTheSummariesGo:
     def test_eviction_is_announced_as_an_archive_from_old_gen(self):
         """Both hops are archives, but one ends a turn's first hop and the other its
         last. A transitions timeline that conflated them would show a turn archived
-        twice."""
-        service, _ = _build()
+        twice.
+
+        A wide archive band, so young turns decay into ARCHIVE before a cut compacts
+        them and both kinds of archive occur in one conversation."""
+        service, _ = _build(archive_threshold=0.45)
         archived = []
         service.event_bus.subscribe(EventType.MESSAGE_ARCHIVED, archived.append)
 

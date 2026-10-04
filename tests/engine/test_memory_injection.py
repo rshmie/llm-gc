@@ -1,10 +1,10 @@
 """Archived turns must reach the model, not just the dashboard.
 
-Until this landed, `gc_collect` assembled old gen + young gen and stopped, so an
-archived turn was a deletion with a receipt: the fact stored, visible on the
-dashboard, and unusable by the model. That is the same information loss as the
-sliding window this project exists to beat — and worse, because the transparency
-layer reported the fact as retained.
+An archived turn whose facts are stored but never sent is a deletion with a
+receipt: visible on the dashboard, unusable by the model - the same loss as the
+sliding window this project exists to beat, and worse, because the transparency
+layer would report the fact as retained. Facts reach the model inside the front,
+chosen when a cut is made, so the front is identical on every request between cuts.
 """
 
 import asyncio
@@ -13,12 +13,13 @@ from llm_gc.config import GCConfig
 from llm_gc.engine.compaction import NoOpCompactor
 from llm_gc.engine.gc_service import GcService
 from llm_gc.engine.generations import GenerationalMemory, LexicalFactRetriever
+from llm_gc.engine.generations.front import FRONT_HEADER
 from llm_gc.engine.generations.memory_block import MEMORY_BLOCK_HEADER
 from llm_gc.engine.sweep import Sweeper, ThresholdSweepStrategy
-from llm_gc.events import EventBus
+from llm_gc.events import EventBus, EventType
 from llm_gc.extraction import KnowledgeExtractor
-from llm_gc.models.generation_snapshot import AgingDelta, apply_aging
 from llm_gc.models import KnowledgeEntry, Message
+from llm_gc.models.generation_snapshot import AgingDelta, apply_aging
 from llm_gc.models.knowledge_entry import KnowledgeType
 from llm_gc.scoring import RecencyScorer, RelevanceScorer, RelevanceType
 from llm_gc.session import SessionManager
@@ -30,11 +31,11 @@ SESSION = "s"
 def _config(**overrides) -> GCConfig:
     base = {
         "context_window": 200,
-        "gc_threshold": 0.5,
         "keep_threshold": 0.55,
         "archive_threshold": 0.3,
         "min_compactable_tokens": 10,
         "last_n_turns_to_keep": 2,
+        "min_cut_tokens": 1000,     # no cut during these tests: facts are placed directly
         "max_memory_ratio": 0.6,
         "max_memory_facts": 6,
     }
@@ -42,37 +43,32 @@ def _config(**overrides) -> GCConfig:
     return GCConfig(**base)
 
 
-def _build(config: GCConfig, retriever=None):
+def _build(config: GCConfig, retriever=None) -> GcService:
     bus = EventBus()
-    memory = GenerationalMemory(
-        knowledge_extractor=KnowledgeExtractor(event_bus=bus),
-        compactor=NoOpCompactor(event_bus=bus),
-    )
-    service = GcService(
+    return GcService(
         session_manager=SessionManager(),
-        generational_memory=memory,
+        generational_memory=GenerationalMemory(knowledge_extractor=KnowledgeExtractor(event_bus=bus),
+                                               compactor=NoOpCompactor(event_bus=bus)),
         relevance_scorer=RelevanceScorer(
             scorers=[RecencyScorer(decay_rate=0.3)], weights={RelevanceType.RECENCY: 1.0}, event_bus=bus
         ),
-        sweeper=Sweeper(
-            sweeper_strategy=ThresholdSweepStrategy(gc_config=config), gc_config=config, event_bus=bus
-        ),
+        sweeper=Sweeper(sweeper_strategy=ThresholdSweepStrategy(gc_config=config), gc_config=config, event_bus=bus),
         event_bus=bus,
         gc_config=config,
         fact_retriever=retriever,
     )
-    return service, memory
 
 
-def _store(service: GcService, topic: str, content: str, turn: int) -> None:
+def _store(service: GcService, topic: str, content: str, turn: int,
+           kind: KnowledgeType = KnowledgeType.FACT) -> None:
     """Put a fact straight into the session's permanent generation.
 
     Driving a whole conversation through the sweeper to produce one archived turn
-    makes a test about *injection* depend on every threshold in the config — which
+    makes a test about *injection* depend on every threshold in the config - which
     is how a previous draft of these tests silently measured nothing. Facts are
     placed directly; the aging path has its own tests.
     """
-    entry = KnowledgeEntry(message_turn=turn, content=content, topic_label=topic, knowledge_type=KnowledgeType.FACT)
+    entry = KnowledgeEntry(message_turn=turn, content=content, topic_label=topic, knowledge_type=kind)
     state = service.session_manager.get_or_create(SESSION)
     state.snapshot = apply_aging(state.snapshot, AgingDelta(new_knowledge=(entry,))).snapshot
 
@@ -85,186 +81,184 @@ def _young(service: GcService, texts: list[str], start: int = 50) -> None:
         )
 
 
-def _collect(service: GcService, query: str | None = None) -> list[Message]:
-    return asyncio.run(service.gc_collect(SESSION, query=query))
+def _collect(service: GcService) -> list[Message]:
+    return asyncio.run(service.gc_collect(SESSION))
 
 
-def _block(context: list[Message]) -> Message | None:
+def _front(context: list[Message]) -> Message | None:
     return context[0] if context and context[0].turn_index == -1 else None
 
 
 class TestAnArchivedFactReachesThePrompt:
-    def test_the_relevant_fact_is_injected(self):
-        service, memory = _build(_config())
+    def test_a_stored_fact_is_in_the_front(self):
+        service = _build(_config())
         _store(service, "database", "postgres, partitioned by day", turn=2)
         _young(service, ["and what about the deployment checklist"])
 
-        context = _collect(service, query="Which database are we actually targeting?")
-        block = _block(context)
-
-        assert block is not None
-        assert "database: postgres, partitioned by day" in block.content
+        front = _front(_collect(service))
+        assert front is not None
+        assert "postgres, partitioned by day" in front.content
 
     def test_it_is_announced_rather_than_disguised_as_a_turn(self):
-        service, memory = _build(_config())
+        service = _build(_config())
         _store(service, "database", "postgres", turn=2)
 
-        block = _block(_collect(service, query="which database?"))
+        front = _front(_collect(service))
+        assert front is not None
+        assert front.content.startswith(FRONT_HEADER)
+        assert MEMORY_BLOCK_HEADER in front.content
 
-        assert block is not None
-        assert block.content.startswith(MEMORY_BLOCK_HEADER)
-
-    def test_it_comes_before_every_surviving_turn(self):
-        """These facts are the oldest information in the context, and a conversation
-        should read chronologically."""
-        service, memory = _build(_config())
+    def test_the_front_opens_the_conversation_as_a_user_turn(self):
+        """The provider requires the first message to be a user turn; facts are the
+        oldest information in the context, and a conversation reads chronologically."""
+        service = _build(_config())
         _store(service, "database", "postgres", turn=2)
-        _young(service, ["a later turn", "the latest turn"])
-
-        context = _collect(service, query="which database?")
-
-        assert context[0].turn_index == -1
-        assert [message.turn_index for message in context[1:]] == [50, 51]
-
-    def test_an_irrelevant_fact_is_not_injected(self):
-        """Memory is retrieved, not dumped. A prompt full of unrelated "memory"
-        spends tokens and invites the model to use something off-topic."""
-        service, memory = _build(_config())
-        _store(service, "database", "postgres", turn=2)
-
-        assert _block(_collect(service, query="what time is the standup?")) is None
-
-    def test_with_nothing_stored_nothing_is_injected(self):
-        service, _ = _build(_config())
-        _young(service, ["just one turn"])
+        _young(service, ["first surviving turn", "second surviving turn"])
 
         context = _collect(service)
-        assert _block(context) is None
-        assert len(context) == 1
+        assert context[0].role == "user"
+        assert [m.turn_index for m in context] == [-1, 50, 51]
+
+    def test_with_nothing_stored_there_is_no_front(self):
+        service = _build(_config())
+        _young(service, ["just a turn"])
+        assert _front(_collect(service)) is None
+
+
+class TestTheFrontIsStableBetweenCuts:
+    def test_the_front_does_not_change_with_the_question(self):
+        """A front that changed with each question would change the prompt on every
+        request: no cache hit, and every thinking block invalidated."""
+        service = _build(_config())
+        _store(service, "database", "postgres", turn=2)
+        _store(service, "standup", "ten o'clock", turn=4)
+
+        _young(service, ["which database did we pick?"], start=50)
+        first = _front(_collect(service))
+        _young(service, ["what time is the standup?"], start=51)
+        second = _front(_collect(service))
+
+        assert first is not None and second is not None
+        assert first.content == second.content
 
 
 class TestSupersededFactsNeverReachThePrompt:
-    def test_only_the_surviving_value_is_injected(self):
+    def test_only_the_surviving_value_is_in_the_front(self):
         """The single most important assertion here. Without it the model reads
-        "the database is postgres" and "the database is mysql" as equal claims, and
-        every supersession the system detected was recorded for nothing."""
-        service, memory = _build(_config())
-        _store(service, "database", "postgres", turn=2)
-        _store(service, "database", "mysql", turn=40)
+        "postgres" and "mysql" as equal claims, and every supersession the system
+        detected was recorded for nothing."""
+        service = _build(_config())
+        _store(service, "database", "the database is postgres", turn=2, kind=KnowledgeType.DECISION)
+        _store(service, "database", "the database is mysql", turn=9, kind=KnowledgeType.DECISION)
 
-        block = _block(_collect(service, query="which database are we targeting?"))
-
-        assert block is not None
-        assert "mysql" in block.content
-        assert "postgres" not in block.content
+        front = _front(_collect(service))
+        assert front is not None
+        assert "mysql" in front.content
+        assert "postgres" not in front.content
 
 
 class TestTheBudgetIsEnforcedOnTheRealPrompt:
-    def test_the_block_respects_max_memory_tokens(self):
-        service, memory = _build(_config(max_memory_ratio=0.3, max_memory_facts=20))
-        for index in range(20):
-            _store(service, f"topic{index}", f"some value number {index} with trailing prose", turn=index)
+    def test_the_facts_respect_max_memory_tokens(self):
+        service = _build(_config(context_window=200, max_memory_ratio=0.25))
+        for index in range(12):
+            _store(service, f"topic{index}", f"a reasonably long fact number {index} about the system", turn=index)
 
-        block = _block(_collect(service, query="topic0 topic1 topic2 topic3 topic4 value"))
+        front = _front(_collect(service))
+        assert front is not None
+        facts_section = front.content.split(MEMORY_BLOCK_HEADER, 1)[1]
+        assert count_tokens(MEMORY_BLOCK_HEADER + facts_section) <= service.gc_config.max_memory_tokens
 
-        assert block is not None
-        assert block.token_count <= 60
+    def test_max_memory_facts_caps_how_many_are_chosen(self):
+        service = _build(_config(max_memory_facts=2))
+        for index in range(6):
+            _store(service, f"topic{index}", f"fact {index}", turn=index)
 
-    def test_max_memory_facts_caps_retrieval(self):
-        service, memory = _build(_config(max_memory_facts=2, max_memory_ratio=1.0))
-        for index in range(10):
-            _store(service, f"topic{index}", f"value {index}", turn=index)
+        front = _front(_collect(service))
+        assert front is not None
+        assert front.content.count("\n- (turn") == 2
 
-        block = _block(_collect(service, query=" ".join(f"topic{i}" for i in range(10))))
+    def test_front_tokens_count_toward_the_reported_context(self):
+        """The front is real tokens in the real prompt. A context size that omitted
+        it would under-report pressure in the reassuring direction."""
+        service = _build(_config())
+        _store(service, "database", "postgres", turn=2)
+        _young(service, ["a surviving turn"])
 
-        assert block is not None
-        assert block.content.count("\n") == 2, "header plus exactly two facts"
-
-    def test_injected_tokens_count_toward_the_reported_context(self):
-        """The block is real tokens in the real prompt. A context size that omitted
-        it would under-report pressure in the reassuring direction - the same error
-        the token meter already refuses to make about old-gen summaries."""
-        service, memory = _build(_config())
-        _store(service, "database", "postgres, partitioned by day", turn=2)
-        _young(service, ["a turn about the database"])
-
-        with_memory = _collect(service, query="which database?")
-        without_memory = _collect(service, query="what time is the standup?")
-
-        assert sum(m.token_count for m in with_memory) > sum(m.token_count for m in without_memory)
+        context = _collect(service)
+        assert sum(m.token_count for m in context) == context[0].token_count + context[1].token_count
 
 
-class TestInjectionCanBeTurnedOff:
-    def test_a_zero_memory_ratio_disables_it(self):
-        """How a deployment opts out, and how a benchmark measures what injection is
+class TestFactsCanBeTurnedOff:
+    def test_a_zero_memory_ratio_leaves_facts_out(self):
+        """How a deployment opts out, and how a benchmark measures what facts are
         worth by running the same conversation both ways."""
-        service, memory = _build(_config(max_memory_ratio=0.0))
+        service = _build(_config(max_memory_ratio=0.0))
         _store(service, "database", "postgres", turn=2)
+        assert _front(_collect(service)) is None
 
-        assert _block(_collect(service, query="which database?")) is None
-
-    def test_zero_memory_facts_disables_it(self):
-        service, memory = _build(_config(max_memory_facts=0))
+    def test_zero_memory_facts_leaves_facts_out(self):
+        service = _build(_config(max_memory_facts=0))
         _store(service, "database", "postgres", turn=2)
-
-        assert _block(_collect(service, query="which database?")) is None
-
-
-class TestWithoutAQuery:
-    def test_recent_facts_are_still_injected(self):
-        """A caller with no query has not asked for no memory. The dashboard reads
-        the context without one."""
-        service, memory = _build(_config())
-        _store(service, "database", "postgres", turn=2)
-        _store(service, "queue", "rabbitmq", turn=30)
-
-        block = _block(_collect(service, query=None))
-
-        assert block is not None
-        assert "rabbitmq" in block.content
+        assert _front(_collect(service)) is None
 
 
 class TestTheRetrieverIsSwappable:
-    def test_an_injected_retriever_is_used(self):
+    def test_an_injected_retriever_chooses_the_facts(self):
         """Same dependency-injection seam as the compactor and the provider: a
-        deployment with its own vector store supplies one, and nothing in the
-        engine changes."""
+        deployment with its own ranking supplies one, and nothing in the engine
+        changes. It is asked without a query, because facts are chosen at the cut."""
+        queries = []
 
         class _OnlyTheOldest:
             name = "oldest"
 
             def retrieve(self, entries, query, limit):
-                return sorted(entries, key=lambda entry: entry.message_turn)[:limit]
+                queries.append(query)
+                return sorted(entries, key=lambda entry: entry.message_turn)[:1]
 
-        service, memory = _build(_config(), retriever=_OnlyTheOldest())
+        service = _build(_config(), retriever=_OnlyTheOldest())
         _store(service, "database", "postgres", turn=2)
         _store(service, "queue", "rabbitmq", turn=30)
 
-        block = _block(_collect(service, query="what time is the standup?"))
-
-        # The lexical retriever would have returned nothing for this query; this one
-        # ignores the query entirely, which is how we know it ran.
-        assert block is not None
-        assert "postgres" in block.content
+        front = _front(_collect(service))
+        assert front is not None
+        assert "postgres" in front.content and "rabbitmq" not in front.content
+        assert queries == [None]
 
     def test_the_default_retriever_is_lexical(self):
-        service, _ = _build(_config())
-        assert isinstance(service.fact_retriever, LexicalFactRetriever)
+        assert isinstance(_build(_config()).fact_retriever, LexicalFactRetriever)
 
 
 class TestUpdateAndCollectStillAgree:
-    def test_both_paths_see_the_same_memory(self):
+    def test_both_paths_see_the_same_front(self):
         """`_assemble` is shared so the number the dashboard shows and the payload
-        the proxy forwards cannot drift. Injection must not break that."""
-        service, memory = _build(_config())
+        the proxy forwards cannot drift."""
+        service = _build(_config())
         _store(service, "database", "postgres", turn=2)
+        reported = []
+        service.event_bus.subscribe(EventType.GC_FINISHED,
+                                    lambda event: reported.append(event.data["gc_result"].final_messages))
 
         async def scenario():
             text = "a new turn mentioning the database again"
-            await service.gc_update(
-                SESSION, Message(role="user", content=text, token_count=count_tokens(text), turn_index=60)
-            )
-            return await service.gc_collect(SESSION, query=None)
+            await service.gc_update(SESSION, Message(role="user", content=text, token_count=count_tokens(text),
+                                                     turn_index=60))
+            return await service.gc_collect(SESSION)
 
         context = asyncio.run(scenario())
-        assert _block(context) is not None
+        assert [m.content for m in reported[-1]] == [m.content for m in context]
+
+
+class TestTheFrontKeepsWhatMattersMost:
+    def test_a_decision_outranks_newer_raw_excerpts(self):
+        """Found by running the proxy demo: ranked by recency alone, the front kept
+        two later acknowledgements ("Understood. I have noted that.") and dropped
+        the turn-2 decision the whole demo exists to show surviving."""
+        service = _build(_config(max_memory_facts=2))
+        _store(service, "database", "postgres, partitioned by day", turn=2, kind=KnowledgeType.DECISION)
+        for turn in (10, 11, 12):
+            _store(service, "__raw__", f"Understood, noted ({turn}).", turn=turn, kind=KnowledgeType.RAW)
+
+        front = _front(_collect(service))
+        assert front is not None
+        assert "postgres, partitioned by day" in front.content

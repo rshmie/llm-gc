@@ -141,8 +141,9 @@ recoverable.
 
 Two costs come with it. Compaction now makes a network call inside the async
 update window, so a slow or unavailable provider stops the aging path (safely:
-turns stay young). And it spends money per promotion, which is why aging is
-pressure-triggered rather than unconditional.
+the cut retreats and the turns stay verbatim). And it spends money per summary,
+which is one reason a cut waits for a batch worth making rather than compacting
+each turn as it cools (see [the cut](../generational-memory/the-cut.md)).
 
 ## File map
 

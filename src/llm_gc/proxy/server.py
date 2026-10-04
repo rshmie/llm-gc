@@ -43,6 +43,11 @@ DEFAULT_PROXY_PORT = 9900
 # success into a failure the client cannot distinguish from a real one.
 DEFAULT_UPSTREAM_TIMEOUT_S = 600.0
 
+# The provider's own request limit. A larger body would be rejected upstream
+# anyway, so refusing it here costs no user anything, and it stops one request from
+# making the proxy buffer an unbounded body.
+MAX_REQUEST_BYTES = 32 * 1024 * 1024
+
 # Response headers that describe the upstream connection, not its content.
 # Returning them would have us promise an encoding or a length that no longer
 # applies to the body we hand back.
@@ -164,7 +169,9 @@ async def _handle(app: FastAPI, request: Request) -> Response:
     metrics: ProxyMetrics = app.state.metrics
     metrics.requests += 1
 
-    body = await request.body()
+    body = await _read_body(request)
+    if body is None:
+        return _too_large()
     headers = forwardable_headers(dict(request.headers))
 
     try:
@@ -292,12 +299,16 @@ async def _apply_gc(
         return original_body, client_tokens
 
     gc_service: GcService = app.state.gc_service
-    collected = await gc_service.gc_collect(session_id, query=new_turn.content)
+    collected = await gc_service.gc_collect(session_id)
     if [message.turn_index for message in collected] == list(range(len(history))):
         return original_body, client_tokens
 
+    # Read with no await since the collect, so it describes the same snapshot.
+    state = gc_service.session_manager.store.get(session_id)
+    cut_turn_count = state.snapshot.cut_turn_count if state is not None else 0
     forwarded = collected + [new_turn]
-    return _dump_json(rewrite_messages(payload, forwarded)), sum(m.token_count for m in forwarded)
+    body = rewrite_messages(payload, forwarded, strip_thinking_before=cut_turn_count)
+    return _dump_json(body), sum(m.token_count for m in forwarded)
 
 
 async def _age(app: FastAPI, session_id: str) -> None:
@@ -410,6 +421,30 @@ def _unreachable(err: httpx2.RequestError) -> Response:
             {"error": {"type": "api_error", "message": f"llm-gc could not reach the provider: {type(err).__name__}"}}
         ),
         status_code=502,
+        media_type="application/json",
+    )
+
+
+async def _read_body(request: Request) -> bytes | None:
+    """The request body, or None once it passes `MAX_REQUEST_BYTES`.
+
+    Checked while reading rather than trusted from `content-length`, which a client
+    may omit or misstate.
+    """
+    received = bytearray()
+    async for chunk in request.stream():
+        received += chunk
+        if len(received) > MAX_REQUEST_BYTES:
+            return None
+    return bytes(received)
+
+
+def _too_large() -> Response:
+    return Response(
+        content=_dump_json_bytes({"type": "error", "error": {
+            "type": "request_too_large",
+            "message": f"request body exceeds {MAX_REQUEST_BYTES} bytes, the provider's own limit"}}),
+        status_code=413,
         media_type="application/json",
     )
 

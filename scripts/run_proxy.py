@@ -117,6 +117,8 @@ def build_engine(*, api_key: str | None, compactor_kind: str) -> tuple[GcService
         archive_threshold=0.25,
         min_compactable_tokens=10,
         last_n_turns_to_keep=3,
+        # Scaled to this demo's small window; real conversations use far larger batches.
+        min_cut_tokens=60,
         max_memory_ratio=0.15,
     )
 

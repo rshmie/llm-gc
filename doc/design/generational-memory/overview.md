@@ -193,76 +193,51 @@ relevance, not just position.
 
 ## How Context Is Assembled (on gc.collect)
 
-When the GC builds the optimized context to send to the LLM:
+The context sent to the model is **a front, then the verbatim tail**:
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│ 1. System prompt (unchanged)                          │
+│ System prompt (the client's, unchanged)              │
 │                                                      │
-│ 2. Relevant permanent gen facts (injected as context)│
-│    "[Memory: Database is MySQL, decided turn 15]"    │
-│    "[Memory: Auth uses JWT with 7-day refresh]"      │
-│    Only facts RELEVANT to current query (similarity) │
+│ FRONT — one user-role message, present after a cut   │
+│   facts recovered from archived turns                │
+│   "[Memory: (turn 15) database: mysql]"              │
+│   summaries and quoted turns, in conversation order  │
+│   "[Compacted turns 6-12] Implemented JWT auth..."   │
+│   "[Quoted exactly] (turn 5, user) We chose ..."     │
 │                                                      │
-│ 3. Old gen summaries (compressed turns)              │
-│    "[Summary turns 6-12: Implemented JWT auth...]"   │
+│ TAIL — every later turn, exactly as the client sent  │
+│   Turn 18, Turn 19, Turn 20                          │
 │                                                      │
-│ 4. Young gen turns (recent, full verbatim)           │
-│    Turn 18, Turn 19, Turn 20                         │
-│                                                      │
-│ 5. Current query (unchanged)                         │
+│ The new turn (unchanged)                             │
 └──────────────────────────────────────────────────────┘
 ```
 
-This resembles RAG — but instead of retrieving from an external knowledge base, it retrieves
-from facts extracted from **this conversation's own history**. Same mechanism (embedding
-similarity for retrieval), different source.
+The front changes only when a cut is made, which is the subject of
+[the-cut.md](the-cut.md): when a cut happens, what it contains, and why the prompt
+may be changed only there.
 
-### How step 2 chooses, and what it costs
+**Facts are retrieved, not dumped, and the budget keeps the system stable.**
+Permanent generation accumulates for the life of a session, so the front carries a
+budgeted selection of it, chosen when the front is made: decisions first, then
+facts, then preferences, with raw excerpts only in the room left over. The facts
+are real tokens in the real prompt and count against the context like any other
+message. Setting either memory budget to zero leaves facts out, which is how a
+deployment opts out and how a benchmark measures what they are worth. Ranking sits
+behind an interface, so a deployment with its own ranking supplies one without
+changing the engine.
 
-Retrieval, not a dump. Permanent generation accumulates for the life of a session,
-so injecting all of it would recreate, somewhere new, the unbounded growth that
-archiving exists to stop.
+**Selection and presentation use different orderings.** Importance decides what
+survives the budget; the surviving facts are shown in conversation order, because
+the front is read top to bottom and a fact from turn 2 belongs before one from
+turn 40.
 
-**Ranking sits behind an interface.** Retrieval quality is a measurable property
-that belongs to a benchmark, and the component that *uses* a ranking should not
-change when the ranking does. The shipped default ranks by word overlap with the
-turn about to be sent, weighting a match on the fact's subject above a match
-anywhere in its content. The rejected alternative was to make embedding similarity
-the default: it is better at paraphrase, and it puts a model download and a cold
-start on the collect path for an improvement nobody has measured yet. That is the
-wrong order. The accepted cost is a real and named miss — "which datastore?" does
-not match a fact stored under `database` — and a deployment that cares supplies its
-own retriever rather than editing the engine.
-
-**Facts with no overlap are excluded, not merely ranked last.** A prompt filled
-with whatever happened to be stored spends tokens and invites the model to use
-something unrelated to the turn. Returning fewer facts is the better failure.
-
-**The block is capped, and the cap is what makes the system stable.** Injected
-facts are real tokens in the real prompt, so they count against the context budget
-like any other message — the same ruling the budget meter already makes about
-old-generation summaries, for the same reason: a meter that omitted them would
-under-report pressure in the reassuring direction. That creates a loop worth
-naming: pressure causes archiving, archiving produces facts, facts add tokens,
-tokens add pressure. Bounded, it converges, because past the cap further archiving
-only ever reduces the total. Unbounded, memory grows with the session and cancels
-the saving that archiving produced. Setting either budget to zero disables
-injection, which is how a deployment opts out and how a benchmark measures what
-injection is worth by running the same conversation both ways.
-
-**Selection and presentation use different orderings.** Relevance decides what
-survives the budget; the surviving facts are then shown in conversation order,
-because a block is read top to bottom and a fact from turn 2 belongs before one
-from turn 40.
-
-**The block says what it is.** It carries a header naming it as recovered memory
-and each fact carries its origin turn. Distilled facts presented as if they were
-original conversation would be the same dishonesty the compacted-summary marker
-exists to prevent, and the origin turn is what lets the prompt and the dashboard
-agree about provenance. A `RAW` entry is labelled an excerpt rather than a parsed
-fact, because extraction found nothing in that turn and calling it a fact would
-overstate what is known.
+**The front says what it is.** It carries a header naming it as condensed history,
+each fact carries its origin turn, each summary its provenance marker, and each
+quote is marked as quoted. Distilled content presented as original conversation
+would be the dishonesty the provenance markers exist to prevent. A `RAW` entry is
+labelled an excerpt rather than a parsed fact, because extraction found nothing in
+that turn.
 
 **Superseded facts never reach the prompt.** Only active entries are candidates.
 This is the step that makes contradiction tracking worth anything: without the
@@ -270,8 +245,7 @@ filter the model would read an old value and its correction as two equal claims.
 
 ### How old gen is swept, and why it is the bound that matters
 
-The old generation is scored and swept on the same pressure-gated pass that ages
-the young generation, and summaries that have gone cold are archived into the
+The old generation is scored and swept as part of each cut, and summaries that have gone cold are archived into the
 permanent generation and removed. Without this a turn's journey would end at old
 gen: old gen would only ever grow, the assembled context would gain one summary
 per aged run forever, and old gen would become the leak that aging the young
@@ -550,58 +524,47 @@ Aging and assembly are split across the two engine entry points, so the
 per-request hot path stays cheap and never waits for aging.
 
 ```
-COLD PATH · gc.update(session_id, new_turn)          runs after the response
+COLD PATH · gc.age(session_id)                        runs after the response
 ═════════════════════════════════════════════════════════════════════════════
-  new_turn ──► recorded into the session's snapshot at once
+  the session's verbatim turns
                     │
-                    ▼  (only under pressure, one pass per session at a time)
-             RelevanceScorer ──► Sweeper      score + classify each young turn
+                    ▼  (one pass per session at a time)
+             RelevanceScorer ──► Sweeper      score + classify each verbatim turn
                     │
-                    ▼      plan from each turn's CURRENT classification
+                    ▼  find the latest cut point: keeps the newest turns, splits no tool round
+          batch = the turns before it          worth a cut? (compactable tokens ≥ min_cut_tokens)
+                    │
        ┌────────────┼─────────────────────────────┐
        ▼            ▼                              ▼
      KEEP        COMPACT                        ARCHIVE
-     stays     summarise the run              extract the facts
-     young     (a model call)                 (KnowledgeExtractor)
-                    │                              │
-                    └──────────► delta ◄───────────┘
-                                   │   + cold old-gen summaries to evict
-                                   ▼
-                     commit onto the CURRENT snapshot, then announce
+     quoted      runs summarised                facts extracted
+     verbatim    (a model call)                 (KnowledgeExtractor)
+                    │
+                    └──► delta ──► smaller than before? ──► commit onto the CURRENT snapshot
 
 
-HOT PATH · gc.collect(session_id, query)             runs before forwarding
+HOT PATH · gc.collect(session_id)                     runs before forwarding
 ═════════════════════════════════════════════════════════════════════════════
   read the session's snapshot once — no lock, no scoring, no compaction:
 
-   [ memory block: PERMANENT facts relevant to the query ]
- + [ OLD GEN summaries ] + [ YOUNG GEN turns (verbatim) ]   ordered by turn index
+        [ FRONT: facts + summaries + quotes ]   (only after a cut; frozen between cuts)
+      + [ TAIL: later turns, verbatim ]
                                       │
                                       ▼
-                          cleaned context ──► LLM
+                          context ──► LLM
 ```
 
-**`gc.update` (cold path) — the ager.** Runs after a response, off the request's
-critical path. It records the turn immediately, then, if the context is under
-pressure, plans against the current snapshot:
-
-- **KEEP** → stays in the young generation (verbatim).
-- **COMPACT** → adjacent COMPACT turns are summarised together into one old-gen
-  summary; the run then leaves the young generation.
-- **ARCHIVE** → `KnowledgeExtractor` pulls the turn's facts into permanent gen; the
-  turn then leaves the young generation.
-
-A turn joins the departing set only after its summary or extraction succeeded,
-so a failure leaves it in place for the next pass, never losing it and never
-filing a summary whose original is still live. The whole plan is committed in one
+**`gc.age` (cold path) — the ager.** Runs after a response, off the request's
+critical path, on the turns recorded so far. It decides whether a cut is worth
+making and, if so, plans it against the current snapshot and commits it in one
 step onto whatever the snapshot is by then, so turns recorded during a slow
-compaction are kept.
+compaction are kept. When a summary or an extraction fails, the cut retreats to
+just before it.
 
 **`gc.collect` (hot path) — the assembler.** Runs before the request is
-forwarded. It reads the session's current snapshot and stitches the three
-generations together. It never waits for an aging pass: if one is in flight, it
-returns the context from before that pass, which is complete and only less
-compressed. (Re-ranking young turns against the query is a planned addition.)
+forwarded. It reads the session's current snapshot and returns the front and the
+tail. It never waits for an aging pass: if one is in flight, it returns the
+context from before that pass, which is complete and only less compressed.
 
 Two properties matter here:
 

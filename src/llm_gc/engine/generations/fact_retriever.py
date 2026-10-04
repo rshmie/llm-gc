@@ -8,6 +8,7 @@ doc/design/generational-memory/overview.md.
 from typing import TYPE_CHECKING, Protocol
 
 from llm_gc.models import KnowledgeEntry
+from llm_gc.models.knowledge_entry import KnowledgeType
 from llm_gc.utils.text import significant_words
 
 # A topic label is the fact's subject, so matching it beats matching its prose.
@@ -37,6 +38,15 @@ class FactRetriever(Protocol):
         ...
 
 
+_TYPE_PRIORITY = {
+    KnowledgeType.DECISION: 3,
+    KnowledgeType.FACT: 2,
+    KnowledgeType.PREFERENCE: 1,
+    KnowledgeType.RAW: 0,
+}
+"""Without a query, decisions are the costliest thing to lose and raw excerpts the cheapest."""
+
+
 class LexicalFactRetriever:
     """Ranks facts by word overlap with the query.
 
@@ -53,12 +63,12 @@ class LexicalFactRetriever:
             return []
 
         if query is None:
-            return self._most_recent(entries, limit)
+            return self._most_important(entries, limit)
 
         query_words = significant_words(query)
         if not query_words:
             # An all-stopword query ("so what about it?") gives nothing to rank by.
-            return self._most_recent(entries, limit)
+            return self._most_important(entries, limit)
 
         scored = [(self._score(entry, query_words), entry) for entry in entries]
         # Zero-overlap facts are excluded, not ranked last: irrelevant "memory"
@@ -75,9 +85,16 @@ class LexicalFactRetriever:
         return _TOPIC_MATCH_WEIGHT * topic_overlap + content_overlap
 
     @staticmethod
-    def _most_recent(entries: list[KnowledgeEntry], limit: int) -> list[KnowledgeEntry]:
-        """Fallback with no query: recency is the only ordering available."""
-        return sorted(entries, key=lambda entry: entry.message_turn, reverse=True)[:limit]
+    def _most_important(entries: list[KnowledgeEntry], limit: int) -> list[KnowledgeEntry]:
+        """Fallback with no query: what a fact is first, then how recent.
+
+        This is how a front is chosen at a cut, where there is no question to rank
+        against. Recency alone ranked a throwaway acknowledgement above the
+        decision it acknowledged; a RAW excerpt - a turn extraction found nothing
+        in - only fills room the extracted knowledge leaves.
+        """
+        return sorted(entries, key=lambda entry: (_TYPE_PRIORITY[entry.knowledge_type], entry.message_turn),
+                      reverse=True)[:limit]
 
 
 if TYPE_CHECKING:

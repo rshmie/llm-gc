@@ -76,13 +76,14 @@ def _service():
         relevance_scorer=_KeepScorer(),
         sweeper=_CompactTurnsBelow(limit=3),
         event_bus=bus,
-        gc_config=GCConfig(context_window=1000, gc_threshold=0.0, archive_threshold=0.0),
+        gc_config=GCConfig(context_window=1000, min_cut_tokens=0, last_n_turns_to_keep=0, archive_threshold=0.0),
     )
     return service, compactor
 
 
 def _turn(index: int) -> Message:
-    return Message(role="user", content=f"turn {index}", token_count=10, turn_index=index)
+    # Sized like a real turn, so a cut can remove more than the front's headers cost.
+    return Message(role="user", content=f"turn {index}", token_count=100, turn_index=index)
 
 
 async def _start_aging(service: GcService, compactor: _GatedCompactor) -> asyncio.Task:
@@ -136,7 +137,7 @@ class TestTheHotPathNeverWaits:
 
         during, after = _run(scenario())
         assert 3 in _indices(during), "recorded turns must not wait for aging to finish"
-        assert _indices(after) == [0, 3], "turns 0-2 summarised; turn 3 kept"
+        assert _indices(after) == [-1, 3], "turns 0-2 are in the front; turn 3 kept"
         assert "[Compacted]" in after[0].content
 
 

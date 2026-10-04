@@ -85,13 +85,6 @@ extractor and, if it returns nothing, keeps the **entire message verbatim** as a
 raw archives never overwrite one another. A message can therefore be archived
 without its content being lost, whether or not the heuristics understood it.
 
-> **Known gap: archived knowledge is not read back into context.** Assembly is
-> old-generation summaries plus young-generation turns. Nothing injects relevant
-> permanent-generation entries into the prompt, so today ARCHIVE means the message
-> leaves the context and its facts go into a store only the dashboard reads. The
-> knowledge is preserved, but the model does not see it. Closing this needs a
-> relevance query over the permanent generation at assembly time.
-
 ## Override Rules
 
 These overrides apply before any threshold logic. They are universal (strategy-independent):

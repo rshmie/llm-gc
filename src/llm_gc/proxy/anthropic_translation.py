@@ -88,16 +88,39 @@ def _flatten_content(content: object, index: int) -> str:
     raise ConfigError(f"messages[{index}] has unsupported content type {type(content).__name__}")
 
 
-def rewrite_messages(payload: dict[str, Any], messages: list[Message]) -> dict[str, Any]:
+def rewrite_messages(payload: dict[str, Any], messages: list[Message], strip_thinking_before: int = 0) -> dict[str, Any]:
     """Return a copy of the body with its conversation replaced.
 
     A copy, because the original is the fallback if anything downstream fails.
     Every other field passes through untouched, including ones this version has
-    never heard of — the proxy changes the conversation and nothing else.
+    never heard of - the proxy changes the conversation and nothing else.
+
+    Turns are sent as the client's original content (images, tool calls), not
+    their text. Thinking blocks are removed from turns recorded before the latest
+    cut: they were produced against the history the cut replaced, and the provider
+    rejects or drops them once that history has changed.
     """
     rewritten = dict(payload)
-    rewritten["messages"] = [{"role": message.role, "content": message.content} for message in messages]
+    rewritten["messages"] = [
+        rendered for message in messages
+        if (rendered := _render_turn(message, strip_thinking=0 <= message.turn_index < strip_thinking_before))
+        is not None
+    ]
     return rewritten
+
+
+_THINKING_BLOCK_TYPES = frozenset({"thinking", "redacted_thinking"})
+
+
+def _render_turn(message: Message, *, strip_thinking: bool) -> dict[str, Any] | None:
+    """One turn as the provider expects it, or None if nothing is left to send."""
+    content = message.raw_content if message.raw_content is not None else message.content
+    if strip_thinking and isinstance(content, list):
+        content = [block for block in content
+                   if not (isinstance(block, dict) and block.get("type") in _THINKING_BLOCK_TYPES)]
+        if not content:
+            return None
+    return {"role": message.role, "content": content}
 
 
 def forwardable_headers(headers: dict[str, str]) -> dict[str, str]:
