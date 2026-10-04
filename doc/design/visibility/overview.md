@@ -202,8 +202,14 @@ by turn and by fact:
   reach the model. *Stored, not sent* is the signal that matters most: the
   conversation has not forgotten it, and the model cannot see it.
 - **The next cut**: which verbatim turns it would take, what each would become,
-  and how far the batch is from `min_cut_tokens` — a warning before anything
-  changes.
+  and the two conditions it must meet, each with its state — a batch worth
+  cutting, against `min_cut_tokens`, and a prompt that comes out smaller. Only the
+  first can be known in advance: whether the prompt shrinks depends on summaries
+  not yet written, so the dashboard says it is checked as the cut runs, and shows
+  the last attempt's figures when one was refused. *Rejected: a progress meter
+  alone.* It reads as a promise, and on a conversation of short messages the
+  meter filled, Run GC now was pressed, and nothing happened, with nothing on the
+  panel saying why.
 
 It is built from a single read-only **inspection** of the session that the
 engine produces with the same rendering that builds the prompt and the same

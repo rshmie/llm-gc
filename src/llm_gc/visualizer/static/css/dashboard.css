@@ -345,8 +345,8 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.6 ui-monosp
 .proxy-line b { color: var(--ink); font-weight: 650; font-variant-numeric: tabular-nums; }
 .proxy-line .sep { color: var(--baseline); }
 .eng-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
-.eng-grid.next-why { grid-template-columns: minmax(0, 1fr) minmax(0, 1.75fr); }
-@media (max-width: 960px) { .eng-grid, .eng-grid.next-why { grid-template-columns: minmax(0, 1fr); } }
+.eng-stack { display: grid; gap: 16px; }
+@media (max-width: 960px) { .eng-grid { grid-template-columns: minmax(0, 1fr); } }
 .eng-card .card-head { margin-bottom: 8px; }
 .card-head .card-toggle { flex: none; }
 .eng-card.collapsed .card-head { margin-bottom: 0; }
@@ -359,6 +359,27 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.6 ui-monosp
 .collapse svg { transition: transform .2s; }
 .collapse[aria-expanded="false"] svg { transform: rotate(-90deg); }
 @media (prefers-reduced-motion: reduce) { .collapse svg { transition: none; } }
+.next-lede { margin: 0 0 14px; font-size: 15px; font-weight: 650; color: var(--ink); }
+.next-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 16px 40px; }
+@media (max-width: 860px) { .next-grid { grid-template-columns: minmax(0, 1fr); } }
+.next-grid .label { margin-bottom: 10px; }
+.ck-list, .would { list-style: none; margin: 0; padding: 0; display: grid; }
+.ck-list { gap: 16px; }
+.ck { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 12px; }
+.ck-badge { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 12px; background: var(--raised); color: var(--ink-2); }
+.ck.tone-good .ck-badge { background: var(--good); color: #fff; }
+.ck.tone-warn .ck-badge { background: var(--warn); color: #3a2a00; }
+.ck-head { display: flex; justify-content: space-between; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; font-size: 13.5px; }
+.ck-head b { font-weight: 650; color: var(--ink); }
+.ck-head .num, .would .num { color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 13px; }
+.ck.tone-warn .ck-head .num { color: var(--warn-ink); }
+.ck .meter { margin-top: 8px; }
+.ck p { margin: 6px 0 0; font-size: 12.5px; color: var(--ink-3); max-width: 60ch; }
+.would { gap: 10px; margin-bottom: 12px; }
+.would li { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; gap: 10px; align-items: baseline; font-size: 13px; color: var(--ink-2); }
+.would li b { color: var(--ink); font-weight: 650; }
+.would-head { font-size: 12.5px; color: var(--ink-3); margin: 0 0 6px; }
+.would-note { color: var(--ink-3); }
 .when-runs { margin-top: 12px; font-size: 12.5px; color: var(--ink-3); display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
 .qchip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 1px 8px 1px 6px; border-radius: 999px; background: var(--raised); color: var(--ink-2); }
 .show-all { margin-top: 10px; }
@@ -402,7 +423,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.6 ui-monosp
    card with the threshold labels pinned at the top. */
 .rate { --a: 30%; --k: 70%; }
 .rate-list { max-height: 470px; overflow-y: auto; overscroll-behavior: contain; }
-.rate-row { display: grid; grid-template-columns: 90px minmax(160px, 1fr) minmax(0, 250px); gap: 0 16px; align-items: center; min-height: 34px; font-size: 12.5px; border-radius: 8px; }
+.rate-row { display: grid; grid-template-columns: 90px minmax(160px, 1.2fr) minmax(0, 1fr); gap: 0 16px; align-items: center; min-height: 34px; font-size: 12.5px; border-radius: 8px; }
 .rate-row.linked { background: var(--accent-wash); }
 .rate-row.flash { background: var(--flash); }
 .rate-lab { color: var(--ink-2); white-space: nowrap; font-variant-numeric: tabular-nums; padding-left: 6px; }

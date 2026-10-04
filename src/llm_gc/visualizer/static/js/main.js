@@ -28,7 +28,6 @@ function renderConversation() {
   if (ui.promptView) renderPrompt(k); else renderTimeline(k);
   renderMemory(k);
   renderRelevance(k);
-  renderNext(k);
 }
 
 async function refresh() {
@@ -71,7 +70,7 @@ async function refresh() {
         }
       }
       state.activity = await getJSON(sessionPath("/activity"));
-      if (state.knowledge) { renderStatus(); renderCleanupLog(); }
+      if (state.knowledge) { renderStatus(); renderCleanupLog(); renderNext(state.knowledge); }
       renderProxy();
       renderEngineStatus();
       renderChart();

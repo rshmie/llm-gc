@@ -126,22 +126,61 @@ export function renderEngineStatus() {
 
 // ----------------------------------------------------------------- what happens next, and why
 
+// The newest pass that planned a cut, whether it was made or refused.
+function lastAttempt() {
+  const passes = state.activity ? state.activity.recent_passes : [];
+  return passes.findLast((p) => p.abandoned_cut || (p.gc_status === "completed" && p.outcome)) || null;
+}
+
+// A clean-up has two conditions to meet, so they are shown as a checklist, each with its state,
+// beside what the clean-up would do to which messages - and which of those count toward the first.
 export function renderNext(k) {
   const cut = k.next_cut;
-  const share = cut.min_cut_tokens > 0 ? cut.compactable_tokens / cut.min_cut_tokens : (cut.compactable_tokens > 0 ? 1 : 0);
-  const becoming = {};
-  for (const t of k.turns) if (t.becomes) becoming[t.becomes] = (becoming[t.becomes] || 0) + 1;
-  const rest = cut.batch_ready ? " ready: it runs after the next reply"
-    : cut.compactable_tokens ? ` ready, ${fmt(cut.min_cut_tokens - cut.compactable_tokens)} to go` : " ready yet";
+  const taking = k.turns.filter((t) => t.becomes);
+  const tokensOf = (turns) => turns.reduce((sum, t) => sum + (t.tokens || 0), 0);
+  const refused = lastAttempt()?.abandoned_cut ? lastAttempt() : null;
+  const share = cut.min_cut_tokens > 0 ? Math.min(1, cut.compactable_tokens / cut.min_cut_tokens) : (cut.compactable_tokens > 0 ? 1 : 0);
+  const newest = k.turns.filter((t) => t.fidelity === "verbatim" && !t.becomes).length;
+
+  const lede = !taking.length ? "Nothing to clean up yet."
+    : cut.batch_ready ? "Ready: it runs after the next reply, if the result is smaller."
+    : `Waiting for ${fmt(cut.min_cut_tokens - cut.compactable_tokens)} more tokens of messages to condense.`;
+  const check = (tone, icon, title, figure, ...body) => h("li", { class: `ck tone-${tone}` },
+    h("span", { class: "ck-badge", "aria-hidden": "true" }, icon),
+    h("div", {}, h("div", { class: "ck-head" }, h("b", {}, title), figure), body));
+
+  const row = (key, label, note) => {
+    const turns = taking.filter((t) => t.becomes === key);
+    return turns.length ? h("li", {}, swatch(BECOMES_CAT[key]),
+      h("span", {}, h("b", {}, plural(turns.length, "message")), ` ${label}`, note ? h("span", { class: "would-note" }, ` (${note})`) : null),
+      h("span", { class: "num" }, `${fmt(tokensOf(turns))} tokens`)) : null;
+  };
+  const counted = [row("summarised", "summarised"), row("facts_only", "reduced to facts")].filter(Boolean);
+  const notCounted = [row("quoted", "quoted whole", "short or rated important"),
+    newest ? h("li", {}, swatch("verbatim"), h("span", {}, h("b", {}, `The newest ${plural(newest, "message")}`), " stay word for word"), h("span")) : null].filter(Boolean);
+
   fill("panel-next",
-    h("p", { class: "tile-lede" }, `Runs at ${fmt(cut.min_cut_tokens)} tokens of messages rated to condense.`),
-    h("div", { class: "tile-big" }, countEl("next-ready", cut.compactable_tokens), h("small", {}, rest)),
-    h("div", { class: `meter${cut.batch_ready ? " ready" : ""}`, role: "meter", "aria-valuemin": "0", "aria-valuemax": String(cut.min_cut_tokens),
-      "aria-valuenow": String(cut.compactable_tokens), "aria-label": "Tokens ready to condense" }, meterBar("next-ready", share * 100)),
-    h("div", { class: "when-runs" }, Object.keys(becoming).length
-      ? [h("span", {}, "When it runs:"), Object.entries(becoming).map(([key, n]) => h("span", { class: "qchip" }, swatch(BECOMES_CAT[key]), `${n} ${BECOMES[key]}`))]
-      : h("span", {}, `Nothing is queued: the newest ${keepLast()} messages always stay word for word.`)),
-    cut.turns.length && cut.compactable_tokens === 0 ? h("p", { class: "note" }, "The queued messages are all kept whole, so there is nothing to condense yet.") : null);
+    h("p", { class: "next-lede" }, lede),
+    h("div", { class: "next-grid" },
+      h("div", {},
+        h("div", { class: "label" }, "It runs when both hold"),
+        h("ul", { class: "ck-list" },
+          check(cut.batch_ready ? "good" : "wait", cut.batch_ready ? "✓" : "…", "Enough to condense",
+            h("span", { class: "num" }, countEl("next-ready", cut.compactable_tokens), ` of ${fmt(cut.min_cut_tokens)} tokens`),
+            h("div", { class: `meter${cut.batch_ready ? " ready" : ""}`, role: "meter", "aria-valuemin": "0", "aria-valuemax": String(cut.min_cut_tokens),
+              "aria-valuenow": String(cut.compactable_tokens), "aria-label": "Tokens of messages to condense" }, meterBar("next-ready", share * 100)),
+            h("p", {}, "Only messages that will be summarised or reduced to facts count. Quoting a message whole saves nothing.")),
+          refused
+            ? check("warn", "!", "Makes the prompt smaller", h("span", { class: "num" }, `${fmt(refused.tokens_before)} → ${fmt(refused.abandoned_cut.context_tokens_after)}`),
+              h("p", {}, `The last try, ${agoTs(refused.gc_completed_at)}, would have made it bigger, so nothing changed. Each condensed message carries a short label, so condensing a few short messages costs more than it saves.`))
+            : check("wait", "…", "Makes the prompt smaller", null,
+              h("p", {}, "Checked as it runs, because the summaries aren't written until then. If the result would be bigger, nothing changes.")))),
+      h("div", {},
+        h("div", { class: "label" }, "What it would do now"),
+        counted.length ? [h("div", { class: "would-head" }, `Counts toward the ${fmt(cut.min_cut_tokens)}`), h("ul", { class: "would" }, counted)] : null,
+        notCounted.length ? [h("div", { class: "would-head" }, "Doesn't count"), h("ul", { class: "would" }, notCounted)] : null,
+        !counted.length && !notCounted.length ? h("p", { class: "note" }, "Nothing yet.") : null,
+        taking.length ? h("button", { class: "link-btn", type: "button", onclick: () => openCard("rate", true) }, "Why each message gets this ↓") : null)));
 }
 
 // Why a message gets what it gets: the engine's own classification, worded with your thresholds.
