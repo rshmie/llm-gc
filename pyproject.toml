@@ -11,6 +11,8 @@ dependencies = ["pydantic", "tiktoken", "numpy", "sentence-transformers", "fasta
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The repository root, so tests can import the evals, which are not part of the package.
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 120
