@@ -1,7 +1,7 @@
 // The LLM-GC at work view: the proxy's counters, every check, ratings and settings.
 
 import { BECOMES, CHART_HEIGHT, CLASS_LABEL, CLASS_TO_CAT, STATUS, TRANSITION, speaker } from "./vocabulary.js";
-import { $, agoTs, compact, fill, fmt, h, plural, ranges, setChildren, svg } from "./dom.js";
+import { $, agoTs, compact, countEl, fill, fmt, h, meterBar, plural, ranges, setChildren, svg } from "./dom.js";
 import { captured, keepLast, preview, state, ui } from "./state.js";
 import { hideTooltip, info, placeTooltip, tipQuote, tooltipContent, hoverTip } from "./tooltip.js";
 
@@ -14,13 +14,13 @@ export function renderTiles() {
     h("div", { class: "stat-label" }, label, term ? info(term) : null), h("div", { class: "value" }, value),
     extra || null, caption ? h("div", { class: "caption" }, caption) : null);
   fill("tiles",
-    tile("Requests through the proxy", null, p ? fmt(p.requests) : "—",
+    tile("Requests through the proxy", null, p ? countEl("tile-requests", p.requests) : "—",
       p ? [`${fmt(p.gc_applied)} handled by LLM-GC`, p.gc_bypassed ? [" · ", h("span", { class: "st warn" }, "⚠ "), `${fmt(p.gc_bypassed)} passed on untouched after an error`] : " · none passed on after an error"]
         : "no proxy beside this dashboard"),
-    tile("Tokens sent to the provider", "forwarded", p ? fmt(p.tokens_forwarded) : "—",
+    tile("Tokens sent to the provider", "forwarded", p ? countEl("tile-forwarded", p.tokens_forwarded) : "—",
       p ? `${p.ratio !== null ? `${Math.round(p.ratio * 100)}% of` : "of"} ${fmt(p.tokens_in_client_history)} your apps sent, all conversations` : null,
-      p && p.ratio !== null ? h("div", { class: "meter" }, h("div", { class: "some", style: `width:${Math.min(100, p.ratio * 100)}%` })) : null),
-    tile("Clean-ups in this conversation", "cleanup", k ? fmt(k.cuts) : "—",
+      p && p.ratio !== null ? h("div", { class: "meter" }, meterBar("tile-forwarded-ratio", p.ratio * 100)) : null),
+    tile("Clean-ups in this conversation", "cleanup", k ? countEl("tile-cuts", k.cuts) : "—",
       lastCut ? `last ${agoTs(lastCut.gc_completed_at)}: ${fmt(lastCut.tokens_before)} → ${fmt(lastCut.tokens_before - lastCut.tokens_saved)} tokens` : "none in the recent checks"),
     tile("Conversation tracking", "tracking", null, null,
       h("div", { class: "triple" }, [[p ? p.sessions_seeded : "—", "started fresh"], [p ? p.history_rewinds : "—", "rewound after an edit"], [p ? p.history_restarts : "—", "restarted"]]
