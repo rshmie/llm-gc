@@ -17,15 +17,15 @@
       LLM-GC
     </span>
     <nav class="tabs" role="tablist" aria-label="Views">
-      <button role="tab" id="tab-conversation" aria-selected="true" aria-controls="view-conversation">The conversation</button>
-      <button role="tab" id="tab-engine" aria-selected="false" aria-controls="view-engine">LLM-GC at work</button>
+      <button role="tab" id="tab-conversation" aria-selected="true" aria-controls="view-conversation">Conversation</button>
+      <button role="tab" id="tab-engine" aria-selected="false" aria-controls="view-engine">Engine</button>
     </nav>
     <span class="spacer"></span>
     <div class="picker">
       <label for="session-select">Conversation</label>
       <select id="session-select"><option>none yet</option></select>
     </div>
-    <button class="run-gc" id="run-gc" disabled title="Clean up this conversation now: condense its older messages without waiting until enough have built up.">Run GC now</button>
+    <button class="run-gc" id="run-gc" disabled title="Clean up this conversation now, without waiting for enough messages rated to condense.">Run GC now</button>
     <span class="live" id="live" data-state="connecting" role="status"><span class="dot"></span><span id="live-text">connecting…</span></span>
     <button class="icon-btn" id="theme" type="button" title="Theme: follow the system">◐</button>
     <button class="icon-btn" id="open-guide" type="button" title="How LLM-GC works, and what the words mean" aria-label="How it works">?</button>
@@ -52,34 +52,37 @@
     </ol>
   </section>
 
-  <!-- ===================================================== the conversation -->
+  <!-- ===================================================== the conversation: what the model knows -->
   <div id="view-conversation" class="view" role="tabpanel" aria-labelledby="tab-conversation" hidden>
-    <section class="card hero" aria-labelledby="hero-title">
-      <div class="card-head" style="margin-bottom:0">
-        <div>
-          <h1 id="hero-title">What the model can see</h1>
-          <p class="hero-summary" id="hero-summary"></p>
-        </div>
-        <div class="hero-meta" id="hero-meta"></div>
-      </div>
-      <div class="map" id="map" role="img"></div>
-      <div class="map-ends" id="map-ends" aria-hidden="true"><span>first message</span><span>newest</span></div>
-      <div class="legend" id="legend"></div>
-      <div class="hero-grid">
+    <div class="status-stack" id="status" role="status"></div>
+
+    <section class="card prompt-card" aria-labelledby="hero-title">
+      <div class="prompt-top">
         <section id="panel-size"></section>
-        <section id="panel-next"></section>
+        <section id="panel-holds"></section>
         <section id="panel-window"></section>
       </div>
+      <div>
+        <div class="map-head">
+          <h2 id="hero-title">What the model has of each message</h2>
+          <span class="muted">Width: size in tokens · height: how much the model still has · hover to trace · click to open</span>
+        </div>
+        <div class="pmap" id="map">
+          <div></div><div class="an-labels" id="an-labels"></div>
+          <div class="an-rowlab">Messages</div><div class="an-bars" id="an-bars"></div>
+          <div class="an-rowlab">Sent</div><div class="an-ledger" id="an-ledger"></div>
+          <div></div><div class="an-axis" aria-hidden="true"><span>first message</span><span>newest · widths to scale</span></div>
+        </div>
+        <div class="an-key" id="an-key"></div>
+      </div>
     </section>
-
-    <div class="attention" id="attention"></div>
 
     <div class="conv">
       <section class="card" id="messages" aria-labelledby="messages-title">
         <div class="card-head">
           <div>
             <h2 id="messages-title">Message by message</h2>
-            <div class="sub">What was said, and what the model still has of it.</div>
+            <div class="sub">Newest first, with what the model still has of each.</div>
           </div>
           <div class="toggle" role="group" aria-label="View">
             <button id="view-timeline" aria-pressed="true">As it happened</button>
@@ -89,7 +92,7 @@
         <div class="toolbar" id="toolbar">
           <div class="search">
             <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="7" cy="7" r="4.8"/><path d="m10.6 10.6 3.6 3.6" stroke-linecap="round"/></svg>
-            <input type="search" id="search" placeholder="Find in this conversation — for example “database”" aria-label="Find in this conversation" autocomplete="off">
+            <input type="search" id="search" placeholder="Find in this conversation, for example “database”" aria-label="Find in this conversation" autocomplete="off">
           </div>
           <div class="chips" id="chips" role="group" aria-label="Show"></div>
           <div class="filter-note" id="filter-note" hidden></div>
@@ -97,73 +100,105 @@
         <div class="timeline" id="timeline"></div>
         <div id="prompt" hidden></div>
       </section>
-      <aside class="card memory" aria-labelledby="memory-title">
-        <h2 id="memory-title">Facts the model remembers</h2>
-        <div class="sub" style="margin-bottom:10px">Pulled out of messages as they were condensed. Click one to see where it came from.</div>
-        <div id="memory"></div>
+      <aside class="side">
+        <section class="card memory" aria-labelledby="memory-title">
+          <h2 id="memory-title">What the model remembers</h2>
+          <div class="sub">Facts kept from condensed messages. Click one to see where it came from.</div>
+          <div id="memory"></div>
+        </section>
+        <section class="card" aria-labelledby="cleanups-title">
+          <h2 id="cleanups-title">Clean-ups</h2>
+          <ul class="log" id="cleanup-log"></ul>
+        </section>
       </aside>
     </div>
   </div>
 
-  <!-- ===================================================== the engine -->
+  <!-- ===================================================== the engine: what LLM-GC is doing, and why -->
   <div id="view-engine" class="view" role="tabpanel" aria-labelledby="tab-engine" hidden>
-    <div class="tiles" id="tiles"></div>
-
-    <section class="card" aria-labelledby="chart-title">
-      <div class="card-head" style="margin-bottom:6px">
-        <div>
-          <h2 id="chart-title">Prompt size, check by check</h2>
-          <div class="sub">After every reply LLM-GC checks whether a clean-up is due. Each drop is a clean-up; the gap to the grey line is what it saves on every request.</div>
-        </div>
-        <div id="last-check"></div>
-      </div>
-      <div class="chart-legend" id="chart-legend"></div>
-      <div class="chart" id="chart"></div>
-    </section>
-
-    <div class="two">
-      <div class="stack">
-        <section class="card" aria-labelledby="rel-title">
-          <div class="card-head">
-            <div>
-              <h2 id="rel-title">How the next clean-up rates each recent message</h2>
-              <div class="sub" id="rel-sub"></div>
-            </div>
-          </div>
-          <div class="rel" id="relevance"></div>
-        </section>
-        <section class="card" aria-labelledby="checks-title">
-          <div class="card-head" style="margin-bottom:6px">
-            <div>
-              <h2 id="checks-title">Every check</h2>
-              <div class="sub">The chart's numbers, newest first. Checks that found nothing to do are grouped; clean-ups are in bold.</div>
-            </div>
-          </div>
-          <div class="table-scroll scroll"><table id="checks"></table></div>
-        </section>
-      </div>
-      <div class="stack">
-        <section class="card" aria-labelledby="settings-title">
-          <div class="card-head" style="margin-bottom:6px">
-            <div>
-              <h2 id="settings-title">Settings in effect</h2>
-              <div class="sub">First guesses, meant to be tuned by watching conversations here.</div>
-            </div>
-          </div>
-          <div class="settings" id="settings"></div>
-        </section>
-        <section class="card" aria-labelledby="problems-title">
-          <h2 id="problems-title">Problems</h2>
-          <div class="sub" style="margin-bottom:10px">What a clean-up meant to do and could not. Those messages stay word for word: nothing is lost, the prompt is just bigger.</div>
-          <ul class="events" id="problems"></ul>
-        </section>
-        <section class="card" aria-labelledby="history-title">
-          <h2 id="history-title">What moved, and when</h2>
-          <div class="sub" style="margin-bottom:10px">The most recent moves, grouped by the clean-up that made them.</div>
-          <ul class="events scroll" id="history"></ul>
-        </section>
-      </div>
+    <div class="eng-intro">
+      <h1>LLM-GC at work</h1>
+      <p>When the next clean-up runs and why, what clean-ups have done to this conversation, and a record of every check.</p>
     </div>
+    <div class="proxy-line" id="proxy-line"></div>
+    <div class="status-stack" id="eng-status" role="status"></div>
+
+    <div class="eng-grid next-why">
+      <section class="card eng-card" data-card="next" aria-labelledby="next-title">
+        <div class="card-head">
+          <div><h2 id="next-title">Next clean-up<button class="info" type="button" data-info="next" aria-label="About Next clean-up">i</button></h2></div>
+          <button class="collapse card-toggle" type="button" aria-expanded="true" aria-controls="next-body" aria-label="Collapse Next clean-up" title="Collapse"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        </div>
+        <div class="card-body" id="next-body">
+          <div id="panel-next"></div>
+        </div>
+      </section>
+      <section class="card eng-card" data-card="rate" aria-labelledby="rate-title">
+        <div class="card-head">
+          <div><h2 id="rate-title">How each message is rated<button class="info" type="button" data-info="rate" aria-label="About How each message is rated">i</button></h2><div class="sub">Relevance from 0 to 1, against your thresholds.</div></div>
+          <button class="collapse card-toggle" type="button" aria-expanded="true" aria-controls="rate-body" aria-label="Collapse How each message is rated" title="Collapse"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        </div>
+        <div class="card-body" id="rate-body">
+          <div class="rate" id="relevance"></div>
+        </div>
+      </section>
+    </div>
+
+    <div class="eng-grid pair" id="eng-pair">
+      <section class="card eng-card" data-card="moves" aria-labelledby="moves-title">
+        <div class="card-head">
+          <div><h2 id="moves-title">What moved, and when<button class="info" type="button" data-info="moves" aria-label="About What moved, and when">i</button></h2><div class="sub">By clean-up. Click a message to open it.</div></div>
+          <button class="collapse card-toggle" type="button" aria-expanded="true" aria-controls="moves-body" aria-label="Collapse What moved, and when" title="Collapse"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        </div>
+        <div class="card-body" id="moves-body">
+          <div id="history"></div>
+        </div>
+      </section>
+      <section class="card eng-card" data-card="notmoved" aria-labelledby="notmoved-title">
+        <div class="card-head">
+          <div><h2 id="notmoved-title">What didn't move, and why<button class="info" type="button" data-info="notmoved" aria-label="About What didn't move, and why">i</button></h2><div class="sub">Planned moves a clean-up couldn't make.</div></div>
+          <button class="collapse card-toggle" type="button" aria-expanded="true" aria-controls="notmoved-body" aria-label="Collapse What didn't move, and why" title="Collapse"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        </div>
+        <div class="card-body" id="notmoved-body">
+          <div id="problems"></div>
+        </div>
+      </section>
+    </div>
+
+      <section class="card eng-card" data-card="chart" aria-labelledby="chart-title">
+        <div class="card-head">
+          <div><h2 id="chart-title">Prompt size, check by check<button class="info" type="button" data-info="chart" aria-label="About Prompt size, check by check">i</button></h2><div class="sub">One point per check, after every reply.</div></div>
+          <div class="corner-stat" id="cuts-stat"></div><button class="collapse card-toggle" type="button" aria-expanded="true" aria-controls="chart-body" aria-label="Collapse Prompt size, check by check" title="Collapse"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        </div>
+        <div class="card-body" id="chart-body">
+          <div class="chart-legend" id="chart-legend"></div>
+          <div class="chart" id="chart"></div>
+        </div>
+      </section>
+      <section class="card eng-card" data-card="checks" aria-labelledby="checks-title">
+        <div class="card-head">
+          <div><h2 id="checks-title">Every check<button class="info" type="button" data-info="checks" aria-label="About Every check">i</button></h2><div class="sub">The same checks as rows, newest first.</div></div>
+          <button class="collapse card-toggle" type="button" aria-expanded="true" aria-controls="checks-body" aria-label="Collapse Every check" title="Collapse"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        </div>
+        <div class="card-body" id="checks-body">
+          <div class="table-scroll"><table id="checks"></table></div>
+        </div>
+      </section>
+
+    <div class="scope-head" id="proxy-details">
+      <h2>The proxy, across all conversations</h2>
+      <div class="sub">Totals for everything this proxy has carried, not just the conversation selected above.</div>
+    </div>
+    <div class="tiles" id="tiles"></div>
+      <section class="card eng-card" data-card="settings" aria-labelledby="settings-title">
+        <div class="card-head">
+          <div><h2 id="settings-title">Settings in effect<button class="info" type="button" data-info="settings" aria-label="About Settings in effect">i</button></h2><div class="sub">Tune these by watching conversations here.</div></div>
+          <button class="collapse card-toggle" type="button" aria-expanded="true" aria-controls="settings-body" aria-label="Collapse Settings in effect" title="Collapse"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        </div>
+        <div class="card-body" id="settings-body">
+          <div class="settings" id="settings"></div>
+        </div>
+      </section>
   </div>
 </main>
 

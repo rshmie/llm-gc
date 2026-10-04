@@ -8,11 +8,11 @@ import { showTab } from "./shell.js";
 export function explainResult(r, before) {
   const figures = (after) => [["before", `${fmt(r.tokens_before)} tokens`], ["after", `${fmt(after)} tokens`]];
   const problems = r.degradations.length
-    ? `⚠ ${plural(r.degradations.length, "part")} could not be summarised and stayed word for word: see Problems on LLM-GC at work.` : null;
+    ? `⚠ ${plural(r.degradations.length, "planned move")} didn't happen, so those messages stayed word for word: see What didn't move, on the Engine tab.` : null;
   if (r.status === "completed" && r.tokens_after < r.tokens_before) {
     const condensed = r.summarised + r.archived;
     return { tone: "good", title: `✓ Cleaned up: the model now gets ${fmt(r.tokens_before - r.tokens_after)} fewer tokens`,
-      body: [`${plural(condensed, "older message")} were condensed into the block at the start of the prompt: ${r.summarised} summarised and ${r.archived} reduced to facts. Messages rated important were quoted whole, and the newest ones are untouched.`,
+      body: [`${plural(condensed, "message")} were condensed into the block at the start of the prompt: ${r.summarised} summarised and ${r.archived} reduced to facts. Messages rated important were quoted whole, and the newest ones are untouched.`,
         "From now on every request carries this smaller version. Below, condensed messages show what the model reads instead of them."],
       figures: figures(r.tokens_after), extra: problems, show: true };
   }

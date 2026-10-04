@@ -1,35 +1,265 @@
-// The LLM-GC at work view: the proxy's counters, every check, ratings and settings.
+// The engine view: what LLM-GC is doing to this conversation, and why. When the next clean-up
+// runs and why each message gets what it gets, what clean-ups did and couldn't do, every check,
+// and last the proxy's totals and settings, which apply to every conversation.
 
-import { BECOMES, CHART_HEIGHT, CLASS_LABEL, CLASS_TO_CAT, STATUS, TRANSITION, speaker } from "./vocabulary.js";
-import { $, agoTs, compact, countEl, fill, fmt, h, meterBar, plural, ranges, setChildren, svg } from "./dom.js";
+import { BECOMES, BECOMES_CAT, CARD_INFO, CHART_HEIGHT, CHECKS_SHOWN, MOVES_SHOWN, MOVE_CAT, MOVE_KIND, NOT_MOVED, STATUS, TRANSITION, swatch } from "./vocabulary.js";
+import { $, agoTs, compact, countEl, fill, fmt, h, meterBar, plural, reducedMotion, setChildren, storeGet, storeSet, svg } from "./dom.js";
 import { captured, keepLast, preview, state, ui } from "./state.js";
-import { hideTooltip, info, placeTooltip, tipQuote, tooltipContent, hoverTip } from "./tooltip.js";
+import { hideTooltip, info, placeTooltip, showTooltip, tipQuote, tooltipContent, hoverTip } from "./tooltip.js";
+import { jumpTo, speakerName, trace } from "./conversation.js";
+import { showTab } from "./shell.js";
 
-export function renderTiles() {
-  const p = state.proxy;
-  const k = state.knowledge;
-  const passes = state.activity ? state.activity.recent_passes : [];
-  const lastCut = [...passes].reverse().find((x) => x.gc_status === "completed" && x.tokens_saved > 0);
-  const tile = (label, term, value, caption, extra) => h("div", { class: "card tile" },
-    h("div", { class: "stat-label" }, label, term ? info(term) : null), h("div", { class: "value" }, value),
-    extra || null, caption ? h("div", { class: "caption" }, caption) : null);
-  fill("tiles",
-    tile("Requests through the proxy", null, p ? countEl("tile-requests", p.requests) : "—",
-      p ? [`${fmt(p.gc_applied)} handled by LLM-GC`, p.gc_bypassed ? [" · ", h("span", { class: "st warn" }, "⚠ "), `${fmt(p.gc_bypassed)} passed on untouched after an error`] : " · none passed on after an error"]
-        : "no proxy beside this dashboard"),
-    tile("Tokens sent to the provider", "forwarded", p ? countEl("tile-forwarded", p.tokens_forwarded) : "—",
-      p ? `${p.ratio !== null ? `${Math.round(p.ratio * 100)}% of` : "of"} ${fmt(p.tokens_in_client_history)} your apps sent, all conversations` : null,
-      p && p.ratio !== null ? h("div", { class: "meter" }, meterBar("tile-forwarded-ratio", p.ratio * 100)) : null),
-    tile("Clean-ups in this conversation", "cleanup", k ? countEl("tile-cuts", k.cuts) : "—",
-      lastCut ? `last ${agoTs(lastCut.gc_completed_at)}: ${fmt(lastCut.tokens_before)} → ${fmt(lastCut.tokens_before - lastCut.tokens_saved)} tokens` : "none in the recent checks"),
-    tile("Conversation tracking", "tracking", null, null,
-      h("div", { class: "triple" }, [[p ? p.sessions_seeded : "—", "started fresh"], [p ? p.history_rewinds : "—", "rewound after an edit"], [p ? p.history_restarts : "—", "restarted"]]
-        .map(([n, label]) => h("div", {}, h("b", {}, typeof n === "number" ? fmt(n) : n), h("span", {}, label))))));
-}
+const smooth = () => (reducedMotion() ? "auto" : "smooth");
+const chevron = () => svg("svg", { width: 14, height: 14, viewBox: "0 0 16 16", "aria-hidden": "true" },
+  svg("path", { d: "M4 6l4 4 4-4", fill: "none", stroke: "currentColor", "stroke-width": 1.8, "stroke-linecap": "round", "stroke-linejoin": "round" }));
 
 export function statusChip(status) {
   const s = STATUS[status] || { tone: "", icon: "?", text: status };
   return h("span", { class: "status-chip" }, h("span", { class: `dot ${s.tone}` }), `${s.icon} ${s.text}`);
+}
+
+// Each message number links to it in the conversation; a run of them is one link to its first.
+function messageLinks(numbers) {
+  const sorted = [...new Set(numbers)].sort((a, b) => a - b);
+  const out = [];
+  for (let i = 0; i < sorted.length; i++) {
+    let j = i;
+    while (j + 1 < sorted.length && sorted[j + 1] === sorted[j] + 1) j++;
+    const first = sorted[i];
+    out.push(out.length ? ", " : "", h("button", { class: "link-btn", type: "button", onclick: () => jumpTo(first) }, j > i ? `${first}–${sorted[j]}` : String(first)));
+    i = j;
+  }
+  return [sorted.length === 1 ? "message " : "messages ", out];
+}
+
+// ----------------------------------------------------------------- cards: collapse and ⓘ
+
+const CARDS_KEY = "llmgc.cards";
+const COLLAPSED_BY_DEFAULT = { settings: true };
+let cardState = {};
+
+function setCard(card, collapsed) {
+  const button = card.querySelector(".card-toggle");
+  const title = card.querySelector("h2").firstChild.textContent;
+  card.querySelector(".card-body").hidden = collapsed;
+  card.classList.toggle("collapsed", collapsed);
+  button.setAttribute("aria-expanded", String(!collapsed));
+  button.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${title}`);
+  button.title = collapsed ? "Expand" : "Collapse";
+  if (card.dataset.card === "chart" && !collapsed) { ui.chartKey = null; renderChart(); }
+}
+
+export function initCards() {
+  try { cardState = JSON.parse(storeGet(CARDS_KEY) || "{}"); } catch { cardState = {}; }
+  for (const card of document.querySelectorAll("[data-card]")) {
+    const key = card.dataset.card;
+    setCard(card, cardState[key] ?? !!COLLAPSED_BY_DEFAULT[key]);
+    card.querySelector(".card-toggle").addEventListener("click", () => {
+      const collapsed = !card.classList.contains("collapsed");
+      setCard(card, collapsed);
+      cardState[key] = collapsed;
+      storeSet(CARDS_KEY, JSON.stringify(cardState));
+    });
+  }
+  for (const button of document.querySelectorAll("[data-info]")) {
+    const [title, text] = CARD_INFO[button.dataset.info];
+    button.addEventListener("pointerenter", (e) => showTooltip(e, title, text));
+    button.addEventListener("pointerleave", hideTooltip);
+    button.addEventListener("focus", (e) => showTooltip(e, title, text));
+    button.addEventListener("blur", hideTooltip);
+  }
+}
+
+export function openCard(key, scroll = false) {
+  const card = document.querySelector(`[data-card="${key}"]`);
+  if (!card) return;
+  if (card.classList.contains("collapsed")) setCard(card, false);
+  if (scroll) card.scrollIntoView({ behavior: smooth(), block: "start" });
+}
+
+// ----------------------------------------------------------------- all conversations, and health
+
+export function renderProxy() {
+  const p = state.proxy;
+  $("proxy-details").hidden = !p;
+  if (!p) {
+    fill("proxy-line", h("span", { class: "label" }, "All conversations"), "No proxy beside this dashboard, so there are no totals.");
+    fill("tiles");
+    return;
+  }
+  fill("proxy-line", h("span", { class: "label" }, "All conversations"),
+    h("span", {}, h("b", {}, fmt(p.requests)), " requests"), h("span", { class: "sep" }, "·"),
+    h("span", {}, h("b", {}, fmt(p.tokens_forwarded)), ` tokens sent${p.ratio !== null ? `, ${Math.round(p.ratio * 100)}% of what your apps sent` : ""}`), h("span", { class: "sep" }, "·"),
+    p.gc_bypassed ? h("span", {}, h("span", { class: "st warn" }, "⚠ "), `${fmt(p.gc_bypassed)} passed on untouched after an error`) : h("span", {}, "none passed on after an error"),
+    h("button", { class: "link-btn", type: "button", onclick: () => $("proxy-details").scrollIntoView({ behavior: smooth(), block: "start" }) }, "Details ↓"));
+  const tile = (label, term, value, caption, extra) => h("section", { class: "card tile" },
+    h("div", { class: "label" }, label, term ? info(term) : null), value === null ? null : h("div", { class: "value" }, value), extra || null,
+    caption ? h("div", { class: "caption" }, caption) : null);
+  fill("tiles",
+    tile("Requests through the proxy", null, countEl("tile-requests", p.requests),
+      [`${fmt(p.gc_applied)} handled by LLM-GC`, p.gc_bypassed ? [" · ", h("span", { class: "st warn" }, "⚠ "), `${fmt(p.gc_bypassed)} passed on untouched after an error`] : " · none passed on after an error"]),
+    tile("Tokens sent to the provider", "forwarded", countEl("tile-forwarded", p.tokens_forwarded),
+      `${p.ratio !== null ? `${Math.round(p.ratio * 100)}% of` : "of"} the ${fmt(p.tokens_in_client_history)} your apps sent, all conversations`,
+      p.ratio !== null ? h("div", { class: "meter", "aria-hidden": "true" }, meterBar("tile-forwarded-ratio", p.ratio * 100)) : null),
+    tile("Conversation tracking", "tracking", null, null,
+      h("div", { class: "triple" }, [[p.sessions_seeded, "started fresh"], [p.history_rewinds, "rewound after an edit"], [p.history_restarts, "restarted"]]
+        .map(([n, label]) => h("div", {}, h("b", {}, fmt(n)), h("span", {}, label))))));
+}
+
+// One line answers "is LLM-GC healthy?": the last check, and any move a clean-up couldn't make.
+export function renderEngineStatus() {
+  const a = state.activity;
+  const last = a && a.gc_breakdown;
+  const problems = a ? a.recent_degradations.length : 0;
+  $("view-engine").classList.toggle("has-problems", problems > 0);
+  const failed = !!last && last.gc_status === "bypassed_on_error";
+  const tone = failed ? "critical" : problems ? "warn" : "good";
+  const lastText = last ? `Last check ${agoTs(last.gc_completed_at)}: ${STATUS[last.gc_status]?.text || last.gc_status}, ${last.duration_ms.toFixed(0)} ms.`
+    : "No checks yet. LLM-GC checks after every reply.";
+  fill("eng-status", h("div", { class: `status-line tone-${tone}` },
+    h("span", { class: "badge", "aria-hidden": "true" }, failed ? "✕" : problems ? "!" : "✓"),
+    h("span", { class: "msg-text" }, h("b", {}, failed ? "The last check failed, and nothing changed." : problems ? `${plural(problems, "planned move")} didn't happen.` : "LLM-GC is working normally."),
+      ` ${lastText}`, failed && last.failure_reason ? ` ${last.failure_stage}: ${last.failure_reason}` : null),
+    problems ? h("button", { class: "link-btn", type: "button", onclick: () => openCard("notmoved", true) }, "See why →")
+      : h("span", { class: "then" }, "Every move a clean-up planned was made.")));
+}
+
+// ----------------------------------------------------------------- what happens next, and why
+
+export function renderNext(k) {
+  const cut = k.next_cut;
+  const share = cut.min_cut_tokens > 0 ? cut.compactable_tokens / cut.min_cut_tokens : (cut.compactable_tokens > 0 ? 1 : 0);
+  const becoming = {};
+  for (const t of k.turns) if (t.becomes) becoming[t.becomes] = (becoming[t.becomes] || 0) + 1;
+  const rest = cut.batch_ready ? " ready: it runs after the next reply"
+    : cut.compactable_tokens ? ` ready, ${fmt(cut.min_cut_tokens - cut.compactable_tokens)} to go` : " ready yet";
+  fill("panel-next",
+    h("p", { class: "tile-lede" }, `Runs at ${fmt(cut.min_cut_tokens)} tokens of messages rated to condense.`),
+    h("div", { class: "tile-big" }, countEl("next-ready", cut.compactable_tokens), h("small", {}, rest)),
+    h("div", { class: `meter${cut.batch_ready ? " ready" : ""}`, role: "meter", "aria-valuemin": "0", "aria-valuemax": String(cut.min_cut_tokens),
+      "aria-valuenow": String(cut.compactable_tokens), "aria-label": "Tokens ready to condense" }, meterBar("next-ready", share * 100)),
+    h("div", { class: "when-runs" }, Object.keys(becoming).length
+      ? [h("span", {}, "When it runs:"), Object.entries(becoming).map(([key, n]) => h("span", { class: "qchip" }, swatch(BECOMES_CAT[key]), `${n} ${BECOMES[key]}`))]
+      : h("span", {}, `Nothing is queued: the newest ${keepLast()} messages always stay word for word.`)),
+    cut.turns.length && cut.compactable_tokens === 0 ? h("p", { class: "note" }, "The queued messages are all kept whole, so there is nothing to condense yet.") : null);
+}
+
+// Why a message gets what it gets: the engine's own classification, worded with your thresholds.
+export function whyText(t) {
+  const c = state.config;
+  const low = c ? c.archive_threshold : 0.3, high = c ? c.keep_threshold : 0.7;
+  if (t.score === null || t.score === undefined) return "Not rated.";
+  const s = t.score.toFixed(2);
+  if (t.forced_keep) {
+    if (t.forced_keep.includes("too short")) return `Kept whole: too short to condense (${c ? `${c.min_compactable_tokens} tokens or fewer` : "very short"}), whatever its relevance of ${s}.`;
+    if (t.forced_keep.includes("last_n")) return `Kept word for word: among the newest ${keepLast()} (relevance ${s}).`;
+    return `Kept whole by a rule (relevance ${s}).`;
+  }
+  if (t.classification === "keep") return `Relevance ${s}: at or above ${high.toFixed(2)}, so quoted whole.`;
+  if (t.classification === "archive") return `Relevance ${s}: below ${low.toFixed(2)}, so reduced to facts.`;
+  return `Relevance ${s}: between ${low.toFixed(2)} and ${high.toFixed(2)}, so summarised.`;
+}
+const DOT = { keep: "quoted", compact: "summarised", archive: "facts" };
+
+// The ratings lead with the messages the next clean-up takes; the rest fold under one line, and a
+// long list scrolls inside the card with the threshold labels pinned.
+export function renderRelevance(k) {
+  const c = state.config;
+  const low = c ? c.archive_threshold : 0.3, high = c ? c.keep_threshold : 0.7;
+  const plot = $("relevance");
+  plot.style.setProperty("--a", `${low * 100}%`);
+  plot.style.setProperty("--k", `${high * 100}%`);
+  const rated = k.turns.filter((t) => t.fidelity === "verbatim" && t.score !== null);
+  const condensed = k.turns.filter((t) => t.fidelity !== "verbatim");
+  if (!rated.length && !condensed.length) { setChildren(plot, h("p", { class: "empty" }, "No messages to rate yet.")); return; }
+  const taking = rated.filter((t) => t.becomes), staying = rated.filter((t) => !t.becomes);
+  const stayOpen = ui.stayOpen || !taking.length;
+  const row = (t) => h("div", { class: "rate-row", id: `r-${t.turn_index}`, onpointerenter: () => trace([t.turn_index]), onpointerleave: () => trace(null) },
+    h("div", { class: "rate-lab" }, `#${t.turn_index} · ${t.role === "user" ? "You" : "AI"}`),
+    h("div", { class: "rate-track" }, h("span", { class: `rate-dot${t.forced_keep ? " forced" : ` f-${DOT[t.classification]}`}`, style: `left:${t.score * 100}%`,
+      ...hoverTip(`Message ${t.turn_index} · ${speakerName(t.role)}`, whyText(t), tipQuote(preview(t.text, 120))) })),
+    h("div", { class: "rate-why" }, whyText(t), t.becomes ? h("div", { class: "then" }, `→ next clean-up: ${BECOMES[t.becomes]}`) : null));
+  const head = (label, n, open, toggles) => toggles
+    ? h("button", { class: "rate-group", type: "button", "aria-expanded": String(open), onclick: () => { ui.stayOpen = !ui.stayOpen; renderRelevance(state.knowledge); } },
+      chevron(), label, h("span", { class: "n" }, `· ${n}`))
+    : h("div", { class: "rate-group" }, label, h("span", { class: "n" }, `· ${n}`));
+  setChildren(plot,
+    h("div", { class: "rate-list" },
+      h("div", { class: "rate-row rate-axis", "aria-hidden": "true" }, h("div"),
+        h("div", { class: "rate-track" },
+          h("span", { class: "zone", style: `left:${(low / 2) * 100}%` }, `facts · below ${low}`),
+          h("span", { class: "zone", style: `left:${((low + high) / 2) * 100}%` }, "summarise"),
+          h("span", { class: "zone", style: `left:${((high + 1) / 2) * 100}%` }, `quote whole · ${high}+`)), h("div")),
+      taking.length ? [head("In the next clean-up", taking.length, true, false), taking.map(row)] : null,
+      staying.length ? [head("Staying word for word", staying.length, stayOpen, taking.length > 0), stayOpen ? staying.map(row) : null] : null,
+      condensed.length ? h("div", { class: "rate-gone" },
+        condensed.length === 1 ? `Message ${condensed[0].turn_index} was condensed by an earlier clean-up, so it is no longer rated. `
+          : `${plural(condensed.length, "message")} were condensed by earlier clean-ups, so they are no longer rated. `,
+        h("button", { class: "link-btn", type: "button", onclick: () => openCard("moves", true) }, "See what moved")) : null),
+    h("div", { class: "rate-legend" },
+      h("span", {}, h("span", { class: "rate-dot f-facts" }), "reduce to facts"),
+      h("span", {}, h("span", { class: "rate-dot f-summarised" }), "summarise"),
+      h("span", {}, h("span", { class: "rate-dot f-quoted" }), "quote whole"),
+      h("span", {}, h("span", { class: "rate-dot forced" }), "kept whole by a rule")));
+}
+
+// A "next:" tag in the conversation lands here, on its message's rating.
+export function showWhy(turnIndex) {
+  showTab("engine");
+  openCard("rate");
+  if (!$(`r-${turnIndex}`)) { ui.stayOpen = true; renderRelevance(state.knowledge); }
+  const row = $(`r-${turnIndex}`);
+  if (!row) return;
+  row.scrollIntoView({ behavior: smooth(), block: "center" });
+  row.classList.add("flash");
+  setTimeout(() => row.classList.remove("flash"), 1600);
+}
+
+// ----------------------------------------------------------------- what has happened
+
+export function renderHistory() {
+  const transitions = state.activity ? state.activity.generation_lifecycle.recent_transitions : [];
+  // Moves made by one clean-up arrive together; group them by time.
+  const groups = [];
+  for (const t of transitions) {
+    const lastGroup = groups.at(-1);
+    if (lastGroup && t.occurred_at - lastGroup.at < 2) lastGroup.items.push(t);
+    else groups.push({ at: t.occurred_at, items: [t] });
+  }
+  groups.reverse();
+  const shown = ui.allMoves ? groups : groups.slice(0, MOVES_SHOWN);
+  fill("history", groups.length ? [
+    h("ul", { class: "events" }, shown.map((g) => {
+      const byType = {};
+      for (const t of g.items) (byType[t.transition_type] ||= []).push(t);
+      return h("li", {},
+        h("div", { class: "event-head" }, h("b", {}, "Clean-up"), h("span", { class: "when" }, agoTs(g.at))),
+        h("div", { class: "event-lines" }, Object.entries(byType).map(([type, items]) => h("div", {},
+          h("span", { class: "k" }, swatch(MOVE_CAT[type] || "verbatim"), TRANSITION[type] || type, MOVE_KIND[type] ? h("span", { class: "kind" }, MOVE_KIND[type]) : null),
+          h("span", {}, type === "superseded"
+            ? items.map((t, n) => [n ? ", " : "", `“${t.topic_label}” from `, h("button", { class: "link-btn", type: "button", onclick: () => jumpTo(t.turn_index) }, `#${t.turn_index}`)])
+            : messageLinks(items.map((t) => t.turn_index)))))));
+    })),
+    groups.length > MOVES_SHOWN ? h("button", { class: "link-btn show-all", type: "button", onclick: () => { ui.allMoves = !ui.allMoves; renderHistory(); } },
+      ui.allMoves ? "Show fewer" : `Show all ${groups.length} clean-ups`) : null,
+  ] : h("p", { class: "empty" }, "Nothing has moved yet."));
+}
+
+export function renderProblems() {
+  const problems = state.activity ? state.activity.recent_degradations.slice().reverse() : [];
+  const shown = ui.allProblems ? problems : problems.slice(0, MOVES_SHOWN);
+  fill("problems", problems.length ? [
+    h("ul", { class: "events" }, shown.map((r) => {
+      const [label, kind] = NOT_MOVED[r.degradation.reason] || [r.degradation.reason.replaceAll("_", " "), null];
+      return h("li", {},
+        h("div", { class: "event-head" }, h("span", { class: "st warn" }, "⚠"), h("b", {}, label), kind ? h("span", { class: "muted" }, kind) : null, h("span", { class: "when" }, agoTs(r.occurred_at))),
+        h("div", { class: "event-lines" },
+          h("div", {}, h("span", { class: "k" }, "Stayed word for word"), h("span", {}, messageLinks(r.degradation.turn_indices))),
+          r.degradation.detail ? h("div", {}, h("span", { class: "k" }, "Detail"), h("span", {}, r.degradation.detail)) : null));
+    })),
+    problems.length > MOVES_SHOWN ? h("button", { class: "link-btn show-all", type: "button", onclick: () => { ui.allProblems = !ui.allProblems; renderProblems(); } },
+      ui.allProblems ? "Show fewer" : `Show all ${problems.length}`) : null,
+  ] : h("p", { class: "ok-line" }, h("span", { class: "st good" }, "✓ "), "None so far."));
 }
 
 // The conversation as written up to a turn: a running sum of the transcript's own counts.
@@ -52,6 +282,11 @@ export function niceStep(max, count) {
 export function renderChart() {
   const host = $("chart");
   const passes = state.activity ? state.activity.recent_passes : [];
+  const cutsDone = passes.filter((p) => p.gc_status === "completed" && p.tokens_saved > 0);
+  const lastCut = cutsDone.at(-1);
+  fill("cuts-stat", h("span", { class: "label", style: "justify-content:flex-end" }, "Clean-ups"),
+    h("span", { class: "n" }, state.knowledge ? fmt(state.knowledge.cuts) : "—"),
+    lastCut ? `last ${agoTs(lastCut.gc_completed_at)}: ${fmt(lastCut.tokens_before)} → ${fmt(lastCut.tokens_before - lastCut.tokens_saved)}` : "none in the recent checks");
   const width = Math.round(host.clientWidth);
   const key = `${width}|${passes.length}|${passes.at(-1)?.gc_completed_at}|${state.version}|${Math.floor(Date.now() / 30000)}`;
   if (!width || key === ui.chartKey) return;
@@ -92,11 +327,16 @@ export function renderChart() {
     grid.push(svg("line", { class: v === 0 ? "axis" : "grid", x1: M.l, x2: M.l + pw, y1: y(v), y2: y(v) }),
       svg("text", { class: "tick", x: M.l - 8, y: y(v) + 4, "text-anchor": "end" }, compact(v)));
   }
-  let sentPath = "";
-  pts.forEach((d, n) => { sentPath += `${n ? "L" : "M"}${x(d.i)},${y(d.before)}`; if (d.after < d.before) sentPath += `L${x(d.i)},${y(d.after)}`; });
-  const areaPath = `${sentPath}L${x(pts.at(-1).i)},${y(0)}L${x(0)},${y(0)}Z`;
+  // Stepped: the prompt holds its size until the next message arrives, then jumps; a clean-up drops it.
+  let sentPath = `M${x(0)},${y(pts[0].before)}`;
+  pts.forEach((d, n) => { if (n) sentPath += `H${x(d.i)}V${y(d.before)}`; if (d.after < d.before) sentPath += `V${y(d.after)}`; });
+  const areaPath = `${sentPath}H${x(pts.at(-1).i)}V${y(0)}H${x(0)}Z`;
   const writtenPts = pts.filter((d) => d.written !== null);
-  const writtenPath = writtenPts.map((d, n) => `${n ? "L" : "M"}${x(d.i)},${y(d.written)}`).join("");
+  const writtenPath = writtenPts.map((d, n) => n ? `H${x(d.i)}V${y(d.written)}` : `M${x(d.i)},${y(d.written)}`).join("");
+  const bands = cuts.map((d) => {
+    const x0 = Math.max(M.l, x(d.i) - 10), x1 = Math.min(M.l + pw, x(d.i) + 10);
+    return svg("rect", { class: "band", x: x0, y: M.t, width: Math.max(0, x1 - x0), height: ph });
+  });
 
   const last = pts.at(-1);
   const ends = [];
@@ -109,12 +349,16 @@ export function renderChart() {
   const cross = svg("line", { class: "cross", x1: 0, x2: 0, y1: M.t, y2: M.t + ph, style: "display:none" });
   const root = svg("svg", { height: CHART_HEIGHT, viewBox: `0 0 ${width} ${CHART_HEIGHT}`, role: "img",
     "aria-label": `Prompt size over the last ${passes.length} checks: now ${fmt(last.after)} tokens sent${last.written !== null ? `, ${fmt(last.written)} as written` : ""}, ${plural(cuts.length, "clean-up")}.` },
-    grid,
+    svg("defs", {}, svg("linearGradient", { id: "g-area", x1: 0, y1: 0, x2: 0, y2: 1 },
+      svg("stop", { offset: 0, style: "stop-color:var(--accent);stop-opacity:.28" }), svg("stop", { offset: 1, style: "stop-color:var(--accent);stop-opacity:0" }))),
+    grid, bands,
     svg("path", { class: "a-sent", d: areaPath }),
     writtenPath ? svg("path", { class: "l-written", d: writtenPath }) : null,
     svg("path", { class: "l-sent", d: sentPath }),
+    pts.length <= 40 ? pts.filter((d) => !(d.after < d.before) && !d.p.abandoned_cut && d.p.gc_status !== "bypassed_on_error")
+      .map((d) => svg("circle", { class: "mk-check", cx: x(d.i), cy: y(d.before), r: 3.5 })) : null,
     cuts.map((d) => [svg("circle", { class: "mk-cut", cx: x(d.i), cy: y(d.after), r: 5 }),
-      cuts.length <= 8 ? svg("text", { class: "cut-label", x: x(d.i) + 7, y: y(d.after) + 15 }, `−${fmt(d.before - d.after)}`) : null]),
+      cuts.length <= 8 ? svg("text", { class: "cut-label", x: x(d.i) - 8, y: y(d.after) + 16, "text-anchor": "end" }, `−${fmt(d.before - d.after)}`) : null]),
     skipped.map((d) => svg("circle", { class: "mk-skip", cx: x(d.i), cy: y(d.before), r: 4.5 })),
     failed.map((d) => svg("circle", { class: "mk-error", cx: x(d.i), cy: y(d.before), r: 5 })),
     ends,
@@ -137,7 +381,7 @@ export function renderChart() {
       d.written !== null ? figure("as written", fmt(d.written)) : null,
       d.p.abandoned_cut ? figure("a clean-up would have made it", fmt(d.p.abandoned_cut.context_tokens_after)) : null,
       d.after < d.before ? figure("summarised · facts", `${d.p.compact_count} · ${d.p.archive_count}`) : null,
-      d.p.degradations.length ? h("div", { class: "tip-row" }, h("span", { class: "st warn" }, "⚠ "), plural(d.p.degradations.length, "problem")) : null,
+      d.p.degradations.length ? h("div", { class: "tip-row" }, h("span", { class: "st warn" }, "⚠ "), plural(d.p.degradations.length, "move"), " didn't happen") : null,
     ]);
     const cx = box.left + x(i) * scaleX;
     placeTooltip({ left: cx + 14, right: cx + 14, top: box.top + M.t, bottom: box.top + M.t + 40 });
@@ -146,71 +390,6 @@ export function renderChart() {
   root.appendChild(hit);
   setChildren(host, root);
 }
-
-export function renderLastCheck() {
-  const pass = state.activity && state.activity.gc_breakdown;
-  fill("last-check", pass ? h("div", { style: "text-align:right" }, h("div", { class: "eyebrow", style: "display:flex;gap:6px;justify-content:flex-end;align-items:center" }, "Last check", info("check")),
-    h("div", { style: "margin-top:4px" }, statusChip(pass.gc_status)),
-    h("div", { class: "note", style: "margin-top:2px" }, [agoTs(pass.gc_completed_at), `${pass.duration_ms.toFixed(0)} ms`,
-      pass.failure_reason ? `${pass.failure_stage}: ${pass.failure_reason}` : null].filter(Boolean).join(" · "))) : null);
-}
-
-// ----------------------------------------------------------------- the engine: relevance and settings
-
-export function renderRelevance(k) {
-  const c = state.config;
-  const a = c ? c.archive_threshold : 0.3, keep = c ? c.keep_threshold : 0.7;
-  fill("rel-title", "How the next clean-up rates each recent message", info("relevance"));
-  fill("rel-sub", `Each dot is a message's relevance. Below ${a} it would be reduced to facts, from ${keep} quoted whole, and in between summarised. A ring means a rule keeps it word for word whatever its score.`);
-  const rows = k.turns.filter((t) => t.fidelity === "verbatim" && t.score !== null);
-  const plot = $("relevance");
-  if (!rows.length) { setChildren(plot, h("p", { class: "empty" }, "No recent messages to rate.")); return; }
-  plot.style.setProperty("--a", `${a * 100}%`);
-  plot.style.setProperty("--k", `${keep * 100}%`);
-  const why = (t) => !t.forced_keep ? CLASS_LABEL[t.classification]
-    : t.forced_keep.includes("too short") ? "kept: too short to condense"
-    : t.forced_keep.includes("last_n") ? `kept: among the newest ${keepLast()}` : "kept: by a rule";
-  setChildren(plot,
-    h("div", { class: "rel-row rel-axis", "aria-hidden": "true" }, h("div"),
-      h("div", { class: "rel-track" },
-        h("span", { class: "zone", style: `left:${(a / 2) * 100}%` }, `facts · < ${a}`),
-        h("span", { class: "zone", style: `left:${((a + keep) / 2) * 100}%` }, "summarise"),
-        h("span", { class: "zone", style: `left:${((keep + 1) / 2) * 100}%` }, `quote · ≥ ${keep}`)), h("div")),
-    rows.map((t) => h("div", { class: "rel-row" },
-      h("div", { class: "rel-lab num" }, `#${t.turn_index} · ${speaker(t.role)}`),
-      h("div", { class: "rel-track", ...hoverTip(`Message ${t.turn_index}: relevance ${t.score.toFixed(2)}`,
-          t.forced_keep ? why(t) : `rated to ${CLASS_LABEL[t.classification]}`,
-          t.becomes ? `the next clean-up: ${BECOMES[t.becomes]}` : "not part of the next clean-up", tipQuote(preview(t.text, 120))) },
-        h("span", { class: `rel-dot ${t.forced_keep ? "forced" : `f-${CLASS_TO_CAT[t.classification]}`}`, style: `left:${t.score * 100}%` })),
-      h("div", { class: "rel-why" }, h("div", {}, h("b", {}, t.score.toFixed(2)), ` · ${why(t)}`),
-        t.becomes ? h("div", { class: "then" }, `→ next clean-up: ${BECOMES[t.becomes]}`) : null))),
-    h("div", { class: "rel-legend" },
-      h("span", {}, h("span", { class: "rel-dot f-verbatim" }), "quote whole"),
-      h("span", {}, h("span", { class: "rel-dot f-summarised" }), "summarise"),
-      h("span", {}, h("span", { class: "rel-dot f-facts" }), "reduce to facts"),
-      h("span", {}, h("span", { class: "rel-dot forced" }), "kept word for word by a rule")));
-}
-
-export function renderSettings() {
-  const c = state.config;
-  if (!c) return;
-  // The flag is how to change a setting while watching here; the rest are GCConfig fields.
-  const rows = [
-    ["Clean-up size", "min_cut_tokens", c.min_cut_tokens, "tokens ready to condense before a clean-up runs", "--min-cut-tokens"],
-    ["Always word for word", "last_n_turns_to_keep", c.last_n_turns_to_keep, "newest messages never condensed", "--keep-last"],
-    ["Quote whole from", "keep_threshold", c.keep_threshold, "relevance at or above this is kept word for word"],
-    ["Facts below", "archive_threshold", c.archive_threshold, "relevance below this is reduced to facts"],
-    ["Too short to condense", "min_compactable_tokens", c.min_compactable_tokens, "messages this short, in tokens, are kept whole"],
-    ["Facts per block", "max_memory_facts", c.max_memory_facts, "most facts the condensed block carries"],
-    ["Fact budget", "max_memory_tokens", c.max_memory_tokens, "most tokens of facts in the condensed block"],
-    ["The model's window", "context_window", c.context_window, "its capacity, in tokens", "--context-window"],
-  ];
-  fill("settings", rows.map(([label, name, value, desc, flag]) => h("div", { class: "setting" },
-    h("div", { class: "name" }, label, h("code", {}, name)), h("div", { class: "value" }, fmt(value)),
-    h("div", { class: "desc" }, desc, flag ? h("div", {}, "change with ", h("code", { class: "flag" }, `run_proxy.py ${flag}`)) : null))));
-}
-
-// ----------------------------------------------------------------- the engine: checks, problems, history
 
 export function renderChecks() {
   const passes = state.activity ? state.activity.recent_passes.slice().reverse() : [];
@@ -222,9 +401,10 @@ export function renderChecks() {
     if (quiet && lastGroup && lastGroup.quiet && lastGroup.status === p.gc_status) lastGroup.items.push(p);
     else groups.push({ quiet, status: p.gc_status, items: [p] });
   }
+  const shown = ui.allChecks ? groups : groups.slice(0, CHECKS_SHOWN);
   setChildren($("checks"),
     h("thead", {}, h("tr", {}, ["When", "Result", "Prompt, tokens", "Took"].map((title) => h("th", {}, title)))),
-    h("tbody", {}, groups.length ? groups.map((g) => {
+    h("tbody", {}, groups.length ? shown.map((g) => {
       const p = g.items[0], oldest = g.items.at(-1);
       const cut = p.gc_status === "completed" && p.tokens_saved > 0;
       const durations = g.items.map((x) => x.duration_ms);
@@ -234,38 +414,34 @@ export function renderChecks() {
         h("td", { class: "num", style: "white-space:nowrap" }, span(agoTs(oldest.gc_completed_at), agoTs(p.gc_completed_at))),
         h("td", {}, statusChip(p.gc_status), g.items.length > 1 ? h("span", { class: "times" }, `×${g.items.length}`) : null,
           cut ? h("div", { class: "muted", style: "font-weight:400;font-size:12.5px" }, `${p.compact_count} summarised · ${p.archive_count} reduced to facts`) : null,
-          p.degradations.length ? h("div", { style: "font-weight:400" }, h("span", { class: "st warn" }, "⚠ "), plural(p.degradations.length, "problem")) : null),
+          p.degradations.length ? h("div", { style: "font-weight:400" }, h("span", { class: "st warn" }, "⚠ "), plural(p.degradations.length, "move"), " didn't happen") : null),
         h("td", { class: "num", style: "white-space:nowrap" }, cut ? `${fmt(p.tokens_before)} → ${fmt(p.tokens_before - p.tokens_saved)}`
           : p.abandoned_cut ? [fmt(p.tokens_before), h("div", { class: "muted", style: "font-size:12px" }, `would have been ${fmt(p.abandoned_cut.context_tokens_after)}`)]
           : span(fmt(oldest.tokens_before), fmt(p.tokens_before))),
         h("td", { class: "num", style: "white-space:nowrap" }, `${took} ms`));
-    }) : h("tr", {}, h("td", { colspan: 4, class: "empty" }, "No checks yet."))));
+    }) : h("tr", {}, h("td", { colspan: 4, class: "empty" }, "No checks yet."))),
+    groups.length > CHECKS_SHOWN ? h("tfoot", {}, h("tr", {}, h("td", { colspan: 4 },
+      h("button", { class: "link-btn", type: "button", onclick: () => { ui.allChecks = !ui.allChecks; renderChecks(); } },
+        ui.allChecks ? "Show fewer" : `Show all ${plural(passes.length, "check")}`)))) : null);
 }
 
-export function renderProblems() {
-  const problems = state.activity ? state.activity.recent_degradations.slice().reverse() : [];
-  fill("problems", problems.length ? problems.map((r) => h("li", {},
-    h("div", { class: "event-head" }, h("span", { class: "st warn" }, "⚠"), h("b", {}, r.degradation.reason.replaceAll("_", " ")), h("span", { class: "when" }, agoTs(r.occurred_at))),
-    h("div", { class: "event-lines" }, `Messages ${ranges(r.degradation.turn_indices)} stayed word for word. ${r.degradation.detail}`)))
-    : h("li", { class: "empty" }, h("span", { class: "st good" }, "✓ "), "None: every clean-up did what it set out to."));
-}
+// ----------------------------------------------------------------- settings
 
-export function renderHistory() {
-  const transitions = state.activity ? state.activity.generation_lifecycle.recent_transitions : [];
-  // Moves made by one clean-up arrive together; group them by time.
-  const groups = [];
-  for (const t of transitions) {
-    const lastGroup = groups.at(-1);
-    if (lastGroup && t.occurred_at - lastGroup.at < 2) lastGroup.items.push(t);
-    else groups.push({ at: t.occurred_at, items: [t] });
-  }
-  fill("history", groups.length ? groups.reverse().map((g) => {
-    const byType = {};
-    for (const t of g.items) (byType[t.transition_type] ||= []).push(t);
-    return h("li", {},
-      h("div", { class: "event-head" }, h("b", {}, "Clean-up"), h("span", { class: "when" }, agoTs(g.at))),
-      h("div", { class: "event-lines" }, Object.entries(byType).map(([type, items]) => h("div", {},
-        h("span", { class: "k" }, TRANSITION[type] || type),
-        type === "superseded" ? items.map((t) => `“${t.topic_label}” from #${t.turn_index}`).join(", ") : `messages ${ranges(items.map((t) => t.turn_index))}`))));
-  }) : h("li", { class: "empty" }, "Nothing has moved yet."));
+export function renderSettings() {
+  const c = state.config;
+  if (!c) return;
+  // The flag is how to change a setting while watching here; the rest are GCConfig fields.
+  const rows = [
+    ["Clean-up size", "min_cut_tokens", c.min_cut_tokens, "tokens of messages rated to condense before a clean-up runs", "--min-cut-tokens"],
+    ["Always word for word", "last_n_turns_to_keep", c.last_n_turns_to_keep, "newest messages never condensed", "--keep-last"],
+    ["Quote whole from", "keep_threshold", c.keep_threshold, "relevance at or above this is kept word for word"],
+    ["Facts below", "archive_threshold", c.archive_threshold, "relevance below this is reduced to facts"],
+    ["Too short to condense", "min_compactable_tokens", c.min_compactable_tokens, "messages this short, in tokens, are kept whole"],
+    ["Facts per block", "max_memory_facts", c.max_memory_facts, "most facts the condensed block carries"],
+    ["Fact budget", "max_memory_tokens", c.max_memory_tokens, "most tokens of facts in the condensed block"],
+    ["The model's window", "context_window", c.context_window, "its capacity, in tokens", "--context-window"],
+  ];
+  fill("settings", rows.map(([label, name, value, desc, flag]) => h("div", { class: "setting" },
+    h("div", { class: "name" }, label, h("code", {}, name)), h("div", { class: "value" }, fmt(value)),
+    h("div", { class: "desc" }, desc, flag ? h("div", {}, "change with ", h("code", { class: "flag" }, `run_proxy.py ${flag}`)) : null))));
 }
