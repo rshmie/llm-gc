@@ -1,8 +1,10 @@
 import asyncio
 import logging
+from collections.abc import Sequence
 from datetime import datetime, timezone
 
 from llm_gc.config.constants import DEFAULT_SESSION_SWEEP_INTERVAL_S, DEFAULT_SESSION_TIMEOUT_S
+from llm_gc.models.generation_snapshot import GenerationSnapshot
 from llm_gc.session.session_state import SessionState
 from llm_gc.session.session_store import SessionStore
 
@@ -26,6 +28,10 @@ class SessionManager:
         self._store = store if store is not None else SessionStore()
         self._session_timeout_s = session_timeout_s
         self._sweep_interval_s = sweep_interval_s
+        # Chain hash of each session's last recorded turn -> session id, so a
+        # request can be matched to the conversation it continues by content.
+        self._sessions_by_tip: dict[str, str] = {}
+        self._tip_of: dict[str, str] = {}
 
     @property
     def store(self) -> SessionStore:
@@ -46,9 +52,49 @@ class SessionManager:
         """
         return self._store.get(state.session_id) is state
 
+    def find_by_lineage(self, hashes: Sequence[str]) -> tuple[SessionState, int] | None:
+        """The session whose recorded conversation is the longest prefix of `hashes`.
+
+        Returns the session and how many of the turns it has already recorded, or
+        None if no session's last recorded turn matches any prefix. A match means
+        the two conversations are identical up to that point, so nothing a session
+        holds can belong to a different conversation.
+        """
+        for length in range(len(hashes), 0, -1):
+            session_id = self._sessions_by_tip.get(hashes[length - 1])
+            state = self._store.get(session_id) if session_id is not None else None
+            if state is not None and state.snapshot.tip == hashes[length - 1]:
+                return state, length
+        return None
+
+    def retip(self, state: SessionState) -> None:
+        """Re-index a session after its recorded conversation changed."""
+        stale = self._tip_of.pop(state.session_id, None)
+        if stale is not None and self._sessions_by_tip.get(stale) == state.session_id:
+            del self._sessions_by_tip[stale]
+        tip = state.snapshot.tip
+        if tip is not None:
+            self._sessions_by_tip[tip] = state.session_id
+            self._tip_of[state.session_id] = tip
+
+    def replace(self, state: SessionState, snapshot: GenerationSnapshot) -> SessionState:
+        """Start the session over from `snapshot`, under the same id, as a new object.
+
+        A new object rather than an edit, so an aging pass still running on the old
+        one finds it no longer live and discards its result instead of committing
+        changes planned against a conversation that has since been rewound.
+        """
+        fresh = SessionState(session_id=state.session_id, snapshot=snapshot)
+        self._store.put(fresh)
+        self.retip(fresh)
+        return fresh
+
     def close_session(self, session_id: str) -> None:
         """Drop a session and all of its data. A second close is a no-op."""
         self._store.remove(session_id)
+        stale = self._tip_of.pop(session_id, None)
+        if stale is not None and self._sessions_by_tip.get(stale) == session_id:
+            del self._sessions_by_tip[stale]
 
     def sweep_once(self, now: datetime | None = None) -> list[str]:
         """Close every session idle longer than `session_timeout_s`; return their ids.

@@ -1,54 +1,37 @@
-"""Deciding which conversation a request belongs to.
+"""Which conversation a request continues.
 
-A chat completions API is stateless, so nothing in a request says which remembered
-conversation it continues. See doc/design/session/overview.md.
+A chat completions API is stateless: every request carries the whole
+conversation and nothing else says which one it is. So a conversation is
+identified by its content - a chain hash per turn - and a request is matched to
+the session whose recorded conversation is a prefix of what it sent. See
+doc/design/proxy/overview.md.
 """
 
 import hashlib
+import json
+from collections.abc import Sequence
 
 from llm_gc.models import Message
 
 SESSION_HEADER = "x-llm-gc-session"
-"""Client-supplied session id. Preferred over any inference."""
-
-_FINGERPRINT_PREFIX_TURNS = 2
-"""Leading turns hashed to identify a conversation.
-
-Two, not one: a shared opener ("You are a helpful assistant") would collide every
-conversation in an app into one session, interleaving different users' turns. Two,
-not many: a longer prefix stops matching once the engine rewrites history.
-"""
-
-_FINGERPRINT_LENGTH = 16
+"""Client-supplied session id. Preferred over matching by content."""
 
 
-def resolve_session_id(messages: list[Message], header_value: str | None = None) -> str:
-    """Return the session id for a request, from the header or by fingerprint.
+def chain_hashes(messages: Sequence[Message]) -> list[str]:
+    """One hash per turn, each covering the whole conversation up to and including it.
 
-    Args:
-        messages: The conversation as the *client* sent it. Not our maintained
-            version, which every GC pass rewrites.
-        header_value: The client's own session id, if sent.
+    `hashes[k]` equals another conversation's `hashes[k]` only if the two are
+    identical through turn k, so a session can be found by matching the hash of
+    the last turn it recorded against a prefix of an incoming request. Each turn is
+    hashed from its role and its provider content as sent (`raw_content`, falling
+    back to the text), in canonical JSON so that key order does not count as an
+    edit.
     """
-    if header_value and header_value.strip():
-        return header_value.strip()
-    return fingerprint_session_id(messages)
-
-
-def fingerprint_session_id(messages: list[Message]) -> str:
-    """Derive a stable id by hashing the conversation's opening turns.
-
-    Hashed rather than stored verbatim because a session id reaches logs and
-    events, and conversation content is user data.
-
-    Two known limitations: conversations that genuinely start identically share a
-    session, and a conversation whose opening is edited becomes a new one (a cold
-    start, not corruption).
-    """
-    if not messages:
-        return "empty"
-
-    prefix = messages[:_FINGERPRINT_PREFIX_TURNS]
-    # Roles included, and NUL-separated so parts cannot run together ambiguously.
-    material = "\n\x00".join(f"{message.role}\x00{message.content}" for message in prefix)
-    return f"fp_{hashlib.sha256(material.encode('utf-8')).hexdigest()[:_FINGERPRINT_LENGTH]}"
+    hashes: list[str] = []
+    previous = ""
+    for message in messages:
+        content = message.raw_content if message.raw_content is not None else message.content
+        turn = json.dumps([message.role, content], sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        previous = hashlib.sha256(f"{previous}\x00{turn}".encode("utf-8")).hexdigest()
+        hashes.append(previous)
+    return hashes

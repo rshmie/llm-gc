@@ -57,6 +57,7 @@ def extract_messages(payload: dict[str, Any]) -> list[Message]:
                 content=content,
                 token_count=count_tokens(content),
                 turn_index=index,
+                raw_content=raw.get("content"),
             )
         )
     return messages

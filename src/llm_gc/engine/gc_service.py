@@ -1,5 +1,6 @@
 import logging
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from time import perf_counter
 
@@ -142,13 +143,31 @@ class GcService:
         state = self.session_manager.get_or_create(session_id)
         return self._assemble(state.snapshot, query=query)
 
-    async def gc_update(self, session_id: str, new_turn: Message) -> None:
-        """Cold path: record a turn, then age the session if it is under pressure.
+    def gc_record(self, session_id: str, turns: Sequence[Message], lineage: Sequence[str]) -> SessionState:
+        """Record turns the conversation has gained, with their chain hashes. Immediate.
 
-        Recording is immediate, so the next `gc_collect` sees the turn even while
-        an earlier aging pass is still running. Aging runs at most once per session
-        at a time: a second trigger is reported and skipped rather than queued, and
-        pressure that persists triggers it again on the next turn.
+        Used by callers that identify a session by its content: each turn arrives
+        with the hash that places it in the conversation, so the session can later
+        be found by - and checked against - the client's own history.
+        """
+        state = self.session_manager.get_or_create(session_id)
+        state.snapshot = state.snapshot.with_turns(turns, lineage)
+        self.session_manager.retip(state)
+        return state
+
+    async def gc_update(self, session_id: str, new_turn: Message) -> None:
+        """Record one turn, then age the session if it is under pressure."""
+        state = self.session_manager.get_or_create(session_id)
+        state.snapshot = state.snapshot.with_turn(new_turn)
+        await self.gc_age(session_id)
+
+    async def gc_age(self, session_id: str) -> None:
+        """Cold path: age the session's recorded turns if it is under pressure.
+
+        Recording is separate and immediate, so the next `gc_collect` sees new turns
+        even while an aging pass is still running. Aging runs at most once per
+        session at a time: a second trigger is reported and skipped rather than
+        queued, and pressure that persists triggers it again on the next turn.
 
         Emits GC_FINISHED exactly once, after any commit.
         """
@@ -156,7 +175,6 @@ class GcService:
         gc_run_id = str(uuid.uuid4())
 
         state = self.session_manager.get_or_create(session_id)
-        state.snapshot = state.snapshot.with_turn(new_turn)
         base = state.snapshot
 
         # Measured on the assembled context, not young alone: old-gen summaries

@@ -33,6 +33,10 @@ class SessionStore:
             logger.debug("Reusing existing session", extra={"session_id": session_id})
         return state
 
+    def put(self, state: SessionState) -> None:
+        """Store `state` under its id, replacing any state already there."""
+        self._sessions[state.session_id] = state
+
     def get(self, session_id: str) -> SessionState | None:
         """Return the state for `session_id`, or None if it does not exist."""
         return self._sessions.get(session_id)

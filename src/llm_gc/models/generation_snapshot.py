@@ -6,6 +6,7 @@ as it likes, across any number of `await`s, with no lock. Writers build the next
 snapshot and swap the session's reference in one synchronous step.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 
 from llm_gc.models.knowledge_entry import KnowledgeEntry
@@ -21,19 +22,54 @@ class GenerationSnapshot:
     the record of what was contradicted is part of what the transparency layer
     reports. `version` increases with every change, so two snapshots can be
     ordered and a future external store can commit with compare-and-set.
+
+    `lineage` holds one chain hash per recorded turn, by position, including turns
+    that have since been aged out of `young`: it is the record of which
+    conversation this is. Callers that do not identify sessions by content leave
+    it empty.
     """
 
     young: tuple[Message, ...] = ()
     old: tuple[Message, ...] = ()
     knowledge: tuple[KnowledgeEntry, ...] = ()
     version: int = 0
+    lineage: tuple[str, ...] = ()
 
     @property
     def active_knowledge(self) -> list[KnowledgeEntry]:
         return [entry for entry in self.knowledge if entry.knowledge_status == KnowledgeStatus.ACTIVE]
 
+    @property
+    def tip(self) -> str | None:
+        """The chain hash of the last recorded turn, or None before any."""
+        return self.lineage[-1] if self.lineage else None
+
     def with_turn(self, turn: Message) -> "GenerationSnapshot":
         return replace(self, young=self.young + (turn,), version=self.version + 1)
+
+    def with_turns(self, turns: Sequence[Message], hashes: Sequence[str]) -> "GenerationSnapshot":
+        """Append turns together with their chain hashes, one for one."""
+        if len(turns) != len(hashes):
+            raise ValueError(f"{len(turns)} turns but {len(hashes)} lineage hashes")
+        return replace(self, young=self.young + tuple(turns), lineage=self.lineage + tuple(hashes),
+                       version=self.version + 1)
+
+    def rewound_to(self, turn_count: int) -> "GenerationSnapshot | None":
+        """The snapshot as it was with only the first `turn_count` turns recorded.
+
+        None when any turn being discarded has already been aged: its summary or
+        facts may describe the abandoned branch and cannot be separated from what
+        came before, so the caller must start the session over instead.
+        """
+        young_indices = {message.turn_index for message in self.young}
+        if any(index not in young_indices for index in range(turn_count, len(self.lineage))):
+            return None
+        return replace(
+            self,
+            young=tuple(m for m in self.young if m.turn_index < turn_count),
+            lineage=self.lineage[:turn_count],
+            version=self.version + 1,
+        )
 
 
 @dataclass(frozen=True)

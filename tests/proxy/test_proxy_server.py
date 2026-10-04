@@ -253,83 +253,129 @@ class TestTheClientsHistoryIsReplaced:
         assert contents.count("only turn") == 1
 
 
-class TestSessionIdentity:
+class TestFindingTheConversation:
+    """Each test here is a defect the proxy shipped with: the request reached the
+    provider without the conversation it belonged to."""
+
+    def test_a_first_turn_is_forwarded_untouched_and_starts_no_session(self):
+        client, service, _, seen = _proxy()
+        _post(client, _body(("user", "hello")))
+
+        assert [m["content"] for m in _sent(seen)["messages"]] == ["hello"]
+        assert service.session_manager.store.count() == 0
+
+    def test_without_a_header_the_second_request_keeps_its_history(self):
+        """The fingerprint gave request 1 and request 2 different sessions, and the
+        cold second session forwarded only the newest turn."""
+        client, _, _, seen = _proxy()
+        _post(client, _body(("user", "we chose postgres")))
+        _post(client, _body(("user", "we chose postgres"), ("assistant", "Noted."), ("user", "which database?")))
+
+        assert [m["content"] for m in _sent(seen)["messages"]] == ["we chose postgres", "Noted.", "which database?"]
+
+    def test_a_restarted_proxy_does_not_forget_a_conversation_in_progress(self):
+        """A cold session forwarded only the newest turn: after a restart, every
+        ongoing conversation reached the model with no history at all."""
+        client, _, _, seen = _proxy()
+        history = [("user", "we chose postgres"), ("assistant", "Noted."), ("user", "retention is 90 days"),
+                   ("assistant", "Noted."), ("user", "which database did we choose?")]
+        _post(client, _body(*history))
+
+        assert len(_sent(seen)["messages"]) == len(history)
+
+    def test_regenerate_does_not_send_the_answer_being_replaced(self):
+        """Regenerate re-sends the conversation without its last reply. Recording
+        the reply from the response made the proxy forward it anyway, as if the user
+        had asked the same question twice."""
+        client, service, _, seen = _proxy()
+        opening = [("user", "we chose postgres"), ("assistant", "Noted.")]
+        _post(client, _body(*opening, ("user", "which database?")), headers={SESSION_HEADER: "s"})
+        _post(client, _body(*opening, ("user", "which database?")), headers={SESSION_HEADER: "s"})
+
+        assert [m["content"] for m in _sent(seen)["messages"]] == ["we chose postgres", "Noted.", "which database?"]
+        assert len(service.session_manager.store.get("s").snapshot.young) == 2
+
+    def test_an_edited_turn_rewinds_the_session_to_the_edit(self):
+        client, service, _, seen = _proxy()
+        h = {SESSION_HEADER: "s"}
+        _post(client, _body(("user", "use postgres"), ("assistant", "Noted."), ("user", "and retention?")), headers=h)
+        _post(client, _body(("user", "use mysql"), ("assistant", "Noted."), ("user", "and retention?")), headers=h)
+
+        sent = [m["content"] for m in _sent(seen)["messages"]]
+        assert sent == ["use mysql", "Noted.", "and retention?"]
+        assert "use postgres" not in [m.content for m in service.session_manager.store.get("s").snapshot.young]
+        assert client.get("/stats").json()["history_rewinds"] == 1
+
     def test_an_explicit_session_header_is_honoured(self):
-        """A client that knows its own conversation identity is authoritative, and
-        nothing we infer can beat it."""
         client, service, _, _ = _proxy()
-        _post(client, _body(("user", "hello")), headers={SESSION_HEADER: "my-session"})
-
-        assert service.session_manager.store.get("my-session") is not None
-
-    def test_without_a_header_the_opening_turns_are_fingerprinted(self):
-        client, service, _, _ = _proxy()
-        _post(client, _body(("user", "a distinctive opening line")))
-
-        ids = service.session_manager.store.active_session_ids()
-        assert len(ids) == 1
-        assert ids[0].startswith("fp_")
-
-    def test_the_same_conversation_resolves_to_one_session(self):
-        """The property a fingerprint exists for: stable as the conversation grows."""
-        client, service, _, _ = _proxy()
-        _post(client, _body(("user", "opening line"), ("assistant", "reply")))
-        _post(client, _body(("user", "opening line"), ("assistant", "reply"), ("user", "more")))
-
-        assert service.session_manager.store.count() == 1
+        _post(client, _body(("user", "a"), ("assistant", "b"), ("user", "c")), headers={SESSION_HEADER: "chat-42"})
+        assert service.session_manager.store.get("chat-42") is not None
 
     def test_different_conversations_get_different_sessions(self):
         client, service, _, _ = _proxy()
-        _post(client, _body(("user", "conversation about databases")))
-        _post(client, _body(("user", "conversation about scheduling")))
-
+        _post(client, _body(("user", "about databases"), ("assistant", "ok"), ("user", "go on")))
+        _post(client, _body(("user", "about holidays"), ("assistant", "ok"), ("user", "go on")))
         assert service.session_manager.store.count() == 2
 
     def test_the_session_id_carries_no_conversation_text(self):
-        """A session id reaches logs and events, and conversation content is user
-        data. A hash identifies without carrying what was said."""
         client, service, _, _ = _proxy()
-        _post(client, _body(("user", "my bank password is hunter2")))
+        _post(client, _body(("user", "my secret project codename is BLUEBIRD"), ("assistant", "ok"), ("user", "?")))
+        [session_id] = service.session_manager.store.active_session_ids()
+        assert "BLUEBIRD" not in session_id
 
-        assert all("hunter2" not in sid for sid in service.session_manager.store.active_session_ids())
 
+class TestTheRecordIsTheClientsHistory:
+    """The client's next request holds every earlier reply exactly as the user saw
+    it, and nothing the user never saw. Recording from it, rather than from the
+    response, is what keeps the record and the conversation the same thing."""
 
-class TestPostResponseAging:
-    def test_both_halves_of_the_exchange_are_recorded(self):
-        """Recording only the user's turn would leave the engine scoring a
-        conversation in which the assistant never spoke — and half of what a
-        conversation decides is in the replies."""
+    def test_both_halves_of_an_exchange_are_recorded_from_the_next_request(self):
         client, service, _, _ = _proxy()
-        _post(client, _body(("user", "which database?")), headers={SESSION_HEADER: "s"})
+        h = {SESSION_HEADER: "s"}
+        _post(client, _body(("user", "which database?")), headers=h)
+        _post(client, _body(("user", "which database?"), ("assistant", "Postgres, partitioned by day."),
+                            ("user", "why?")), headers=h)
 
-        state = service.session_manager.store.get("s")
-        assert state is not None
-        roles = [m.role for m in state.snapshot.young]
-        assert roles == ["user", "assistant"]
-        assert "Postgres" in state.snapshot.young[-1].content
+        young = service.session_manager.store.get("s").snapshot.young
+        assert [(m.role, m.content) for m in young] == [("user", "which database?"),
+                                                        ("assistant", "Postgres, partitioned by day.")]
 
-    def test_nothing_is_recorded_when_the_provider_fails(self):
-        """Session state would otherwise describe a conversation that never
-        happened — and the client will retry, recording the turn twice.
+    def test_a_failed_request_retried_records_its_history_once(self):
+        """Recording on the first attempt would put the history in twice when the
+        client retries."""
+        attempts = iter([httpx2.Response(500, json={"error": "boom"}), httpx2.Response(200, json=UPSTREAM_OK)])
+        client, service, _, _ = _proxy(lambda request: next(attempts))
+        body = _body(("user", "a"), ("assistant", "b"), ("user", "c"))
+        _post(client, body, headers={SESSION_HEADER: "s"})
+        _post(client, body, headers={SESSION_HEADER: "s"})
 
-        The session *object* does exist: `gc_collect` runs before forwarding and
-        creates it. What must be empty is its turn list."""
-        client, service, _, _ = _proxy(lambda request: httpx2.Response(500, json={"error": "boom"}))
-        _post(client, _body(("user", "which database?")), headers={SESSION_HEADER: "s"})
+        assert [m.content for m in service.session_manager.store.get("s").snapshot.young] == ["a", "b"]
 
-        state = service.session_manager.store.get("s")
-        assert state is not None, "gc_collect creates the session before we forward"
-        assert state.snapshot.young == (), "but a failed exchange records no turns"
+    def test_a_tool_call_reply_is_recorded_exactly_as_sent(self):
+        """Parsed out of a response, a tool-call reply had no text and was lost."""
+        tool_use = [{"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {"city": "Paris"}}]
+        tool_result = [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "18C"}]
+        client, service, _, _ = _proxy()
+        client.post("/v1/messages", json={"model": "m", "max_tokens": 10, "messages": [
+            {"role": "user", "content": "weather in paris?"},
+            {"role": "assistant", "content": tool_use},
+            {"role": "user", "content": tool_result}]}, headers={SESSION_HEADER: "s"})
 
-    def test_an_unparseable_reply_still_records_the_user_turn(self):
-        """A 200 we cannot read costs one turn of scoring accuracy, not the turn
-        the user actually sent."""
-        client, service, _, _ = _proxy(lambda request: httpx2.Response(200, text="not json"))
-        _post(client, _body(("user", "which database?")), headers={SESSION_HEADER: "s"})
+        assert service.session_manager.store.get("s").snapshot.young[1].raw_content == tool_use
 
-        state = service.session_manager.store.get("s")
-        assert state is not None
-        assert [m.role for m in state.snapshot.young] == ["user"]
+    def test_an_unaged_conversation_is_forwarded_byte_for_byte(self):
+        """Nothing aged means nothing to change, so the client's own bytes go out:
+        images, tool calls and the provider's prompt cache survive intact."""
+        image = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}}
+        payload = {"model": "m", "max_tokens": 10, "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "what is this?"}, image]},
+            {"role": "assistant", "content": "A diagram."},
+            {"role": "user", "content": "explain it"}]}
+        client, _, _, seen = _proxy()
+        raw = json.dumps(payload).encode()
+        client.post("/v1/messages", content=raw, headers={"content-type": "application/json", SESSION_HEADER: "s"})
+
+        assert seen[-1].content == raw
 
 
 class TestItNeverLeaksCredentials:
@@ -348,7 +394,7 @@ class TestItNeverLeaksCredentials:
 
     def test_the_key_is_not_held_in_session_state(self):
         client, service, _, _ = _proxy()
-        _post(client, _body(("user", "hello")), headers={SESSION_HEADER: "s"})
+        _post(client, _body(("user", "hello"), ("assistant", "hi"), ("user", "?")), headers={SESSION_HEADER: "s"})
 
         state = service.session_manager.store.get("s")
         assert state is not None
@@ -423,11 +469,11 @@ class TestFirstDoNoHarm:
             async def gc_collect(self, session_id, query=None):
                 raise RuntimeError("engine exploded")
 
-            async def gc_update(self, session_id, new_turn):
+            def gc_record(self, session_id, turns, lineage):
                 raise RuntimeError("engine exploded")
 
         client, _, _, _ = _proxy(gc_service=_BrokenService())
-        _post(client, _body(("user", "hello")))
+        _post(client, _body(("user", "hello"), ("assistant", "hi"), ("user", "?")))
 
         stats = client.get("/stats").json()
         assert stats["gc_bypassed"] == 1
@@ -490,7 +536,9 @@ class TestContentBlocks:
             json={
                 "model": "claude-sonnet-5",
                 "max_tokens": 512,
-                "messages": [{"role": "user", "content": [{"type": "text", "text": "which database?"}]}],
+                "messages": [{"role": "user", "content": [{"type": "text", "text": "which database?"}]},
+                             {"role": "assistant", "content": "Postgres."},
+                             {"role": "user", "content": "why?"}],
             },
             headers={"x-api-key": API_KEY, SESSION_HEADER: "s"},
         )
@@ -601,35 +649,24 @@ class TestStreaming:
         assert response.headers["content-type"].startswith("text/event-stream")
         assert response.content == body
 
-    def test_both_halves_of_a_streamed_exchange_are_recorded(self):
-        """The defect this suite exists for: before streaming was handled, the
-        reply was dropped and the engine scored a conversation with a silent
-        assistant."""
-        client, service, _, _ = _proxy(_streaming_upstream(_sse("Postgres, ", "partitioned by day.")))
-        _post(client, _body(("user", "which database?"), stream=True), headers={SESSION_HEADER: "s"})
+    def test_a_streamed_reply_is_recorded_from_the_next_request(self):
+        """The defect this suite once existed for: a streamed reply was never
+        recorded. Now no reply is parsed; the client's next request carries it."""
+        client, service, _, _ = _proxy(_streaming_upstream(_sse("Postgres.")))
+        h = {SESSION_HEADER: "s"}
+        _post(client, _body(("user", "which database?"), stream=True), headers=h)
+        _post(client, _body(("user", "which database?"), ("assistant", "Postgres."), ("user", "why?"), stream=True),
+              headers=h)
 
-        state = service.session_manager.store.get("s")
-        assert [m.role for m in state.snapshot.young] == ["user", "assistant"]
-        assert state.snapshot.young[-1].content == "Postgres, partitioned by day."
-
-    @pytest.mark.parametrize("broken", [_sse("half an", stop=False), _sse("partial", error=True)],
-                             ids=["truncated", "provider-error-event"])
-    def test_an_unfinished_stream_records_nothing_and_says_so(self, broken):
-        """The client will retry it; recording it would put the turn in twice."""
-        client, service, _, _ = _proxy(_streaming_upstream(broken))
-        _post(client, _body(("user", "which database?"), stream=True), headers={SESSION_HEADER: "s"})
-
-        assert service.session_manager.store.get("s").snapshot.young == ()
-        assert client.get("/stats").json()["streams_unrecorded"] == 1
+        assert [m.role for m in service.session_manager.store.get("s").snapshot.young] == ["user", "assistant"]
 
     def test_an_error_status_on_a_stream_request_passes_through_verbatim(self):
         error = {"type": "error", "error": {"type": "rate_limit_error", "message": "slow down"}}
-        client, service, _, _ = _proxy(lambda request: httpx2.Response(429, json=error))
-        response = _post(client, _body(("user", "which database?"), stream=True), headers={SESSION_HEADER: "s"})
+        client, _, _, _ = _proxy(lambda request: httpx2.Response(429, json=error))
+        response = _post(client, _body(("user", "which database?"), stream=True))
 
         assert response.status_code == 429
         assert response.json() == error
-        assert service.session_manager.store.get("s").snapshot.young == ()
 
     def test_a_gc_failure_still_streams_the_original_request(self, monkeypatch):
         body = _sse("fine")
@@ -639,7 +676,7 @@ class TestStreaming:
             raise RuntimeError("engine bug")
 
         monkeypatch.setattr(service, "gc_collect", broken)
-        response = _post(client, _body(("user", "which database?"), stream=True))
+        response = _post(client, _body(("user", "a"), ("assistant", "b"), ("user", "c"), stream=True))
         assert response.content == body
         assert _sent(seen)["stream"] is True
 
@@ -700,9 +737,9 @@ class TestLlmGcNeverBlocksTheConversation:
         def broken(*args, **kwargs):
             raise RuntimeError("bug")
 
-        monkeypatch.setattr("llm_gc.proxy.server.resolve_session_id", broken)
+        monkeypatch.setattr("llm_gc.proxy.server._record_client_history", broken)
         client, _, _, _ = _proxy()
-        response = _post(client, _body(("user", "which database?")))
+        response = _post(client, _body(("user", "a"), ("assistant", "b"), ("user", "which database?")))
         assert response.status_code == 200
         assert response.json() == UPSTREAM_OK
 
@@ -719,43 +756,9 @@ class TestLlmGcNeverBlocksTheConversation:
             raise RuntimeError("scheduler down")
 
         client.app.state.schedule = broken
-        response = _post(client, _body(("user", "which database?"), stream=stream))
+        response = _post(client, _body(("user", "a"), ("assistant", "b"), ("user", "c"), stream=stream))
         assert response.status_code == 200
         assert response.content == body if stream else response.json() == UPSTREAM_OK
-
-    def test_an_observer_failure_does_not_cut_the_stream(self, monkeypatch):
-        def broken(self, chunk):
-            raise RuntimeError("parser bug")
-
-        monkeypatch.setattr("llm_gc.proxy.server.StreamedReply.feed", broken)
-        body = _sse("Postgres, ", "partitioned by day.")
-        client, service, _, _ = _proxy(_streaming_upstream(body))
-        response = _post(client, _body(("user", "which database?"), stream=True), headers={SESSION_HEADER: "s"})
-
-        assert response.content == body
-        assert service.session_manager.store.get("s").snapshot.young == ()
-        assert client.get("/stats").json()["streams_unrecorded"] == 1
-
-
-class TestABypassedExchangeIsStillRecorded:
-    """A bypass costs one request its GC. It must not also cost the session a turn:
-    the exchange happened, and a hole in session state is carried into every
-    context built afterwards."""
-
-    @pytest.mark.parametrize("stream", [False, True], ids=["json", "sse"])
-    def test_a_gc_failure_still_records_both_halves(self, monkeypatch, stream):
-        upstream = _streaming_upstream(_sse("Postgres, partitioned by day.")) if stream else None
-        client, service, _, _ = _proxy(upstream)
-
-        async def busy(*args, **kwargs):
-            raise RuntimeError("session busy compacting")
-
-        monkeypatch.setattr(service, "gc_collect", busy)
-        _post(client, _body(("user", "which database?"), stream=stream), headers={SESSION_HEADER: "s"})
-
-        state = service.session_manager.store.get("s")
-        assert [m.role for m in state.snapshot.young] == ["user", "assistant"]
-        assert client.get("/stats").json()["gc_bypassed"] == 1
 
 
 class TestOneUsersConversationNeverReachesAnother:

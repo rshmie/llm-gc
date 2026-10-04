@@ -15,7 +15,8 @@ forwards the client's original request untouched. See doc/design/ for rationale.
 """
 
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable
+import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -27,10 +28,9 @@ from llm_gc.config.constants import APP_VERSION
 from llm_gc.engine.gc_service import GcService
 from llm_gc.exceptions import ConfigError
 from llm_gc.models import Message
-from llm_gc.proxy.anthropic_stream import StreamedReply
+from llm_gc.models.generation_snapshot import GenerationSnapshot
 from llm_gc.proxy.anthropic_translation import extract_messages, forwardable_headers, rewrite_messages
-from llm_gc.proxy.session_identity import SESSION_HEADER, resolve_session_id
-from llm_gc.utils import count_tokens
+from llm_gc.proxy.session_identity import SESSION_HEADER, chain_hashes
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +61,11 @@ class ProxyMetrics:
         self.gc_bypassed = 0
         self.tokens_in_client_history = 0
         self.tokens_forwarded = 0
-        # Streams that reached the client but whose reply the engine never heard.
-        self.streams_unrecorded = 0
+        # Reconciliations with the client's history. Each restart or seed costs one
+        # uncompressed request, so they are counted rather than hidden.
+        self.history_rewinds = 0
+        self.history_restarts = 0
+        self.sessions_seeded = 0
 
     def as_dict(self) -> dict[str, Any]:
         saved = self.tokens_in_client_history - self.tokens_forwarded
@@ -73,7 +76,9 @@ class ProxyMetrics:
             "tokens_in_client_history": self.tokens_in_client_history,
             "tokens_forwarded": self.tokens_forwarded,
             "tokens_saved": saved,
-            "streams_unrecorded": self.streams_unrecorded,
+            "history_rewinds": self.history_rewinds,
+            "history_restarts": self.history_restarts,
+            "sessions_seeded": self.sessions_seeded,
             # None, not 1.0: a ratio with no requests behind it is not a measurement.
             "ratio": (
                 round(self.tokens_forwarded / self.tokens_in_client_history, 3)
@@ -173,7 +178,7 @@ async def _handle(app: FastAPI, request: Request) -> Response:
         return await _forward(app, body, headers)
 
     streaming = payload.get("stream") is True
-    new_turn = client_messages[-1]
+    history, new_turn = client_messages[:-1], client_messages[-1]
     client_history_tokens = sum(message.token_count for message in client_messages)
     metrics.tokens_in_client_history += client_history_tokens
 
@@ -181,147 +186,145 @@ async def _handle(app: FastAPI, request: Request) -> Response:
     # failure of ours can stop the conversation: the worst case is no GC.
     session_id: str | None = None
     try:
-        session_id = resolve_session_id(client_messages, request.headers.get(SESSION_HEADER))
-        forward_body, forwarded_messages = await _apply_gc(app, session_id, client_messages, payload, new_turn)
-        logger.info(
-            "proxying with a collected context",
-            extra={
-                "session_id": session_id,
-                "turns_from_client": len(client_messages),
-                "turns_forwarded": len(forwarded_messages),
-                "tokens_from_client": client_history_tokens,
-                "tokens_forwarded": sum(message.token_count for message in forwarded_messages),
-            },
-        )
+        session_id = _record_client_history(app, history, request.headers.get(SESSION_HEADER))
+        forward_body, forwarded_tokens = await _apply_gc(app, session_id, history, new_turn, payload, body)
+        logger.info("proxying", extra={"session_id": session_id, "turns_from_client": len(client_messages),
+                                       "tokens_from_client": client_history_tokens,
+                                       "tokens_forwarded": forwarded_tokens})
     except Exception as err:
         logger.exception("GC failed on the request path; forwarding the original",
                          extra={"session_id": session_id, "error_type": type(err).__name__})
         metrics.gc_bypassed += 1
         # Counted as forwarded, so a bypass does not look free in /stats.
         metrics.tokens_forwarded += client_history_tokens
-        # Still recorded when the session is known: the exchange really happened,
-        # and skipping it would leave a hole every later context is built over.
-        return await _forward_and_record(app, body, headers, streaming, session_id, new_turn)
+        return await _send(app, body, headers, streaming)
 
     metrics.gc_applied += 1
-    metrics.tokens_forwarded += sum(message.token_count for message in forwarded_messages)
-    return await _forward_and_record(app, _dump_json(forward_body), headers, streaming, session_id, new_turn)
+    metrics.tokens_forwarded += forwarded_tokens
+    response = await _send(app, forward_body, headers, streaming)
 
-
-async def _forward_and_record(
-    app: FastAPI,
-    body: bytes,
-    headers: dict[str, str],
-    streaming: bool,
-    session_id: str | None,
-    new_turn: Message,
-) -> Response:
-    """Forward, then record the exchange only if the provider answered it.
-
-    Recording only a successful exchange keeps session state to conversations the
-    client actually had: a failed one will be retried, and recording it would put
-    the turn in twice.
-    """
-    metrics: ProxyMetrics = app.state.metrics
-
-    if streaming:
-        def record_stream(reply: StreamedReply) -> None:
-            if session_id is None:
-                return
-            if reply.completed and not reply.errored:
-                app.state.schedule(_age(app, session_id, new_turn, reply.text or None))
-                return
-            metrics.streams_unrecorded += 1
-            logger.warning("streamed reply not recorded", extra={
-                "session_id": session_id, "completed": reply.completed, "errored": reply.errored,
-                "abandoned": reply.abandoned, "malformed_events": reply.malformed_events,
-            })
-
-        return await _forward_stream(app, body, headers, on_end=lambda reply: _never_blocking(record_stream, reply))
-
-    response = await _forward(app, body, headers)
-    if response.status_code == 200 and session_id is not None:
-        _never_blocking(
-            lambda: app.state.schedule(_age(app, session_id, new_turn, _reply_text(bytes(response.body))))
-        )
+    # Aging prepares the next request from the conversation recorded so far; it
+    # never depends on this reply, which the next request will show us exactly.
+    if session_id is not None:
+        _never_blocking(lambda: app.state.schedule(_age(app, session_id)))
     return response
+
+
+def _record_client_history(app: FastAPI, history: list[Message], header_value: str | None) -> str | None:
+    """Find the session this history belongs to and record what it has not seen.
+
+    The client's history is the truth: it holds every earlier reply exactly as the
+    user saw it, and nothing the user never saw. So the session is reconciled to
+    it on every request - continued, rewound, or started over - rather than built
+    from responses. Returns None for a first turn, which has no history to keep.
+    """
+    if not history:
+        return None
+
+    gc_service: GcService = app.state.gc_service
+    manager = gc_service.session_manager
+    metrics: ProxyMetrics = app.state.metrics
+    hashes = chain_hashes(history)
+
+    if header_value and header_value.strip():
+        state = manager.get_or_create(header_value.strip())
+        recorded = state.snapshot.lineage
+        agreed = _agreed_length(recorded, hashes)
+        if agreed < len(recorded):
+            # Regenerate, edit, or a retry of an earlier point: the client's history
+            # left ours at turn `agreed`.
+            rewound = state.snapshot.rewound_to(agreed)
+            if rewound is not None:
+                metrics.history_rewinds += 1
+                state = manager.replace(state, rewound)
+            else:
+                # The abandoned branch was already summarised or archived, and
+                # what was derived from it cannot be separated from what came
+                # before. Starting over costs one uncompressed request; keeping it
+                # could put the abandoned branch in the model's memory.
+                metrics.history_restarts += 1
+                state = manager.replace(state, GenerationSnapshot())
+                agreed = 0
+            logger.info("client history diverged from the session; reconciled",
+                        extra={"session_id": state.session_id, "at_turn": agreed})
+    else:
+        found = manager.find_by_lineage(hashes)
+        if found is not None:
+            state, agreed = found
+        else:
+            # No conversation we know continues into this one: a first exchange, a
+            # proxy restart, or an edited history. Seed from what the client sent.
+            metrics.sessions_seeded += 1
+            state = manager.get_or_create(f"s_{uuid.uuid4().hex[:16]}")
+            agreed = 0
+
+    if agreed < len(history):
+        gc_service.gc_record(state.session_id, history[agreed:], hashes[agreed:])
+    return state.session_id
+
+
+def _agreed_length(recorded: Sequence[str], hashes: Sequence[str]) -> int:
+    """How many leading turns two conversations share, from their chain hashes."""
+    agreed = 0
+    for ours, theirs in zip(recorded, hashes):
+        if ours != theirs:
+            break
+        agreed += 1
+    return agreed
+
+
+async def _apply_gc(
+    app: FastAPI,
+    session_id: str | None,
+    history: list[Message],
+    new_turn: Message,
+    payload: dict[str, Any],
+    original_body: bytes,
+) -> tuple[bytes, int]:
+    """The body to forward, and its conversation's token count.
+
+    When the collected context is exactly the client's history - nothing has been
+    aged yet - the client's own bytes are forwarded untouched, so images, tool
+    calls, thinking blocks and the provider's prompt cache are all preserved.
+    """
+    client_tokens = sum(message.token_count for message in history) + new_turn.token_count
+    if session_id is None:
+        return original_body, client_tokens
+
+    gc_service: GcService = app.state.gc_service
+    collected = await gc_service.gc_collect(session_id, query=new_turn.content)
+    if [message.turn_index for message in collected] == list(range(len(history))):
+        return original_body, client_tokens
+
+    forwarded = collected + [new_turn]
+    return _dump_json(rewrite_messages(payload, forwarded)), sum(m.token_count for m in forwarded)
+
+
+async def _age(app: FastAPI, session_id: str) -> None:
+    """Age the session after the response. Detached, so failures are logged here."""
+    try:
+        gc_service: GcService = app.state.gc_service
+        await gc_service.gc_age(session_id)
+    except Exception:
+        logger.exception("post-response aging failed", extra={"session_id": session_id})
 
 
 def _never_blocking(action: Callable[..., None], *args: Any) -> None:
     """Run post-response bookkeeping that must never cost the client their answer.
 
-    By this point the provider has answered; a failure here loses one recorded
-    turn, which is logged, rather than the response the user is waiting on.
+    By this point the provider has answered; a failure here is logged, and the
+    response the user is waiting on is unaffected.
     """
     try:
         action(*args)
     except Exception:
-        logger.exception("post-response recording failed; the client's response is unaffected")
+        logger.exception("post-response bookkeeping failed; the client's response is unaffected")
 
 
-async def _apply_gc(
-    app: FastAPI,
-    session_id: str,
-    client_messages: list[Message],
-    payload: dict[str, Any],
-    new_turn: Message,
-) -> tuple[dict[str, Any], list[Message]]:
-    """Replace the client's history with ours, keeping their newest turn.
-
-    The new turn is appended because aging runs after the response, so it is not
-    in the maintained context yet. On a cold session nothing is maintained and the
-    client's own messages are forwarded.
-    """
-    gc_service: GcService = app.state.gc_service
-    collected = await gc_service.gc_collect(session_id, query=new_turn.content)
-
-    # A duplicated final turn is a confusing prompt, and the check is one compare.
-    if collected and collected[-1].content == new_turn.content:
-        forwarded = collected
-    else:
-        forwarded = collected + [new_turn]
-
-    return rewrite_messages(payload, forwarded), forwarded
-
-
-async def _age(app: FastAPI, session_id: str, new_turn: Message, reply_text: str | None) -> None:
-    """Record both halves of the exchange after the client has their answer.
-
-    Runs detached, so exceptions are logged rather than left to vanish unretrieved.
-    """
-    try:
-        gc_service: GcService = app.state.gc_service
-        await gc_service.gc_update(session_id, new_turn)
-
-        if reply_text is not None:
-            reply = Message(role="assistant", content=reply_text, token_count=count_tokens(reply_text),
-                            turn_index=new_turn.turn_index + 1)
-            await gc_service.gc_update(session_id, reply)
-    except Exception:
-        logger.exception("post-response aging failed", extra={"session_id": session_id})
-
-
-def _reply_text(body: bytes) -> str | None:
-    """Read the assistant's text out of a non-streamed reply, or None.
-
-    None rather than raising: the client already has their answer, and a missing
-    reply costs one turn of scoring accuracy.
-    """
-    try:
-        payload = _parse_json(body)
-    except ValueError:
-        return None
-
-    blocks = payload.get("content")
-    if not isinstance(blocks, list):
-        return None
-
-    text = "".join(
-        block["text"]
-        for block in blocks
-        if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str)
-    )
-    return text or None
+async def _send(app: FastAPI, body: bytes, headers: dict[str, str], streaming: bool) -> Response:
+    if streaming:
+        return await _forward_stream(app, body, headers)
+    return await _forward(app, body, headers)
 
 
 async def _forward(app: FastAPI, body: bytes, headers: dict[str, str]) -> Response:
@@ -338,18 +341,8 @@ async def _forward(app: FastAPI, body: bytes, headers: dict[str, str]) -> Respon
     return _verbatim(upstream, upstream.content)
 
 
-async def _forward_stream(
-    app: FastAPI,
-    body: bytes,
-    headers: dict[str, str],
-    *,
-    on_end: Callable[[StreamedReply], None] | None,
-) -> Response:
-    """Relay a streamed reply chunk by chunk, observing it on the way past.
-
-    `on_end` runs only when the upstream stream ran to its end. A client that
-    disconnects, or an upstream that drops mid-stream, never reaches it.
-    """
+async def _forward_stream(app: FastAPI, body: bytes, headers: dict[str, str]) -> Response:
+    """Relay a streamed reply chunk by chunk, as it arrives."""
     client: httpx2.AsyncClient = app.state.http_client
     try:
         upstream = await client.send(_upstream_request(app, body, headers), stream=True)
@@ -364,22 +357,11 @@ async def _forward_stream(
             await upstream.aclose()
         return _verbatim(upstream, content)
 
-    reply = StreamedReply()
-
     async def relay() -> AsyncIterator[bytes]:
-        observing = True
         try:
             # Decoded bytes: we strip `content-encoding`, so relaying raw gzip would
             # hand the client compressed bytes labelled as plain text.
             async for chunk in upstream.aiter_bytes():
-                if observing:
-                    try:
-                        reply.feed(chunk)
-                    except Exception:
-                        # A bug in the observer stops observation, never the relay.
-                        # The reply ends incomplete, so it is counted as unrecorded.
-                        logger.exception("stream observer failed; relaying without it")
-                        observing = False
                 yield chunk
         except httpx2.TransportError as err:
             logger.warning("provider stream dropped mid-response", extra={"error_type": type(err).__name__})
@@ -387,8 +369,6 @@ async def _forward_stream(
         finally:
             # Also runs on client disconnect, when the server closes this generator.
             await upstream.aclose()
-        if on_end is not None:
-            on_end(reply)
 
     return StreamingResponse(
         relay(),
