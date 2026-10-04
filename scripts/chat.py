@@ -32,16 +32,31 @@ SESSION_HEADER = "x-llm-gc-session"
 # the refusal's category. Off with --no-fallback.
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
+# Sent when no credential was found, so a stub upstream - which checks none - still
+# answers. A real provider rejects it with a 401, reported with what to do.
+PLACEHOLDER_KEY = "no-credential-found"
+
+NO_CREDENTIAL_HINT = (
+    "no Anthropic credential was found, so a placeholder key was sent.\n"
+    "  for a real model:  export ANTHROPIC_API_KEY=... and start chat.py again\n"
+    "  to run offline:    restart the proxy with --stub-upstream"
+)
+
 _DIM, _RESET = "\033[2m", "\033[0m"
 
 
-def build_client(proxy_url: str) -> anthropic.Anthropic:
-    """An SDK client aimed at the proxy, with whatever credential the SDK finds."""
-    try:
-        return anthropic.Anthropic(base_url=proxy_url)
-    except anthropic.AnthropicError:
-        print(f"{_DIM}no credentials found - fine against --stub-upstream; a real provider will answer 401{_RESET}")
-        return anthropic.Anthropic(base_url=proxy_url, api_key="no-key-set")
+def build_client(proxy_url: str) -> tuple[anthropic.Anthropic, bool]:
+    """An SDK client aimed at the proxy, and whether it found a credential of its own.
+
+    The SDK resolves its credential when it is built - an API key, an auth token,
+    or a saved profile - but raises only when a request is sent, and then a
+    `TypeError` rather than an API error. So what it resolved is checked here,
+    before any request.
+    """
+    client = anthropic.Anthropic(base_url=proxy_url)
+    if client.api_key or client.auth_token or client.credentials:
+        return client, True
+    return anthropic.Anthropic(base_url=proxy_url, api_key=PLACEHOLDER_KEY), False
 
 
 def send(client: anthropic.Anthropic, args: argparse.Namespace, history: list[dict]):
@@ -59,8 +74,9 @@ def send(client: anthropic.Anthropic, args: argparse.Namespace, history: list[di
         request["betas"] = [FALLBACK_BETA]
         request["extra_body"] = {"fallbacks": "default"}
 
-    print("\nassistant> ", end="", flush=True)
+    # The request is sent on entering the block; announce the reply only once it is under way.
     with client.beta.messages.stream(**request) as stream:
+        print("\nassistant> ", end="", flush=True)
         for event in stream:
             if event.type != "content_block_delta":
                 continue
@@ -79,9 +95,11 @@ def send(client: anthropic.Anthropic, args: argparse.Namespace, history: list[di
 
 
 def chat(args: argparse.Namespace) -> None:
-    client = build_client(args.proxy)
+    client, has_credential = build_client(args.proxy)
     history: list[dict] = []
     print(f"talking to {args.model} through {args.proxy}   (/new, /quit)")
+    if not has_credential:
+        print(f"{_DIM}no Anthropic credential found - fine if the proxy runs with --stub-upstream{_RESET}")
 
     while True:
         try:
@@ -103,6 +121,10 @@ def chat(args: argparse.Namespace) -> None:
             reply = send(client, args, history)
         except anthropic.APIConnectionError:
             print(f"\ncannot reach the proxy at {args.proxy} - is `run_proxy.py --serve` running?")
+        except anthropic.AuthenticationError as err:
+            print(f"\nthe provider answered {err.status_code}: {err.message}")
+            if not has_credential:
+                print(NO_CREDENTIAL_HINT)
         except anthropic.APIStatusError as err:
             print(f"\nthe provider answered {err.status_code}: {err.message}")
         else:
