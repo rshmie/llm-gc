@@ -1,205 +1,289 @@
-// The conversation view: what the model can see, and message by message.
+// The conversation view: what the model knows, and message by message.
 //
 // Every value comes from an endpoint; this view formats and explains, and derives
 // nothing beyond grouping, counting, and sums and differences of numbers it was given.
 
-import { BECOMES, BECOMES_CAT, CATS, CELL_MAX_PX, CLAMP_CHARS, FACTS_SHOWN, GLOSSARY, GONE, ORDER, RUN_MIN, categoryOf, speaker, swatch } from "./vocabulary.js";
-import { $, agoIso, fill, fmt, h, percent, plural, ranges, setChildren } from "./dom.js";
-import { captured, countCats, factsByTurn, has, keepLast, marked, maxFacts, pendingTurns, preview, query, saidByTurn, state, turnMatches, ui } from "./state.js";
+import { BECOMES, BECOMES_CAT, CATS, CLAMP_CHARS, EARLIER_SHOWN, FACTS_SHOWN, GLOSSARY, GONE, HEIGHT, MIN_BAR_PX, ORDER, RUN_MIN, categoryOf, swatch } from "./vocabulary.js";
+import { $, agoTs, countEl, fill, fmt, h, meterBar, percent, plural, ranges, reducedMotion, setChildren, storeSet, svg } from "./dom.js";
+import { captured, countCats, factsByTurn, has, marked, maxFacts, pendingTurns, preview, query, saidByTurn, state, turnMatches, ui } from "./state.js";
 import { hideTooltip, info, showTooltip, tipQuote, hoverTip } from "./tooltip.js";
 import { showTab } from "./shell.js";
+import { openCard, showWhy, whyText } from "./engine.js";
+
+const smooth = () => (reducedMotion() ? "auto" : "smooth");
+export const speakerName = (role) => role === "user" ? "You" : role ? role[0].toUpperCase() + role.slice(1) : "—";
+const avatarText = (role) => role === "user" ? "You" : role === "assistant" ? "AI" : (role || "?").slice(0, 2).toUpperCase();
+const avatar = (role) => h("div", { class: `av ${role === "user" ? "user" : "assistant"}`, "aria-hidden": "true" }, avatarText(role));
+const changeForm = (n) => `${n === 1 ? "1 message changes" : `${fmt(n)} messages change`} form at the next clean-up.`;
 
 export function renderHero(k) {
-  const counts = countCats(k);
-  const inBlock = counts.quoted + counts.summarised;
-  fill("hero-summary", k.cuts === 0
-    ? [`All ${plural(k.recorded_turns, "message")} reach the model `, h("b", {}, "word for word"), ". ",
-       `Nothing has been condensed yet: the first clean-up comes once older messages add up to ${fmt(k.next_cut.min_cut_tokens)} tokens worth condensing.`]
-    : [`Of ${plural(k.recorded_turns, "message")}, the model gets `, h("b", {}, `${fmt(counts.verbatim)} word for word`),
-       inBlock ? [", ", h("b", {}, `${fmt(inBlock)} through the condensed block`)] : "",
-       counts.facts ? [", ", h("b", {}, `${fmt(counts.facts)} only as facts`)] : "",
-       counts.unseen ? [" — and ", h("b", {}, `nothing of ${fmt(counts.unseen)}`)] : "", "."]);
-  renderHeroMeta(k);
-  renderMap(k);
-  renderLegend(k, counts);
   renderSize(k);
-  renderNext(k);
+  renderHolds(k);
   renderWindow(k);
+  renderMap(k);
 }
 
-export function renderHeroMeta(k) {
-  const current = state.sessions.find((s) => s.session_id === state.selected);
-  fill("hero-meta",
-    k.aging_in_flight ? [h("span", { class: "dot warn" }), "cleaning up…"] : null,
-    h("span", {}, plural(k.cuts, "clean-up")), "·",
-    h("span", {}, current ? `active ${agoIso(current.last_activity)}` : ""));
-}
+// ----------------------------------------------------------------- what needs attention
 
-export function renderMap(k) {
-  const said = saidByTurn();
-  const facts = factsByTurn(k);
-  const condensed = k.turns.filter((t) => t.fidelity !== "verbatim");
-  const next = k.turns.filter((t) => t.fidelity === "verbatim" && t.becomes);
-  const kept = k.turns.filter((t) => t.fidelity === "verbatim" && !t.becomes);
-  const pending = pendingTurns(k);
-  const groups = [
-    { key: "condensed", label: "Condensed", term: "block", turns: condensed, pending: [] },
-    { key: "next", label: "Next clean-up", term: "next", turns: next, pending: [] },
-    { key: "kept", label: "Word for word", term: "verbatim", turns: kept, pending },
-  ].filter((g) => g.turns.length + g.pending.length > 0);
-  const total = k.turns.length + pending.length;
-  const map = $("map");
-  map.classList.toggle("dense", total > 120);
-  map.classList.toggle("searching", !!query());
-  map.setAttribute("aria-label", `Every message in order: ${groups.map((g) => `${g.label.toLowerCase()} ${g.turns.length + g.pending.length}`).join(", ")}`);
-
-  const cell = (t) => {
-    const cat = categoryOf(t);
-    const words = said.get(t.turn_index)?.text ?? t.text;
-    const role = said.get(t.turn_index)?.role ?? t.role;
-    const keeps = (facts.get(t.turn_index) || []).filter((f) => f.status === "active");
-    return h("div", {
-      class: `cell f-${cat}${t.becomes ? " will" : ""}${query() ? (turnMatches(t, said, facts) ? " hit" : " miss") : ""}`,
-      style: t.becomes ? `--b:var(--fid-${BECOMES_CAT[t.becomes]})` : null,
-      onclick: () => jumpTo(t.turn_index), onpointerleave: hideTooltip,
-      onpointerenter: (e) => showTooltip(e, [swatch(cat), `Message ${t.turn_index} · ${speaker(role)}`],
-        `${CATS[cat].label}: ${CATS[cat].desc}`,
-        t.becomes ? `Next clean-up: ${BECOMES[t.becomes]}` : null,
-        GONE.has(cat) && keeps.length ? `Keeps ${plural(keeps.length, "fact")}, ${keeps.filter((f) => f.sent).length} sent` : null,
-        tipQuote(preview(words)), h("div", { class: "tip-row muted" }, "Click to open it")),
-    });
-  };
-  const pendingCell = (p) => h("div", { class: "cell pending", onclick: () => jumpTo(p.turn_index), onpointerleave: hideTooltip,
-    onpointerenter: (e) => showTooltip(e, `Message ${p.turn_index} · ${speaker(p.role)}`, "Your newest message: recorded, with its reply, once the next request arrives.", tipQuote(preview(p.text))) });
-
-  const widest = (n) => n * CELL_MAX_PX + (n - 1) * 2;
-  setChildren(map, groups.map((g) => {
-    const n = g.turns.length + g.pending.length;
-    const recorded = g.turns.length;
-    const span = recorded ? (recorded === 1 ? `#${g.turns[0].turn_index}` : `#${g.turns[0].turn_index}–${g.turns.at(-1).turn_index}`) : "";
-    return h("div", { class: `map-group g-${g.key}`, style: `flex:${n} 1 0px;max-width:${widest(n)}px` },
-      h("div", { class: "map-label", ...hoverTip(`${g.label}: ${plural(recorded, "message")} ${span}`, GLOSSARY[g.term][1],
-          g.pending.length ? "The last cell is your newest message, recorded with its reply." : null) },
-        h("b", {}, g.label), h("span", { class: "num" }, fmt(recorded)), g.pending.length ? h("span", {}, "+1 newest") : null,
-        h("span", { class: "num range" }, span)),
-      h("div", { class: "cells" }, g.turns.map(cell), g.pending.map(pendingCell)));
-  }));
-  // The end labels span the cells, not the card: a short conversation is a short row.
-  $("map-ends").style.maxWidth = `${groups.reduce((sum, g) => sum + widest(g.turns.length + g.pending.length), 0) + (groups.length - 1) * 10}px`;
-}
-
-export function renderLegend(k, counts) {
-  const nextCount = k.turns.filter((t) => t.becomes).length;
-  const item = (key, label, count, glossaryKey, mark) => h("button", {
-    class: "legend-item", type: "button", "aria-pressed": String(ui.filter === key),
-    onclick: () => { setFilter(ui.filter === key ? "all" : key); $("messages").scrollIntoView({ behavior: "smooth", block: "start" }); },
-    ...hoverTip(GLOSSARY[glossaryKey][0], GLOSSARY[glossaryKey][1], "Click to list these messages"),
-  }, mark, label, h("b", { class: "num" }, fmt(count)));
-  fill("legend",
-    ORDER.filter((key) => counts[key]).map((key) => item(key, CATS[key].label, counts[key], key, swatch(key))),
-    nextCount ? item("next", "Taken by the next clean-up", nextCount, "next", h("span", { class: "swatch will-swatch" })) : null);
-}
-
-export function renderSize(k) {
-  const written = captured() ? state.transcript.recorded_tokens : null;
-  const sent = k.context_tokens;
-  const scale = Math.max(written ?? 0, sent, 1);
-  const tail = sent - k.front_tokens;
-  const width = (n) => `${Math.max(0, (n / scale) * 100)}%`;
-  const saved = written === null ? null : written - sent;
-  fill("panel-size",
-    h("div", { class: "stat-label" }, "Tokens per request", info("size")),
-    h("div", { class: "big" }, fmt(sent), h("small", {}, written === null ? " sent to the model" : ` sent, of ${fmt(written)} written`)),
-    h("div", { class: "bars" },
-      written === null ? null : [h("span", { class: "lab" }, "As written"),
-        h("div", { class: "bar-track" }, h("div", { class: "seg written", style: `width:${width(written)};border-radius:0 4px 4px 0` })),
-        h("span", { class: "val" }, fmt(written))],
-      h("span", { class: "lab" }, "Sent"),
-      h("div", { class: "bar-track" },
-        k.front_tokens ? h("div", { class: "seg front", style: `width:${width(k.front_tokens)}`, ...hoverTip("The condensed block", `${fmt(k.front_tokens)} tokens standing in for every condensed message`) }) : null,
-        h("div", { class: "seg tail", style: `width:${width(tail)}`, ...hoverTip("Recent messages", `${fmt(tail)} tokens, word for word`) })),
-      h("span", { class: "val" }, fmt(sent))),
-    k.front_tokens ? h("div", { class: "seg-key" },
-      h("span", {}, h("span", { class: "key", style: "background:var(--fid-summarised)" }), `condensed block ${fmt(k.front_tokens)}`),
-      h("span", {}, h("span", { class: "key", style: "background:var(--fid-verbatim)" }), `recent messages ${fmt(tail)}`)) : null,
-    h("div", { class: "note" }, saved === null ? "The words were not captured (the dashboard started after this conversation), so there is nothing to compare with."
-      : k.cuts === 0 ? "Nothing condensed yet: the model gets the whole conversation."
-      : saved >= 0 ? [h("b", { class: "secondary" }, `${fmt(saved)} tokens (${percent(saved, written)}%) saved`), ` on every request from now on, after ${plural(k.cuts, "clean-up")}.`]
-      : `The condensed block is ${fmt(-saved)} tokens larger than what it replaced.`));
-}
-
-export function renderNext(k) {
-  const cut = k.next_cut;
-  const share = cut.min_cut_tokens > 0 ? cut.compactable_tokens / cut.min_cut_tokens : (cut.compactable_tokens > 0 ? 1 : 0);
-  const becoming = {};
-  for (const t of k.turns) if (t.becomes) becoming[t.becomes] = (becoming[t.becomes] || 0) + 1;
-  const plan = Object.entries(becoming).map(([key, n]) => `${n} ${BECOMES[key]}`).join(" · ");
-  const why = cut.batch_ready ? [h("span", { class: "st good" }, "✓ "), "Enough: a clean-up runs after the next reply."]
-    : cut.turns.length === 0 ? `Nothing yet: the newest ${keepLast()} messages always stay word for word.`
-    : cut.compactable_tokens === 0 ? `The ${plural(cut.turns.length, "older message")} queued are all kept whole, so there is nothing to condense yet.`
-    : `${fmt(cut.min_cut_tokens - cut.compactable_tokens)} more needed, or press Run GC now.`;
-  fill("panel-next",
-    h("div", { class: "stat-label" }, "Next clean-up", info("ready")),
-    h("div", { class: "big" }, fmt(cut.compactable_tokens), h("small", {}, ` of ${fmt(cut.min_cut_tokens)} tokens ready`)),
-    h("div", { class: `meter${cut.batch_ready ? " ready" : ""}`, role: "meter", "aria-valuemin": "0", "aria-valuemax": String(cut.min_cut_tokens), "aria-valuenow": String(cut.compactable_tokens), "aria-label": "Tokens ready to condense" },
-      h("div", { class: share > 0 ? "some" : "", style: `width:${Math.min(100, share * 100)}%` })),
-    plan ? h("div", { class: "note" }, `${plural(cut.turns.length, "message")} queued: ${plan}`) : null,
-    h("div", { class: "note" }, why));
-}
-
-export function renderWindow(k) {
-  const w = state.config ? state.config.context_window : null;
-  const share = w ? k.context_tokens / w : 0;
-  fill("panel-window",
-    h("div", { class: "stat-label" }, "The model's window", info("window")),
-    h("div", { class: "big" }, w ? `${share < 0.001 && share > 0 ? "<0.1" : (share * 100).toFixed(share < 0.1 ? 1 : 0)}%` : "—", h("small", {}, " used")),
-    h("div", { class: "meter", role: "meter", "aria-valuemin": "0", "aria-valuemax": String(w || 0), "aria-valuenow": String(k.context_tokens), "aria-label": "Share of the model's window" },
-      h("div", { class: share > 0 ? "some" : "", style: `width:${Math.min(100, share * 100)}%` })),
-    h("div", { class: "note" }, w ? `${fmt(k.context_tokens)} of ${fmt(w)} tokens, before your next message` : "window size not reported"));
-}
-
-// ----------------------------------------------------------------- the conversation: what needs attention
-
-export function renderAttention() {
+// Good news is one quiet line; each warning is its own amber line saying what to do about it.
+export function renderStatus() {
   const k = state.knowledge;
   if (!k) return;
   const counts = countCats(k);
   const unsent = k.facts.filter((f) => f.status === "active" && !f.sent).length;
   const contradicted = k.facts.filter((f) => f.status === "superseded").length;
   const problems = state.activity ? state.activity.recent_degradations.length : 0;
+  const next = k.turns.filter((t) => t.becomes).length;
+  const toMessages = (filter) => () => { setFilter(filter); $("messages").scrollIntoView({ behavior: smooth(), block: "start" }); };
+  const line = (tone, icon, title, text, action, then) => h("div", { class: `status-line tone-${tone}` },
+    h("span", { class: "badge", "aria-hidden": "true" }, icon),
+    h("span", { class: "msg-text" }, h("b", {}, title), text ? ` ${text}` : null),
+    then || null,
+    action ? h("button", { class: "link-btn", type: "button", onclick: action[1] }, `${action[0]} →`) : null);
   const items = [];
-  if (counts.unseen) items.push({ tone: "warn", icon: "!", title: `The model sees nothing of ${plural(counts.unseen, "message")}`,
-    text: `Facts were pulled out of them, but the condensed block carries at most ${maxFacts()} facts and theirs did not make it. If a later answer needs one of these, the model does not have it.`,
-    action: ["Show these messages", () => { setFilter("unseen"); $("messages").scrollIntoView({ behavior: "smooth", block: "start" }); }] });
-  if (unsent) items.push({ tone: "warn", icon: "!", title: `${plural(unsent, "fact")} stored but not sent`,
-    text: "Kept by LLM-GC, ranked below the facts the condensed block has room for.",
-    action: ["Show the facts", () => $("memory-unsent")?.scrollIntoView({ behavior: "smooth", block: "start" })] });
-  if (problems) items.push({ tone: "warn", icon: "!", title: `${plural(problems, "clean-up problem")}`,
-    text: "Part of a clean-up could not be done, so those messages stayed word for word. Nothing is lost; the prompt is bigger than planned.",
-    action: ["See the problems", () => { showTab("engine"); $("problems").scrollIntoView({ behavior: "smooth", block: "center" }); }] });
-  if (!items.length) items.push({ tone: "good", icon: "✓", title: k.cuts ? "Nothing is out of view" : "The model sees the whole conversation",
-    text: k.cuts ? "Every condensed message reaches the model quoted, summarised, or through a fact that is sent." : "Every message is sent word for word; nothing has been condensed yet." });
-  if (contradicted) items.push({ tone: "", icon: "↺", title: `${plural(contradicted, "fact")} contradicted later`,
-    text: "A later message changed them, so the newer fact is sent and the old one is not. Check the replacement is the one you meant.",
-    action: ["Show them", () => { setFilter("superseded"); $("messages").scrollIntoView({ behavior: "smooth", block: "start" }); }] });
-  if (k.next_cut.batch_ready) items.push({ tone: "", icon: "→", title: "A clean-up runs after the next reply",
-    text: `Messages ${ranges(k.next_cut.turns)} will be condensed. Each one shows what it will become.`,
-    action: ["Show them", () => { setFilter("next"); $("messages").scrollIntoView({ behavior: "smooth", block: "start" }); }] });
-  if (!captured()) items.push({ tone: "", icon: "i", title: "What was said was not captured",
-    text: "The dashboard started after this conversation, so it shows what the model receives but not the original words." });
-  fill("attention", items.map((item) => h("div", { class: `callout${item.tone ? ` tone-${item.tone}` : ""}` },
-    h("span", { class: "icon", "aria-hidden": "true" }, item.icon), h("div", { class: "title" }, item.title),
-    h("div", { class: "text" }, item.text),
-    item.action ? h("button", { class: "link-btn", type: "button", onclick: item.action[1] }, `${item.action[0]} →`) : null)));
+  if (counts.unseen) items.push(line("warn", "!", `The model sees nothing of ${plural(counts.unseen, "message")}.`,
+    `Their facts were stored, but the condensed block carries at most ${maxFacts()} facts and theirs didn't make it.`, ["Show them", toMessages("unseen")]));
+  if (unsent) items.push(line("warn", "!", `${plural(unsent, "fact")} stored but not sent.`,
+    "Ranked below the facts the condensed block has room for, so the model can't see them.",
+    ["Show the facts", () => $("memory-unsent")?.scrollIntoView({ behavior: smooth(), block: "start" })]));
+  if (problems) items.push(line("warn", "!", `${plural(problems, "planned move")} didn't happen.`,
+    "Those messages stayed word for word: nothing is lost, the prompt is just bigger than planned.",
+    ["See why", () => { showTab("engine"); openCard("notmoved", true); }]));
+  if (!items.length) {
+    items.push(line("good", "✓", k.cuts ? "Nothing is out of view." : "The model sees the whole conversation.",
+      k.cuts ? "Every condensed message still reaches the model quoted, summarised or as a sent fact." : "Nothing has been condensed yet.", null,
+      next && !k.next_cut.batch_ready ? h("span", { class: "then" }, `→ ${changeForm(next)}`,
+        h("button", { class: "link-btn", type: "button", onclick: () => { showTab("engine"); openCard("rate", true); } }, "Why these?")) : null));
+  }
+  if (k.aging_in_flight) items.push(line("", "…", "LLM-GC is cleaning up this conversation.", "The map updates when it finishes."));
+  if (k.next_cut.batch_ready) items.push(line("", "→", "A clean-up runs after the next reply.", `Messages ${ranges(k.next_cut.turns)} will change form.`, ["Show them", toMessages("next")]));
+  if (contradicted) items.push(line("", "↺", `${plural(contradicted, "fact")} contradicted later.`,
+    "The newer fact is sent and the old one isn't. Check the replacement is the one you meant.", ["Show them", toMessages("superseded")]));
+  if (!captured()) items.push(line("", "i", "What was said wasn't captured.",
+    "The dashboard started after this conversation, so it shows what the model receives but not the original words."));
+  fill("status", items);
 }
 
-// ----------------------------------------------------------------- the conversation: message by message
+// ----------------------------------------------------------------- the prompt: cost, holdings, window
+
+export function renderSize(k) {
+  const written = captured() ? state.transcript.recorded_tokens : null;
+  const sent = k.context_tokens;
+  const saved = written === null ? null : written - sent;
+  const [tone, text] = written === null ? ["", "The words weren't captured, so there's nothing to compare with"]
+    : k.cuts === 0 ? ["", "Same as written: nothing condensed yet"]
+    : saved >= 0 ? ["good", `↓ ${fmt(saved)} saved · ${percent(saved, written)}% less than as written`]
+    : ["", `↑ ${fmt(-saved)} more than as written: the condensed block outgrew what it replaced`];
+  fill("panel-size",
+    h("div", { class: "label" }, "Sent to the model on every message", info("size")),
+    h("div", { class: "hero-row" }, h("span", { class: "hero" }, countEl("size-sent", sent)), h("span", { class: "hero-unit" }, "tokens"),
+      h("span", { class: `delta${tone ? ` ${tone}` : ""}` }, text)),
+    h("p", { class: "hero-sub" }, "The whole conversation so far, as the model gets it. Your new message comes on top of this."));
+}
+
+export function renderHolds(k) {
+  const counts = countCats(k);
+  const next = k.turns.filter((t) => t.becomes).length;
+  const rows = ORDER.filter((key) => key !== "superseded" || counts.superseded).map((key) => h("li",
+    { class: key === "unseen" && counts.unseen ? "alert" : counts[key] ? "" : "zero" },
+    h("i", { class: `hb f-${key}`, style: `height:${Math.max(3, Math.round(HEIGHT[key] * 0.13))}px` }),
+    h("span", {}, CATS[key].label), h("b", {}, countEl(`holds-${key}`, counts[key]))));
+  fill("panel-holds",
+    h("div", { class: "label" }, "What the model holds"),
+    h("ul", { class: "holds" }, rows),
+    h("div", { class: "note" }, `Of ${plural(k.turns.length, "recorded message")}; your newest is counted once its reply arrives.`,
+      next ? [` ${changeForm(next)} `, h("button", { class: "link-btn", type: "button", onclick: () => { showTab("engine"); openCard("rate", true); } }, "Why?")] : null));
+}
+
+export function renderWindow(k) {
+  const w = state.config ? state.config.context_window : null;
+  const share = w ? k.context_tokens / w : 0;
+  fill("panel-window",
+    h("div", { class: "label" }, "The model's window", info("window")),
+    h("div", { class: "tile-big" }, w ? [countEl("window-pct", share * 100, { format: (v) => (v < 0.1 && v > 0 ? "<0.1" : v.toFixed(v < 10 ? 1 : 0)) }), "%"] : "—", h("small", {}, " used")),
+    h("div", { class: "meter", role: "meter", "aria-valuemin": "0", "aria-valuemax": String(w || 0), "aria-valuenow": String(k.context_tokens), "aria-label": "Share of the model's window" },
+      meterBar("window-share", share * 100)),
+    h("div", { class: "note" }, w ? `${fmt(k.context_tokens)} of ${fmt(w)} tokens, before your next message` : "window size not reported"));
+}
+
+// ----------------------------------------------------------------- the map: what the model has of each message
+
+// One bar per message, reused across renders and keyed by message: a clean-up changes a bar's
+// colour and height in place, which is what lets the change transition instead of jumping.
+const barCache = new Map();
+let lastCats = new Map();
+let ledgerSegs = null;
+export function clearMapCache() { barCache.clear(); lastCats = new Map(); ledgerSegs = null; }
+
+// Appends what is new instead of re-inserting what is already there: an element taken out of the
+// page and put back loses its running transition.
+function reconcile(host, nodes) {
+  const current = [...host.children];
+  if (current.length <= nodes.length && current.every((node, i) => node === nodes[i])) {
+    for (const node of nodes.slice(current.length)) host.appendChild(node);
+  } else setChildren(host, nodes);
+}
+
+function ledger() {
+  if (!ledgerSegs) {
+    ledgerSegs = Object.fromEntries(["block", "saved", "recent", "pending"].map((key) => [key, h("div", { class: `an-s ${key}` }, h("i"))]));
+    setChildren($("an-ledger"), Object.values(ledgerSegs));
+  }
+  return ledgerSegs;
+}
+
+export function renderMap(k) {
+  const said = saidByTurn();
+  const facts = factsByTurn(k);
+  const items = [
+    ...k.turns.map((t) => ({ turn: t, i: t.turn_index, cat: categoryOf(t), tok: said.get(t.turn_index)?.tokens ?? t.tokens ?? null,
+      role: said.get(t.turn_index)?.role ?? t.role, text: said.get(t.turn_index)?.text ?? t.text })),
+    ...pendingTurns(k).map((p) => ({ pending: true, i: p.turn_index, cat: "pending", tok: p.tokens, role: p.role, text: p.text })),
+  ];
+  const barsHost = $("an-bars");
+  // Widths are tokens, with a floor of about MIN_BAR_PX so a one-token message stays visible and clickable.
+  const total = items.reduce((n, x) => n + (x.tok ?? 0), 0) || items.length || 1;
+  const floor = (total * MIN_BAR_PX) / Math.max(240, barsHost.clientWidth || 900);
+  const width = (x) => Math.max(x.tok ?? floor, floor);
+  barsHost.classList.toggle("dense", items.length > 80);
+  barsHost.classList.toggle("searching", !!query());
+  $("map").setAttribute("aria-label", `Every message in order, oldest first: ${items.length} in all`);
+
+  const groupOf = (x) => x.pending ? "newest" : x.cat !== "verbatim" ? "condensed" : x.turn.becomes ? "next" : "kept";
+  const runs = [];
+  for (const x of items) {
+    const g = groupOf(x), r = runs.at(-1);
+    if (r && r.g === g) { r.n++; r.w += width(x); } else runs.push({ g, n: 1, w: width(x) });
+  }
+  const GROUP = { condensed: "Condensed", next: "Next clean-up", kept: "Word for word", newest: "" };
+  setChildren($("an-labels"), runs.map((r) => h("div", { class: "an-l", style: `flex-grow:${r.w}` },
+    h("span", { title: r.g === "newest" ? "Your newest message" : null }, r.g === "newest" ? " " : [h("b", {}, GROUP[r.g]), ` · ${r.n}`]))));
+
+  let changed = 0;
+  const cells = items.map((x) => {
+    let el = barCache.get(x.i);
+    if (!el) {
+      el = h("div", { class: "bar", tabindex: "0", role: "button",
+        onclick: () => jumpTo(el._i),
+        onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); jumpTo(el._i); } },
+        onpointerenter: (e) => { showTooltip(e, ...el._tip); trace([el._i]); },
+        onpointerleave: () => { hideTooltip(); trace(null); },
+        onfocus: (e) => { showTooltip(e, ...el._tip); trace([el._i]); },
+        onblur: () => { hideTooltip(); trace(null); } });
+      el._cell = h("div", { class: "an-c" }, el);
+      barCache.set(x.i, el);
+    }
+    el._i = x.i;
+    el._cell.style.flexGrow = String(width(x));
+    const t = x.turn;
+    const hit = query() ? (x.pending ? has(x.text) : turnMatches(t, said, facts)) : null;
+    el.className = `bar${x.pending ? " pending" : ` f-${x.cat}`}${hit === null ? "" : hit ? " hit" : " miss"}`;
+    const before = lastCats.get(x.i);
+    el.style.setProperty("--d", before !== undefined && before !== x.cat ? `${(changed++ * 0.03).toFixed(2)}s` : "0s");
+    lastCats.set(x.i, x.cat);
+    el.style.setProperty("--h", `${x.pending ? 100 : HEIGHT[x.cat]}%`);
+    setChildren(el, t && t.becomes ? h("span", { class: "q", style: `--qb:var(--fid-${BECOMES_CAT[t.becomes]})` }) : null);
+    const size = x.tok === null ? "size not captured" : plural(x.tok, "token");
+    const keeps = (facts.get(x.i) || []).filter((f) => f.status === "active");
+    el.setAttribute("aria-label", `Message ${x.i}, ${speakerName(x.role)}, ${size}: ${x.pending ? "newest, not recorded yet" : CATS[x.cat].label}`);
+    el._tip = x.pending
+      ? [`Message ${x.i} · ${speakerName(x.role)} · ${size}`, "Your newest message: recorded, with its reply, once the next request arrives.", tipQuote(preview(x.text))]
+      : [[swatch(x.cat), `Message ${x.i} · ${speakerName(x.role)} · ${size}`], `${CATS[x.cat].label}: ${CATS[x.cat].desc}`,
+        t.becomes ? `Next clean-up: ${BECOMES[t.becomes]}. ${whyText(t)}` : null,
+        GONE.has(x.cat) && keeps.length ? `Keeps ${plural(keeps.length, "fact")}, ${keeps.filter((f) => f.sent).length} sent` : null,
+        tipQuote(preview(x.text)), h("div", { class: "tip-row muted" }, "Click to open it")];
+    return el._cell;
+  });
+  reconcile(barsHost, cells);
+
+  // The Sent row: the condensed block and the saving split the width of the condensed messages
+  // above them, and recent messages sit under themselves.
+  const segs = ledger();
+  const cond = items.filter((x) => !x.pending && x.cat !== "verbatim");
+  const verb = items.filter((x) => !x.pending && x.cat === "verbatim");
+  const pend = items.filter((x) => x.pending);
+  const sum = (list) => list.reduce((n, x) => n + width(x), 0);
+  const written = captured() ? state.transcript.recorded_tokens : null;
+  const saved = written === null ? null : written - k.context_tokens;
+  const condW = sum(cond);
+  const blockW = condW && saved > 0 ? (condW * k.front_tokens) / (k.front_tokens + saved) : condW;
+  const recent = k.context_tokens - k.front_tokens;
+  const pendTok = pend.reduce((n, x) => n + (x.tok ?? 0), 0);
+  const parts = {
+    block: [blockW, `The condensed block · ${plural(k.front_tokens, "token")}`, "Stands in for the condensed messages above it.", cond],
+    saved: [condW - blockW, `Saved · ${plural(saved ?? 0, "token")}`, "What clean-ups took out of every request.", cond],
+    recent: [sum(verb), `Recent messages · ${plural(recent, "token")}`, "Sent word for word.", verb],
+    pending: [sum(pend), `Your newest · ${plural(pendTok, "token")}`, "Sent with your next request, on top of the rest.", pend],
+  };
+  for (const [key, [grow, title, text, list]] of Object.entries(parts)) {
+    const seg = segs[key];
+    seg.style.flexGrow = String(grow);
+    seg.classList.toggle("zero", !grow);
+    seg.onpointerenter = (e) => { showTooltip(e, title, text); trace(list.map((x) => x.i), seg); };
+    seg.onpointerleave = () => { hideTooltip(); trace(null); };
+  }
+  renderKey(k, items, { saved, recent, pendTok });
+}
+
+// The key mirrors the map's two rows: what a bar means, then what the Sent row is made of.
+function renderKey(k, items, { saved, recent, pendTok }) {
+  const counts = countCats(k);
+  const queued = k.turns.some((t) => t.becomes);
+  const pending = items.some((x) => x.pending);
+  const item = (mark, ...text) => h("span", {}, mark, h("span", {}, ...text));
+  fill("an-key",
+    h("div", { class: "an-rowlab" }, "Bars"),
+    h("div", { class: "items" },
+      ORDER.filter((key) => counts[key]).map((key) => item(h("i", { class: `lg f-${key}`, style: `height:${Math.max(3, Math.round(HEIGHT[key] * 0.14))}px` }), CATS[key].label)),
+      queued ? item(h("i", { class: "qdot" }), "Dot: queued for the next clean-up, in the colour it will become") : null,
+      pending ? item(h("i", { class: "key pending" }), "Outline: your newest message") : null),
+    h("div", { class: "an-rowlab" }, "Sent"),
+    h("div", { class: "items" },
+      k.front_tokens ? item(h("i", { class: "key block" }), "Condensed block ", h("b", {}, fmt(k.front_tokens))) : null,
+      saved > 0 && k.front_tokens ? item(h("i", { class: "key saved" }), "Saved ", h("b", {}, fmt(saved))) : null,
+      saved < 0 ? item(null, "The condensed block is ", h("b", {}, fmt(-saved)), " tokens larger than what it replaced") : null,
+      item(h("i", { class: "key recent" }), "Recent messages ", h("b", {}, fmt(recent))),
+      pending ? item(h("i", { class: "key pending" }), "Your newest ", h("b", {}, fmt(pendTok)), ", sent next") : null));
+}
+
+// Hovering a message anywhere traces it: its bar, its Sent segment, its row, and its rating.
+export function trace(ids, seg = null) {
+  for (const el of document.querySelectorAll(".linked")) el.classList.remove("linked");
+  $("an-bars").classList.toggle("tracing", !!ids);
+  $("an-ledger").classList.toggle("tracing", !!ids);
+  if (!ids) return;
+  const k = state.knowledge;
+  const segs = ledger();
+  // Summary rows and quotes stand for several messages; they carry them in data-turns.
+  for (const row of document.querySelectorAll("#timeline [data-turns]")) {
+    if (row.dataset.turns.split(",").map(Number).some((n) => ids.includes(n))) row.classList.add("linked");
+  }
+  for (const i of ids) {
+    barCache.get(i)?.classList.add("linked");
+    $(`r-${i}`)?.classList.add("linked");
+    const t = k && k.turns.find((x) => x.turn_index === i);
+    const key = !t ? "pending" : t.fidelity !== "verbatim" ? "block" : "recent";
+    segs[key].classList.add("linked");
+    if (key === "block") segs.saved.classList.add("linked");
+  }
+  if (seg) seg.classList.add("linked");
+}
+
+// After a clean-up the condensed bars shrink first, then the block slides in beneath them; a brief
+// glow marks where they went.
+export function celebrateCleanup() {
+  if (reducedMotion() || !ledgerSegs) return;
+  const block = ledgerSegs.block;
+  setTimeout(() => { block.classList.add("landed"); setTimeout(() => block.classList.remove("landed"), 1100); }, 900);
+}
+
+// ----------------------------------------------------------------- message by message
 
 export function setFilter(key) {
   ui.filter = key;
+  ui.listOpen = true;
   if (ui.promptView) setPromptView(false);
   renderMessages();
-  if (state.knowledge) renderLegend(state.knowledge, countCats(state.knowledge));
 }
 
 export function renderMessages() {
@@ -216,10 +300,15 @@ export function renderChips(k) {
   const pending = pendingTurns(k).length;
   const nextCount = k.turns.filter((t) => t.becomes).length;
   const chip = (key, label, count, mark) => h("button", { class: "chip-btn", type: "button", "aria-pressed": String(ui.filter === key),
-    onclick: () => setFilter(ui.filter === key && key !== "all" ? "all" : key) }, mark, label, h("span", { class: "count" }, fmt(count)));
+    onclick: () => setFilter(ui.filter === key && key !== "all" ? "all" : key) }, mark, label, h("span", { class: "count" }, countEl(`chip-${key}`, count)));
+  const toggle = h("button", { class: "list-toggle", type: "button", "aria-controls": "timeline", "aria-expanded": String(ui.listOpen),
+    "aria-label": ui.listOpen ? "Hide the messages" : "Show the messages", title: ui.listOpen ? "Hide the messages" : "Show the messages",
+    onclick: () => { ui.listOpen = !ui.listOpen; storeSet("llmgc.messages", ui.listOpen ? "open" : "closed"); renderChips(k); renderTimeline(k); } },
+    svg("svg", { width: 14, height: 14, viewBox: "0 0 16 16", "aria-hidden": "true" },
+      svg("path", { d: "M4 6l4 4 4-4", fill: "none", stroke: "currentColor", "stroke-width": 1.8, "stroke-linecap": "round", "stroke-linejoin": "round" })));
   fill("chips", chip("all", "All", k.turns.length + pending),
     ORDER.filter((key) => counts[key]).map((key) => chip(key, CATS[key].label, counts[key], swatch(key))),
-    nextCount ? chip("next", "Next clean-up", nextCount, h("span", { class: "swatch will-swatch" })) : null);
+    nextCount ? chip("next", "Next clean-up", nextCount, h("span", { class: "qdot" })) : null, toggle);
 }
 
 export function buildRows(k) {
@@ -263,23 +352,68 @@ export function foldRuns(rows) {
   return out;
 }
 
+// How many original messages a row stands for: a run or a summary speaks for several at once.
+export function rowMessageCount(row) {
+  return row.kind === "run" ? row.rows.length : row.kind === "summary" ? row.turns.length : 1;
+}
+
+const isQueued = (row) => row.kind === "turn" && row.cat === "verbatim" && !!row.turn.becomes;
+const isCondensed = (row) => row.kind === "run" || row.kind === "summary" || (row.kind === "turn" && row.cat !== "verbatim");
+
 export function renderTimeline(k) {
   const said = saidByTurn();
   const facts = factsByTurn(k);
   const all = buildRows(k);
   const visible = all.filter((row) => rowVisible(row, said, facts));
-  const items = foldRuns(visible).map((row) => row.kind === "run" ? runRow(row, said, facts)
-    : row.kind === "summary" ? summaryRow(row, said) : row.kind === "pending" ? pendingRow(row.pending) : turnRow(row.turn, said, facts));
+  // Newest first: what the model sees now leads, and older history reads on below it.
+  const folded = foldRuns(visible).reverse();
   const filtered = ui.filter !== "all" || query();
+  // Unfiltered, a long conversation shows only its newest messages; the rest sit behind a button at
+  // the foot. Filtering, searching or jumping to a message shows everything that matches.
+  const canFold = !filtered && folded.length - EARLIER_SHOWN >= RUN_MIN;
+  const foldOlder = canFold && !ui.earlierOpen;
+  const shown = foldOlder ? folded.slice(0, EARLIER_SHOWN) : folded;
+  // One line marks where the next clean-up's queue starts, and one where the condensed block starts.
+  const items = [];
+  let pastQueued = false, pastCondensed = false;
+  for (const row of shown) {
+    if (!filtered && !pastQueued && !pastCondensed && isQueued(row)) {
+      pastQueued = true;
+      items.push(h("div", { class: "boundary" }, h("span", {}, "↑ Stays word for word · ↓ Queued for the next clean-up")));
+    }
+    if (!filtered && !pastCondensed && isCondensed(row)) {
+      pastCondensed = true;
+      items.push(h("div", { class: "boundary" }, h("span", {}, "↑ Sent word for word · ↓ In the condensed block, ", h("b", {}, fmt(k.front_tokens)), " tokens")));
+    }
+    items.push(row.kind === "run" ? runRow(row, said, facts) : row.kind === "summary" ? summaryRow(row, said)
+      : row.kind === "pending" ? pendingRow(row.pending) : turnRow(row.turn, said, facts));
+  }
+  const timeline = $("timeline");
+  timeline.hidden = !ui.listOpen;
   const note = $("filter-note");
-  note.hidden = !filtered;
+  note.hidden = !filtered || !ui.listOpen;
   if (filtered) {
-    const shown = visible.reduce((n, row) => n + (row.kind === "summary" ? row.turns.length : 1), 0);
-    setChildren(note, `Showing ${plural(shown, "message")}${query() ? ` matching “${ui.query.trim()}”` : ""}${ui.filter !== "all" ? ` · ${ui.filter === "next" ? "next clean-up" : CATS[ui.filter].tag}` : ""}`,
+    const shownCount = visible.reduce((n, row) => n + (row.kind === "summary" ? row.turns.length : 1), 0);
+    setChildren(note, `Showing ${plural(shownCount, "message")}${query() ? ` matching “${ui.query.trim()}”` : ""}${ui.filter !== "all" ? ` · ${ui.filter === "next" ? "next clean-up" : CATS[ui.filter].tag}` : ""}`,
       h("button", { class: "link-btn", type: "button", onclick: () => { ui.query = ""; $("search").value = ""; setFilter("all"); } }, "Show all"));
   }
-  setChildren($("timeline"), items.length ? items : h("p", { class: "empty", style: "padding:14px 0" },
-    filtered ? "No message matches." : "No messages recorded yet."));
+  const olderCount = folded.slice(EARLIER_SHOWN).reduce((n, row) => n + rowMessageCount(row), 0);
+  const setOlder = (open) => {
+    ui.earlierOpen = open;
+    renderTimeline(state.knowledge);
+    // Folding back shortens the list from below; keep the button in view rather than the page's foot.
+    if (!open) $("older-toggle")?.scrollIntoView({ block: "nearest" });
+  };
+  const olderBtn = canFold ? h("div", { class: "earlier-row" },
+    h("button", { class: "link-btn", id: "older-toggle", type: "button", "aria-expanded": String(!foldOlder), onclick: () => setOlder(foldOlder) },
+      foldOlder ? `Show ${plural(olderCount, "older message")}` : "Show fewer messages")) : null;
+  setChildren(timeline, items.length ? items : h("p", { class: "empty", style: "padding:14px 0" },
+    filtered ? "No message matches." : "No messages recorded yet."), olderBtn);
+  for (const row of timeline.querySelectorAll("[data-turns]")) {
+    const ids = row.dataset.turns.split(",").map(Number);
+    row.addEventListener("pointerenter", () => trace(ids));
+    row.addEventListener("pointerleave", () => trace(null));
+  }
 }
 
 export function textBlock(text, { faded = false, key = null } = {}) {
@@ -303,48 +437,63 @@ export function fidTag(cat) {
   return h("span", { class: "tag", ...hoverTip(CATS[cat].label, GLOSSARY[cat][1]) }, swatch(cat), CATS[cat].tag);
 }
 
-export function factRow(fact, { withFrom = true, onclick = null, besideItsTurn = false } = {}) {
+const factStatus = (fact) => fact.status === "superseded"
+  ? h("span", {}, h("span", { class: "st" }, "↺ "), fact.superseded_by_turn !== null ? `replaced by #${fact.superseded_by_turn}` : "replaced")
+  : fact.sent ? h("span", {}, h("span", { class: "st good" }, "✓ "), "sent") : h("span", {}, h("span", { class: "st warn" }, "⚠ "), "not sent");
+
+// A fact in the sidebar: its topic above what it says, and whether the model is sent it.
+export function factRow(fact, { withFrom = true, onclick = null } = {}) {
   const raw = fact.knowledge_type === "raw";
-  // Beside its own message, an excerpt of that whole message would only repeat the words above it.
-  const wholeTurn = besideItsTurn && raw && fact.source_turns.length === 1;
-  const status = fact.status === "superseded"
-    ? h("span", {}, h("span", { class: "st" }, "↺ "), fact.superseded_by_turn !== null ? `replaced by #${fact.superseded_by_turn}` : "replaced")
-    : fact.sent ? h("span", {}, h("span", { class: "st good" }, "✓ "), "sent") : h("span", {}, h("span", { class: "st warn" }, "⚠ "), "not sent");
   return h(onclick ? "button" : "div", { class: `fact s-${fact.status}`, type: onclick ? "button" : null, onclick,
     title: onclick ? "Show the message it came from" : null },
     h("span", { class: "fact-topic", title: raw ? "an excerpt: nothing more specific could be pulled out" : fact.topic }, raw ? "excerpt" : fact.topic),
-    h("span", { class: "fact-what" }, wholeTurn ? h("span", { class: "muted" }, "the message itself, kept as an excerpt (nothing more specific could be pulled out)") : marked(fact.content)),
-    h("span", { class: "fact-meta" }, withFrom ? h("span", { class: "num" }, `#${ranges(fact.source_turns)}`) : null, status));
+    h("span", { class: "fact-what" }, marked(fact.content)),
+    h("span", { class: "fact-meta" }, withFrom ? h("span", { class: "num" }, `#${ranges(fact.source_turns)}`) : null, factStatus(fact)));
 }
 
-export function nextTag(becomes) {
-  return h("span", { class: "tag next", ...hoverTip("Next clean-up", `This message will be ${BECOMES[becomes]} when the next clean-up runs.`) },
-    h("span", { class: `swatch f-${BECOMES_CAT[becomes]}` }), `next: ${BECOMES[becomes]}`);
+// A fact beside the message it came from, as a compact topic-and-value chip.
+function factChip(fact) {
+  const raw = fact.knowledge_type === "raw";
+  // Beside its own message, an excerpt of that whole message would only repeat the words above it.
+  const wholeTurn = raw && fact.source_turns.length === 1;
+  return h("span", { class: `fact-chip s-${fact.status}` }, h("b", {}, raw ? "excerpt" : fact.topic),
+    h("span", {}, wholeTurn ? "the message itself" : marked(fact.content)), factStatus(fact));
+}
+
+// "next: summarised" explains itself: hover for the reason, click for its rating on the Engine tab.
+export function nextTag(turn) {
+  return h("button", { class: "tag next why", type: "button", "aria-label": `Next clean-up: ${BECOMES[turn.becomes]}. Show why on the Engine tab`,
+    onpointerenter: (e) => showTooltip(e, `Why ${BECOMES[turn.becomes]}?`, whyText(turn), h("div", { class: "tip-row muted" }, "Click to see its rating on the Engine tab")),
+    onpointerleave: hideTooltip, onclick: () => { hideTooltip(); showWhy(turn.turn_index); } },
+    h("span", { class: `swatch f-${BECOMES_CAT[turn.becomes]}` }), `next: ${BECOMES[turn.becomes]}`);
 }
 
 export function turnRow(turn, said, facts) {
   const cat = categoryOf(turn);
   const words = said.get(turn.turn_index);
+  const role = words ? words.role : turn.role;
   const kept = facts.get(turn.turn_index) || [];
   const key = `t-${turn.turn_index}`;
+  const tokens = words?.tokens ?? turn.tokens;
   let body;
   if (cat === "verbatim") body = textBlock(turn.text, { key });
   else if (cat === "quoted") body = textBlock(words ? words.text : state.knowledge.front_entries[turn.front_entry].stated_text, { key });
   else {
     const intro = cat === "unseen" ? [h("span", { class: "st warn" }, "⚠ "), "The model sees nothing of this message. Stored, but not sent:"]
-      : cat === "superseded" ? "Contradicted later, so no longer sent:" : "The model no longer sees this message. It keeps:";
+      : cat === "superseded" ? "Contradicted later, so no longer sent:" : "The model keeps:";
     body = [textBlock(words?.text, { faded: true, key }), h("div", { class: "keeps" }, h("div", { class: "keeps-intro" }, intro),
-      kept.length ? kept.map((f) => factRow(f, { withFrom: false, besideItsTurn: true })) : h("div", { class: "lost" }, "nothing"))];
+      kept.length ? kept.map(factChip) : h("span", { class: "lost" }, "nothing"))];
   }
-  return h("article", { class: `msg f-${cat}`, id: `turn-${turn.turn_index}` },
+  // The common case carries no badge: only a message that changed, or is about to, is tagged.
+  return h("article", { class: `msg${GONE.has(cat) ? " gone" : ""}`, id: `turn-${turn.turn_index}`, "data-turns": String(turn.turn_index) },
     h("div", { class: "msg-no" }, turn.turn_index),
-    h("div", { class: "msg-rail" }),
+    avatar(role),
     h("div", { class: "msg-body" },
       h("div", { class: "msg-head" },
-        h("span", { class: "who" }, speaker(words ? words.role : turn.role)),
-        fidTag(cat),
-        turn.becomes ? nextTag(turn.becomes) : null,
-        turn.tokens ? h("span", { class: "num" }, plural(turn.tokens, "token")) : null),
+        h("span", { class: "who" }, speakerName(role)),
+        cat !== "verbatim" ? fidTag(cat) : null,
+        turn.becomes ? nextTag(turn) : null,
+        tokens && (cat === "verbatim" || cat === "quoted") ? h("span", { class: "tok" }, plural(tokens, "token")) : null),
       body));
 }
 
@@ -353,26 +502,25 @@ export function summaryRow(row, said) {
   const first = turns[0].turn_index, last = turns.at(-1).turn_index;
   const key = `orig-${first}`;
   const open = ui.open.has(key) || (query() && turns.some((t) => has(said.get(t.turn_index)?.text)));
-  return h("article", { class: "msg f-summarised", id: `entry-${first}` },
+  return h("article", { class: "msg", id: `entry-${first}`, "data-turns": turns.map((t) => t.turn_index).join(",") },
     h("div", { class: "msg-no" }, first === last ? first : `${first}–${last}`),
-    h("div", { class: "msg-rail" }),
+    h("div", { "aria-hidden": "true" }),
     h("div", { class: "msg-body" },
-      h("div", { class: "msg-head" }, h("span", { class: "who" }, plural(turns.length, "message")), fidTag("summarised"),
-        h("span", {}, "the model reads this summary instead of what was said")),
-      h("div", { class: "summary-box" }, h("div", { class: "label" }, `Summary · ${plural(entry.tokens, "token")}`), h("div", { class: "text" }, marked(entry.stated_text))),
+      h("div", { class: "msg-head" }, h("span", { class: "who" }, plural(turns.length, "message")), fidTag("summarised")),
+      h("div", { class: "summary-box" }, h("div", { class: "label" }, `The model reads this instead · ${plural(entry.tokens, "token")}`), h("div", { class: "text" }, marked(entry.stated_text))),
       h("button", { class: "more orig-toggle", type: "button", "aria-expanded": String(!!open),
         onclick: () => { if (ui.open.has(key)) ui.open.delete(key); else ui.open.add(key); renderTimeline(state.knowledge); } },
         `${open ? "Hide" : "Show"} what was said in ${turns.length > 1 ? `messages ${first}–${last}` : `message ${first}`}`),
       open ? turns.map((t) => h("div", { class: "orig", id: `turn-${t.turn_index}` },
-        h("div", { class: "msg-head" }, h("span", { class: "who" }, speaker(said.get(t.turn_index)?.role)), h("span", { class: "num" }, `message ${t.turn_index}`)),
+        h("div", { class: "msg-head" }, h("span", { class: "who" }, speakerName(said.get(t.turn_index)?.role)), h("span", { class: "num" }, `message ${t.turn_index}`)),
         textBlock(said.get(t.turn_index)?.text, { faded: true, key: `t-${t.turn_index}` }))) : null));
 }
 
 export function pendingRow(p) {
-  return h("article", { class: "msg f-verbatim pending", id: `turn-${p.turn_index}` },
-    h("div", { class: "msg-no" }, p.turn_index), h("div", { class: "msg-rail" }),
+  return h("article", { class: "msg pending", id: `turn-${p.turn_index}`, "data-turns": String(p.turn_index) },
+    h("div", { class: "msg-no" }, p.turn_index), avatar(p.role),
     h("div", { class: "msg-body" },
-      h("div", { class: "msg-head" }, h("span", { class: "who" }, speaker(p.role)), h("span", { class: "tag" }, "newest message"),
+      h("div", { class: "msg-head" }, h("span", { class: "who" }, speakerName(p.role)), h("span", { class: "tag" }, "newest"),
         h("span", {}, "recorded, with its reply, once the next request arrives")),
       textBlock(p.text, { key: `t-${p.turn_index}` })));
 }
@@ -393,7 +541,7 @@ export function runRow(run, said, facts) {
         h("span", { class: "run-sub" }, h("span", { class: "minis" }, run.rows.map((row) => h("span", { class: `mini f-${row.cat}` }))),
           ORDER.filter((c) => counts[c]).map((c) => `${counts[c]} ${CATS[c].tag}`).join(" · "))),
       h("span", { class: "run-toggle" }, open ? "Hide" : "Show")),
-    open ? run.rows.map((row) => turnRow(row.turn, said, facts)) : null);
+    open ? [...run.rows].reverse().map((row) => turnRow(row.turn, said, facts)) : null);
 }
 
 export function jumpTo(turnIndex) {
@@ -406,6 +554,9 @@ export function jumpTo(turnIndex) {
   const facts = factsByTurn(k);
   const row = turn ? buildRows(k).find((r) => r.kind === "turn" ? r.turn === turn : r.kind === "summary" && r.turns.includes(turn)) : null;
   if (row && !rowVisible(row, said, facts)) { ui.filter = "all"; ui.query = ""; $("search").value = ""; }
+  // A message folded away, or in a hidden list, still needs to be reachable from the map.
+  ui.earlierOpen = true;
+  ui.listOpen = true;
   if (turn && turn.fidelity === "summarised") {
     const entryRow = buildRows(k).find((r) => r.kind === "summary" && r.turns.includes(turn));
     ui.open.add(`orig-${entryRow.turns[0].turn_index}`);
@@ -417,7 +568,7 @@ export function jumpTo(turnIndex) {
   renderMessages();
   const target = $(`turn-${turnIndex}`);
   if (!target) return;
-  target.scrollIntoView({ behavior: "smooth", block: "center" });
+  target.scrollIntoView({ behavior: smooth(), block: "center" });
   target.classList.add("flash");
   setTimeout(() => target.classList.remove("flash"), 1600);
 }
@@ -434,7 +585,7 @@ export function renderPrompt(k) {
       k.front_text ? "The condensed block stays byte for byte the same until the next clean-up, so the provider can keep it cached."
         : "Nothing has been condensed, so your app's own request is forwarded untouched."), copy),
     k.front_text ? h("div", { class: "prompt-msg front" }, h("div", { class: "msg-head" }, h("span", { class: "who" }, "user"),
-      h("span", { class: "tag" }, swatch("summarised"), `the condensed block · ${plural(k.front_tokens, "token")}`), info("block")), h("pre", {}, marked(k.front_text))) : null,
+      h("span", { class: "tag" }, h("span", { class: "key block" }), `the condensed block · ${plural(k.front_tokens, "token")}`), info("block")), h("pre", {}, marked(k.front_text))) : null,
     tail.map((t) => h("div", { class: "prompt-msg" }, h("div", { class: "msg-head" }, h("span", { class: "who" }, t.role),
       h("span", { class: "num" }, `message ${t.turn_index} · ${plural(t.tokens, "token")}`)), h("pre", {}, marked(t.text || "(no text)")))));
 }
@@ -444,9 +595,9 @@ export function setPromptView(on) {
   $("view-prompt").setAttribute("aria-pressed", String(on));
   $("view-timeline").setAttribute("aria-pressed", String(!on));
   $("prompt").hidden = !on;
-  $("timeline").hidden = on;
+  $("timeline").hidden = on || !ui.listOpen;
   $("chips").hidden = on;
-  $("filter-note").hidden = on || (ui.filter === "all" && !query());
+  $("filter-note").hidden = on || !ui.listOpen || (ui.filter === "all" && !query());
   if (state.knowledge) { if (on) renderPrompt(state.knowledge); else renderTimeline(state.knowledge); }
 }
 
@@ -460,7 +611,7 @@ export function renderMemory(k) {
     { id: "superseded", title: "Contradicted later", icon: h("span", { class: "st" }, "↺"), facts: k.facts.filter((f) => f.status === "superseded") },
   ];
   if (!k.facts.length) {
-    fill("memory", h("p", { class: "empty" }, "Nothing has been reduced to facts yet. Facts appear when a clean-up condenses a message that has gone cold."));
+    fill("memory", h("p", { class: "empty", style: "margin-top:10px" }, "Nothing yet. When a clean-up condenses a message, the facts it established appear here."));
     return;
   }
   fill("memory",
@@ -477,4 +628,21 @@ export function renderMemory(k) {
           all ? "Show fewer" : `Show all ${shown.length}`) : null);
     }),
     query() && !k.facts.some(matches) ? h("p", { class: "empty" }, "No fact matches.") : null);
+}
+
+// The clean-ups beside the facts: when each was made and what it did, then what comes next.
+export function renderCleanupLog() {
+  const k = state.knowledge;
+  if (!k) return;
+  const passes = state.activity ? state.activity.recent_passes : [];
+  const cuts = passes.filter((p) => p.gc_status === "completed" && p.tokens_saved > 0).reverse().slice(0, 3);
+  const next = k.turns.filter((t) => t.becomes).length;
+  const whenWhy = h("button", { class: "link-btn", type: "button", onclick: () => { showTab("engine"); openCard("next", true); } }, "When and why");
+  fill("cleanup-log",
+    cuts.length ? cuts.map((p) => h("li", {}, h("div", {},
+      h("b", {}, "Clean-up"), h("span", { class: "when" }, ` · ${agoTs(p.gc_completed_at)}`),
+      h("div", { class: "muted" }, `${p.compact_count} summarised · ${p.archive_count} reduced to facts · ${fmt(p.tokens_before)} → ${fmt(p.tokens_before - p.tokens_saved)} tokens`))))
+      : k.cuts ? null : h("li", { class: "future" }, h("div", { class: "muted" }, "No clean-ups yet.")),
+    h("li", { class: "future" }, h("div", {}, h("b", {}, "Next clean-up"),
+      h("div", { class: "muted" }, next ? `${next === 1 ? "1 message" : `${next} messages`} will change form. ` : "Nothing is queued to change yet. ", whenWhy))));
 }

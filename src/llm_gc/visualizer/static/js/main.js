@@ -1,12 +1,12 @@
 // Entry point: polling, the session picker, and wiring the controls.
 
 import { CATS, GLOSSARY, GUIDE_TERMS, ORDER, swatch } from "./vocabulary.js";
-import { $, fill, h, plural, setChildren, storeGet, storeSet } from "./dom.js";
+import { $, clearMotionCaches, fill, h, plural, setChildren, storeGet, storeSet } from "./dom.js";
 import { getJSON, sessionPath, state, ui } from "./state.js";
 import { hideTooltip } from "./tooltip.js";
-import { THEMES, applyTheme, setGuide, setLive, showTab } from "./shell.js";
-import { renderAttention, renderChips, renderHero, renderHeroMeta, renderMemory, renderMessages, renderPrompt, renderTimeline, setPromptView } from "./conversation.js";
-import { renderChart, renderChecks, renderHistory, renderLastCheck, renderProblems, renderRelevance, renderSettings, renderTiles } from "./engine.js";
+import { THEMES, applyTheme, setGuide, setLive, showCleanupNotice, showTab } from "./shell.js";
+import { celebrateCleanup, clearMapCache, renderChips, renderCleanupLog, renderHero, renderMap, renderMemory, renderMessages, renderPrompt, renderStatus, renderTimeline, setPromptView } from "./conversation.js";
+import { initCards, renderChart, renderChecks, renderEngineStatus, renderHistory, renderNext, renderProblems, renderProxy, renderRelevance, renderSettings } from "./engine.js";
 import { runGcNow } from "./run-gc.js";
 
 function renderSessions() {
@@ -28,6 +28,7 @@ function renderConversation() {
   if (ui.promptView) renderPrompt(k); else renderTimeline(k);
   renderMemory(k);
   renderRelevance(k);
+  renderNext(k);
 }
 
 async function refresh() {
@@ -41,6 +42,9 @@ async function refresh() {
       state.version = null;
       state.knowledge = null;
       ui.open.clear();
+      ui.earlierOpen = false;
+      clearMapCache();
+      clearMotionCaches();
     }
     renderSessions();
     renderSettings();
@@ -51,18 +55,25 @@ async function refresh() {
       const current = state.sessions.find((s) => s.session_id === state.selected);
       // Content changes only with the conversation's version; activity is cheap and polled every time.
       if (current.version !== state.version) {
+        const previousCuts = state.knowledge ? state.knowledge.cuts : null;
         const [k, transcript] = await Promise.all([getJSON(sessionPath()), getJSON(sessionPath("/transcript"))]);
         if (k) {
           state.knowledge = k;
           state.transcript = transcript;
           state.version = k.version;
           renderConversation();
+          if (previousCuts !== null && k.cuts > previousCuts) {
+            showCleanupNotice(k.cuts - previousCuts > 1
+              ? `${plural(k.cuts - previousCuts, "clean-up")} just ran: messages were condensed.`
+              : "A clean-up just ran: messages were condensed.");
+            celebrateCleanup();
+          }
         }
       }
       state.activity = await getJSON(sessionPath("/activity"));
-      if (state.knowledge) { renderHeroMeta(state.knowledge); renderAttention(); }
-      renderTiles();
-      renderLastCheck();
+      if (state.knowledge) { renderStatus(); renderCleanupLog(); }
+      renderProxy();
+      renderEngineStatus();
       renderChart();
       renderChecks();
       renderProblems();
@@ -93,13 +104,15 @@ document.addEventListener("keydown", (e) => {
 });
 $("session-select").addEventListener("change", (e) => {
   state.selected = e.target.value; state.version = null; state.knowledge = null;
-  ui.open.clear(); ui.filter = "all"; ui.query = ""; $("search").value = "";
+  ui.open.clear(); ui.filter = "all"; ui.query = ""; $("search").value = ""; ui.earlierOpen = false;
+  clearMapCache();
+  clearMotionCaches();
   refresh();
 });
 let searchTimer = null;
 $("search").addEventListener("input", (e) => {
   clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => { ui.query = e.target.value; renderMessages(); }, 120);
+  searchTimer = setTimeout(() => { ui.query = e.target.value; if (ui.query.trim()) ui.listOpen = true; renderMessages(); }, 120);
 });
 $("theme").addEventListener("click", () => {
   const order = Object.keys(THEMES);
@@ -108,12 +121,20 @@ $("theme").addEventListener("click", () => {
   renderChart();
 });
 new ResizeObserver(() => renderChart()).observe($("chart"));
+// Bar widths keep a floor in pixels, so the map is redrawn when its width changes.
+let mapWidth = 0;
+new ResizeObserver(() => {
+  const width = $("an-bars").clientWidth;
+  if (state.knowledge && width && Math.abs(width - mapWidth) > 2) { mapWidth = width; renderMap(state.knowledge); }
+}).observe($("an-bars"));
+initCards();
 
 applyTheme(storeGet("llmgc.theme") || "system");
 $("intro").hidden = storeGet("llmgc.intro") === "dismissed";
+ui.listOpen = storeGet("llmgc.messages") !== "closed";
 fill("glossary", GUIDE_TERMS.map((term) => [h("dt", {}, GLOSSARY[term][0]), h("dd", {}, GLOSSARY[term][1])]));
 fill("guide-colours", ORDER.map((key) => h("div", {}, swatch(key), h("div", {}, h("b", {}, CATS[key].label), h("span", {}, ` — ${GLOSSARY[key][1]}`)))),
-  h("div", {}, h("span", { class: "swatch will-swatch" }), h("div", {}, h("b", {}, "Taken by the next clean-up"), h("span", {}, " — the band at the foot is what the message will become."))));
+  h("div", {}, h("span", { class: "qdot", style: "margin:3px 2px 0" }), h("div", {}, h("b", {}, "Queued for the next clean-up"), h("span", {}, " — a dot on the message's bar, in the colour it will become. On the map, a bar's height shows how much of the message the model still has, and its width how long the message is."))));
 
 refresh();
 setInterval(refresh, 1000);

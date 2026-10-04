@@ -65,3 +65,47 @@ export const agoIso = (iso) => ago((Date.now() - Date.parse(iso)) / 1000);
 
 export function storeGet(key) { try { return localStorage.getItem(key); } catch { return null; } }
 export function storeSet(key, value) { try { localStorage.setItem(key, value); } catch { /* a per-viewer convenience only */ } }
+
+// ----------------------------------------------------------------- motion: numbers that count up, meters that fill
+
+export const reducedMotion = () => { try { return matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { return false; } };
+
+const numPrev = new Map();  // key -> last value shown, so a redrawn number can tween from it instead of jumping
+const meterEls = new Map(); // key -> the one <div> that fills a meter, reused so its width transitions
+
+// A <span> holding a number that eases from whatever it last showed (under this key) to `value`,
+// instead of jumping, when the value actually changed. First draw and reduced motion skip the tween.
+export function countEl(key, value, { format = fmt } = {}) {
+  const span = document.createElement("span");
+  span.className = "num";
+  const prev = numPrev.get(key);
+  const animate = prev !== undefined && prev !== value && !reducedMotion();
+  span.textContent = format(animate ? prev : value);
+  numPrev.set(key, value);
+  if (animate) {
+    const from = prev, to = value, start = performance.now(), duration = 450;
+    const step = (now) => {
+      const t = Math.min(1, (now - start) / duration);
+      const eased = 1 - (1 - t) ** 3;
+      span.textContent = format(Math.round(from + (to - from) * eased));
+      if (t < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+  return span;
+}
+
+// The fill of a meter, as the same element every time it is drawn under this key: changing its
+// width, rather than recreating it, is what lets the CSS transition on it actually play.
+export function meterBar(key, pct, extraClass = "") {
+  let el = meterEls.get(key);
+  if (!el) { el = document.createElement("div"); meterEls.set(key, el); }
+  const some = pct > 0 ? "some" : "";
+  el.className = [some, extraClass].filter(Boolean).join(" ");
+  el.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+  return el;
+}
+
+// Forgets every tracked number and meter: called when the selected conversation changes, so a
+// value from the previous one never gets treated as "before" for the newly selected one.
+export function clearMotionCaches() { numPrev.clear(); meterEls.clear(); }

@@ -17,14 +17,15 @@
   --accent-wash: rgba(42, 120, 214, 0.10);
   --button: #2a78d6;
   --button-hover: #256abf;
-  /* Fidelity is ordinal - how much of a message the model still receives - so it
-     is one hue stepped dark (all of it) to light (little of it), never a rainbow.
-     Validated as an ordinal ramp against both surfaces. */
+  /* Fidelity is ordinal - how much of a message the model still receives - so what the model reads
+     is one hue stepped dark (all of it) to light (a summary), with the steps spaced wide enough to
+     tell apart in a narrow bar. Once only facts remain it turns neutral; out of view is the warning
+     colour. The map also encodes fidelity as bar height, so colour is never the only cue. */
   --fid-verbatim: #1c5cab;
-  --fid-quoted: #2a78d6;
-  --fid-summarised: #5598e7;
-  --fid-facts: #86b6ef;
-  --fid-gone: #a9a89f;
+  --fid-quoted: #3987e5;
+  --fid-summarised: #86b6ef;
+  --fid-facts: #a9a89f;
+  --fid-gone: #cfcec7;
   --written: #898781;
   --meter-track: #e1ecfa;
   --good: #0ca30c;
@@ -36,6 +37,16 @@
   --mark: rgba(250, 178, 25, 0.38);
   --flash: rgba(42, 120, 214, 0.18);
   --topbar: rgba(245, 245, 242, 0.86);
+  --good-ink: #006300;
+  --warn-ink: #7a5200;
+  --hatch: rgba(11, 11, 11, 0.16);
+  /* depth: a lighter top for surfaces, a highlight on their top edge, the shadow they cast,
+     and the gloss and shade laid over marks */
+  --surface-hi: #ffffff;
+  --edge-hi: rgba(255, 255, 255, 0.95);
+  --lift: rgba(11, 11, 11, 0.16);
+  --gloss: rgba(255, 255, 255, 0.34);
+  --shade: rgba(0, 0, 0, 0.10);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -46,7 +57,9 @@
     --shadow: none;
     --accent: #3987e5; --accent-wash: rgba(57, 135, 229, 0.16);
     /* On a dark surface the ramp flips its anchor: brightest is most faithful. */
-    --fid-verbatim: #86b6ef; --fid-quoted: #5598e7; --fid-summarised: #2a78d6; --fid-facts: #1c5cab; --fid-gone: #5c5b56;
+    --fid-verbatim: #9ec5f4; --fid-quoted: #5598e7; --fid-summarised: #256abf; --fid-facts: #6f6e68; --fid-gone: #4a4a46;
+    --good-ink: #3fc23f; --warn-ink: #fab219; --hatch: rgba(255, 255, 255, 0.16);
+    --surface-hi: #222220; --edge-hi: rgba(255, 255, 255, 0.07); --lift: rgba(0, 0, 0, 0.6); --gloss: rgba(255, 255, 255, 0.2); --shade: rgba(0, 0, 0, 0.28);
     --meter-track: rgba(57, 135, 229, 0.17);
     --good-wash: rgba(12, 163, 12, 0.12); --warn-wash: rgba(250, 178, 25, 0.12); --critical-wash: rgba(208, 59, 59, 0.14);
     --mark: rgba(250, 178, 25, 0.32); --flash: rgba(57, 135, 229, 0.22);
@@ -60,7 +73,9 @@
   --hairline: #2c2c2a; --baseline: #3d3d3a; --border: rgba(255, 255, 255, 0.09);
   --shadow: none;
   --accent: #3987e5; --accent-wash: rgba(57, 135, 229, 0.16);
-  --fid-verbatim: #86b6ef; --fid-quoted: #5598e7; --fid-summarised: #2a78d6; --fid-facts: #1c5cab; --fid-gone: #5c5b56;
+  --fid-verbatim: #9ec5f4; --fid-quoted: #5598e7; --fid-summarised: #256abf; --fid-facts: #6f6e68; --fid-gone: #4a4a46;
+  --good-ink: #3fc23f; --warn-ink: #fab219; --hatch: rgba(255, 255, 255, 0.16);
+  --surface-hi: #222220; --edge-hi: rgba(255, 255, 255, 0.07); --lift: rgba(0, 0, 0, 0.6); --gloss: rgba(255, 255, 255, 0.2); --shade: rgba(0, 0, 0, 0.28);
   --meter-track: rgba(57, 135, 229, 0.17);
   --good-wash: rgba(12, 163, 12, 0.12); --warn-wash: rgba(250, 178, 25, 0.12); --critical-wash: rgba(208, 59, 59, 0.14);
   --mark: rgba(250, 178, 25, 0.32); --flash: rgba(57, 135, 229, 0.22);

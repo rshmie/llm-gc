@@ -5,6 +5,10 @@ import { $, compact, h } from "./dom.js";
 export const ACTION_HEADER = { "x-llm-gc-dashboard": "1" };
 export const RUN_MIN = 4;              // consecutive condensed-away messages folded into one row
 export const FACTS_SHOWN = 6;          // facts listed per group before "show all"
+export const EARLIER_SHOWN = 8;        // newest rows shown before "Show N older messages" folds the rest
+export const CHECKS_SHOWN = 5;         // rows of "Every check" before "Show all"
+export const MOVES_SHOWN = 3;          // clean-ups listed in "What moved" and "What didn't move" before "Show all"
+export const MIN_BAR_PX = 10;          // narrowest a message's bar gets on the map, so a one-token message stays clickable
 export const CELL_MAX_PX = 46;         // widest a message gets on the map
 export const CLAMP_CHARS = 420;        // longer messages start collapsed
 export const CHART_HEIGHT = 260;
@@ -57,6 +61,26 @@ export const STATUS = {
   discarded_session_closed: { tone: "", icon: "–", text: "discarded: the conversation had closed" },
 };
 export const TRANSITION = { promoted: "Summarised", archived: "Reduced to facts", superseded: "Fact contradicted" };
+// The kind of move behind each transition and each degradation, in the engine's own terms.
+export const MOVE_KIND = { promoted: "compaction", archived: "archive", superseded: null };
+export const MOVE_CAT = { promoted: "summarised", archived: "facts", superseded: "superseded" };
+export const NOT_MOVED = {
+  compaction_refused: ["Summary rejected by the safeguard", "compaction"],
+  compaction_failed: ["Summary request failed", "compaction"],
+  archive_failed: ["Facts couldn't be stored", "archive"],
+};
+// How much of a message the model still has, drawn as the height of its bar (percent of full).
+export const HEIGHT = { verbatim: 100, quoted: 100, summarised: 52, facts: 24, unseen: 24, superseded: 24 };
+// The ⓘ beside each LLM-GC at work card: the explanation its one-line subtitle leaves out.
+export const CARD_INFO = {
+  next: ["Next clean-up", "Only messages rated to be summarised (compaction) or reduced to facts (archive) count toward the target. Messages kept whole don't, whether for high relevance, being too short to condense, or being among the newest, since condensing them would save nothing. Run GC now runs a clean-up early."],
+  rate: ["How each message is rated", "Each dot is a message's relevance, from 0 to 1, against your two thresholds: below the lower one it is reduced to facts, from the upper one quoted whole, and summarised in between. A ring means a rule keeps it whole whatever its score. Only messages still word for word are rated; condensed ones keep no score."],
+  moves: ["What moved, and when", "Every message a clean-up moved, grouped by clean-up and named by kind: summarised (compaction) or reduced to facts (archive). A fact contradicted by a later message is listed too."],
+  notmoved: ["What didn't move, and why", "Moves a clean-up planned but couldn't make, with the reason: a summary the safeguard rejected, a request to the provider that failed (compaction), or facts that couldn't be stored (archive). Those messages stay word for word: nothing is lost, the prompt is just bigger."],
+  chart: ["Prompt size, check by check", "LLM-GC checks after every reply. The blue line is what the model is sent: it holds its size until a message arrives, then steps up, and drops at each clean-up. The grey line is the conversation as written. The gap between them is saved on every request."],
+  checks: ["Every check", "Checks that found nothing to do fold into one row, so clean-ups stand out in bold. A check that failed outright shows here too."],
+  settings: ["Settings in effect", "First guesses, meant to be tuned. Settings with a flag can be changed when starting the proxy; the rest are GCConfig fields."],
+};
 
 export const swatch = (key) => h("span", { class: `swatch f-${key}` });
 export const categoryOf = (turn) => turn.fidelity === "facts_only" ? (turn.facts_sent > 0 ? "facts" : "unseen") : turn.fidelity;
