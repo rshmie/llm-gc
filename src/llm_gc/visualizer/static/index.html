@@ -329,6 +329,14 @@ const TRANSITION = { promoted: "summarised into the front", archived: "reduced t
 
 const state = { config: null, sessions: [], selected: null, version: null, knowledge: null, transcript: null };
 
+// Absent parts (null, undefined, false) are skipped and nested arrays flattened.
+// The DOM's own append and replaceChildren would print them as "null" and
+// "[object HTMLDivElement]", so children are only ever set through these two.
+function nodes(children) {
+  return children.flat(Infinity).filter((child) => child !== null && child !== undefined && child !== false)
+    .map((child) => child instanceof Node ? child : document.createTextNode(String(child)));
+}
+function setChildren(target, ...children) { target.replaceChildren(...nodes(children)); }
 function h(tag, props = {}, ...children) {
   const el = document.createElement(tag);
   for (const [key, value] of Object.entries(props)) {
@@ -338,14 +346,10 @@ function h(tag, props = {}, ...children) {
     else if (key.startsWith("on")) el.addEventListener(key.slice(2), value);
     else el.setAttribute(key, value === true ? "" : value);
   }
-  for (const child of children.flat(Infinity)) {
-    if (child === null || child === undefined || child === false) continue;
-    el.append(child instanceof Node ? child : document.createTextNode(String(child)));
-  }
+  setChildren(el, ...children);
   return el;
 }
-// replaceChildren would print an absent part as "null"; h() skips it.
-const fill = (id, ...children) => document.getElementById(id).replaceChildren(h("div", { style: "display:contents" }, children));
+const fill = (id, ...children) => setChildren(document.getElementById(id), ...children);
 const fmt = (n) => Number(n).toLocaleString();
 const span = (turns) => turns.length > 1 ? `turns ${turns[0]}–${turns[turns.length - 1]}` : `turn ${turns[0]}`;
 const plural = (n, word) => `${fmt(n)} ${word}${n === 1 ? "" : "s"}`;
@@ -386,7 +390,7 @@ function showTab(name) {
 
 function showTooltip(event, ...rows) {
   const tip = document.getElementById("tooltip");
-  tip.replaceChildren(...rows.map((row, i) => h("div", { style: i === 0 ? "font-weight:650" : "color:var(--ink-secondary)" }, row)));
+  setChildren(tip, ...rows.map((row, i) => h("div", { style: i === 0 ? "font-weight:650" : "color:var(--ink-secondary)" }, row)));
   tip.hidden = false;
   const rect = event.currentTarget.getBoundingClientRect();
   tip.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - tip.offsetWidth - 8))}px`;
@@ -398,7 +402,7 @@ const hideTooltip = () => { document.getElementById("tooltip").hidden = true; };
 let toastTimer = null;
 function toast(color, icon, text) {
   const box = document.getElementById("toast");
-  box.firstElementChild.replaceChildren(h("span", { class: "dot", style: `background:${color}` }), h("span", {}, `${icon} ${text}`));
+  setChildren(box.firstElementChild, h("span", { class: "dot", style: `background:${color}` }), h("span", {}, `${icon} ${text}`));
   box.hidden = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { box.hidden = true; }, 9000);
@@ -430,7 +434,7 @@ function renderGlance(k, transcript) {
     saidTokens !== null ? [" — ", h("span", { class: "num" }, fmt(saidTokens)), " tokens as they were said"] : "", ".");
 
   const total = k.turns.length || 1;
-  document.getElementById("fidbar").replaceChildren(...present.map((key) => h("button", {
+  setChildren(document.getElementById("fidbar"), ...present.map((key) => h("button", {
     class: `seg f-${key}`, role: "listitem", style: `flex:${counts[key]}`, "aria-label": `${counts[key]} ${FIDELITY[key].label}`,
     onpointerenter: (e) => showTooltip(e, `${plural(counts[key], "turn")} ${FIDELITY[key].label}`, FIDELITY[key].note,
       `${Math.round((counts[key] / total) * 100)}% of the conversation · click to find the first`),
@@ -445,7 +449,7 @@ function renderGlance(k, transcript) {
   if (!warn.hidden) {
     const parts = [unsent ? `${plural(unsent, "fact")} kept but not in front of the model` : null,
       counts.unseen ? `${plural(counts.unseen, "turn")} the model sees nothing of` : null].filter(Boolean);
-    warn.replaceChildren(h("span", { class: "dot", style: "background:var(--status-warning)" }), h("span", {}, `⚠ ${parts.join(" · ")}`),
+    setChildren(warn, h("span", { class: "dot", style: "background:var(--status-warning)" }), h("span", {}, `⚠ ${parts.join(" · ")}`),
       h("button", { onclick: () => document.getElementById("memory-unsent")?.scrollIntoView({ behavior: "smooth", block: "start" }) }, "show them"));
   }
 
@@ -547,12 +551,12 @@ function renderTimeline(k, transcript) {
           h("span", { class: "tag" }, "latest message"), h("span", {}, "recorded, with its reply, when the next request arrives")),
         turnText(pending.text, false))));
   }
-  document.getElementById("timeline").replaceChildren(...(items.length ? items : [h("p", { class: "empty" }, "No turns recorded yet.")]));
+  setChildren(document.getElementById("timeline"), ...(items.length ? items : [h("p", { class: "empty" }, "No turns recorded yet.")]));
 }
 
 function renderPrompt(k) {
   const tail = k.turns.filter((t) => t.fidelity === "verbatim");
-  document.getElementById("prompt").replaceChildren(
+  setChildren(document.getElementById("prompt"),
     h("div", { class: "note", style: "margin-bottom:10px" }, "The conversation as forwarded to the provider, before the next request's new message. ",
       k.front_text ? "The front stays byte-for-byte the same until the next cut, which keeps the provider's prompt cache valid." : "Nothing has been cut, so the client's own request is forwarded untouched."),
     k.front_text ? h("div", { class: "prompt-msg" }, h("div", { class: "meta" }, h("span", { class: "who" }, "user"), h("span", { class: "tag" }, `the front · ${fmt(k.front_tokens)} tok`)), h("pre", {}, k.front_text)) : null,
@@ -572,7 +576,7 @@ function renderMemory(k) {
     { id: "memory-unsent", title: "Kept, but not in front of the model", dot: "var(--status-warning)", icon: "⚠", facts: k.facts.filter((f) => f.status === "active" && !f.sent) },
     { id: "memory-superseded", title: "Contradicted later", dot: "var(--ink-muted)", icon: "–", facts: k.facts.filter((f) => f.status === "superseded") },
   ].filter((g) => g.facts.length);
-  document.getElementById("memory").replaceChildren(...(groups.length ? groups.map((g) => h("div", { id: g.id },
+  setChildren(document.getElementById("memory"), ...(groups.length ? groups.map((g) => h("div", { id: g.id },
     h("h3", {}, h("span", { class: "dot", style: `background:${g.dot}` }), `${g.icon} ${g.title}`, h("span", { class: "muted", style: "font-weight:400" }, `· ${g.facts.length}`)),
     h("div", { class: "keeps", style: "margin-top:0" }, g.facts.map((f) => factRow(f, { onclick: () => jumpTo(f.source_turns[0]) })))))
     : [h("p", { class: "empty" }, "Nothing has been reduced to facts yet. Facts appear when a cut archives a turn that has gone cold.")]));
@@ -582,7 +586,7 @@ function renderMemory(k) {
 
 function renderProxy(proxy) {
   const tile = (label, value, caption, title) => h("div", { class: "card tile", title }, h("div", { class: "label" }, label), h("div", { class: "value num" }, value), caption ? h("div", { class: "caption" }, caption) : null);
-  document.getElementById("proxy-tiles").replaceChildren(...(proxy ? [
+  setChildren(document.getElementById("proxy-tiles"), ...(proxy ? [
     tile("Requests through the proxy", fmt(proxy.requests), `${fmt(proxy.gc_applied)} with GC · ${fmt(proxy.gc_bypassed)} forwarded untouched after a failure`),
     tile("Tokens forwarded", fmt(proxy.tokens_forwarded), `of ${fmt(proxy.tokens_in_client_history)} the clients sent${proxy.ratio !== null ? ` · ${Math.round(proxy.ratio * 100)}%` : ""}`, "across every session; prompt caching is not reflected"),
     tile("Histories reconciled", `${proxy.history_rewinds} · ${proxy.history_restarts} · ${proxy.sessions_seeded}`, "rewinds · restarts · seeds", "a restart or a seed costs one uncompressed request"),
@@ -594,12 +598,12 @@ function renderRelevance(k) {
   document.getElementById("arch-t").textContent = c ? c.archive_threshold.toFixed(2) : "?";
   document.getElementById("keep-t").textContent = c ? c.keep_threshold.toFixed(2) : "?";
   const rows = k.turns.filter((t) => t.fidelity === "verbatim" && t.score !== null);
-  if (!rows.length) { document.getElementById("relevance").replaceChildren(h("p", { class: "empty" }, "No verbatim turns to score.")); return; }
+  if (!rows.length) { setChildren(document.getElementById("relevance"), h("p", { class: "empty" }, "No verbatim turns to score.")); return; }
   const line = (value) => h("div", { class: "line", style: `left:${value * 100}%` });
   const why = (t) => !t.forced_keep ? CLASS_LABEL[t.classification]
     : t.forced_keep.includes("too short") ? "kept: too short"
     : t.forced_keep.includes("last_n") ? "kept: newest turns" : "kept by a rule";
-  document.getElementById("relevance").replaceChildren(
+  setChildren(document.getElementById("relevance"),
     h("div", { class: "rel" }, h("div", {}), h("div", { class: "rel-axis" },
       h("span", { style: "left:0%;transform:none" }, "0"),
       c ? h("span", { style: `left:${c.archive_threshold * 100}%` }, `facts below ${c.archive_threshold}`) : null,
@@ -633,7 +637,7 @@ function renderActivity(activity) {
       : h("p", { class: "empty" }, "No pass has finished yet."));
 
   const passes = activity ? activity.recent_passes.slice().reverse() : [];
-  document.getElementById("passes").replaceChildren(
+  setChildren(document.getElementById("passes"),
     h("thead", {}, h("tr", {}, ["When", "Outcome", "Context", "Kept · summarised · facts", "Took"].map((title) => h("th", {}, title)))),
     h("tbody", {}, passes.length ? passes.map((p) => {
       const cut = p.gc_status === "completed" && p.tokens_saved > 0;
@@ -646,13 +650,13 @@ function renderActivity(activity) {
     }) : h("tr", {}, h("td", { colspan: 5, class: "empty" }, "No passes yet."))));
 
   const degradations = activity ? activity.recent_degradations.slice().reverse() : [];
-  document.getElementById("degradations").replaceChildren(...(degradations.length ? degradations.map((r) => h("li", {},
+  setChildren(document.getElementById("degradations"), ...(degradations.length ? degradations.map((r) => h("li", {},
     h("span", { class: "chip", style: "font-weight:500" }, h("span", { class: "dot", style: "background:var(--status-warning)" }), `⚠ ${r.degradation.reason.replaceAll("_", " ")}`),
     h("span", {}, `${span(r.degradation.turn_indices)} stayed word for word · ${r.degradation.detail}`), h("span", { class: "when" }, agoTs(r.occurred_at))))
     : [h("li", { class: "empty" }, "None: every pass did what it set out to.")]));
 
   const transitions = activity ? activity.generation_lifecycle.recent_transitions.slice().reverse() : [];
-  document.getElementById("transitions").replaceChildren(...(transitions.length ? transitions.map((t) => h("li", {},
+  setChildren(document.getElementById("transitions"), ...(transitions.length ? transitions.map((t) => h("li", {},
     h("span", { class: "num", style: "min-width:58px;color:var(--ink-muted)" }, `turn ${t.turn_index}`),
     h("span", {}, TRANSITION[t.transition_type] || t.transition_type, t.topic_label ? ` · ${t.topic_label}` : ""),
     h("span", { class: "when" }, agoTs(t.occurred_at))))
@@ -665,7 +669,7 @@ function renderSettings() {
   const rows = [["min_cut_tokens", c.min_cut_tokens], ["last_n_turns_to_keep", c.last_n_turns_to_keep],
     ["keep_threshold", c.keep_threshold], ["archive_threshold", c.archive_threshold],
     ["fact budget (tok)", c.max_memory_tokens], ["context_window", c.context_window]];
-  document.getElementById("settings").replaceChildren(...rows.flatMap(([name, value]) => [h("dt", {}, name), h("dd", {}, fmt(value))]));
+  setChildren(document.getElementById("settings"), ...rows.flatMap(([name, value]) => [h("dt", {}, name), h("dd", {}, fmt(value))]));
 }
 
 // ----------------------------------------------------------------- session picker, Run GC now
@@ -674,7 +678,7 @@ function renderSessions() {
   const select = document.getElementById("session-select");
   const options = state.sessions.map((s) => h("option", { value: s.session_id },
     `${s.session_id} · ${s.recorded_turns} turns · ${s.cuts} cut${s.cuts === 1 ? "" : "s"}${s.aging_in_flight ? " · aging…" : ""}`));
-  select.replaceChildren(...(options.length ? options : [h("option", {}, "no sessions yet")]));
+  setChildren(select, ...(options.length ? options : [h("option", {}, "no sessions yet")]));
   if (state.selected) select.value = state.selected;
   const button = document.getElementById("run-gc");
   button.disabled = !state.selected || button.dataset.running === "1";

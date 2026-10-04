@@ -1,6 +1,7 @@
 """The dashboard over live sessions: read-only, per session, and honest about absence."""
 
 import asyncio
+from pathlib import Path
 
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
@@ -216,3 +217,12 @@ class TestTranscript:
 
         assert _client(service, monitor, transcripts=recorder).get("/api/sessions/gone/transcript").status_code == 404
         assert recorder.get("gone") is None
+
+
+def test_the_page_sets_children_only_through_its_helper():
+    """The DOM's own replaceChildren prints an absent part as "null" and a nested
+    list as "[object HTMLDivElement]" - which reached the screen twice. Only the
+    page's setChildren, which skips and flattens, may call it."""
+    page = (Path(__file__).parents[2] / "src/llm_gc/visualizer/static/index.html").read_text()
+    calls = [line.strip() for line in page.splitlines() if ".replaceChildren(" in line and not line.strip().startswith("//")]
+    assert calls == ["function setChildren(target, ...children) { target.replaceChildren(...nodes(children)); }"]
