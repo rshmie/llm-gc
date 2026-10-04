@@ -38,6 +38,12 @@ The front is one user-role message: a header saying it is condensed history, the
 facts section, then the summaries and quotes in conversation order. It opens the
 conversation as a user turn, which the provider requires.
 
+Each summary or quote is stored as a **front entry** that records two things
+beyond the message the model sees: the turns it stands in for, and what it says
+without its marker. The first lets anyone ask where turn 17 is now — a summary's
+message names only its first turn. The second is what facts are extracted from
+when the entry is later archived.
+
 **Facts are chosen when the front is made, not for each question.** Without a
 question to rank against, they are ranked by what they are, then by recency:
 decisions first, then facts, then preferences, and raw excerpts — turns extraction
@@ -55,7 +61,10 @@ swept, and the latest safe cut point is found. A cut is made only when:
    COMPACT or ARCHIVE add up to at least `min_cut_tokens`. A batch of only KEEP
    turns is never cut: quoting compacts nothing.
 2. **The cut does not split a tool round.** No tool result kept after the cut may
-   answer a tool call removed by it; the provider rejects an orphaned result.
+   answer a tool call removed by it. The provider's rule is stricter than "no
+   orphans": a tool result must immediately follow the message holding its call,
+   with nothing between them. The front is always the first message, so it can
+   never land between the two.
 3. **The most recent turns stay verbatim** — at least `last_n_turns_to_keep`.
 4. **The cut makes the context smaller.** Measured on the context the cut would
    produce, not summed: the front's headers, quote markers and facts can make it
@@ -79,11 +88,29 @@ little to be worth a cut, nothing is committed.
 ### Thinking blocks and the provider's cache
 
 Current models attach their reasoning to each reply as thinking blocks, and each
-block is bound to the exact history before it. When a cut replaces that history,
-the blocks in the turns the cut keeps no longer match it, so the proxy strips them
-from those turns — once, at the cut, which is the provider's prescribed handling
-for this shape. Replies produced after the cut keep their thinking, because the
+block is bound to the exact prompt before it; a request that replays a block
+whose prompt has since changed is rejected. A cut changes the prompt, so the
+blocks in the turns it keeps no longer match. The proxy strips them from every
+turn sent with **the first request that carries the new front** — the provider's
+prescribed handling for keep-tail compaction. They are removed from a leading
+run of turns, oldest first, which is the only removal that leaves later blocks
+valid. Replies produced from that request on keep their thinking, because the
 front they were produced against does not change until the next cut.
+
+The boundary is recorded when the front is first sent, not when the cut commits:
+
+```
+request N    plans the cut in the background    reply N produced against the OLD front
+                         └ commit
+request N+1  first to carry the new front       sends reply N back  -> its thinking is stale
+             boundary = the turns it sends       reply N+1 produced against the NEW front
+request N+2  same front                          reply N+1 keeps its thinking
+```
+
+The commit cannot see reply N — it is still being written, or has not reached
+the proxy yet — and with a slow compaction call the commit can land after
+request N+1 has already gone out on the old front. Only the first request that
+carries the front knows which turns predate it.
 
 The same stability is what lets the provider cache the prompt: a cached prefix is
 billed at a fraction of the input price and answered faster, but only if it is
@@ -134,6 +161,22 @@ Three things made that untenable:
   on every request. *Accepted cost:* when stored facts outnumber the room for them,
   a question about one that was not chosen is answered without it in front of the
   model. Revisit if the benchmark shows decisions being missed.
+- **Front entries carry their coverage, as data.** *Rejected: a field on every
+  message* — the core vocabulary type would carry a summary-only concept on every
+  turn; *a coverage map beside the old generation* — two collections that every
+  eviction must keep aligned, and misattribute silently when one is missed; *a
+  per-turn ledger written at each cut* — a second record of state the generations
+  already imply, free to drift from them. On the entry, coverage leaves with the
+  entry when it is archived and is passed on to the facts it yields.
+- **Facts are extracted from what an entry says, not from how it is shown.** A
+  short turn stating a decision is too small to summarise, so a cut quotes it;
+  when the quote went cold it was archived by parsing the quote as the model
+  sees it, and "[Quoted exactly] (turn 2, user) The database is postgres" yields
+  no fact. It was filed as a raw excerpt, ranked last for the front, and dropped
+  from the prompt — the early decision LLM-GC exists to keep, lost to its own
+  marker. *Rejected: strip markers with a pattern in
+  the extractor* — it couples extraction to every marker format, present and
+  future.
 - **Derive the front from the generations rather than storing it.** Rendering is
   deterministic and the generations change only when a cut commits, so the front is
   frozen between cuts by construction, with no second copy that could drift.
@@ -155,6 +198,11 @@ Three things made that untenable:
   dashboard.
 - **Non-text content inside the front.** A cut turn's images and tool calls survive
   only as the text that described them.
+- **A cut can become visible in the middle of a tool round.** When the first
+  request carrying a new front is a tool result, the reply that made the call
+  loses its thinking for that step; the provider advises against compacting
+  mid-round. Correct, and costs reasoning once per cut. The fix is to hold a new
+  front back until a request that is not a tool result.
 - **The stateless library path** (`GarbageCollector.collect`) still recomposes the
   whole conversation per call; the cut shape applies to the session path the proxy
   uses.

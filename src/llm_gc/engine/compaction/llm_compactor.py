@@ -169,6 +169,7 @@ class LLMCompactor(BaseCompactor):
             summary=summary_message,
             original_token_count=original_token_count,
             compaction_strategy=self.COMPACTION_STRATEGY,
+            summary_text=summary_text,
         )
 
     def _minimum_viable_run_tokens(self, first_turn: int, last_turn: int) -> int:

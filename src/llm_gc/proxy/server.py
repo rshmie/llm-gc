@@ -14,6 +14,8 @@ The client's history is ignored; we send ours. Any failure in our own machinery
 forwards the client's original request untouched. See doc/design/ for rationale.
 """
 
+import asyncio
+import contextlib
 import logging
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
@@ -115,12 +117,20 @@ def create_app(
     """
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        yield
-        # Only a client we created is ours to close; closing a caller's pooled
-        # client would break its other users. Same ownership rule as the llm/
-        # adapters.
-        if app.state.owns_http_client:
-            await app.state.http_client.aclose()
+        # Sessions hold conversation content; without the sweeper an idle one would
+        # live as long as the process.
+        idle_sweeper = asyncio.create_task(gc_service.session_manager.run_idle_sweeper())
+        try:
+            yield
+        finally:
+            idle_sweeper.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await idle_sweeper
+            # Only a client we created is ours to close; closing a caller's pooled
+            # client would break its other users. Same ownership rule as the llm/
+            # adapters.
+            if app.state.owns_http_client:
+                await app.state.http_client.aclose()
 
     app = FastAPI(title="LLM-GC Proxy", version=APP_VERSION, lifespan=lifespan)
     app.state.gc_service = gc_service
@@ -154,8 +164,6 @@ def _default_schedule(coro: Awaitable[None]) -> None:
     The task reference is held until it finishes: a `create_task` result nobody
     keeps can be garbage-collected mid-flight, stopping the work with no exception.
     """
-    import asyncio
-
     task = asyncio.ensure_future(coro)
     _BACKGROUND_TASKS.add(task)
     task.add_done_callback(_BACKGROUND_TASKS.discard)
@@ -303,11 +311,10 @@ async def _apply_gc(
     if [message.turn_index for message in collected] == list(range(len(history))):
         return original_body, client_tokens
 
-    # Read with no await since the collect, so it describes the same snapshot.
-    state = gc_service.session_manager.store.get(session_id)
-    cut_turn_count = state.snapshot.cut_turn_count if state is not None else 0
+    # No await since the collect, so this describes the front being forwarded.
+    valid_from = gc_service.mark_front_sent(session_id, len(history))
     forwarded = collected + [new_turn]
-    body = rewrite_messages(payload, forwarded, strip_thinking_before=cut_turn_count)
+    body = rewrite_messages(payload, forwarded, strip_thinking_before=valid_from)
     return _dump_json(body), sum(m.token_count for m in forwarded)
 
 

@@ -144,11 +144,26 @@ conversation are tested against what clients actually do.
 
 Once the engine has cut a session, the forwarded conversation is the front (one
 user-role message) followed by every later turn as the client's **original
-content** — images, tool calls and all. Thinking blocks are removed from the turns
-recorded before the cut, because they were produced against the history the cut
-replaced; turns after it keep theirs. Between cuts the forwarded conversation only
-grows at the end, so the provider's prompt cache holds. See
+content** — images, tool calls and all. Thinking blocks are removed from every
+turn sent with the first request that carries a new front, because each was
+produced against a prompt the cut replaced; the proxy tells the engine when it
+sends a front for the first time, and that request's history length becomes the
+boundary. Replies produced from then on keep theirs. Between cuts the forwarded
+conversation only grows at the end, so the provider's prompt cache holds. See
 [the cut](../generational-memory/the-cut.md).
+
+### Idle sessions
+
+A session holds its conversation's content, so the proxy runs the session idle
+sweeper for as long as it serves: a session untouched for 30 minutes is closed
+and its data dropped. A client that returns later is seeded afresh from its own
+history, at the cost of one uncompressed request.
+
+### The dashboard
+
+The live dashboard runs in the same process on its own localhost port, reading
+the same sessions; it is opt-in because it shows conversation content. See
+[visibility](../visibility/overview.md).
 
 ### Request size
 

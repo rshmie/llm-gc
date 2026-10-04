@@ -27,29 +27,11 @@ def format_memory_block(entries: list[KnowledgeEntry], max_tokens: int) -> Messa
         One `Message`, or None when there is nothing to inject or no room — so the
         caller appends nothing rather than a header with no facts under it.
     """
-    if not entries or max_tokens <= 0:
-        return None
-
-    # Measured by rendering, not by summing per-line counts: the joining newlines
-    # are tokens and a tokenizer's merges differ across a boundary, so summing
-    # under-counts and the block would exceed the budget it promised.
-    if count_tokens(MEMORY_BLOCK_HEADER) >= max_tokens:
-        return None
-
-    kept: list[KnowledgeEntry] = []
-    content = ""
-    for entry in entries:
-        candidate = _render(kept + [entry])
-        if count_tokens(candidate) > max_tokens:
-            # Stop here rather than trying the next entry, which would reorder by
-            # size and discard the retriever's ranking.
-            break
-        kept.append(entry)
-        content = candidate
-
+    kept = fit_facts(entries, max_tokens)
     if not kept:
         return None
 
+    content = render_memory_block(kept)
     return Message(
         role="user",
         content=content,
@@ -59,8 +41,29 @@ def format_memory_block(entries: list[KnowledgeEntry], max_tokens: int) -> Messa
     )
 
 
-def _render(entries: list[KnowledgeEntry]) -> str:
-    """Render the block as it will be sent: relevance picks, chronology displays."""
+def fit_facts(entries: list[KnowledgeEntry], max_tokens: int) -> list[KnowledgeEntry]:
+    """The leading entries whose rendered block fits within `max_tokens`."""
+    if not entries or max_tokens <= 0:
+        return []
+
+    # Measured by rendering, not by summing per-line counts: the joining newlines
+    # are tokens and a tokenizer's merges differ across a boundary, so summing
+    # under-counts and the block would exceed the budget it promised.
+    if count_tokens(MEMORY_BLOCK_HEADER) >= max_tokens:
+        return []
+
+    kept: list[KnowledgeEntry] = []
+    for entry in entries:
+        if count_tokens(render_memory_block(kept + [entry])) > max_tokens:
+            # Stop here rather than trying the next entry, which would reorder by
+            # size and discard the retriever's ranking.
+            break
+        kept.append(entry)
+    return kept
+
+
+def render_memory_block(entries: list[KnowledgeEntry]) -> str:
+    """The block's text as it will be sent: relevance picks, chronology displays."""
     in_order = sorted(entries, key=lambda entry: entry.message_turn)
     body = "\n".join(_format_fact(entry) for entry in in_order)
     return f"{MEMORY_BLOCK_HEADER}\n{body}"

@@ -19,6 +19,10 @@ DEFAULT_LAST_N_TURNS_TO_KEEP = 5
 # real conversations.
 DEFAULT_MIN_CUT_TOKENS = 1000
 DEFAULT_MAX_RECENT_TRANSITIONS = 20
+DEFAULT_MAX_RECENT_DEGRADATIONS = 20
+# Sessions the health monitor keeps history for. Above this, the one heard from
+# least recently is dropped; it bounds memory if closed sessions are never forgotten.
+DEFAULT_MONITOR_MAX_SESSIONS = 1000
 
 # Permanent-generation injection. The cap is what makes the system stable, not a
 # nicety: archiving produces facts, injected facts are real tokens, and more

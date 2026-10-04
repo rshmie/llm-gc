@@ -42,20 +42,26 @@ Three components manage sessions:
   first sight), reports whether a given state is still the live one for its id,
   closes sessions, and runs the idle sweeper.
 
-### The snapshot, and the three operations on it
+### The snapshot, and the operations on it
 
 A **snapshot** is immutable. Every change produces a new snapshot with the next
 `version` number, and the session's reference is replaced. A reader that has
 taken a snapshot therefore holds a consistent view for as long as it likes —
 across any number of `await`s — without a lock, because nothing can change it.
 
-The engine performs three operations on a session, each with its own guarantee:
+The engine performs three operations on a session that change or use it, each
+with its own guarantee, and one that only looks:
 
 | Operation | Who calls it | Guarantee |
 |---|---|---|
 | **collect** (assemble the context) | the proxy, before forwarding a request | Never waits. Reads the current snapshot once. |
 | **record** turns | the proxy, from the client's history on each request | Immediate. The next collect sees them. |
 | **age** (score, sweep, cut) | after each response, in the background | At most one per session at a time; commits onto whatever the snapshot is *now*. |
+| **inspect** | the dashboard | Read-only. Never creates a session, never resets its idle clock, announces nothing. |
+
+Besides the three generations, a snapshot records how many cuts the session has
+had and, after a cut, the first turn whose thinking blocks were produced against
+the current front (see [the cut](../generational-memory/the-cut.md)).
 
 Aging is the slow one: compaction is a model call that can take seconds. It is
 split so that the slow part holds nothing:
@@ -194,6 +200,10 @@ LLM-GC's background work directly into the user's latency.
 - **Session ends on idle timeout or explicit close, and reopens on demand.**
   Without an idle timeout the active set grows without bound when users walk
   away; without explicit close a library caller has no way to end a session now.
+- **Looking does not count as activity.** Inspection reads the store without
+  touching the session, so a dashboard left open on a conversation does not keep
+  it alive, and an inspection of a closed session reports it absent rather than
+  creating an empty one.
 - **`GenerationSnapshot` and `SweepClassification` live in `models/`.** Session
   state and the engine both depend on them, so they sit in the shared leaf
   package both can import without a cycle.
@@ -215,9 +225,6 @@ LLM-GC's background work directly into the user's latency.
 - **Persistence** — the in-memory store is replaced by a persistent one; a commit
   becomes a conditional write on `version`, and the liveness check becomes what
   stops a late commit from resurrecting a closed session.
-- **Per-session health in the dashboard** — the health monitor reads one
-  session's generations, but its event-fed history (transitions, the last pass)
-  still mixes every session the event bus carries.
 - **Work on the collect path** must stay within a latency budget, and CPU-bound
   work there must move off the event loop: an asyncio timeout cannot interrupt
   code that never awaits.

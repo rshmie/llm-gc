@@ -1,16 +1,19 @@
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Callable
+from dataclasses import dataclass, field
 
 from llm_gc.config import GCConfig
-from llm_gc.config.constants import DEFAULT_MAX_RECENT_TRANSITIONS
-from llm_gc.engine import GCResult
+from llm_gc.config.constants import DEFAULT_MAX_RECENT_DEGRADATIONS, DEFAULT_MAX_RECENT_TRANSITIONS, \
+    DEFAULT_MONITOR_MAX_SESSIONS
+from llm_gc.engine import AgingDegradation, GCResult
 from llm_gc.engine.sweep import SweepClassification, SweepResult
 from llm_gc.events import Event, EventBus, EventType
 from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.generation_snapshot import GenerationSnapshot
 from llm_gc.monitoring.context_health import (
     GenerationTransition,
+    RecordedDegradation,
     TransitionType,
     ContextHealth,
     TokenBudgetSignal,
@@ -19,30 +22,86 @@ from llm_gc.monitoring.context_health import (
 )
 
 
+@dataclass(frozen=True)
+class _PassSignals:
+    """What the monitor keeps of one finished pass: its signals, built on arrival.
+
+    Built when GC_FINISHED arrives rather than when a snapshot is read, so the
+    monitor never holds the result itself - which carries the conversation - only
+    counts, tokens and turn indices.
+    """
+
+    token_budget: TokenBudgetSignal | None
+    gc_breakdown: GCBreakdownSignal
+    transformation_ratio: float | None
+    young_turn_indices: list[int]
+    young_tokens: int
+
+
+@dataclass
+class _SessionRecord:
+    """Everything the monitor has heard about one session."""
+
+    transitions: deque[GenerationTransition]
+    degradations: deque[RecordedDegradation]
+    last_pass: _PassSignals | None = field(default=None)
+
+
 class ContextHealthMonitor:
-    def __init__(self, event_bus: EventBus, gc_config: GCConfig, read_generations: Callable[[], GenerationSnapshot],
-                 max_recent_transitions: int = DEFAULT_MAX_RECENT_TRANSITIONS) -> None:
+    """Keeps the event-fed half of each session's health: its last pass and its history.
+
+    Events carry the session they describe, so one monitor serves every session on
+    the bus without mixing them. Events with no session - the stateless library
+    path - are kept under `None`.
+    """
+
+    def __init__(self, event_bus: EventBus, gc_config: GCConfig,
+                 read_generations: Callable[[str | None], GenerationSnapshot | None],
+                 max_recent_transitions: int = DEFAULT_MAX_RECENT_TRANSITIONS,
+                 max_recent_degradations: int = DEFAULT_MAX_RECENT_DEGRADATIONS,
+                 max_sessions: int = DEFAULT_MONITOR_MAX_SESSIONS) -> None:
         self.event_bus = event_bus
         self.gc_config = gc_config
-        # How to read the generations of the conversation this monitor describes.
-        # A function rather than a store, because generations belong to a session
-        # and only the caller knows which one.
+        # How to read a session's generations. A function rather than a store,
+        # because generations belong to the session; None means it no longer exists.
         self.read_generations = read_generations
-        # The last GC pass and the timestamp of the event that reported it, held as
-        # one value because they are only ever meaningful together. Two separate
-        # Optionals would let a future edit set one without the other, and the
-        # mismatch would surface as a validation error in the dashboard rather
-        # than at the line that caused it.
-        self._last_gc: tuple[GCResult, float] | None = None
-        self._recent_transitions: deque[GenerationTransition] = deque(maxlen=max_recent_transitions)
+        self._max_recent_transitions = max_recent_transitions
+        self._max_recent_degradations = max_recent_degradations
+        # Least recently heard from first, so the bound evicts sessions that have
+        # gone quiet - normally ones already closed.
+        self._max_sessions = max_sessions
+        self._records: OrderedDict[str | None, _SessionRecord] = OrderedDict()
         event_bus.subscribe(EventType.GC_FINISHED, self._on_gc_finished)
         event_bus.subscribe(EventType.MESSAGE_PROMOTED_TO_OLD_GEN, self._on_message_promoted_to_old_gen)
         event_bus.subscribe(EventType.MESSAGE_ARCHIVED, self._on_message_archived)
         event_bus.subscribe(EventType.KNOWLEDGE_ENTRY_SUPERSEDED, self._on_knowledge_entry_superseded)
+        event_bus.subscribe(EventType.AGING_DEGRADED, self._on_aging_degraded)
+
+    def forget(self, session_id: str | None) -> None:
+        """Drop everything heard about a session, as when it is closed."""
+        self._records.pop(session_id, None)
+
+    def _record_for(self, event: Event) -> _SessionRecord:
+        session_id = event.data.get("session_id")
+        record = self._records.get(session_id)
+        if record is None:
+            record = _SessionRecord(transitions=deque(maxlen=self._max_recent_transitions),
+                                    degradations=deque(maxlen=self._max_recent_degradations))
+            self._records[session_id] = record
+            if len(self._records) > self._max_sessions:
+                self._records.popitem(last=False)
+        else:
+            self._records.move_to_end(session_id)
+        return record
 
     def _on_gc_finished(self, event: Event) -> None:
         gc_result: GCResult = event.data["gc_result"]
-        self._last_gc = (gc_result, event.timestamp)
+        young_turn_indices, young_tokens = self._young_generation(gc_result)
+        self._record_for(event).last_pass = _PassSignals(
+            token_budget=self._build_token_budget(gc_result),
+            gc_breakdown=self._build_gc_breakdown(gc_result, event.timestamp),
+            transformation_ratio=self._compute_transformation_ratio(gc_result.sweep_result),
+            young_turn_indices=young_turn_indices, young_tokens=young_tokens)
 
     def _on_message_promoted_to_old_gen(self, event: Event) -> None:
         """Record a young -> old promotion, one transition per turn that moved.
@@ -56,49 +115,53 @@ class ContextHealthMonitor:
         promotes anything into old gen). The producer knows what
         it moved; the monitor just writes it down.
         """
+        transitions = self._record_for(event).transitions
         for turn_index in event.data["source_turn_indices"]:
-            self._recent_transitions.append(
+            transitions.append(
                 GenerationTransition(transition_type=TransitionType.PROMOTED, turn_index=turn_index,
                                      topic_label=None, occurred_at=event.timestamp))
 
     def _on_message_archived(self, event: Event) -> None:
         message: Message = event.data["message"]
-        self._recent_transitions.append(
+        self._record_for(event).transitions.append(
             GenerationTransition(transition_type=TransitionType.ARCHIVED, turn_index=message.turn_index,
                                  topic_label=None, occurred_at=event.timestamp))
 
     def _on_knowledge_entry_superseded(self, event: Event) -> None:
         superseded_entries: list[KnowledgeEntry] = event.data["superseded_knowledge_entries"]
+        transitions = self._record_for(event).transitions
         for superseded_entry in superseded_entries:
-            self._recent_transitions.append(GenerationTransition(transition_type=TransitionType.SUPERSEDED,
+            transitions.append(GenerationTransition(transition_type=TransitionType.SUPERSEDED,
                                                                  turn_index=superseded_entry.message_turn,
                                                                  topic_label=superseded_entry.topic_label,
                                                                  occurred_at=event.timestamp))
 
-    def get_snapshot(self) -> ContextHealth:
-        """Build a fresh, immutable ContextHealth from the monitor's current state.
+    def _on_aging_degraded(self, event: Event) -> None:
+        """Keep degradations across passes: one quiet pass must not hide a refusal before it."""
+        degradation: AgingDegradation = event.data["degradation"]
+        self._record_for(event).degradations.append(
+            RecordedDegradation(degradation=degradation, occurred_at=event.timestamp))
+
+    def get_snapshot(self, session_id: str | None = None) -> ContextHealth:
+        """Build a fresh, immutable ContextHealth for one session.
 
         Built whole on every call - never cached, never mutated field-by-field -
         so a reader can never observe a torn, half-updated snapshot. token_budget,
-        gc_breakdown, and transformation_ratio are None until the first GC pass
-        has run: an honest "not measured yet" instead of a fabricated zero.
+        gc_breakdown, and transformation_ratio are None until the session's first
+        GC pass has run: an honest "not measured yet" instead of a fabricated zero.
         """
-        last_gc = self._last_gc
+        record = self._records.get(session_id)
+        last_pass = record.last_pass if record is not None else None
+        transitions = list(record.transitions) if record is not None else []
+        degradations = list(record.degradations) if record is not None else []
 
-        if last_gc is None:
-            gc_result = None
-            token_budget_signal = None
-            gc_breakdown_signal = None
-            transformation_ratio = None
-        else:
-            gc_result, gc_completed_at = last_gc
-            token_budget_signal = self._build_token_budget(gc_result)
-            gc_breakdown_signal = self._build_gc_breakdown(gc_result, gc_completed_at)
-            transformation_ratio = self._compute_transformation_ratio(gc_result.sweep_result)
-
-        return ContextHealth(token_budget=token_budget_signal, gc_breakdown=gc_breakdown_signal,
-                             generation_lifecycle=self._build_generation_lifecycle(gc_result),
-                             transformation_ratio=transformation_ratio, snapshot_taken_at=time.time())
+        return ContextHealth(
+            token_budget=last_pass.token_budget if last_pass is not None else None,
+            gc_breakdown=last_pass.gc_breakdown if last_pass is not None else None,
+            generation_lifecycle=self._build_generation_lifecycle(last_pass, session_id, transitions),
+            transformation_ratio=last_pass.transformation_ratio if last_pass is not None else None,
+            recent_degradations=degradations,
+            snapshot_taken_at=time.time())
 
     def _build_token_budget(self, gc_result: GCResult) -> TokenBudgetSignal | None:
         if gc_result.sweep_result is not None:
@@ -147,22 +210,23 @@ class ContextHealthMonitor:
             return None
         return transformed_tokens / total_swept_tokens
 
-    def _build_generation_lifecycle(self, gc_result: GCResult | None) -> GenerationLifeCycleSignal:
-        young_gen_turn_indices: list[int] = []
-        young_gen_tokens = 0
-
-        if gc_result is not None and gc_result.sweep_result is not None:
+    @staticmethod
+    def _young_generation(gc_result: GCResult) -> tuple[list[int], int]:
+        if gc_result.sweep_result is not None:
             # Young gen is still derived from the last sweep: KEEP is exactly the
             # set of turns that stayed. (One known skew: a turn whose promotion
             # failed is classified COMPACT but stays young, so it is undercounted
             # here until the next pass reclassifies it.)
-            young_gen_turn_indices = [entry.turn_index for entry in gc_result.sweep_result.sweep_entries
-                                      if entry.classification == SweepClassification.KEEP]
-            young_gen_tokens = gc_result.sweep_result.total_keep_tokens
-        elif gc_result is not None:
-            # Bypassed run: everything the pass saw stayed live and untransformed.
-            young_gen_turn_indices = [message.turn_index for message in gc_result.final_messages]
-            young_gen_tokens = gc_result.tokens_in_final
+            return ([entry.turn_index for entry in gc_result.sweep_result.sweep_entries
+                     if entry.classification == SweepClassification.KEEP],
+                    gc_result.sweep_result.total_keep_tokens)
+        # Bypassed run: everything the pass saw stayed live and untransformed.
+        return [message.turn_index for message in gc_result.final_messages], gc_result.tokens_in_final
+
+    def _build_generation_lifecycle(self, last_pass: _PassSignals | None, session_id: str | None,
+                                    transitions: list[GenerationTransition]) -> GenerationLifeCycleSignal:
+        young_gen_turn_indices = last_pass.young_turn_indices if last_pass is not None else []
+        young_gen_tokens = last_pass.young_tokens if last_pass is not None else 0
 
         # Old gen is read from real storage, not derived from COMPACT counts.
         # The derivation reported only the *last pass's* COMPACT turns, so a
@@ -172,8 +236,8 @@ class ContextHealthMonitor:
         # promotes, it reported a populated old gen that was in fact empty. The
         # summaries carry the turn index of the first turn in their run, so the
         # indices still point back at where the content came from.
-        generations = self.read_generations()
-        old_gen_messages = list(generations.old)
+        generations = self.read_generations(session_id) or GenerationSnapshot()
+        old_gen_messages = [entry.message for entry in generations.old]
         old_gen_turn_indices = [message.turn_index for message in old_gen_messages]
         old_gen_tokens = sum(message.token_count for message in old_gen_messages)
 
@@ -187,5 +251,5 @@ class ContextHealthMonitor:
                                          young_gen_turn_indices=young_gen_turn_indices,
                                          old_gen_turn_indices=old_gen_turn_indices,
                                          permanent_gen_entries=permanent_gen_entries,
-                                         recent_transitions=list(self._recent_transitions))
+                                         recent_transitions=transitions)
 
