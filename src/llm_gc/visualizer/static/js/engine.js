@@ -3,7 +3,7 @@
 import { BECOMES, CHART_HEIGHT, CLASS_LABEL, CLASS_TO_CAT, STATUS, TRANSITION, speaker } from "./vocabulary.js";
 import { $, agoTs, compact, fill, fmt, h, plural, ranges, setChildren, svg } from "./dom.js";
 import { captured, keepLast, preview, state, ui } from "./state.js";
-import { hideTooltip, info, placeTooltip, tipQuote, tooltipContent } from "./tooltip.js";
+import { hideTooltip, info, placeTooltip, tipQuote, tooltipContent, hoverTip } from "./tooltip.js";
 
 export function renderTiles() {
   const p = state.proxy;

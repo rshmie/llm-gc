@@ -14,6 +14,7 @@ from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -103,6 +104,9 @@ def create_dashboard_app(
     @app.get("/", include_in_schema=False)
     async def serve_page() -> FileResponse:
         return FileResponse(_STATIC_DIR / "index.html")
+
+    # The page's styles and scripts, shipped inside the package so no build step is needed.
+    app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 
     @app.get("/api/overview")
     async def overview() -> DashboardOverview:

@@ -81,7 +81,7 @@ $("tab-conversation").addEventListener("click", () => showTab("conversation"));
 $("tab-engine").addEventListener("click", () => showTab("engine"));
 $("view-timeline").addEventListener("click", () => setPromptView(false));
 $("view-prompt").addEventListener("click", () => setPromptView(true));
-$("run-gc").addEventListener("click", runGcNow);
+$("run-gc").addEventListener("click", () => runGcNow(refresh));
 $("open-guide").addEventListener("click", () => setGuide(true));
 $("intro-guide").addEventListener("click", () => setGuide(true));
 $("close-guide").addEventListener("click", () => setGuide(false));

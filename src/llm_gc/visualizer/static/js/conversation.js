@@ -6,7 +6,7 @@
 import { BECOMES, BECOMES_CAT, CATS, CELL_MAX_PX, CLAMP_CHARS, FACTS_SHOWN, GLOSSARY, GONE, ORDER, RUN_MIN, categoryOf, speaker, swatch } from "./vocabulary.js";
 import { $, agoIso, fill, fmt, h, percent, plural, ranges, setChildren } from "./dom.js";
 import { captured, countCats, factsByTurn, has, keepLast, marked, maxFacts, pendingTurns, preview, query, saidByTurn, state, turnMatches, ui } from "./state.js";
-import { hideTooltip, info, showTooltip, tipQuote } from "./tooltip.js";
+import { hideTooltip, info, showTooltip, tipQuote, hoverTip } from "./tooltip.js";
 import { showTab } from "./shell.js";
 
 export function renderHero(k) {

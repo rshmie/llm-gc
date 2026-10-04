@@ -69,6 +69,11 @@ class TestThePage:
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]
 
+    def test_serves_its_styles_and_scripts(self):
+        client = _client(*_engine())
+        assert "text/css" in client.get("/static/css/dashboard.css").headers["content-type"]
+        assert "javascript" in client.get("/static/js/main.js").headers["content-type"]
+
     def test_its_one_action_is_the_manual_cut(self):
         app = create_dashboard_app(*_engine())
         writes = [route.path for route in app.routes if isinstance(route, APIRoute) and route.methods - {"GET"}]
@@ -257,6 +262,7 @@ def test_the_page_sets_children_only_through_its_helper():
     """The DOM's own replaceChildren prints an absent part as "null" and a nested
     list as "[object HTMLDivElement]" - which reached the screen twice. Only the
     page's setChildren, which skips and flattens, may call it."""
-    page = (Path(__file__).parents[2] / "src/llm_gc/visualizer/static/index.html").read_text()
+    static = Path(__file__).parents[2] / "src/llm_gc/visualizer/static"
+    page = "\n".join(path.read_text() for path in sorted(static.glob("js/*.js")))
     calls = [line.strip() for line in page.splitlines() if ".replaceChildren(" in line and not line.strip().startswith("//")]
-    assert calls == ["function setChildren(target, ...children) { target.replaceChildren(...nodes(children)); }"]
+    assert calls == ["export function setChildren(target, ...children) { target.replaceChildren(...nodes(children)); }"]

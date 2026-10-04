@@ -63,7 +63,7 @@ export function showResult(explained) {
   box.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-export async function runGcNow() {
+export async function runGcNow(refresh) {
   const button = $("run-gc");
   const before = state.knowledge;
   button.dataset.running = "1";
