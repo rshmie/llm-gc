@@ -6,7 +6,9 @@ stubbed is the socket.
 """
 
 import asyncio
+import hashlib
 import json
+import time
 
 import httpx2
 import pytest
@@ -850,29 +852,86 @@ class TestTheCutShape:
         assert _is_front(last[0]), "the image turn must sit in the tail of a cut conversation"
         assert any(isinstance(m["content"], list) and image in m["content"] for m in last)
 
-    def test_thinking_is_stripped_only_from_turns_that_predate_the_cut(self):
-        thinking_reply = [{"type": "thinking", "thinking": "", "signature": "sig"},
-                          {"type": "text", "text": "Postgres."}]
-        client, service, _, seen = _proxy()
+    def test_no_request_replays_thinking_produced_against_another_front(self):
+        """Every thinking block is bound to the exact prompt before it, and current
+        models reject a request that replays one whose prompt has since changed.
+
+        The reply to the request during which a cut is planned is produced against
+        the old front, and the client sends it back on the next request - the first
+        to carry the new front. Stripping only turns recorded before the commit kept
+        that reply's thinking, and the provider answered the user with a 400.
+        """
+        client, _, _, seen = _proxy(upstream=_front_binding_provider)
         history: list[dict] = []
-        for i in range(16):
+        statuses = []
+        for i in range(30):
             history.append({"role": "user", "content":
                             f"question {i}: we went over the storage layer, retention, and the rollout plan again"})
-            client.post("/v1/messages", json={"model": "m", "max_tokens": 64, "messages": history},
-                        headers={"x-api-key": API_KEY, SESSION_HEADER: "s"})
-            history.append({"role": "assistant", "content": thinking_reply})
+            response = client.post("/v1/messages", json={"model": "m", "max_tokens": 64, "messages": history},
+                                   headers={"x-api-key": API_KEY})
+            statuses.append(response.status_code)
+            if response.status_code != 200:
+                break
+            history.append({"role": "assistant", "content": response.json()["content"]})
 
-        state = service.session_manager.store.get("s")
-        boundary = state.snapshot.cut_turn_count
-        assert boundary > 0, "a cut must have happened"
-        sent = json.loads(seen[-1].content)["messages"]
-        tail = sent[1:]
-        tail_indices = sorted(m.turn_index for m in state.snapshot.young)
-        for index, message in zip(tail_indices, tail):
-            blocks = message["content"] if isinstance(message["content"], list) else []
-            has_thinking = any(b.get("type") == "thinking" for b in blocks)
-            if message["role"] == "assistant":
-                assert has_thinking == (index >= boundary), f"turn {index}, cut at {boundary}"
+        forwarded = [json.loads(request.content)["messages"] for request in seen]
+        assert statuses == [200] * 30, f"rejected at requests {[i for i, s in enumerate(statuses) if s != 200]}"
+        assert sum(1 for i, m in enumerate(forwarded[1:], 1) if m[0] != forwarded[i - 1][0]) >= 2, "two cuts at least"
+        assert any(_is_front(m[0]) and _thinking_blocks(m) for m in forwarded), \
+            "replies produced against the current front keep their thinking"
+
+    def test_a_cut_that_commits_after_the_next_request_left_is_still_safe(self):
+        """Compaction is a model call, so a pass can commit after the next request
+        has already been forwarded on the old front. That request's reply predates
+        the new front too, and the commit cannot know it exists."""
+        service, _ = _engine()
+        pending: list = []
+        seen: list[httpx2.Request] = []
+
+        def provider(request: httpx2.Request) -> httpx2.Response:
+            seen.append(request)
+            return _front_binding_provider(request)
+
+        client = TestClient(create_app(service, http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(provider)),
+                                       schedule=pending.append))
+        history: list[dict] = []
+        try:
+            for i in range(30):
+                history.append({"role": "user", "content":
+                                f"question {i}: we went over the storage layer, retention, and the rollout plan again"})
+                response = client.post("/v1/messages", json={"model": "m", "max_tokens": 64, "messages": history},
+                                       headers={"x-api-key": API_KEY})
+                assert response.status_code == 200, f"request {i} was rejected"
+                history.append({"role": "assistant", "content": response.json()["content"]})
+                while len(pending) > 1:          # each pass runs one request late
+                    _run_now(pending.pop(0))
+        finally:
+            for coro in pending:
+                coro.close()
+        assert service.session_manager.store.get(service.session_manager.store.active_session_ids()[0]).snapshot.cut_count >= 2
+
+
+def _thinking_blocks(messages: list[dict]) -> list[dict]:
+    return [block for message in messages if isinstance(message["content"], list)
+            for block in message["content"] if block.get("type") == "thinking"]
+
+
+def _front_binding_provider(request: httpx2.Request) -> httpx2.Response:
+    """A provider that binds each reply's thinking to the front it was produced
+    against, and rejects a request replaying a block bound to a different one.
+
+    The real check binds to the whole prefix; between cuts the proxy only appends,
+    so the front is the part of the prefix a cut can change.
+    """
+    messages = json.loads(request.content)["messages"]
+    front = messages[0]["content"] if _is_front(messages[0]) else ""
+    binding = hashlib.sha256(front.encode()).hexdigest()[:16]
+    if any(block["signature"] != binding for block in _thinking_blocks(messages)):
+        return httpx2.Response(400, json={"type": "error", "error": {
+            "type": "invalid_request_error",
+            "message": "Invalid `signature` in `thinking` block. The block is bound to a different conversation."}})
+    return httpx2.Response(200, json={**UPSTREAM_OK, "content": [
+        {"type": "thinking", "thinking": "", "signature": binding}, {"type": "text", "text": "Postgres."}]})
 
 
 class TestRequestSize:
@@ -889,3 +948,21 @@ class TestRequestSize:
         client, _, _, seen = _proxy()
         assert _post(client, _body(("user", "hello"))).status_code == 200
         assert len(seen) == 1
+
+
+class TestIdleSessionsAreClosed:
+    def test_the_proxy_closes_sessions_that_go_idle(self):
+        """Sessions hold conversation content. The sweeper existed but nothing
+        started it, so a serving proxy kept every conversation for its lifetime."""
+        service, _ = _engine()
+        service.session_manager = SessionManager(session_timeout_s=0, sweep_interval_s=0.01)
+        client, _, _, _ = _proxy(gc_service=service)
+
+        with client:   # entering the client runs the app's lifespan
+            _post(client, _body(("user", "hello"), ("assistant", "hi"), ("user", "which database?")))
+            assert client.get("/stats").json()["sessions_seeded"] == 1
+            deadline = time.monotonic() + 2
+            while service.session_manager.store.count() and time.monotonic() < deadline:
+                time.sleep(0.01)
+
+        assert service.session_manager.store.count() == 0

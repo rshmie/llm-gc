@@ -1,4 +1,3 @@
-from llm_gc.visualizer.demo_conversation import DemoConversationFeeder
-from llm_gc.visualizer.server import create_app
+from llm_gc.visualizer.server import DashboardOverview, SessionSummary, create_dashboard_app
 
-__all__ = ["DemoConversationFeeder", "create_app"]
+__all__ = ["DashboardOverview", "SessionSummary", "create_dashboard_app"]

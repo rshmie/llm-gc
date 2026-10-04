@@ -71,7 +71,7 @@ def _snapshot(service) -> GenerationSnapshot:
 
 def _old_gen(service) -> list[Message]:
     state = service.session_manager.store.get(SESSION)
-    return list(state.snapshot.old) if state is not None else []
+    return [entry.message for entry in state.snapshot.old] if state is not None else []
 
 
 class _ArchiveFailingMemory(GenerationalMemory):
@@ -328,10 +328,10 @@ class TestTheDashboardCanSeeIt:
         compactor = _llm_compactor(bus, _response("tail-less", stop_reason=StopReason.TRUNCATED))
         service, memory, service_bus = _build(compactor)
         monitor = ContextHealthMonitor(event_bus=service.event_bus, gc_config=CONFIG,
-                                       read_generations=lambda: _snapshot(service))
+                                       read_generations=lambda _session_id: _snapshot(service))
 
         _run(service)
-        breakdown = monitor.get_snapshot().gc_breakdown
+        breakdown = monitor.get_snapshot(SESSION).gc_breakdown
 
         assert breakdown is not None
         assert breakdown.is_degraded is True
@@ -341,10 +341,10 @@ class TestTheDashboardCanSeeIt:
     def test_a_clean_snapshot_is_not_degraded(self):
         service, memory, _ = _build()
         monitor = ContextHealthMonitor(event_bus=service.event_bus, gc_config=CONFIG,
-                                       read_generations=lambda: _snapshot(service))
+                                       read_generations=lambda _session_id: _snapshot(service))
 
         _run(service)
-        breakdown = monitor.get_snapshot().gc_breakdown
+        breakdown = monitor.get_snapshot(SESSION).gc_breakdown
 
         assert breakdown is not None
         assert breakdown.is_degraded is False

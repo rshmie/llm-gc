@@ -1,117 +1,103 @@
-import logging
+"""The live dashboard: every session the engine is serving, as it happens.
+
+A read-only view. Each value is produced by an engine, monitor or proxy component
+and only displayed here, so a wrong number is wrong in the component that produced
+it. It shows conversation content, so it is opt-in and must only ever listen on
+localhost; see doc/design/visibility/overview.md.
+"""
+
+from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel
 
-from llm_gc.config import GCConfig
 from llm_gc.config.constants import APP_VERSION
-from llm_gc.engine import ContextComposer, GarbageCollector
-from llm_gc.engine.compaction import NoOpCompactor
-from llm_gc.engine.generations import GenerationalMemory
-from llm_gc.engine.sweep import Sweeper, ThresholdSweepStrategy
-from llm_gc.events import EventBus
-from llm_gc.extraction import KnowledgeExtractor
-from llm_gc.models.generation_snapshot import AgingDelta, GenerationSnapshot, apply_aging
+from llm_gc.engine import GcService
 from llm_gc.monitoring import ContextHealth, ContextHealthMonitor
-from llm_gc.scoring import DecisionScorer, DensityScorer, RecencyScorer, ReferenceScorer, RelevanceScorer, RelevanceType
-from llm_gc.visualizer.demo_conversation import DemoConversationFeeder
-
-logger = logging.getLogger(__name__)
+from llm_gc.monitoring.knowledge_state import KnowledgeState, project_knowledge_state
 
 _STATIC_DIR = Path(__file__).parent / "static"
 
-# Demo-session tuning, local to the visualizer (the same lesson as
-# max_recent_transitions: knobs that only shape a peripheral surface don't
-# belong in the shared GCConfig defaults). A tiny window and a fast recency
-# decay make GC engage after a couple of clicks instead of after 90k tokens.
-DEMO_CONTEXT_WINDOW = 120
-DEMO_GC_THRESHOLD = 0.5
-DEMO_MIN_COMPACTABLE_TOKENS = 3
-DEMO_LAST_N_TURNS_TO_KEEP = 3
-DEMO_RECENCY_DECAY_RATE = 0.25
+
+class SessionSummary(BaseModel):
+    session_id: str
+    version: int                  # changes whenever the session's content does
+    recorded_turns: int
+    cuts: int
+    aging_in_flight: bool
+    last_activity: datetime
 
 
-def _build_demo_config() -> GCConfig:
-    return GCConfig(context_window=DEMO_CONTEXT_WINDOW, gc_threshold=DEMO_GC_THRESHOLD,
-                    min_compactable_tokens=DEMO_MIN_COMPACTABLE_TOKENS,
-                    last_n_turns_to_keep=DEMO_LAST_N_TURNS_TO_KEEP)
+class DashboardOverview(BaseModel):
+    sessions: list[SessionSummary]   # most recently active first
+    config: dict[str, Any]
+    proxy: dict[str, Any] | None     # None when the dashboard is not running beside a proxy
 
 
-def _build_relevance_scorer(event_bus: EventBus) -> RelevanceScorer:
-    # All four lightweight scorers run for real; only recency carries weight so
-    # the demo's classifications are predictable. SimilarityScorer joins in
-    # Phase 7 - it needs a SentenceTransformer download at startup, and the
-    # monitor's data path (what this scaffold proves) never looks inside scores.
-    return RelevanceScorer(
-        scorers=[RecencyScorer(decay_rate=DEMO_RECENCY_DECAY_RATE), DensityScorer(),
-                 DecisionScorer(), ReferenceScorer()],
-        weights={RelevanceType.RECENCY: 1.0, RelevanceType.DENSITY: 0.0,
-                 RelevanceType.DECISION: 0.0, RelevanceType.REFERENCE: 0.0},
-        event_bus=event_bus)
+def create_dashboard_app(
+    gc_service: GcService,
+    monitor: ContextHealthMonitor,
+    read_proxy_stats: Callable[[], dict[str, Any]] | None = None,
+) -> FastAPI:
+    """The dashboard over a running engine.
 
+    Args:
+        gc_service: The engine whose sessions are shown; read, never written.
+        monitor: Subscribed to the same bus as `gc_service`.
+        read_proxy_stats: The proxy's counters, passed as a function so the
+            dashboard does not depend on the proxy package.
 
-def create_app() -> FastAPI:
-    """Wire one demo session: engine + monitor on one shared bus, plus the routes.
-
-    The dashboard is a read-only consumer of the same EventBus every other
-    consumer reads from - the whole point of this scaffold is proving that
-    data path. The one write path (POST /gc/run) exists because Phase 5 has
-    no sessions yet: nothing else holds a conversation to collect, so the
-    server owns a synthetic one and calls collect() directly.
+    Every route is `async` on purpose: FastAPI runs plain `def` routes in a thread
+    pool, and the session store and monitor are only safe to read from the event
+    loop that writes them.
     """
-    app = FastAPI(title="LLM-GC Context Health Dashboard", version=APP_VERSION)
+    app = FastAPI(title="LLM-GC Dashboard", version=APP_VERSION)
+    config = gc_service.gc_config
 
-    event_bus = EventBus()
-    gc_config = _build_demo_config()
-    generational_memory = GenerationalMemory(knowledge_extractor=KnowledgeExtractor(event_bus=event_bus),
-                                             compactor=NoOpCompactor(event_bus=event_bus))
-    garbage_collector = GarbageCollector(
-        event_bus=event_bus, gc_config=gc_config,
-        relevance_scorer=_build_relevance_scorer(event_bus),
-        sweeper=Sweeper(sweeper_strategy=ThresholdSweepStrategy(gc_config=gc_config),
-                        gc_config=gc_config, event_bus=event_bus),
-        context_composer=ContextComposer(event_bus=event_bus, generational_memory=generational_memory,
-                                         compactor=NoOpCompactor(event_bus=event_bus)))
-    # The stateless collector stores nothing, so the server owns this
-    # conversation's facts, as it owns the conversation itself.
-    app.state.generations = GenerationSnapshot()
-    monitor = ContextHealthMonitor(event_bus=event_bus, gc_config=gc_config,
-                                   read_generations=lambda: app.state.generations)
-
-    app.state.garbage_collector = garbage_collector
-    app.state.monitor = monitor
-    app.state.feeder = DemoConversationFeeder()
-    app.state.conversation = []
-
-    @app.get("/")
-    def serve_dashboard() -> FileResponse:
+    @app.get("/", include_in_schema=False)
+    async def serve_page() -> FileResponse:
         return FileResponse(_STATIC_DIR / "index.html")
 
-    @app.get("/health")
-    def get_health() -> ContextHealth:
-        return app.state.monitor.get_snapshot()
+    @app.get("/api/overview")
+    async def overview() -> DashboardOverview:
+        store = gc_service.session_manager.store
+        states = [state for session_id in store.active_session_ids()
+                  if (state := store.get(session_id)) is not None]
+        sessions = [
+            SessionSummary(session_id=state.session_id, version=state.snapshot.version,
+                           recorded_turns=state.snapshot.recorded_turn_count, cuts=state.snapshot.cut_count,
+                           aging_in_flight=state.aging_in_flight, last_activity=state.last_updated_at)
+            for state in sorted(states, key=lambda state: state.last_updated_at, reverse=True)
+        ]
+        return DashboardOverview(
+            sessions=sessions,
+            config={"context_window": config.context_window, "min_cut_tokens": config.min_cut_tokens,
+                    "last_n_turns_to_keep": config.last_n_turns_to_keep, "keep_threshold": config.keep_threshold,
+                    "archive_threshold": config.archive_threshold, "max_memory_tokens": config.max_memory_tokens},
+            proxy=read_proxy_stats() if read_proxy_stats is not None else None,
+        )
 
-    @app.get("/config")
-    def get_config() -> dict:
-        # The snapshot deliberately doesn't carry config (it reports state, not
-        # settings); the meter's threshold tick needs these two values once.
-        return {"context_window": gc_config.context_window, "gc_threshold": gc_config.gc_threshold}
+    @app.get("/api/sessions/{session_id}", response_model=KnowledgeState)
+    async def session_knowledge(session_id: str) -> KnowledgeState | JSONResponse:
+        inspection = gc_service.inspect(session_id)
+        if inspection is None:
+            return _session_not_found(session_id)
+        return project_knowledge_state(inspection)
 
-    @app.post("/gc/run")
-    async def run_gc() -> dict:
-        new_turns = app.state.feeder.next_turns()
-        app.state.conversation = app.state.conversation + new_turns
-        gc_result = await app.state.garbage_collector.collect(app.state.conversation)
-        app.state.conversation = gc_result.final_messages
-        app.state.generations = apply_aging(
-            app.state.generations, AgingDelta(new_knowledge=tuple(gc_result.archived_knowledge))
-        ).snapshot
-        logger.info("Dashboard-triggered GC run finished",
-                    extra={"gc_run_id": gc_result.gc_run_id, "status": gc_result.status.value})
-        return {"gc_run_id": gc_result.gc_run_id, "status": gc_result.status.value,
-                "tokens_before": gc_result.tokens_before, "tokens_in_final": gc_result.tokens_in_final,
-                "tokens_saved": gc_result.tokens_saved,
-                "turns_added": len(new_turns), "conversation_length": len(app.state.conversation)}
+    @app.get("/api/sessions/{session_id}/activity", response_model=ContextHealth)
+    async def session_activity(session_id: str) -> ContextHealth | JSONResponse:
+        if gc_service.session_manager.store.get(session_id) is None:
+            return _session_not_found(session_id)
+        return monitor.get_snapshot(session_id)
 
     return app
+
+
+def _session_not_found(session_id: str) -> JSONResponse:
+    # Sessions close when idle, so a dashboard left open will ask for one that has gone.
+    return JSONResponse(status_code=404, content={"error": {
+        "code": "SESSION_NOT_FOUND", "message": f"no live session {session_id!r}; it may have been closed"}})

@@ -344,7 +344,7 @@ async def trace(config: GCConfig, *, verbose: bool, compactor_kind: str, api_key
     # Read from the session's own state: generations belong to the session, not
     # to the shared GenerationalMemory service.
     snapshot = service.session_manager.store.get(SESSION_ID).snapshot
-    old_gen = list(snapshot.old)
+    old_gen = [entry.message for entry in snapshot.old]
     permanent = snapshot.active_knowledge
     young = [m for m in final_context if m not in old_gen and m is not memory_block]
 

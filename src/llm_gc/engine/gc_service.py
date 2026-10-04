@@ -1,8 +1,10 @@
+import copy
 import logging
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from time import perf_counter
+from typing import Protocol
 
 from llm_gc.config.gc_config import GCConfig
 from llm_gc.engine.aging_degradation import AgingDegradation, DegradationReason
@@ -10,16 +12,25 @@ from llm_gc.engine.gc_result import GCResult
 from llm_gc.engine.gc_status import GCStatus
 from llm_gc.engine.generations.fact_retriever import FactRetriever, LexicalFactRetriever
 from llm_gc.engine.generations.generational_memory import GenerationalMemory
-from llm_gc.engine.generations.front import quote_turn, render_front
+from llm_gc.engine.generations.front import Front, quote_turn, render_front
 from llm_gc.engine.compaction import CompactionResult
 from llm_gc.engine.cut_point import find_cut_point, is_safe_cut
+from llm_gc.engine.inspection import CutPreview, SessionInspection, batch_worth_cutting
 from llm_gc.engine.sweep import SweepEntry, Sweeper, SweepResult
 from llm_gc.events import Event, EventBus, EventType
 from llm_gc.exceptions import CompactionRefused, LLMGCError
 from llm_gc.models import KnowledgeEntry, Message, SweepClassification
-from llm_gc.models.generation_snapshot import AgingDelta, AppliedAging, GenerationSnapshot, apply_aging
-from llm_gc.scoring import RelevanceScorer
+from llm_gc.models.generation_snapshot import (
+    AgingDelta,
+    AppliedAging,
+    EntryKind,
+    FrontEntry,
+    GenerationSnapshot,
+    apply_aging,
+)
+from llm_gc.scoring import RelevanceScorer, RelevanceScorerResult
 from llm_gc.session import SessionManager, SessionState
+from llm_gc.utils import count_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +45,8 @@ class _AgingPlan:
     """
 
     departed_turns: set[int] = field(default_factory=set)
-    new_summaries: list[Message] = field(default_factory=list)
-    evicted_summaries: list[Message] = field(default_factory=list)
+    new_entries: list[FrontEntry] = field(default_factory=list)
+    evicted_entries: list[FrontEntry] = field(default_factory=list)
     new_knowledge: list[KnowledgeEntry] = field(default_factory=list)
     promotions: list[tuple[list[int], CompactionResult]] = field(default_factory=list)
     archives: list[tuple[Message, list[KnowledgeEntry], str]] = field(default_factory=list)
@@ -44,10 +55,28 @@ class _AgingPlan:
     def delta(self) -> AgingDelta:
         return AgingDelta(
             departed_turns=frozenset(self.departed_turns),
-            new_summaries=tuple(self.new_summaries),
-            evicted_summaries=tuple(self.evicted_summaries),
+            new_entries=tuple(self.new_entries),
+            evicted_entries=tuple(self.evicted_entries),
             new_knowledge=tuple(self.new_knowledge),
         )
+
+
+@dataclass(frozen=True)
+class _Marked:
+    """The young generation swept and measured against the latest safe cut point."""
+
+    young: list[Message]
+    sweep_result: SweepResult
+    cut: int
+    batch: list[SweepEntry]
+
+    @property
+    def compactable_tokens(self) -> int:
+        return _compactable_tokens(self.batch)
+
+
+class _Announcing(Protocol):
+    event_bus: EventBus | None
 
 
 class GcService:
@@ -96,10 +125,9 @@ class GcService:
         model's thinking blocks on every request.
         """
         front = self._render_front(snapshot)
-        tail = sorted(snapshot.young, key=lambda message: message.turn_index)
-        return ([front] if front is not None else []) + tail
+        return ([front.message] if front is not None else []) + _in_order(snapshot.young)
 
-    def _render_front(self, snapshot: GenerationSnapshot) -> Message | None:
+    def _render_front(self, snapshot: GenerationSnapshot) -> Front | None:
         """Render the front from the generations a cut produced.
 
         Facts are chosen when the cut is made, not for each question: a block that
@@ -123,6 +151,52 @@ class GcService:
         """
         state = self.session_manager.get_or_create(session_id)
         return self._assemble(state.snapshot)
+
+    def inspect(self, session_id: str) -> SessionInspection | None:
+        """A read-only view of one session, or None if there is no such session.
+
+        Uses the same rendering as `gc_collect` and the same marking step as
+        `gc_age`, so the view cannot drift from what the engine does. No model
+        calls, no events, and unlike the request-path methods it never creates a
+        session or resets its idle clock: looking must not change what is looked at.
+        """
+        state = self.session_manager.store.get(session_id)
+        if state is None:
+            return None
+        snapshot = state.snapshot
+        young = _in_order(snapshot.young)
+        marked = self._sweep_and_measure(young, self._score(young, _quiet(self.relevance_scorer)),
+                                         _quiet(self.sweeper))
+        return SessionInspection(
+            session_id=session_id,
+            snapshot=snapshot,
+            front=self._render_front(snapshot),
+            tail=tuple(young),
+            next_cut=CutPreview(entries=tuple(marked.sweep_result.sweep_entries), cut=marked.cut,
+                                compactable_tokens=marked.compactable_tokens,
+                                min_cut_tokens=self.gc_config.min_cut_tokens),
+            aging_in_flight=state.aging_in_flight,
+            last_activity=state.last_updated_at,
+        )
+
+    def mark_front_sent(self, session_id: str, history_turns: int) -> int:
+        """Note that the current front is being sent after `history_turns` turns of history.
+
+        Returns the first turn whose thinking blocks are still valid. A thinking
+        block is bound to the prompt it was produced against, so every turn sent
+        with the first request that carries a new front predates it - including the
+        reply to the request during which the cut was planned, which the commit
+        cannot see. Replies from then on are produced against this front and keep
+        their thinking until the next cut. Immediate.
+        """
+        state = self.session_manager.store.get(session_id)
+        if state is None:
+            return history_turns
+        valid_from = state.snapshot.thinking_valid_from
+        if valid_from is None:
+            valid_from = history_turns
+            state.snapshot = replace(state.snapshot, thinking_valid_from=valid_from)
+        return valid_from
 
     def gc_record(self, session_id: str, turns: Sequence[Message], lineage: Sequence[str]) -> SessionState:
         """Record turns the conversation has gained, with their chain hashes. Immediate.
@@ -183,27 +257,19 @@ class GcService:
         current_stage = "score"
         plan = _AgingPlan()
         try:
-            young = sorted(base.young, key=lambda message: message.turn_index)
-            scores = [self.relevance_scorer.score(message, young) for message in young]
+            young = _in_order(base.young)
+            scores = self._score(young, self.relevance_scorer)
             current_stage = "sweep"
-            sweep_result = self.sweeper.sweep(young, scores)
-
-            cut = find_cut_point(young, self.gc_config.last_n_turns_to_keep)
-            batch = sweep_result.sweep_entries[:cut]
-            compactable = sum(entry.message.token_count for entry in batch
-                              if entry.classification != SweepClassification.KEEP)
-            # A cut costs a cache reset, so it must compact something: a batch of
-            # only KEEP turns would be quoted verbatim for nothing.
-            if cut == 0 or compactable == 0 or compactable < self.gc_config.min_cut_tokens:
+            marked = self._sweep_and_measure(young, scores, self.sweeper)
+            sweep_result = marked.sweep_result
+            if not batch_worth_cutting(marked.cut, marked.compactable_tokens, self.gc_config.min_cut_tokens):
                 return self._unchanged_result(base, gc_run_id, GCStatus.BYPASSED_BATCH_TOO_SMALL, start)
 
             current_stage = "age"
-            intended = batch
+            intended = marked.batch
             plan, cut = await self._plan_batch(session_id, young, intended)
             batch = intended[:cut]
-            compactable = sum(entry.message.token_count for entry in batch
-                              if entry.classification != SweepClassification.KEEP)
-            if compactable == 0 or compactable < self.gc_config.min_cut_tokens:
+            if not batch_worth_cutting(cut, _compactable_tokens(batch), self.gc_config.min_cut_tokens):
                 # A failure shortened the cut below what is worth a cache reset. The
                 # pass still ran to its decision, so it reports what it intended; the
                 # degradations say what stopped it.
@@ -232,9 +298,8 @@ class GcService:
                         extra={"session_id": session_id, "gc_run_id": gc_run_id})
             return self._unchanged_result(base, gc_run_id, GCStatus.DISCARDED_SESSION_CLOSED, start)
 
-        recorded = _recorded_turn_count(state.snapshot)
         applied = apply_aging(state.snapshot, plan.delta())
-        state.snapshot = replace(applied.snapshot, cut_turn_count=recorded)
+        state.snapshot = replace(applied.snapshot, thinking_valid_from=None, cut_count=applied.snapshot.cut_count + 1)
         self._announce(session_id, plan, applied)
 
         logger.debug("cut committed", extra={"session_id": session_id, "gc_run_id": gc_run_id,
@@ -267,6 +332,20 @@ class GcService:
 
     def _context_tokens(self, snapshot: GenerationSnapshot) -> int:
         return sum(message.token_count for message in self._assemble(snapshot))
+
+    @staticmethod
+    def _score(young: list[Message], scorer: RelevanceScorer) -> list[RelevanceScorerResult]:
+        return [scorer.score(message, young) for message in young]
+
+    def _sweep_and_measure(self, young: list[Message], scores: list[RelevanceScorerResult],
+                           sweeper: Sweeper) -> _Marked:
+        """Classify the verbatim turns and find the batch the latest safe cut would take.
+
+        The one definition of a cut's batch, shared by a real pass and a preview.
+        """
+        sweep_result = sweeper.sweep(young, scores)
+        cut = find_cut_point(young, self.gc_config.last_n_turns_to_keep)
+        return _Marked(young=young, sweep_result=sweep_result, cut=cut, batch=sweep_result.sweep_entries[:cut])
 
     def _unchanged_result(
         self, snapshot: GenerationSnapshot, gc_run_id: str, status: GCStatus, start: float,
@@ -314,7 +393,7 @@ class GcService:
             elif entry.classification == SweepClassification.ARCHIVE:
                 ok = self._archive(session_id, entry.message, "young", segment)
             else:
-                segment.new_summaries.append(quote_turn(entry.message))
+                segment.new_entries.append(quote_turn(entry.message))
                 ok = True
             degradations.extend(segment.degradations)
             if not ok:
@@ -330,7 +409,7 @@ class GcService:
             if end > cut:
                 break
             plan.departed_turns |= segment.departed_turns
-            plan.new_summaries.extend(segment.new_summaries)
+            plan.new_entries.extend(segment.new_entries)
             plan.new_knowledge.extend(segment.new_knowledge)
             plan.archives.extend(segment.archives)
             plan.promotions.extend(segment.promotions)
@@ -347,27 +426,33 @@ class GcService:
         the context as it will stand after it - recency is positional, and scoring
         entries among themselves would make the oldest survivor always look recent.
         """
-        candidates = list(base.old) + plan.new_summaries
+        candidates = list(base.old) + plan.new_entries
         if not candidates:
             return
 
         tail_after = [message for message in base.young if message.turn_index not in plan.departed_turns]
-        assembled = sorted(candidates + tail_after, key=lambda message: message.turn_index)
+        assembled = _in_order([entry.message for entry in candidates] + tail_after)
 
-        for summary in candidates:
-            score = self.relevance_scorer.score(summary, assembled).combined_score
+        for entry in candidates:
+            score = self.relevance_scorer.score(entry.message, assembled).combined_score
             if score >= self.gc_config.archive_threshold:
                 continue
-            if not self._archive(session_id, summary, "old", plan):
+            stated = entry.message.model_copy(update={"content": entry.text, "token_count": count_tokens(entry.text)})
+            if not self._archive(session_id, stated, "old", plan, source_turns=entry.source_turns):
                 continue
-            if summary in plan.new_summaries:
+            if entry in plan.new_entries:
                 # Produced and archived in one cut: it never enters old gen.
-                plan.new_summaries.remove(summary)
+                plan.new_entries.remove(entry)
             else:
-                plan.evicted_summaries.append(summary)
+                plan.evicted_entries.append(entry)
 
-    def _archive(self, session_id: str, message: Message, source_generation: str, plan: _AgingPlan) -> bool:
-        """Extract a turn's or entry's facts into the plan; False if extraction failed."""
+    def _archive(self, session_id: str, message: Message, source_generation: str, plan: _AgingPlan,
+                 source_turns: tuple[int, ...] = ()) -> bool:
+        """Extract a turn's or entry's facts into the plan; False if extraction failed.
+
+        `source_turns` carries an old-generation entry's coverage onto its facts, so
+        turns summarised together stay traceable after the summary is archived.
+        """
         try:
             entries = self.generational_memory.extract_knowledge(message)
         except Exception as err:
@@ -378,6 +463,8 @@ class GcService:
                 self._record_degradation(session_id, DegradationReason.ARCHIVE_FAILED, [message.turn_index], err)
             )
             return False
+        if source_turns:
+            entries = [replace(entry, source_turns=source_turns) for entry in entries]
         plan.new_knowledge.extend(entries)
         plan.archives.append((message, entries, source_generation))
         return True
@@ -405,7 +492,9 @@ class GcService:
             plan.degradations.append(
                 self._record_degradation(session_id, DegradationReason.COMPACTION_FAILED, turn_indices, err))
             return False
-        plan.new_summaries.append(result.summary)
+        text = result.summary_text if result.summary_text is not None else result.summary.content
+        plan.new_entries.append(FrontEntry(message=result.summary, kind=EntryKind.SUMMARY,
+                                           source_turns=tuple(turn_indices), text=text))
         plan.promotions.append((turn_indices, result))
         return True
 
@@ -475,8 +564,22 @@ class GcService:
         return degradation
 
 
-def _recorded_turn_count(snapshot: GenerationSnapshot) -> int:
-    """How many turns the session has recorded, aged ones included."""
-    if snapshot.lineage:
-        return len(snapshot.lineage)
-    return max((message.turn_index for message in snapshot.young), default=-1) + 1
+def _in_order(messages: Sequence[Message]) -> list[Message]:
+    return sorted(messages, key=lambda message: message.turn_index)
+
+
+def _compactable_tokens(batch: Sequence[SweepEntry]) -> int:
+    """Tokens a cut of `batch` would compact: everything not quoted verbatim."""
+    return sum(entry.message.token_count for entry in batch if entry.classification != SweepClassification.KEEP)
+
+
+def _quiet[T: _Announcing](component: T) -> T:
+    """A shallow copy of a scorer or sweeper that announces nothing on the bus.
+
+    A dry run reported as a real sweep would have every subscriber record work
+    that never happened. Shallow, so the copy shares the original's scorers and
+    strategy and differs only in having no bus.
+    """
+    twin = copy.copy(component)
+    twin.event_bus = None
+    return twin

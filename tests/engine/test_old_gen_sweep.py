@@ -35,7 +35,7 @@ SUMMARY = LLMResponse(
 
 
 def _old_gen(service: GcService) -> list[Message]:
-    return list(service.session_manager.store.get(SESSION).snapshot.old)
+    return [entry.message for entry in service.session_manager.store.get(SESSION).snapshot.old]
 
 
 def _facts(service: GcService) -> list:
@@ -167,8 +167,8 @@ class TestEvictionIsAllOrNothing:
 
         class _ArchiveFailingMemory(GenerationalMemory):
             def extract_knowledge(self, message):
-                # Old-gen summaries are the ones carrying the provenance marker.
-                if message.content.startswith("[Compacted"):
+                # Archiving an old-gen summary extracts from what the summary says.
+                if message.content == SUMMARY.text:
                     raise RuntimeError("permanent generation is unavailable")
                 return super().extract_knowledge(message)
 
@@ -184,8 +184,8 @@ class TestEvictionIsAllOrNothing:
 
         class _ArchiveFailingMemory(GenerationalMemory):
             def extract_knowledge(self, message):
-                # Old-gen summaries are the ones carrying the provenance marker.
-                if message.content.startswith("[Compacted"):
+                # Archiving an old-gen summary extracts from what the summary says.
+                if message.content == SUMMARY.text:
                     raise RuntimeError("permanent generation is unavailable")
                 return super().extract_knowledge(message)
 
@@ -212,3 +212,40 @@ class TestScoringIsAgainstTheRealConversation:
         oldest_late = min(m.turn_index for m in _old_gen(service))
 
         assert oldest_late > oldest_early
+
+
+class TestArchivedEntriesAreReadAsStated:
+    """Found on the live dashboard: a short turn stating a decision is too small to
+    summarise, so a cut quotes it; when the quote went cold it was archived by
+    parsing the quote as shown to the model, marker included. "[Quoted exactly]
+    (turn 2, user) The database is postgres" yields no fact, so it was filed as a
+    raw excerpt, ranked last for the front, and dropped from the prompt."""
+
+    def test_a_quoted_decision_is_filed_as_a_fact_when_it_goes_cold(self):
+        service, _ = _build()
+
+        async def scenario():
+            await service.gc_update(SESSION, Message(role="user", content="the database is postgres.",
+                                                     token_count=count_tokens("the database is postgres."),
+                                                     turn_index=0))
+            for index in range(1, 80):
+                text = (f"we walked through scenario {index} for throughput and retention at some length "
+                        f"and compared it against what the pool does when the replica goes away.")
+                await service.gc_update(SESSION, Message(role="user" if index % 2 == 0 else "assistant",
+                                                         content=text, token_count=count_tokens(text),
+                                                         turn_index=index))
+
+        asyncio.run(scenario())
+        knowledge = service.session_manager.store.get(SESSION).snapshot.knowledge
+
+        database = [entry for entry in knowledge if entry.topic_label == "database"]
+        assert database and database[0].content.startswith("postgres")
+        assert database[0].message_turn == 0
+
+    def test_nothing_filed_carries_a_front_marker(self):
+        service, _ = _build()
+        _converse(service, 120)
+
+        knowledge = service.session_manager.store.get(SESSION).snapshot.knowledge
+        assert knowledge
+        assert not any("[Quoted exactly]" in entry.content or "[Compacted" in entry.content for entry in knowledge)

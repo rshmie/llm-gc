@@ -13,7 +13,7 @@ class Sweeper:
     delegates classification to the injected strategy, aggregates results
     into a SweepResult, and emits a SWEEP_COMPLETED event.
     """
-    def __init__(self, sweeper_strategy: BaseSweepStrategy, gc_config: GCConfig, event_bus: EventBus):
+    def __init__(self, sweeper_strategy: BaseSweepStrategy, gc_config: GCConfig, event_bus: EventBus | None):
         self.sweeper_strategy = sweeper_strategy
         self.gc_config = gc_config
         self.event_bus = event_bus

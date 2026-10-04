@@ -29,8 +29,12 @@ Two rules bind every compactor, present and future:
 
 - **Summaries are surfaced to the model with a visible marker**, carrying the
   turn range and the method that produced them
-  (`[Compacted summary of turns N-M, method=llm]: ...`). The model is never
+  (`[Compacted (compaction_strategy=llm) turns N-M] ...`). The model is never
   shown a transformed turn pretending to be an original.
+- **A result also carries the summary without its marker**, for components that
+  act on what it says rather than show it. Fact extraction is the one that
+  matters: given the marked message, it read the marker as the first words of
+  the summary and lost the fact in that sentence.
 
 ## Why it exists
 

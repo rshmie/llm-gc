@@ -8,10 +8,38 @@ snapshot and swap the session's reference in one synchronous step.
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
+from enum import Enum
 
 from llm_gc.models.knowledge_entry import KnowledgeEntry
 from llm_gc.models.message import Message
 from llm_gc.models.knowledge_entry import KnowledgeStatus, KnowledgeType
+
+
+class EntryKind(Enum):
+    """How an old-generation entry represents the turns it stands in for."""
+
+    SUMMARY = "summary"   # a run of turns condensed by the compactor
+    QUOTE = "quote"       # one turn kept word for word, scored too important to summarise
+
+
+@dataclass(frozen=True)
+class FrontEntry:
+    """One old-generation entry: the message the front carries, and the turns it replaced.
+
+    `source_turns` is what lets a reader answer "where is turn 17 now?". The
+    entry's message records only its first turn, and a summary of turns 14-19 is
+    otherwise indistinguishable from one of turn 14 alone.
+
+    `text` is what the entry says, without the marker its message opens with to
+    tell the model what it is. Facts are extracted from `text`: parsed from the
+    message, the marker read as the first words of the turn and the fact in that
+    sentence was lost.
+    """
+
+    message: Message
+    kind: EntryKind
+    source_turns: tuple[int, ...]
+    text: str
 
 
 @dataclass(frozen=True)
@@ -30,17 +58,29 @@ class GenerationSnapshot:
     """
 
     young: tuple[Message, ...] = ()
-    old: tuple[Message, ...] = ()
+    old: tuple[FrontEntry, ...] = ()
     knowledge: tuple[KnowledgeEntry, ...] = ()
     version: int = 0
     lineage: tuple[str, ...] = ()
-    # Turns recorded when the most recent cut committed. Thinking blocks in kept
-    # turns before this point were produced against the history the cut replaced.
-    cut_turn_count: int = 0
+    # The first turn whose thinking blocks were produced against the current front.
+    # None from a cut until the first request that carries its front, because until
+    # then nothing has been produced against it.
+    thinking_valid_from: int | None = 0
+    cut_count: int = 0
 
     @property
     def active_knowledge(self) -> list[KnowledgeEntry]:
         return [entry for entry in self.knowledge if entry.knowledge_status == KnowledgeStatus.ACTIVE]
+
+    @property
+    def recorded_turn_count(self) -> int:
+        """How many turns the session has recorded, aged ones included."""
+        if self.lineage:
+            return len(self.lineage)
+        seen = [message.turn_index for message in self.young]
+        seen += [turn for entry in self.old for turn in entry.source_turns]
+        seen += [turn for entry in self.knowledge for turn in entry.covered_turns]
+        return max(seen, default=-1) + 1
 
     @property
     def tip(self) -> str | None:
@@ -81,18 +121,18 @@ class AgingDelta:
 
     Expressed as things to remove and values to add, never as replacement lists,
     so it can be applied to a snapshot that has gained turns since the pass began
-    without discarding them. Young turns are named by turn index; summaries by
-    value, since two summaries can share a first turn index.
+    without discarding them. Young turns are named by turn index; old-generation
+    entries by value, since two entries can share a first turn index.
     """
 
     departed_turns: frozenset[int] = frozenset()
-    new_summaries: tuple[Message, ...] = ()
-    evicted_summaries: tuple[Message, ...] = ()
+    new_entries: tuple[FrontEntry, ...] = ()
+    evicted_entries: tuple[FrontEntry, ...] = ()
     new_knowledge: tuple[KnowledgeEntry, ...] = ()
 
     @property
     def is_empty(self) -> bool:
-        return not (self.departed_turns or self.new_summaries or self.evicted_summaries or self.new_knowledge)
+        return not (self.departed_turns or self.new_entries or self.evicted_entries or self.new_knowledge)
 
 
 @dataclass(frozen=True)
@@ -113,7 +153,7 @@ def apply_aging(snapshot: GenerationSnapshot, delta: AgingDelta) -> AppliedAging
     """Return the snapshot with `delta` applied, and the supersessions it caused.
 
     Raises:
-        ValueError: The delta names a turn or summary the snapshot does not hold.
+        ValueError: The delta names a turn or entry the snapshot does not hold.
             Only one aging pass runs per session, so nothing else removes them;
             reaching this means that invariant broke, and merging anyway would
             silently drop or duplicate content.
@@ -121,14 +161,14 @@ def apply_aging(snapshot: GenerationSnapshot, delta: AgingDelta) -> AppliedAging
     young_turns = {message.turn_index for message in snapshot.young}
     if missing := delta.departed_turns - young_turns:
         raise ValueError(f"aging delta removes turns not in the young generation: {sorted(missing)}")
-    if stale := [s.turn_index for s in delta.evicted_summaries if s not in snapshot.old]:
-        raise ValueError(f"aging delta evicts summaries not in the old generation: {sorted(stale)}")
+    if stale := [e.message.turn_index for e in delta.evicted_entries if e not in snapshot.old]:
+        raise ValueError(f"aging delta evicts entries not in the old generation: {sorted(stale)}")
 
     knowledge, supersessions = file_knowledge(snapshot.knowledge, delta.new_knowledge)
     aged = replace(
         snapshot,
         young=tuple(m for m in snapshot.young if m.turn_index not in delta.departed_turns),
-        old=tuple(s for s in snapshot.old if s not in delta.evicted_summaries) + delta.new_summaries,
+        old=tuple(e for e in snapshot.old if e not in delta.evicted_entries) + delta.new_entries,
         knowledge=knowledge,
         version=snapshot.version + 1,
     )

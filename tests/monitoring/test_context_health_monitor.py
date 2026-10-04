@@ -3,10 +3,10 @@ import pytest
 from pydantic import ValidationError
 
 from llm_gc.config import GCConfig
-from llm_gc.engine import GCResult, GCStatus
+from llm_gc.engine import AgingDegradation, DegradationReason, GCResult, GCStatus
 from llm_gc.engine.sweep import SweepClassification, SweepEntry, SweepResult
 from llm_gc.events import Event, EventBus, EventType
-from llm_gc.models.generation_snapshot import GenerationSnapshot
+from llm_gc.models.generation_snapshot import EntryKind, FrontEntry, GenerationSnapshot
 from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.knowledge_entry import KnowledgeType
 from llm_gc.monitoring import ContextHealthMonitor
@@ -83,7 +83,7 @@ def _make_monitor(max_recent_transitions: int | None = None,
     gen_memory = _Generations()
     kwargs = {} if max_recent_transitions is None else {"max_recent_transitions": max_recent_transitions}
     monitor = ContextHealthMonitor(event_bus=bus, gc_config=GCConfig(context_window=context_window),
-                                   read_generations=lambda: gen_memory.snapshot, **kwargs)
+                                   read_generations=lambda _session_id: gen_memory.snapshot, **kwargs)
     return monitor, bus, gen_memory
 
 
@@ -275,7 +275,9 @@ class TestSnapshotCompleted:
         landed. The sweep below classifies two turns COMPACT while storage holds
         one summary from an earlier pass - the signal must report storage."""
         monitor, bus, gen_memory = _make_monitor()
-        gen_memory.snapshot = GenerationSnapshot(old=(_make_message(turn_index=7, token_count=5),))
+        summary = FrontEntry(message=_make_message(turn_index=7, token_count=5), kind=EntryKind.SUMMARY,
+                             source_turns=(7, 8), text="msg")
+        gen_memory.snapshot = GenerationSnapshot(old=(summary,))
 
         lifecycle = self._snapshot(monitor, bus).generation_lifecycle
 
@@ -367,3 +369,83 @@ class TestSnapshotSemantics:
         assert before is not after
         assert before.gc_breakdown is None  # the old photograph is untouched
         assert after.gc_breakdown is not None
+
+
+# ---- One monitor, many sessions ------------------------------------------------
+
+
+def _emit_for(bus: EventBus, session_id: str, event_type: EventType, **data) -> None:
+    bus.emit(Event(event_type=event_type, data={"session_id": session_id, **data}))
+
+
+class TestSessionsAreKeptApart:
+    """Every session's events share one bus. The monitor used to keep one last
+    pass and one timeline for all of them, so a dashboard watching one user's
+    conversation showed whichever session happened to finish a pass last."""
+
+    def test_each_session_sees_only_its_own_pass_and_transitions(self):
+        monitor, bus, _ = _make_monitor()
+        _emit_for(bus, "alice", EventType.GC_FINISHED, gc_result=_make_completed_result(
+            {0: SweepClassification.KEEP}, gc_run_id="alice-run"))
+        _emit_for(bus, "bob", EventType.MESSAGE_PROMOTED_TO_OLD_GEN, source_turn_indices=[4])
+
+        alice, bob = monitor.get_snapshot("alice"), monitor.get_snapshot("bob")
+
+        assert alice.gc_breakdown.gc_run_id == "alice-run"
+        assert alice.generation_lifecycle.recent_transitions == []
+        assert bob.gc_breakdown is None
+        assert [t.turn_index for t in bob.generation_lifecycle.recent_transitions] == [4]
+
+    def test_generations_are_read_for_the_session_asked_about(self):
+        snapshots = {"alice": GenerationSnapshot(knowledge=(_make_knowledge_entry(topic_label="db"),))}
+        monitor = ContextHealthMonitor(event_bus=EventBus(), gc_config=GCConfig(),
+                                       read_generations=snapshots.get)
+
+        assert monitor.get_snapshot("alice").generation_lifecycle.permanent_gen_count == 1
+        # A session that no longer exists reads as empty, not as an error.
+        assert monitor.get_snapshot("gone").generation_lifecycle.permanent_gen_count == 0
+
+    def test_forgetting_a_session_drops_its_history(self):
+        monitor, bus, _ = _make_monitor()
+        _emit_for(bus, "alice", EventType.MESSAGE_PROMOTED_TO_OLD_GEN, source_turn_indices=[1])
+
+        monitor.forget("alice")
+
+        assert monitor.get_snapshot("alice").generation_lifecycle.recent_transitions == []
+
+    def test_the_quietest_session_is_dropped_past_the_bound(self):
+        bus = EventBus()
+        monitor = ContextHealthMonitor(event_bus=bus, gc_config=GCConfig(),
+                                       read_generations=lambda _session_id: None, max_sessions=2)
+        for session_id in ("a", "b"):
+            _emit_for(bus, session_id, EventType.MESSAGE_PROMOTED_TO_OLD_GEN, source_turn_indices=[1])
+        _emit_for(bus, "a", EventType.MESSAGE_PROMOTED_TO_OLD_GEN, source_turn_indices=[2])   # a is now newest
+        _emit_for(bus, "c", EventType.MESSAGE_PROMOTED_TO_OLD_GEN, source_turn_indices=[1])
+
+        assert monitor.get_snapshot("b").generation_lifecycle.recent_transitions == []
+        assert len(monitor.get_snapshot("a").generation_lifecycle.recent_transitions) == 2
+
+    def test_the_monitor_keeps_no_conversation_content_from_a_pass(self):
+        """A GCResult carries the whole context. Holding it per session would keep
+        every conversation's text alive in the monitor long after its session closed."""
+        monitor, bus, _ = _make_monitor()
+        _emit_for(bus, "alice", EventType.GC_FINISHED, gc_result=_make_completed_result(
+            {0: SweepClassification.KEEP, 1: SweepClassification.COMPACT}))
+
+        record = monitor._records["alice"]
+        assert not any(isinstance(value, GCResult) for value in vars(record.last_pass).values())
+
+
+class TestDegradationsOutliveTheirPass:
+    def test_a_refusal_stays_visible_after_a_quiet_pass(self):
+        monitor, bus, _ = _make_monitor()
+        refused = AgingDegradation(reason=DegradationReason.COMPACTION_REFUSED, turn_indices=[3, 4],
+                                   detail="summary was not shorter than the run")
+        _emit_for(bus, "alice", EventType.AGING_DEGRADED, degradation=refused)
+        _emit_for(bus, "alice", EventType.GC_FINISHED, gc_result=_make_bypassed_result(
+            [_make_message(turn_index=5)], status=GCStatus.BYPASSED_BATCH_TOO_SMALL))
+
+        snapshot = monitor.get_snapshot("alice")
+
+        assert snapshot.gc_breakdown.is_degraded is False, "the last pass itself was clean"
+        assert [r.degradation for r in snapshot.recent_degradations] == [refused]

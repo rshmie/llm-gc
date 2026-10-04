@@ -71,7 +71,7 @@ class _RaisingCompactor(BaseCompactor):
 def _old_gen(service: GcService, session_id: str = "s1") -> list[Message]:
     """The session's own old generation - generations are per-session state."""
     state = service.session_manager.store.get(session_id)
-    return list(state.snapshot.old) if state is not None else []
+    return [entry.message for entry in state.snapshot.old] if state is not None else []
 
 
 def _facts(service: GcService, session_id: str = "s1") -> list:

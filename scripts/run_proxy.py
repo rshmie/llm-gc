@@ -12,23 +12,30 @@ real HTTP, and prints what the client sent versus what was forwarded, per reques
 This is the proxy's equivalent of `trace_session.py`: the engine's own trace shows
 the generations moving, this shows the wire.
 
-**Serve (real traffic to a real provider):**
+**Serve (real traffic to a real provider), with the live dashboard:**
 
     export ANTHROPIC_API_KEY=...      # for LLM-GC's own compaction calls
-    python scripts/run_proxy.py --serve
+    python scripts/run_proxy.py --serve --dashboard
 
-Then point a client at it and change nothing else:
+Then talk through it (`python scripts/chat.py`) or point any client at it and
+change nothing else:
 
     client = anthropic.Anthropic(base_url="http://127.0.0.1:9900", api_key="sk-...")
+
+and watch http://127.0.0.1:9901 while you do. Add `--stub-upstream` to run the
+whole loop offline, with canned replies instead of a model.
 
 The client's key is forwarded from its own request and never stored. The key in
 the environment is a *separate* credential, used only for LLM-GC's compaction
 calls — see doc/design/llm-provider.md for why those must not be the same key.
+The dashboard shows conversation content, so it is off unless asked for and only
+ever listens on localhost.
 
 Developer tooling, not library code, which is why it lives in `scripts/`.
 """
 
 import argparse
+import asyncio
 import json
 import os
 import sys
@@ -40,6 +47,11 @@ import httpx2  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from llm_gc.config import GCConfig  # noqa: E402
+from llm_gc.config.constants import (  # noqa: E402
+    DEFAULT_DASHBOARD_PORT,
+    DEFAULT_LAST_N_TURNS_TO_KEEP,
+    DEFAULT_MIN_CUT_TOKENS,
+)
 from llm_gc.engine.compaction import LLMCompactor, NoOpCompactor  # noqa: E402
 from llm_gc.engine.gc_service import GcService  # noqa: E402
 from llm_gc.engine.generations import GenerationalMemory  # noqa: E402
@@ -47,6 +59,7 @@ from llm_gc.engine.sweep import Sweeper, ThresholdSweepStrategy  # noqa: E402
 from llm_gc.events import EventBus  # noqa: E402
 from llm_gc.extraction import KnowledgeExtractor  # noqa: E402
 from llm_gc.llm import AnthropicClient, FakeProvider, LLMResponse, StopReason  # noqa: E402
+from llm_gc.monitoring import ContextHealthMonitor  # noqa: E402
 from llm_gc.proxy import DEFAULT_PROXY_PORT, SESSION_HEADER, create_app  # noqa: E402
 from llm_gc.scoring import (  # noqa: E402
     DecisionScorer,
@@ -58,6 +71,7 @@ from llm_gc.scoring import (  # noqa: E402
 )
 from llm_gc.session import SessionManager  # noqa: E402
 from llm_gc.utils import count_tokens  # noqa: E402
+from llm_gc.visualizer import create_dashboard_app  # noqa: E402
 
 SESSION = "demo"
 
@@ -107,10 +121,9 @@ _SCRIPTED_SUMMARIES = [
 ] * 6
 
 
-def build_engine(*, api_key: str | None, compactor_kind: str) -> tuple[GcService, GenerationalMemory, str]:
-    """The production engine graph. Only the compactor varies."""
-    bus = EventBus()
-    config = GCConfig(
+def demo_config() -> GCConfig:
+    """Scaled so a twelve-turn scripted conversation is cut more than once."""
+    return GCConfig(
         context_window=400,
         gc_threshold=0.5,
         keep_threshold=0.55,
@@ -121,6 +134,17 @@ def build_engine(*, api_key: str | None, compactor_kind: str) -> tuple[GcService
         min_cut_tokens=60,
         max_memory_ratio=0.15,
     )
+
+
+def serve_config(args: argparse.Namespace) -> GCConfig:
+    """The library defaults, with the two knobs worth turning while watching."""
+    return GCConfig(context_window=args.context_window, min_cut_tokens=args.min_cut_tokens,
+                    last_n_turns_to_keep=args.keep_last)
+
+
+def build_engine(config: GCConfig, *, api_key: str | None, compactor_kind: str) -> tuple[GcService, GenerationalMemory, str]:
+    """The production engine graph. Only the compactor varies."""
+    bus = EventBus()
 
     if compactor_kind == "noop":
         compactor = NoOpCompactor(event_bus=bus)
@@ -199,7 +223,7 @@ def _stub_upstream(forwarded: list[dict]):
 
 def demo(compactor_kind: str, api_key: str | None) -> None:
     """Replay a conversation through the real proxy over real HTTP."""
-    service, memory, label = build_engine(api_key=api_key, compactor_kind=compactor_kind)
+    service, memory, label = build_engine(demo_config(), api_key=api_key, compactor_kind=compactor_kind)
     forwarded: list[dict] = []
 
     def run_now(coro) -> None:
@@ -275,38 +299,112 @@ def demo(compactor_kind: str, api_key: str | None) -> None:
           f"permanent gen: {len(snapshot.active_knowledge)} facts\n")
 
 
-def serve(port: int, compactor_kind: str, api_key: str | None) -> None:
-    """Run the proxy for real traffic."""
+def serve(args: argparse.Namespace, api_key: str | None) -> None:
+    """Run the proxy for real traffic, and the dashboard beside it if asked."""
     import uvicorn
 
-    service, _, label = build_engine(api_key=api_key, compactor_kind=compactor_kind)
-    app = create_app(service)
+    config = serve_config(args)
+    service, _, label = build_engine(config, api_key=api_key, compactor_kind=args.compactor)
+    stub = httpx2.AsyncClient(transport=httpx2.MockTransport(_stub_provider)) if args.stub_upstream else None
+    proxy_app = create_app(service, http_client=stub)
+    apps = [(proxy_app, args.port)]
+    if args.dashboard:
+        store = service.session_manager.store
+        monitor = ContextHealthMonitor(
+            event_bus=service.event_bus, gc_config=config,
+            read_generations=lambda session_id: (state.snapshot if session_id is not None
+                                                 and (state := store.get(session_id)) is not None else None))
+        apps.append((create_dashboard_app(service, monitor, read_proxy_stats=proxy_app.state.metrics.as_dict),
+                     args.dashboard_port))
 
     print(f"\ncompactor: {label}")
-    if not api_key and compactor_kind != "noop":
+    if not api_key and args.compactor != "noop":
         print("WARNING: no ANTHROPIC_API_KEY, so compaction summaries are canned. "
               "Set it for real summarisation.")
-    print(f"\nlistening on http://127.0.0.1:{port} - point a client's base_url at it.")
-    print(f"  stats:  curl http://127.0.0.1:{port}/stats")
-    print(f"  health: curl http://127.0.0.1:{port}/health\n")
-    # Localhost by default, no auth. Binding wider needs authentication first
-    # (CLAUDE.md §10), and the client's provider key passes through this process.
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
+    print(f"upstream:  {'stub (canned replies, no network)' if args.stub_upstream else 'https://api.anthropic.com'}")
+    print(f"settings:  min_cut_tokens={config.min_cut_tokens}  last_n_turns_to_keep={config.last_n_turns_to_keep}  "
+          f"context_window={config.context_window}")
+    print(f"\nproxy      http://127.0.0.1:{args.port}   (stats: /stats)")
+    if args.dashboard:
+        print(f"dashboard  http://127.0.0.1:{args.dashboard_port}")
+    print("talk:      python scripts/chat.py\n")
+    # Localhost only, no auth. Binding wider needs authentication first
+    # (CLAUDE.md §10): the client's provider key passes through this process, and
+    # the dashboard shows every conversation it holds.
+    servers = [uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="info"))
+               for app, port in apps]
+
+    async def run_all() -> None:
+        # One event loop for both, so the dashboard reads sessions from the loop
+        # that writes them.
+        await asyncio.gather(*(server.serve() for server in servers))
+
+    asyncio.run(run_all())
+
+
+_STUB_PARAGRAPHS = [
+    "That fits what we settled earlier. I would keep the current approach and revisit it only if the "
+    "numbers change, since switching now costs more than it saves.",
+    "Worth writing down: it changes the plan for the next step, and it is the kind of detail that is "
+    "easy to lose a few turns from now.",
+    "I would treat that as settled unless something contradicts it. The open question is still the "
+    "rollout order, which depends on how the migration behaves under load.",
+]
+
+
+def _stub_provider(request: httpx2.Request) -> httpx2.Response:
+    """An offline stand-in for the provider: canned replies, streamed or not.
+
+    Long enough that a conversation accumulates compactable tokens at a rate worth
+    watching. It echoes the start of the question so each reply is distinct.
+    """
+    payload = json.loads(request.content)
+    turns = payload.get("messages", [])
+    question = turns[-1]["content"] if turns and isinstance(turns[-1]["content"], str) else "that"
+    text = f"(stub reply {len(turns)}) On \"{question[:60]}\": {_STUB_PARAGRAPHS[len(turns) % len(_STUB_PARAGRAPHS)]}"
+    usage = {"input_tokens": sum(count_tokens(json.dumps(t)) for t in turns), "output_tokens": count_tokens(text)}
+    message = {"id": f"msg_stub_{len(turns)}", "type": "message", "role": "assistant", "model": "stub",
+               "stop_reason": "end_turn", "stop_sequence": None, "usage": usage}
+    if not payload.get("stream"):
+        return httpx2.Response(200, json={**message, "content": [{"type": "text", "text": text}]})
+
+    events = [
+        ("message_start", {"type": "message_start", "message": {**message, "content": [], "stop_reason": None}}),
+        ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+        *[("content_block_delta", {"type": "content_block_delta", "index": 0,
+                                   "delta": {"type": "text_delta", "text": word + " "}}) for word in text.split()],
+        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                           "usage": {"output_tokens": usage["output_tokens"]}}),
+        ("message_stop", {"type": "message_stop"}),
+    ]
+    body = "".join(f"event: {name}\ndata: {json.dumps(data)}\n\n" for name, data in events)
+    return httpx2.Response(200, content=body.encode(), headers={"content-type": "text/event-stream"})
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--serve", action="store_true", help="run a real server instead of the demo")
     parser.add_argument("--port", type=int, default=DEFAULT_PROXY_PORT)
     parser.add_argument("--compactor", choices=("noop", "llm"), default="llm",
                         help="noop = the baseline that expands; llm = LLMCompactor")
+    serving = parser.add_argument_group("serve mode")
+    serving.add_argument("--dashboard", action="store_true", help="also serve the live dashboard (localhost only)")
+    serving.add_argument("--dashboard-port", type=int, default=DEFAULT_DASHBOARD_PORT)
+    serving.add_argument("--stub-upstream", action="store_true", help="answer with canned replies; no network")
+    serving.add_argument("--min-cut-tokens", type=int, default=DEFAULT_MIN_CUT_TOKENS,
+                         help="compactable tokens a cut needs (lower it to see cuts sooner)")
+    serving.add_argument("--keep-last", type=int, default=DEFAULT_LAST_N_TURNS_TO_KEEP,
+                         help="newest turns always kept verbatim")
+    serving.add_argument("--context-window", type=int, default=200_000,
+                         help="the proxied model's window; sets the memory budget")
     args = parser.parse_args()
 
     # From the environment, never a flag, so a key never lands in shell history.
     api_key = os.environ.get("ANTHROPIC_API_KEY")
 
     if args.serve:
-        serve(args.port, args.compactor, api_key)
+        serve(args, api_key)
     else:
         demo(args.compactor, api_key)
 

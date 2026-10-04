@@ -96,9 +96,10 @@ def rewrite_messages(payload: dict[str, Any], messages: list[Message], strip_thi
     never heard of - the proxy changes the conversation and nothing else.
 
     Turns are sent as the client's original content (images, tool calls), not
-    their text. Thinking blocks are removed from turns recorded before the latest
-    cut: they were produced against the history the cut replaced, and the provider
-    rejects or drops them once that history has changed.
+    their text. Thinking blocks are removed from turns before
+    `strip_thinking_before`: they were produced against a prompt the latest cut
+    replaced, and the provider rejects a request that replays them. Removing them
+    from a leading run of turns, oldest first, is what keeps later blocks valid.
     """
     rewritten = dict(payload)
     rewritten["messages"] = [

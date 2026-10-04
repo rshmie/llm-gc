@@ -3,8 +3,8 @@
 > **Status: work in progress, and not yet useful as a tool.** The engine is built and
 > tested — relevance scoring, three-tier sweep classification, generational memory with
 > knowledge extraction, the full pipeline behind `GarbageCollector.collect()`, a
-> context-health monitor, and a dashboard scaffold
-> (`python -m llm_gc.visualizer` → http://localhost:9901). 282 tests pass.
+> context-health monitor, and a live dashboard
+> (`python scripts/run_proxy.py --serve --dashboard` → http://localhost:9901). 282 tests pass.
 >
 > What does **not** work yet: aged turns move into the old generation but never leave it,
 > and extracted facts are never injected back into the assembled context. So today
@@ -161,19 +161,20 @@ pytest
 
 If the test suite passes, the environment is ready.
 
-### Try the dashboard scaffold
+### Watch a conversation on the dashboard
 
-The first visible surface of the visualizer already runs today:
+Run the proxy with the dashboard beside it, then talk through it:
 
 ```bash
-python -m llm_gc.visualizer
+python scripts/run_proxy.py --serve --dashboard   # add --stub-upstream to run offline
+python scripts/chat.py                            # in a second terminal
 # open http://localhost:9901
 ```
 
-Click **"Run GC now"** — each click feeds a batch of synthetic conversation
-turns through the real GC pipeline and updates every signal live: token
-budget pressure, the last pass's KEEP/COMPACT/ARCHIVE breakdown, generation
-lifecycle, and the promote/archive/supersede transitions timeline.
+Every turn appears as it is recorded. At each cut the strip shows which turns
+were quoted, summarised, or reduced to facts; the facts panel shows which facts
+the model is actually sent; and the next-cut meter shows how close the next cut
+is. `--min-cut-tokens 300` makes cuts happen within a short conversation.
 
 ### Everyday commands
 

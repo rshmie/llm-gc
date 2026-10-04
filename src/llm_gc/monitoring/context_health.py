@@ -104,6 +104,16 @@ class GenerationTransition(BaseModel):
     occurred_at: float
 
 
+class RecordedDegradation(BaseModel):
+    """A degradation as it was announced, and when.
+
+    Kept across passes: the last pass's breakdown shows only its own, so a refusal
+    followed by a quiet pass would otherwise vanish from view.
+    """
+    degradation: AgingDegradation
+    occurred_at: float
+
+
 class GenerationLifeCycleSignal(BaseModel):
     """Where every turn currently lives, and how it got there.
 
@@ -144,4 +154,5 @@ class ContextHealth(BaseModel):
     gc_breakdown: GCBreakdownSignal | None
     generation_lifecycle: GenerationLifeCycleSignal
     transformation_ratio: float | None  # internal baseline signal - never surfaced as a headline number
+    recent_degradations: list[RecordedDegradation] = Field(default_factory=list)  # bounded, oldest first
     snapshot_taken_at: float            # when this snapshot was built, distinct from gc_breakdown.gc_completed_at

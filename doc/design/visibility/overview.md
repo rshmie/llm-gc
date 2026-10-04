@@ -80,11 +80,25 @@ during the very reasoning the cleanup was meant to protect.
 
 ### A passive subscriber with a hybrid data model
 
-The Health Monitor subscribes to exactly three events: garbage collection
-finished, message archived, and knowledge entry superseded. It is the same
-publish/subscribe channel every other consumer (logger, benchmarks, the
-dashboard) reads from; the monitor is just one more subscriber, and the bus
-neither knows nor cares that it is listening.
+The Health Monitor subscribes to five events: garbage collection finished,
+turns promoted into the old generation, message archived, knowledge entry
+superseded, and aging degraded. It is the same publish/subscribe channel every
+other consumer (logger, benchmarks, the dashboard) reads from; the monitor is
+just one more subscriber, and the bus neither knows nor cares that it is
+listening.
+
+**One monitor serves every session, and keeps them apart.** Every event names
+the session it describes, and the monitor keeps a separate record per session:
+its last pass, its transitions, and its recent degradations. Events with no
+session — the stateless library path — share one record. The number of records
+is bounded, dropping the session heard from least recently, so a monitor never
+grows with the number of conversations a proxy has ever served.
+
+**It keeps no conversation content.** A finished pass's signals are built the
+moment the event arrives and only those are kept — counts, tokens, turn
+indices — never the result itself, which carries the whole context. Holding it
+would keep every conversation's text alive in the monitor after its session
+closed.
 
 Its data sourcing is deliberately hybrid — *aggregator, not computer*:
 
@@ -128,9 +142,8 @@ half-updated state.
 It is **passive**. It observes and reports; it never triggers a collection
 pass itself. Deciding *when* to clean context is a decision with consequences
 for what the model produces next, and that decision stays with the developer
-or the application. The dashboard's manual "Run GC now" control does not
-contradict this: that is the *developer* pulling the lever explicitly — the
-human judgment the passivity rule exists to protect.
+or the application. The dashboard is passive in the same way: it has no
+controls, and every route it serves is a read.
 
 ### What it exposes — named signals, no aggregate
 
@@ -144,7 +157,7 @@ are what the developer acts on.
 
 | Signal | What it measures | The question it answers |
 |---|---|---|
-| **Knowledge state** *(not yet built)* | every fact and decision the session has produced, with its current fidelity — verbatim, summarized, fact-only, or superseded — and its origin turn | "What does the model still know, and how well?" |
+| **Knowledge state** | every recorded turn with its current fidelity — verbatim, quoted, summarised, facts only, or superseded — and every fact with whether the model is sent it, what replaced it, and the turns it came from | "What does the model still know, and how well?" |
 | **Generation lifecycle state and recent transitions** | current young / old / permanent contents (counts and token shares) plus the last *N* promote / archive / supersede transitions | "Where does my decision live now — and did anything supersede it?" |
 | **Token budget pressure** | current context tokens as a fraction of the configured budget | "How crowded is the context the model is reasoning over?" |
 
@@ -155,22 +168,46 @@ are what the developer acts on.
 | **Latest GC breakdown** | KEEP / COMPACT / ARCHIVE counts and token totals from the most recent collection, plus the run's status, timing, and failure detail | "How much did the last cleanup change — and did it succeed at all?" A bypassed or failed pass is visible, never hidden behind a normal-looking breakdown; signals honestly report `None` ("not measured yet") rather than a fabricated zero before any pass has run |
 
 **Knowledge state is the signal that most directly serves the project's
-purpose, and it is the one that does not exist yet.** The three built signals
-all describe *collector activity*: counts, sizes, durations, transitions. A
-developer reading "old generation holds 21 summaries, pressure 0.64" cannot
-get from there to "the model no longer has the database decision verbatim" —
-yet that inference is the entire product, and today the human has to make it
-unaided from engine telemetry.
+purpose.** The other signals describe *collector activity*: counts, sizes,
+durations, transitions. A developer reading "old generation holds 21
+summaries, pressure 0.64" cannot get from there to "the model no longer has the
+database decision verbatim" — and that inference is the entire product.
 
-Almost all of the underlying data already exists: permanent-generation
-entries carry their origin turn, old-generation summaries record the turns
-they cover, and the transitions log records every move. What is missing is
-the **projection** — pivoting that data from *"what did the collector do"* to
-*"what does the model know"*, keyed by fact rather than by pass.
+Knowledge state is that inference made by the system. It pivots one session's
+data from *"what did the collector do"* to *"what does the model know"*, keyed
+by turn and by fact:
 
-The projection belongs to the monitor, not to the view. The view computes
-nothing of its own (see *Two packages*), and deciding that a fact is
-"fact-only" rather than "verbatim" is a derivation over three storage tiers,
+```
+ turn  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21
+       ░░ ░░ ▓▓ ░░ ▓▓ ╳╳ ▓▓ ▓▓ ▓▓ ▓▓ ▓▓ ▓▓ ▓▓ ▒▒ ▒▒ ▒▒ ▒▒ ██ ██ ██ ██ ██
+       └────── facts only ──────┘          └ quoted / ┘ └── verbatim ──┘
+       ░░ facts stored, not sent           summarised     ▔▔ ▔▔ ▔▔ taken by
+       ╳╳ superseded                                           the next cut
+```
+
+- **Per turn**, where it is now. A turn in the tail is verbatim; one covered by
+  a front entry is quoted or summarised; anything else has been reduced to facts
+  — and if every one of its facts was later contradicted, it is superseded. The
+  last case needs no record of its own: every departure from the young
+  generation leaves a front entry or at least one fact, and an archived front
+  entry passes the turns it covered on to its facts, so a turn found in neither
+  place can only have been reduced to facts.
+- **Per fact**, whether it is **sent**. Facts are chosen for the front by
+  importance and then cut to a budget, so a fact can be stored and still never
+  reach the model. *Stored, not sent* is the signal that matters most: the
+  conversation has not forgotten it, and the model cannot see it.
+- **The next cut**: which verbatim turns it would take, what each would become,
+  and how far the batch is from `min_cut_tokens` — a warning before anything
+  changes.
+
+It is built from a single read-only **inspection** of the session that the
+engine produces with the same rendering that builds the prompt and the same
+marking step a real aging pass runs, so a dashboard showing it cannot disagree
+with what the model is sent or with what the next pass will decide.
+
+The projection belongs to the monitoring package, not to the view. The view
+computes nothing of its own (see *Two packages*), and deciding that a turn is
+"facts only" rather than "quoted" is a derivation over three storage tiers,
 not a rendering choice. Putting it in the visualizer would duplicate that
 logic in every future consumer — the post-session report and the benchmark
 harness both need the same answer.
@@ -211,8 +248,9 @@ share none of their internals.
 
 The layer's two pieces live in two packages, because they have two jobs:
 
-- **`monitoring/`** — the Health Monitor (`ContextHealthMonitor`) and its
-  snapshot (`ContextHealth`). Pure Python; **no web dependencies**.
+- **`monitoring/`** — the Health Monitor (`ContextHealthMonitor`), its
+  snapshot (`ContextHealth`), and the knowledge-state projection. Pure Python;
+  **no web dependencies**.
 - **`visualizer/`** — the dashboard view, and later the post-session report.
   Web dependencies live here.
 
@@ -222,10 +260,18 @@ monitor into the bus — free of any web-framework code. The doc area
 ("visibility") names the *layer*; the two packages are its
 implementation.
 
-The current dashboard reads the snapshot over a periodic HTTP poll and
-renders each signal as a standalone display (no aggregate); server-push
-(WebSocket) delivery is a planned upgrade of the transport, not of the
-split — the monitor stays the single data source either way.
+The dashboard runs inside the proxy process, beside it rather than within it:
+the same engine and the same event loop, on its own localhost port. It lists
+every live session; for the one selected it shows the knowledge state and the
+monitor's activity, and the proxy's counters across all of them. It polls once a
+second, and fetches the knowledge state again only when the session's content
+has changed. Server-push (WebSocket) delivery is a planned upgrade of the
+transport, not of the split.
+
+**It shows conversation content, so it is opt-in and localhost-only.** The proxy
+and the dashboard have different exposure: the proxy is an API meant, one day,
+to be reached behind authentication; the dashboard shows every conversation the
+process holds. Separate listeners keep the two from being exposed together.
 
 ---
 
@@ -361,6 +407,18 @@ This whole direction expands the layer's input surface from "context state"
 to "context state plus model output", which is a real architectural change,
 not a new display. It is recorded here as a considered direction, not a
 commitment.
+
+### The next cut is previewed, not remembered
+
+The preview runs the aging pass's own marking step — score, sweep, find the cut
+point — on the session as it stands, with no model calls and nothing announced on
+the bus; a preview reported as a sweep would have every subscriber record work
+that never happened. *Rejected: show the last real pass's sweep.* It describes
+the conversation before the pass's own cut, so straight after every cut it would
+show the batch just taken; and surfacing a bypassed pass's sweep would put
+compaction counts on a pass that compacted nothing. *Accepted cost:* the preview
+scores on every change to the session, on the event loop; cheap with the default
+scorers, and to move to a worker thread if an embedding scorer is configured.
 
 ### Intent and outcome are different signals
 

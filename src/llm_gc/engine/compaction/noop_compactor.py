@@ -31,4 +31,5 @@ class NoOpCompactor(BaseCompactor):
                                       "token_count_after_compaction": summary_message.token_count,
                                       "messages_in_run": len(messages)
                                   }))
-        return CompactionResult(summary= summary_message, original_token_count=original_token_count, compaction_strategy=self.COMPACTION_STRATEGY)
+        return CompactionResult(summary=summary_message, original_token_count=original_token_count,
+                                compaction_strategy=self.COMPACTION_STRATEGY, summary_text=verbatim_content)

@@ -20,6 +20,11 @@ class KnowledgeEntry:
 
     Stored in the permanent generation after a turn is archived.
     Immutable - supersession creates a new copy via dataclasses.replace().
+
+    `message_turn` is the turn the entry is labelled with. `source_turns` names
+    every turn it was derived from when that is more than one - facts extracted
+    from a summary of turns 14-19 are labelled 14 and come from all six. Empty
+    means the entry comes from `message_turn` alone.
     """
     message_turn: int
     content: str
@@ -27,4 +32,10 @@ class KnowledgeEntry:
     knowledge_type: KnowledgeType
     knowledge_status: KnowledgeStatus = KnowledgeStatus.ACTIVE
     created_at: datetime = field(default_factory=datetime.now)
+    source_turns: tuple[int, ...] = ()
+
+    @property
+    def covered_turns(self) -> tuple[int, ...]:
+        """Every turn this entry was derived from."""
+        return self.source_turns or (self.message_turn,)
 

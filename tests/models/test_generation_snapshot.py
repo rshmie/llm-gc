@@ -6,7 +6,14 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from llm_gc.models.generation_snapshot import AgingDelta, GenerationSnapshot, apply_aging, file_knowledge
+from llm_gc.models.generation_snapshot import (
+    AgingDelta,
+    EntryKind,
+    FrontEntry,
+    GenerationSnapshot,
+    apply_aging,
+    file_knowledge,
+)
 from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.knowledge_entry import KnowledgeStatus, KnowledgeType
 
@@ -15,8 +22,11 @@ def _turn(index: int) -> Message:
     return Message(role="user", content=f"turn {index}", token_count=5, turn_index=index)
 
 
-def _summary(first_turn: int) -> Message:
-    return Message(role="assistant", content=f"summary from {first_turn}", token_count=3, turn_index=first_turn)
+def _summary(first_turn: int, content: str | None = None) -> FrontEntry:
+    message = Message(role="assistant", content=content or f"summary from {first_turn}", token_count=3,
+                      turn_index=first_turn)
+    return FrontEntry(message=message, kind=EntryKind.SUMMARY, source_turns=(first_turn, first_turn + 1),
+                      text=message.content)
 
 
 def _fact(topic: str, content: str, kind: KnowledgeType = KnowledgeType.DECISION) -> KnowledgeEntry:
@@ -48,32 +58,32 @@ class TestADeltaMergesOntoNewerState:
     def test_turns_recorded_during_the_pass_survive_the_commit(self):
         """The reason the model exists: aging computed against v7 commits onto v8."""
         base = _young(3, 4, 5, 10)
-        delta = AgingDelta(departed_turns=frozenset({3, 4, 5}), new_summaries=(_summary(3),))
+        delta = AgingDelta(departed_turns=frozenset({3, 4, 5}), new_entries=(_summary(3),))
         current = base.with_turn(_turn(11))
 
         aged = apply_aging(current, delta).snapshot
         assert [m.turn_index for m in aged.young] == [10, 11]
-        assert [s.turn_index for s in aged.old] == [3]
+        assert [e.message.turn_index for e in aged.old] == [3]
         assert aged.version == current.version + 1
 
     def test_eviction_and_promotion_in_one_pass(self):
         snapshot = GenerationSnapshot(young=(_turn(5), _turn(6)), old=(_summary(0), _summary(2)))
-        delta = AgingDelta(departed_turns=frozenset({5}), new_summaries=(_summary(5),),
-                           evicted_summaries=(_summary(0),))
+        delta = AgingDelta(departed_turns=frozenset({5}), new_entries=(_summary(5),),
+                           evicted_entries=(_summary(0),))
         aged = apply_aging(snapshot, delta).snapshot
-        assert [s.turn_index for s in aged.old] == [2, 5]
+        assert [e.message.turn_index for e in aged.old] == [2, 5]
 
     def test_summaries_sharing_a_first_turn_index_are_evicted_individually(self):
         """A regenerated turn re-sends its index, so two summaries can share one.
         Evicting by index would remove both."""
         first = _summary(4)
-        second = Message(role="assistant", content="a different summary", token_count=3, turn_index=4)
-        aged = apply_aging(GenerationSnapshot(old=(first, second)), AgingDelta(evicted_summaries=(first,))).snapshot
+        second = _summary(4, content="a different summary")
+        aged = apply_aging(GenerationSnapshot(old=(first, second)), AgingDelta(evicted_entries=(first,))).snapshot
         assert aged.old == (second,)
 
     @pytest.mark.parametrize("delta", [
         AgingDelta(departed_turns=frozenset({99})),
-        AgingDelta(evicted_summaries=(_summary(99),)),
+        AgingDelta(evicted_entries=(_summary(99),)),
     ], ids=["unknown-turn", "unknown-summary"])
     def test_a_delta_naming_content_that_is_gone_is_a_programmer_error(self, delta):
         """Only one pass ages a session at a time, so this means that rule broke.
