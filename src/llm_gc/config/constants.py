@@ -40,6 +40,11 @@ DEFAULT_MAX_MEMORY_RATIO = 0.1
 # it holds; archived, it is sent only as facts and lines cut to a fixed length.
 DEFAULT_MAX_OLD_GEN_RATIO = 0.2
 
+# Hysteresis around each detail-level band: a span moves up only once its score
+# clears a band by this much, and down only once it falls this far below one, so a
+# score hovering at a line does not change the front at every collection.
+DEFAULT_LEVEL_MARGIN = 0.05
+
 # Session lifecycle timings (rationale in doc/design/session/overview.md).
 DEFAULT_SESSION_TIMEOUT_S = 1800          # close a session idle this many seconds (30 min)
 DEFAULT_SESSION_SWEEP_INTERVAL_S = 300    # how often the idle sweeper runs (5 min)

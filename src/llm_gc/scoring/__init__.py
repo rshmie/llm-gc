@@ -8,6 +8,8 @@ from llm_gc.scoring.reference_scorer import ReferenceScorer
 from llm_gc.scoring.similarity_scorer import SimilarityScorer
 from llm_gc.scoring.relevance_scorer import RelevanceScorer
 from llm_gc.scoring.relevance_scorer_result import RelevanceScorerResult
+from llm_gc.scoring.span_scorer import LexicalRelevance, Relevance, SpanScore, SpanScorer
 
 __all__ = ["ScorerResult", "RelevanceType", "BaseScorer", "RecencyScorer", "DensityScorer", "DecisionScorer", "ReferenceScorer",
-           "SimilarityScorer", "RelevanceScorer", "RelevanceScorerResult"]
+           "SimilarityScorer", "RelevanceScorer", "RelevanceScorerResult", "LexicalRelevance", "Relevance", "SpanScore",
+           "SpanScorer"]
