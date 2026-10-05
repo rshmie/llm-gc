@@ -74,6 +74,13 @@ class TestThePage:
         assert "text/css" in client.get("/static/css/dashboard.css").headers["content-type"]
         assert "javascript" in client.get("/static/js/main.js").headers["content-type"]
 
+    def test_the_browser_revalidates_the_page_and_its_scripts(self):
+        """Left to guess a cache lifetime, a browser kept running the old scripts after
+        they changed, and an edited dashboard looked unedited."""
+        client = _client(*_engine())
+        for path in ("/", "/static/js/main.js", "/static/css/dashboard.css"):
+            assert client.get(path).headers["cache-control"] == "no-cache", path
+
     def test_its_one_action_is_the_manual_cut(self):
         app = create_dashboard_app(*_engine())
         writes = [route.path for route in app.routes if isinstance(route, APIRoute) and route.methods - {"GET"}]

@@ -6,6 +6,8 @@ import { renderChart } from "./engine.js";
 
 export function showTab(name) {
   ui.tab = name;
+  const back = $("return-pill");
+  if (back && back.dataset.tab === name) back.remove();
   for (const tab of ["conversation", "engine"]) {
     $(`tab-${tab}`).setAttribute("aria-selected", String(tab === name));
     $(`view-${tab}`).hidden = tab !== name || !state.selected;
@@ -47,4 +49,13 @@ export function showCleanupNotice(text) {
   stack.appendChild(toast);
   requestAnimationFrame(() => toast.classList.add("show"));
   setTimeout(() => { toast.classList.remove("show"); setTimeout(() => toast.remove(), 300); }, 4000);
+}
+
+// After a link moves you to another tab, one click takes you back to where you were.
+export function offerReturn(tab, scrollY) {
+  $("return-pill")?.remove();
+  const label = tab === "engine" ? "Engine" : "Conversation";
+  const pill = h("button", { id: "return-pill", class: "return-pill", type: "button", "data-tab": tab,
+    onclick: () => { showTab(tab); requestAnimationFrame(() => window.scrollTo({ top: scrollY })); } }, `← Back to ${label}`);
+  document.body.append(pill);
 }

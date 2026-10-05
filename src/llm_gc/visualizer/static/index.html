@@ -45,6 +45,7 @@
   <section class="card no-session" id="no-session">
     <h2>No conversation yet</h2>
     <p class="secondary" style="margin-top:6px">Conversations appear here as they pass through the proxy, from their second message.</p>
+    <p class="secondary" style="margin-top:6px">Restarted the proxy? It keeps conversations in memory only, so yours reappears, complete, with its next message.</p>
     <ol>
       <li>Start the proxy with the dashboard: <code>python scripts/run_proxy.py --serve --dashboard</code></li>
       <li>Talk through it: <code>python scripts/chat.py</code>, or point any Anthropic client at <code>http://127.0.0.1:9900</code></li>

@@ -89,7 +89,7 @@ export function renderProxy() {
   }
   fill("proxy-line", h("span", { class: "label" }, "All conversations"),
     h("span", {}, h("b", {}, fmt(p.requests)), " requests"), h("span", { class: "sep" }, "·"),
-    h("span", {}, h("b", {}, fmt(p.tokens_forwarded)), ` tokens sent${p.ratio !== null ? `, ${Math.round(p.ratio * 100)}% of what your apps sent` : ""}`), h("span", { class: "sep" }, "·"),
+    h("span", {}, h("b", {}, fmt(p.tokens_forwarded)), ` tokens sent in total${p.ratio !== null ? `, ${Math.round(p.ratio * 100)}% of what your apps sent` : ""}`), h("span", { class: "sep" }, "·"),
     p.gc_bypassed ? h("span", {}, h("span", { class: "st warn" }, "⚠ "), `${fmt(p.gc_bypassed)} passed on untouched after an error`) : h("span", {}, "none passed on after an error"),
     h("button", { class: "link-btn", type: "button", onclick: () => $("proxy-details").scrollIntoView({ behavior: smooth(), block: "start" }) }, "Details ↓"));
   const tile = (label, term, value, caption, extra) => h("section", { class: "card tile" },
@@ -98,7 +98,7 @@ export function renderProxy() {
   fill("tiles",
     tile("Requests through the proxy", null, countEl("tile-requests", p.requests),
       [`${fmt(p.gc_applied)} handled by LLM-GC`, p.gc_bypassed ? [" · ", h("span", { class: "st warn" }, "⚠ "), `${fmt(p.gc_bypassed)} passed on untouched after an error`] : " · none passed on after an error"]),
-    tile("Tokens sent to the provider", "forwarded", countEl("tile-forwarded", p.tokens_forwarded),
+    tile("Total sent since the proxy started", "forwarded", countEl("tile-forwarded", p.tokens_forwarded),
       `${p.ratio !== null ? `${Math.round(p.ratio * 100)}% of` : "of"} the ${fmt(p.tokens_in_client_history)} your apps sent, all conversations`,
       p.ratio !== null ? h("div", { class: "meter", "aria-hidden": "true" }, meterBar("tile-forwarded-ratio", p.ratio * 100)) : null),
     tile("Conversation tracking", "tracking", null, null,
@@ -191,7 +191,10 @@ export function whyText(t) {
   const s = t.score.toFixed(2);
   if (t.forced_keep) {
     if (t.forced_keep.includes("too short")) return `Kept whole: too short to condense (${c ? `${c.min_compactable_tokens} tokens or fewer` : "very short"}), whatever its relevance of ${s}.`;
-    if (t.forced_keep.includes("last_n")) return `Kept word for word: among the newest ${keepLast()} (relevance ${s}).`;
+    if (t.forced_keep.includes("last_n")) {
+      const later = t.score >= high ? "quoted whole" : t.score < low ? "reduced to facts" : "summarised";
+      return `Kept word for word: among the newest ${keepLast()}, whatever its relevance. At ${s} it would be ${later} once older.`;
+    }
     return `Kept whole by a rule (relevance ${s}).`;
   }
   if (t.classification === "keep") return `Relevance ${s}: at or above ${high.toFixed(2)}, so quoted whole.`;
@@ -271,6 +274,15 @@ export function renderHistory() {
     h("ul", { class: "events" }, shown.map((g) => {
       const byType = {};
       for (const t of g.items) (byType[t.transition_type] ||= []).push(t);
+      const archived = new Set((byType.archived || []).map((t) => t.turn_index));
+      const twice = (byType.promoted || []).filter((t) => archived.has(t.turn_index));
+      if (twice.length) {
+        const turns = new Set(twice.map((t) => t.turn_index));
+        byType.promoted = byType.promoted.filter((t) => !turns.has(t.turn_index));
+        byType.archived = byType.archived.filter((t) => !turns.has(t.turn_index));
+        byType.promoted_then_archived = twice;
+        for (const type of ["promoted", "archived"]) if (!byType[type].length) delete byType[type];
+      }
       return h("li", {},
         h("div", { class: "event-head" }, h("b", {}, "Clean-up"), h("span", { class: "when" }, agoTs(g.at))),
         h("div", { class: "event-lines" }, Object.entries(byType).map(([type, items]) => h("div", {},

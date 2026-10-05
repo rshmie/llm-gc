@@ -7,7 +7,7 @@ import { BECOMES, BECOMES_CAT, CATS, CLAMP_CHARS, EARLIER_SHOWN, FACTS_SHOWN, GL
 import { $, agoTs, countEl, fill, fmt, h, meterBar, percent, plural, ranges, reducedMotion, setChildren, storeSet, svg } from "./dom.js";
 import { captured, countCats, factsByTurn, has, marked, maxFacts, pendingTurns, preview, query, saidByTurn, state, turnMatches, ui } from "./state.js";
 import { hideTooltip, info, showTooltip, tipQuote, hoverTip } from "./tooltip.js";
-import { showTab } from "./shell.js";
+import { offerReturn, showTab } from "./shell.js";
 import { openCard, showWhy, whyText } from "./engine.js";
 
 const smooth = () => (reducedMotion() ? "auto" : "smooth");
@@ -75,10 +75,10 @@ export function renderSize(k) {
     : saved >= 0 ? ["good", `↓ ${fmt(saved)} saved · ${percent(saved, written)}% less than as written`]
     : ["", `↑ ${fmt(-saved)} more than as written: the condensed block outgrew what it replaced`];
   fill("panel-size",
-    h("div", { class: "label" }, "Sent to the model on every message", info("size")),
+    h("div", { class: "label" }, "Each request carries, now", info("size")),
     h("div", { class: "hero-row" }, h("span", { class: "hero" }, countEl("size-sent", sent)), h("span", { class: "hero-unit" }, "tokens"),
       h("span", { class: `delta${tone ? ` ${tone}` : ""}` }, text)),
-    h("p", { class: "hero-sub" }, "The whole conversation so far, as the model gets it. Your new message comes on top of this."));
+    h("p", { class: "hero-sub" }, "The size of one request today: the conversation as the model gets it, condensed block first. Your new message comes on top of this. The running total is on the Engine tab."));
 }
 
 export function renderHolds(k) {
@@ -507,12 +507,13 @@ export function summaryRow(row, said) {
     h("div", { "aria-hidden": "true" }),
     h("div", { class: "msg-body" },
       h("div", { class: "msg-head" }, h("span", { class: "who" }, plural(turns.length, "message")), fidTag("summarised")),
-      h("div", { class: "summary-box" }, h("div", { class: "label" }, `The model reads this instead · ${plural(entry.tokens, "token")}`), h("div", { class: "text" }, marked(entry.stated_text))),
+      h("div", { class: "summary-box" }, h("div", { class: "label" }, `The model reads this instead · ${plural(entry.tokens, "token")}, in place of ${plural(turns.reduce((sum, t) => sum + t.tokens, 0), "token")} as written`), h("div", { class: "text" }, marked(entry.stated_text))),
       h("button", { class: "more orig-toggle", type: "button", "aria-expanded": String(!!open),
         onclick: () => { if (ui.open.has(key)) ui.open.delete(key); else ui.open.add(key); renderTimeline(state.knowledge); } },
         `${open ? "Hide" : "Show"} what was said in ${turns.length > 1 ? `messages ${first}–${last}` : `message ${first}`}`),
       open ? turns.map((t) => h("div", { class: "orig", id: `turn-${t.turn_index}` },
-        h("div", { class: "msg-head" }, h("span", { class: "who" }, speakerName(said.get(t.turn_index)?.role)), h("span", { class: "num" }, `message ${t.turn_index}`)),
+        h("div", { class: "msg-head" }, h("span", { class: "who" }, speakerName(said.get(t.turn_index)?.role)), h("span", { class: "num" }, `message ${t.turn_index}`),
+          h("span", { class: "tok" }, plural(t.tokens, "token"))),
         textBlock(said.get(t.turn_index)?.text, { faded: true, key: `t-${t.turn_index}` }))) : null));
 }
 
@@ -545,6 +546,7 @@ export function runRow(run, said, facts) {
 }
 
 export function jumpTo(turnIndex) {
+  if (ui.tab !== "conversation") offerReturn(ui.tab, window.scrollY);
   showTab("conversation");
   setPromptView(false);
   const k = state.knowledge;

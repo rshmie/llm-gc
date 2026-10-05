@@ -17,7 +17,7 @@ export const CHART_HEIGHT = 260;
 // the words in brackets.
 export const GLOSSARY = {
   tokens: ["Tokens", "The unit models read and providers bill: roughly three quarters of a word. A model's window holds a fixed number of them."],
-  size: ["Tokens per request", "The conversation as written, against what LLM-GC forwards for it: the condensed block, then the recent messages word for word. Your newest message is counted once its reply arrives."],
+  size: ["Each request carries, now", "The size of one request today, not a total: the condensed block, then the recent messages word for word, compared with the conversation as written. Your newest message is counted once its reply arrives."],
   window: ["The model's window", "The most the model can read in one request. Filling it is what forces old context out; LLM-GC decides what goes, instead of the provider truncating."],
   cleanup: ["Clean-up (a “cut”)", "LLM-GC does not rewrite the conversation on every message: changing the start of the prompt makes the provider drop its cache and the model lose its earlier reasoning. So it waits until older, low-relevance messages add up to enough to be worth it, then condenses them all at once. The newest messages always stay word for word."],
   ready: ["Ready to condense", "Older messages rated low enough to be summarised or reduced to facts. Short messages and the newest ones are kept whole, so they do not count. When this reaches the target, the next reply triggers a clean-up."],
@@ -32,7 +32,7 @@ export const GLOSSARY = {
   relevance: ["Relevance", "A score from 0 to 1 combining how recent a message is, whether later messages refer back to it, how much specific detail it holds, and whether it records a decision."],
   check: ["Checks (“passes”)", "After every reply LLM-GC checks whether a clean-up is due. Most checks find nothing to do; that is normal, and takes a few milliseconds."],
   tracking: ["Conversation tracking", "LLM-GC recognises a conversation by its content. An edited or regenerated earlier message rewinds it; a change it cannot rewind restarts it; a conversation it has never seen, or one after a proxy restart, starts fresh. A restart or a fresh start costs one request that is not condensed."],
-  forwarded: ["Tokens sent to the provider", "Totals across every request through the proxy. Each request carries the whole conversation again, so these grow much faster than the conversation itself."],
+  forwarded: ["Total sent since the proxy started", "Every request added up, across all conversations, since the proxy last started; a restart sets it back to zero. Each request carries the whole conversation again, so this grows much faster than any conversation. The size of one request today is on the Conversation tab."],
 };
 export const GUIDE_TERMS = ["cleanup", "block", "relevance", "check", "tokens", "window"];
 
@@ -60,7 +60,8 @@ export const STATUS = {
   bypassed_on_error:        { tone: "critical", icon: "✕", text: "failed: nothing changed" },
   discarded_session_closed: { tone: "", icon: "–", text: "discarded: the conversation had closed" },
 };
-export const TRANSITION = { promoted: "Summarised", archived: "Reduced to facts", superseded: "Fact contradicted" };
+export const TRANSITION = { promoted: "Summarised", archived: "Reduced to facts", superseded: "Fact contradicted",
+  promoted_then_archived: "Summarised, then the summary reduced to facts" };
 // What a clean-up did to the messages it took. Always from the engine's outcome, never the sweeper's plan:
 // the same clean-up can overrule the plan, so a message planned to be quoted can end it as facts.
 export function describeOutcome(o) {
@@ -69,8 +70,8 @@ export function describeOutcome(o) {
     o.front_archived ? `${o.front_archived} condensed earlier, now facts` : null].filter(Boolean).join(" · ");
 }
 // The kind of move behind each transition and each degradation, in the engine's own terms.
-export const MOVE_KIND = { promoted: "compaction", archived: "archive", superseded: null };
-export const MOVE_CAT = { promoted: "summarised", archived: "facts", superseded: "superseded" };
+export const MOVE_KIND = { promoted: "compaction", archived: "archive", superseded: null, promoted_then_archived: "same clean-up" };
+export const MOVE_CAT = { promoted: "summarised", archived: "facts", superseded: "superseded", promoted_then_archived: "facts" };
 export const NOT_MOVED = {
   compaction_refused: ["Summary rejected by the safeguard", "compaction"],
   compaction_failed: ["Summary request failed", "compaction"],

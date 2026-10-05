@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -25,6 +25,16 @@ from llm_gc.monitoring.knowledge_state import KnowledgeState, project_knowledge_
 from llm_gc.visualizer.transcript import TranscriptRecorder, TranscriptTurn
 
 _STATIC_DIR = Path(__file__).parent / "static"
+# Without it the browser guesses a cache lifetime and keeps running an old dashboard
+# after the files change; with it, each load revalidates by ETag, which is cheap.
+_REVALIDATE = {"Cache-Control": "no-cache"}
+
+
+class _RevalidatedStaticFiles(StaticFiles):
+    def file_response(self, *args: Any, **kwargs: Any) -> Response:
+        response = super().file_response(*args, **kwargs)
+        response.headers.update(_REVALIDATE)
+        return response
 
 # Only localhost names are served. A page on another site can make the browser
 # resolve its own hostname to 127.0.0.1 (DNS rebinding) and read the responses as
@@ -101,10 +111,10 @@ def create_dashboard_app(
 
     @app.get("/", include_in_schema=False)
     async def serve_page() -> FileResponse:
-        return FileResponse(_STATIC_DIR / "index.html")
+        return FileResponse(_STATIC_DIR / "index.html", headers=_REVALIDATE)
 
     # The page's styles and scripts, shipped inside the package so no build step is needed.
-    app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+    app.mount("/static", _RevalidatedStaticFiles(directory=_STATIC_DIR), name="static")
 
     @app.get("/api/overview")
     async def overview() -> DashboardOverview:
