@@ -1,28 +1,44 @@
 # LLM-GC: Garbage Collection for LLM Context
 
-> **Status: work in progress.** The engine and an Anthropic-compatible proxy are built
-> and tested — relevance scoring, three-tier classification, generational memory with
-> fact extraction and supersession, a summarising compactor, collections that keep the
-> provider's prompt cache and thinking blocks valid, streaming, and a live dashboard
-> (`python scripts/run_proxy.py --serve --dashboard` → http://localhost:9901). A
-> decision-survival check measures what the model can still answer after LLM-GC has
-> condensed a conversation; its current results are under [Measured results](#measured-results).
->
-> What is **not** done yet: the OpenAI-compatible endpoint, a verified run of Claude Code
-> through the proxy, and keeping long assistant answers whole enough to survive — the
-> check shows LLM-GC still losing most of their details. Nothing is pip-installable yet.
+**See what your model remembers, what it has forgotten, and when to worry.**
 
-If you've spent 50+ turns in a Claude Code session, you've probably noticed the model starts forgetting things. The database you agreed on, the auth approach you picked, the thing you explicitly said *not* to do — it's all still in the conversation, but buried under 130K tokens of old file reads, stale command outputs, and resolved debugging context. The model either hallucinates a wrong answer or tells you "I don't have that context."
+If you've spent 50+ turns in a Claude Code session, you've probably watched the model
+start forgetting things: the database you agreed on, the approach you picked, the thing
+you said *not* to do. It's all still in the conversation, buried under 130K tokens of old
+file reads, stale command output and settled debates. Every request re-sends all of it,
+so you pay for the noise on every call, and the model answers in the same confident tone
+whether the decision is still in view or not.
 
-The root cause is that every API call resends the entire conversation history from scratch. Nothing is ever cleaned up, so old material piles up and crowds out the things that still matter.
+LLM-GC sits between your app and the provider and manages the conversation the way a
+generational garbage collector manages memory. Recent turns stay word for word; older
+ones are kept whole, summarised, or reduced to the facts they established; the next
+request carries one compact recap instead of the whole history. **And it never does this
+silently:** a live dashboard shows, for every turn, exactly what the model still
+receives, so you can see when its grounding has gone.
+
+After the [setup](#setup), with `ANTHROPIC_API_KEY` set (or add `--stub-upstream` to run
+offline, with canned replies):
+
+```bash
+python scripts/run_proxy.py --serve --dashboard   # the proxy on :9900, the dashboard on :9901
+python scripts/chat.py                            # talk through it, and watch http://localhost:9901
+```
+
+> **Status: work in progress, not yet pip-installable.** The engine, an
+> Anthropic-compatible proxy (streaming included) and the dashboard are built and tested.
+> A [decision-survival check](evals/decision_survival/README.md) measures what the model
+> can still answer once LLM-GC has condensed a conversation: everything the user stated
+> survives, while details stated only inside long assistant answers mostly do not — the
+> current work. Not done yet: the OpenAI-compatible endpoint, and a verified run of Claude
+> Code through the proxy.
 
 ## The problem
 
 Two distinct things go wrong, and only one of them is about money.
 
-**Context loss.** The decision from turn 5 is still technically present at turn 50 — it's just one short message inside 100K tokens of less relevant material. Liu et al. (2023), [*Lost in the Middle*](https://arxiv.org/abs/2307.03172), showed that information buried in the middle of a long context is recalled less reliably than information at either end. So the decision can be *in* the window and still not usable. Worse, a naive fix makes it worse: on real sessions, a sliding window that keeps the last 10 turns loses **7.6 of 8 early decisions**.
+**Context loss.** The decision from turn 5 is still technically present at turn 50 — it's just one short message inside 100K tokens of less relevant material. Liu et al. (2023), [*Lost in the Middle*](https://arxiv.org/abs/2307.03172), showed that information buried in the middle of a long context is recalled less reliably than information at either end. So the decision can be *in* the window and still not usable. And the naive fix makes it worse: in an early profiling of 7 of the author's own Claude Code sessions, a sliding window that kept the last 10 turns lost **7.6 of 8 early decisions**.
 
-**Context waste.** Across 7 real Claude Code sessions, 99% of token spend was input — the resent history — and 84% of that input at peak was stale context. You are paying, on every single call, to resend material that is crowding out the material you need.
+**Context waste.** The same sessions averaged 132,579 input tokens at their peak, re-sent on every call, and about 84% of that was stale material: old file reads, command output, resolved debugging. You pay, on every call, to resend material that crowds out the material you need. *(That profiling predates this repository's benchmarks; its method is not yet published here, so treat these figures as motivation, not measurement.)*
 
 This is recognisably a memory-management problem, and memory management has decades of prior art. Java, Go and C# all identify what is still needed, discard what is not, and compact what remains.
 
@@ -32,11 +48,13 @@ But cleaning context is only half of it. The other half is **transparency**. Tod
 
 ## How it works
 
-LLM-GC intercepts LLM API calls, optimizes the conversation context, and forwards the cleaned version. Three operations, inspired by classic GC algorithms:
+LLM-GC sits between your app and the provider as a proxy. After each reply it runs a check, a GC pass, with three steps inspired by classic garbage collectors:
 
-1. **Mark** — Score every turn older than the newest few for relevance
-2. **Sweep** — Classify each: **keep** (quote it whole), **compact** (summarise it), or **archive** (extract its facts)
-3. **Compact** — Assemble the prompt: one recap message (quotes, summaries and facts), then the recent turns word for word; the system prompt is never touched
+1. **Mark** — score every turn in the young generation, and every entry in the recap, for relevance
+2. **Sweep** — classify each older turn: **keep** (quote it whole), **compact** (summarise it), or **archive** (reduce it to its facts); the newest few are always kept word for word
+3. **Compact** — once enough older turns are ready, make a **collection**: they leave the young generation as classified, and the next request carries one recap of quotes, summaries and facts, then the recent turns word for word. The system prompt is never touched
+
+Most checks find too little to collect and change nothing. Collecting in batches means the start of the prompt changes rarely, so the provider's prompt cache keeps working, and none of it runs while a request waits.
 
 ### Generational memory
 
@@ -48,7 +66,7 @@ Context is managed in three generations, inspired by generational garbage collec
 | **Old** | Older turns, quoted whole or summarised | Java's tenured generation |
 | **Permanent** | Extracted facts and decisions, never discarded | Java's permanent generation |
 
-As turns age, they move through generations: in full (young) → quoted or summarised (old) → facts extracted (permanent). The old generation and the facts travel together in the recap at the start of every request, so they reach the model; facts are sent up to a share of the model's window.
+As turns age, they move through generations: in full (young) → quoted or summarised (old) → facts extracted (permanent); a turn rated cold enough goes straight from young to facts. The old generation and the facts travel together in the recap at the start of every request, so they reach the model; facts are sent up to a share of the model's window.
 
 ### Context Visualizer — epistemic transparency
 
@@ -62,12 +80,12 @@ Right now, developers have no data:
 - You can't see which parts of the conversation are still "alive" in the model's attention vs. buried noise
 - You have no signal telling you "this is the point where you should worry about answer quality"
 
-LLM-GC's Context Visualizer solves this. Every GC component already computes rich internal state — relevance scores, generation classifications, waste percentages, decision tracking. Instead of using that data only internally, the visualizer **exposes it to the developer** as a live dashboard:
+LLM-GC's Context Visualizer solves this. Every GC component already computes rich internal state — relevance scores, classifications, which generation each turn is in, what each collection did. Instead of using that data only internally, the visualizer **exposes it to the developer** as a live dashboard:
 
 - **Named signals, no aggregate score** — token budget pressure, and what the last GC pass actually did (including when it was bypassed or failed — an unhealthy pass is visible, never hidden). Each signal is named for what it literally measures; nothing looks more authoritative than its math supports. The *transformation ratio* is computed but deliberately **not** displayed: it is honest arithmetic that would still be misread as a risk score if it sat on the page as the one number to glance at
 - **Generation lifecycle & transitions timeline** — where every turn lives right now (young / old / permanent) and the last N promote / archive / supersede events — including the moment a newer fact contradicted and superseded an older one, which no current-state view can ever show
-- **What the model knows, turn by turn** — every turn as it was said, beside what the model still has of it: word for word, quoted, inside a summary, as facts, or out of view — and every fact marked as sent to the model or only stored. A fact that is kept but never sent is the case this view exists to expose
-- **Turn relevance** — each recent turn's score against the keep and archive thresholds, and what the next cut will make of it
+- **What the model knows, turn by turn** — every turn as it was said, beside what the model still has of it: word for word, kept (quoted whole), compacted (summarised), archived (as facts), or out of view — and every fact shown exactly as it is sent, or marked as only stored. A fact that is kept but never sent is the case this view exists to expose
+- **Turn relevance** — each recent turn's score against the keep and archive thresholds, and what the next collection will make of it
 - **Post-Session Analysis** *(planned)* — After a session ends: full timeline of when quality peaked, when it degraded, which decisions survived, where the danger zones were
 
 There is deliberately **no single "health score" or "hallucination risk" number**. A number labelled "risk" claims an accuracy no heuristic can back without ground-truth hallucination labels — and a dishonest number is a new black box, which is the opposite of the point. If a learned predictor can be defensibly grounded in real labels, an aggregate ships *alongside* the signals; until then, the signals do the part that can be done honestly, and you do the part that can't yet be automated honestly. **Aggregation is earned, not assumed.** Most tools optimize context silently. LLM-GC shows you what's happening and lets YOU decide if the AI's output is trustworthy right now.
@@ -81,18 +99,20 @@ LLM-GC borrows principles from garbage collection — a concept pioneered in Lis
 | Heap memory | Context window |
 | Objects | Conversation turns |
 | Live objects | Relevant context (still needed) |
-| Dead objects | Stale context (safe to remove) |
-| GC roots | Current query + active topic |
+| Dead objects | Stale context (safe to condense) |
+| GC roots | The next question, which has not been asked yet (see below) |
 | Reachability analysis | Relevance scoring |
 | Mark phase | Score each turn for relevance |
-| Sweep phase | Remove low-relevance turns |
-| Compaction | Summarize + consolidate remaining context |
+| Sweep phase | Classify each older turn: keep, compact or archive |
+| Compaction | Rewrite the start of the prompt as one recap: quotes, summaries, facts |
+| Minor collection | A collection: a batch of older turns leaves the young generation |
+| Eden filling up | Older turns to compact or archive reaching `min_cut_tokens` |
 | Young generation | Recent turns (full detail) |
-| Old generation | Older turns (compressed) |
+| Old generation | Older turns, quoted whole or summarised |
 | Permanent generation | Key facts (never discarded) |
-| GC pause | Latency overhead (design target: <25ms warm; not yet benchmarked) |
-| Concurrent GC | Async pre-computation between turns |
-| GC tuning flags | Configurable thresholds and strategies |
+| GC pause | None on the request: the check runs after each reply, in about 10 ms, and a collection's summaries are written then too |
+| Concurrent GC | Collections run between turns, while the user reads the reply |
+| GC tuning flags | Configurable thresholds, batch size and newest turns kept |
 
 ### Where the analogy breaks — and why that matters more than where it holds
 
@@ -103,7 +123,7 @@ Relevance is not decidable. The root set for a conversation is the *next questio
 Three things follow, and they shape the whole design:
 
 - **Cleanup cannot be silent.** A system making unsound, unverifiable decisions about what the model is allowed to see — and hiding them from the person who gets handed the answer — has replaced one opaque actor with two. Transparency here isn't a feature chosen because it's appealing. It's the only honest way to ship an operation that can't be proven correct.
-- **Removal has to be recoverable.** Because a bet can be wrong, what's swept must stay reachable in some form. This is why the system compresses rather than deletes: a turn leaving the young generation survives as a summary, and its decisions survive as extracted facts. A wrong bet costs fidelity, not knowledge.
+- **Removal has to be recoverable.** Because a bet can be wrong, what's swept must stay reachable in some form. This is why the system condenses rather than deletes: a turn leaving the young generation survives as a quote, a summary or extracted facts, and its decisions survive as facts. A wrong bet should cost fidelity, not knowledge. That is the intent; the [decision-survival check](evals/decision_survival/README.md) shows where it does not hold yet: details stated only inside long assistant answers.
 - **Conservatism is calibration, not timidity.** Keeping an unneeded turn costs a bounded number of tokens. Removing a needed one costs an unpredictable amount and stays invisible until it surfaces as a wrong answer. Asymmetric costs demand an asymmetric policy.
 
 ### Beyond the GC analogy
@@ -146,8 +166,8 @@ Windows and other options.)
 git clone git@github.com:rshmie/llm-gc.git
 cd llm-gc
 
-# 2. Install dependencies (creates .venv automatically, installs the
-#    project in editable mode, and resolves the dev extras: pytest, ruff)
+# 2. Install dependencies (creates .venv automatically, installs the project in
+#    editable mode, and the dev extras: pytest, ruff, mypy, hypothesis, the Anthropic SDK)
 uv sync --extra dev
 
 # 3. Activate the virtual environment
@@ -169,14 +189,13 @@ python scripts/chat.py                            # in a second terminal
 # open http://localhost:9901
 ```
 
-A short guide explains the page the first time you open it. **The conversation**
-view shows every turn as it was said beside what the model
-still has of it — word for word, quoted, inside a summary, as facts, or out of
-view — and which facts the model is actually sent. **LLM-GC at work** shows how
-the collector scores each turn, every pass and its outcome, and the proxy's
-counters. **Run GC now** cuts the selected conversation without waiting for the
-batch minimum. `--min-cut-tokens 300` makes cuts happen within a short
-conversation.
+The **?** button explains the page. The **Conversation** tab shows every turn as it
+was said beside what the model still has of it — word for word, kept, compacted,
+archived, or out of view — and each fact exactly as the model is sent it. The
+**Engine** tab shows the three generations, how each turn is scored, every check
+and collection, and the proxy's counters. **Run GC now** collects the selected
+conversation without waiting for the minimum. `--min-cut-tokens 300` makes
+collections happen within a short conversation.
 
 ### Everyday commands
 
@@ -184,6 +203,8 @@ conversation.
 uv sync --extra dev   # re-sync .venv after pulling changes to pyproject.toml
 pytest                # run the test suite
 ruff check .          # lint
+mypy                  # type-check the library
+python -m evals.decision_survival.run --rehearse   # the decision-survival check, offline
 ```
 
 ## Using it
@@ -227,7 +248,7 @@ async def on_turn(session_id: str, text: str, role: str, index: int) -> list[Mes
 - Three-tier sweep classification (keep / compact / archive)
 - Generational memory (young / old / permanent) with fact extraction and supersession; cold summaries are archived into facts, and facts go back into the prompt
 - A summarising compactor that refuses any summary that does not shrink what it replaces
-- Cuts: the prompt changes only at its front, in batches, so the provider's prompt cache and the model's thinking blocks stay valid
+- Collections: the prompt changes only at its start, the recap, in batches, so the provider's prompt cache and the model's thinking blocks stay valid
 - An Anthropic Messages proxy, streaming included, that finds each conversation by its content and never makes a reply wait on GC
 - Per-session state that reads never wait for
 - A live dashboard: what the model knows of each turn, and what LLM-GC did
@@ -260,8 +281,7 @@ operating-system memory hierarchy in 2023 — the closest relative to this proje
 framing. **[Mem0](https://github.com/mem0ai/mem0)** and **[Zep](https://www.getzep.com/)**
 extract facts and resolve contradictions; Zep's temporal edge invalidation is the same
 idea as supersession here. **LangChain** has summary-buffer memory. **Providers ship
-their own compaction**, and it uses a frontier model to summarize, which is very likely
-better at preserving meaning than five weighted heuristics.
+their own compaction**, summarising with a frontier model, as LLM-GC's compactor does.
 
 So LLM-GC doesn't claim a better summarizer. What it does differently is **govern and
 report** the operation rather than perform it silently:
@@ -278,41 +298,10 @@ layer around it.
 
 ## Measured results
 
-The first numbers come from profiling **real Claude Code sessions**: they measure the
-problem and a naive baseline. The second set, further down, measures LLM-GC itself.
-
-```
-STAGE 0 — THE PROBLEM (7 real sessions, 1,742 API calls, 130M cumulative tokens)
-  Avg input tokens at peak:                              132,579
-  Share of token spend that is input (resent history):   99%
-  Share of input that is stale context at peak:          84%
-
-STAGE 1 — NAIVE BASELINE (sliding window: keep last 10 turns, drop the rest)
-  Token savings:                                         46-95% per session
-  Decisions preserved:                                   7.6 of 8 LOST
-```
-
-**That second line is the whole argument.** Saving tokens is easy — a five-line sliding
-window gets 46–95%. Saving them *without throwing away the decisions that made the
-conversation worth having* is the hard part, and it's the only reason to build anything
-more complicated than truncation.
-
-### What LLM-GC keeps, measured
-
-The decision-survival check plays scripted conversations through the proxy, then asks
-the model about details they established, once through LLM-GC and once with the whole
-conversation; a question answered right only with the whole conversation is a fact
-LLM-GC lost. Method: [evals/decision_survival/README.md](evals/decision_survival/README.md).
-
-| Conversations | Right through LLM-GC | Right sent whole | Prompt through LLM-GC |
-|---|---|---|---|
-| 3 short (18 turns, ~160-word answers) | 17/18 | 18/18 | 17–24% smaller |
-| 2 long (30 turns, ~1,500-word answers) | 5/19 | 19/19 | 64–66% smaller |
-
-Short conversations keep almost everything. On long ones LLM-GC condenses hard and loses
-most details — chiefly those stated only in long assistant answers, which end up as
-excerpts the recap cuts short. That is the work in progress, and these numbers will be
-replaced as it lands.
+Not published yet: results here will come from benchmarks on real sessions, with their
+dataset and method. During development, the
+[decision-survival check](evals/decision_survival/README.md) measures what the model can
+still answer once LLM-GC has condensed a scripted conversation, and records its runs.
 
 Savings will also be judged against **cached-token pricing**, not raw token counts:
 rewriting the start of the prompt invalidates the provider's prompt cache, so a real
@@ -338,20 +327,18 @@ An unknown setting is an error, so a misspelt one never looks configured.
 
 ## GC strategies
 
-v1.0 ships **one** strategy, `generational`: full mark-sweep-compact across three
-generations, with relevance scoring, fact extraction and memory retrieval. It is the
-only strategy that is fully specified, and shipping one well-specified strategy beats
-shipping three half-specified ones.
+LLM-GC has **one** strategy, generational: mark-sweep-compact across three generations,
+with relevance scoring, fact extraction and facts carried back into the prompt. One
+well-specified strategy beats three half-specified ones.
 
 Two others were considered and rejected, for different reasons:
 
 - **`sliding_window`** (drop everything older than N turns) — rejected outright. It
-  ignores content entirely, which is what loses 7.6 of 8 decisions in the benchmark
-  above. It remains useful as the baseline to beat, not as an option to offer.
-- **`summary`** (keep recent turns, roll everything older into a summary) — rejected
-  *for v1.0* on different grounds: it would need its own sweeper, compactor contract and
-  config surface. It may return as a configurable variant once the generational pipeline
-  is mature.
+  ignores content entirely, which is what lost 7.6 of 8 decisions in the early profiling
+  described under [The problem](#the-problem). It remains useful as the baseline to beat, not as an option to offer.
+- **`summary`** (keep recent turns, roll everything older into one summary) — rejected
+  on different grounds: it would need its own sweeper, compactor contract and settings,
+  and loses the per-turn record that makes the transparency possible.
 
 ## Documentation
 

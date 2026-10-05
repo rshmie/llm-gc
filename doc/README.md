@@ -21,7 +21,7 @@ yet, the doc says so at the top.
 ```
 design/
   scoring/                    relevance scoring — overview + one doc per scorer
-  sweeper-and-composition/    classification, assembly, and compaction
+  sweeper-and-composition/    classification and compaction
   generational-memory/        young / old / permanent generations, and the cut
   session/                    per-conversation state and its concurrency contract
   proxy/                      the HTTP proxy: finding a conversation, forwarding, never degrading
