@@ -13,10 +13,11 @@ from enum import Enum
 
 from pydantic import BaseModel
 
+from llm_gc.engine.generations.front import span_message, stated_text
 from llm_gc.engine.generations.memory_block import shorten_for_block
 from llm_gc.engine.inspection import SessionInspection
 from llm_gc.models import KnowledgeEntry, SweepClassification
-from llm_gc.models.generation_snapshot import EntryKind, FrontEntry
+from llm_gc.models.generation_snapshot import DetailLevel, Span
 from llm_gc.models.knowledge_entry import KnowledgeStatus, KnowledgeType
 
 
@@ -60,7 +61,7 @@ class TurnState(BaseModel):
 
 
 class FrontEntryState(BaseModel):
-    kind: EntryKind
+    kind: DetailLevel                     # kept or compacted: the front carries no text for an archived span
     source_turns: list[int]
     text: str                             # as the model receives it, marker included
     stated_text: str                      # what it says, without the marker - for a person to read
@@ -110,7 +111,7 @@ def project_knowledge_state(inspection: SessionInspection) -> KnowledgeState:
     """Pivot one session's inspection from generations to turns and facts."""
     snapshot = inspection.snapshot
     front = inspection.front
-    entries: tuple[FrontEntry, ...] = front.entries if front is not None else ()
+    entries: tuple[Span, ...] = front.spans if front is not None else ()
     sent = set(front.facts) if front is not None else set()
 
     facts_by_turn: dict[int, list[KnowledgeEntry]] = defaultdict(list)
@@ -126,10 +127,7 @@ def project_knowledge_state(inspection: SessionInspection) -> KnowledgeState:
         context_tokens=inspection.context_tokens,
         front_text=front.message.content if front is not None else None,
         front_tokens=front.message.token_count if front is not None else 0,
-        front_entries=[FrontEntryState(kind=entry.kind, source_turns=list(entry.source_turns),
-                                       text=entry.message.content, stated_text=entry.text,
-                                       tokens=entry.message.token_count)
-                       for entry in entries],
+        front_entries=[_front_entry_state(span) for span in entries],
         turns=_turn_states(inspection, entries, facts_by_turn, sent),
         facts=_fact_states(snapshot.knowledge, sent),
         next_cut=NextCutState(turns=[entry.turn_index for entry in inspection.next_cut.entries[:inspection.next_cut.cut]],
@@ -141,7 +139,14 @@ def project_knowledge_state(inspection: SessionInspection) -> KnowledgeState:
     )
 
 
-def _turn_states(inspection: SessionInspection, entries: tuple[FrontEntry, ...],
+def _front_entry_state(span: Span) -> FrontEntryState:
+    message = span_message(span)
+    assert message is not None, "the front carries text for every span it lists"
+    return FrontEntryState(kind=span.level, source_turns=list(span.turn_indices), text=message.content,
+                           stated_text=stated_text(span), tokens=message.token_count)
+
+
+def _turn_states(inspection: SessionInspection, entries: tuple[Span, ...],
                  facts_by_turn: dict[int, list[KnowledgeEntry]], sent: set[KnowledgeEntry]) -> list[TurnState]:
     """One state per recorded turn, oldest first.
 
@@ -149,7 +154,7 @@ def _turn_states(inspection: SessionInspection, entries: tuple[FrontEntry, ...],
     to facts: every departure from the young generation files a front entry or at
     least one fact, and an archived entry passes its coverage on to its facts.
     """
-    covering = {turn: index for index, entry in enumerate(entries) for turn in entry.source_turns}
+    covering = {turn: index for index, span in enumerate(entries) for turn in span.turn_indices}
     verbatim = {message.turn_index: message for message in inspection.tail}
     preview = inspection.next_cut
     planned = {entry.turn_index: entry for entry in preview.entries}
@@ -170,7 +175,7 @@ def _turn_states(inspection: SessionInspection, entries: tuple[FrontEntry, ...],
                 state.becomes = _FIDELITY_AFTER_CUT[sweep.classification] if turn in in_cut else None
         elif turn in covering:
             state.front_entry = covering[turn]
-            quoted = entries[covering[turn]].kind is EntryKind.QUOTE
+            quoted = entries[covering[turn]].level is DetailLevel.KEPT
             state.fidelity = TurnFidelity.QUOTED if quoted else TurnFidelity.SUMMARISED
         elif facts and all(fact.knowledge_status is KnowledgeStatus.SUPERSEDED for fact in facts):
             state.fidelity = TurnFidelity.SUPERSEDED

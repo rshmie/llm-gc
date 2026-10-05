@@ -224,7 +224,7 @@
   <div class="anatomy-caption" aria-hidden="true"><div style="flex:1.5">old and permanent generations (the front)</div><div style="flex:1">the newest <b class="cfg" data-config="last_n_turns_to_keep">…</b>, word for word</div><div style="flex:1">&nbsp;</div></div>
 
   <h3>How a message moves through the generations</h3>
-  <div class="gflow" role="img" aria-label="Every message starts in the young generation. A collection moves older messages out by relevance: keep quotes them and compact summarises them into the old generation, archive reduces them to facts in the permanent generation. Old-generation entries that go cold are archived into the permanent generation.">
+  <div class="gflow" role="img" aria-label="Every message starts in the young generation. A collection moves older messages out by relevance: keep quotes them and compact summarises them into the old generation, archive reduces them to facts in the permanent generation. When the old generation outgrows its budget, its coldest entries are archived into the permanent generation.">
     <div class="gnode g-young"><b>Young generation</b><span>Every message starts here and is sent word for word.</span></div>
     <div class="gcut">↓ <b>a collection</b> takes the older messages, each by its relevance</div>
     <div class="grows">
@@ -233,8 +233,8 @@
       <div class="grow"><span class="band">&lt; <b class="cfg" data-config="archive_threshold">…</b></span><b class="verb">archive</b><span class="to t-perm">reduced to facts</span></div>
     </div>
     <div class="gdest">
-      <div class="gnode g-old"><b>Old generation</b><span>Quotes and summaries, sent in the recap.</span></div>
-      <div class="gcold">goes cold →<br>archive</div>
+      <div class="gnode g-old"><b>Old generation</b><span>Quotes and summaries, sent in the recap, up to <b class="cfg" data-config="max_old_gen_tokens">…</b> tokens.</span></div>
+      <div class="gcold">over budget →<br>archive coldest</div>
       <div class="gnode g-perm"><b>Permanent generation</b><span>Facts and excerpts; the recap sends up to <b class="cfg" data-recap-limit>…</b>.</span></div>
     </div>
   </div>

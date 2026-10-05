@@ -3,8 +3,8 @@
 ## What It Is
 
 A `KnowledgeEntry` is an extracted unit of knowledge from a conversation turn. It represents
-a piece of information that must survive even after the original turn is archived (removed
-from context).
+a piece of information that must reach the model even after the turn it came from is
+archived: the turn itself is still kept in its span, but the front shows only its facts.
 
 The word "Knowledge" is deliberate — these are not necessarily objective facts. They include:
 - Project state ("Database is MySQL")

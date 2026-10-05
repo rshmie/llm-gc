@@ -38,11 +38,12 @@ The front is one user-role message: a header saying it is condensed history, the
 facts section, then the summaries and quotes in conversation order. It opens the
 conversation as a user turn, which the provider requires.
 
-Each summary or quote is stored as a **front entry** that records two things
-beyond the message the model sees: the turns it stands in for, and what it says
-without its marker. The first lets anyone ask where turn 17 is now — a summary's
-message names only its first turn. The second is what facts are extracted from
-when the entry is later archived.
+A cut stores the turns it takes as **spans**. A span holds the turns themselves
+and the level the front shows them at: quoted, summarised, or archived to facts.
+Holding the turns answers "where is turn 17 now?" — a summary's message names
+only its first turn — and means a span is never lost, only shown at less detail.
+A summarised span also keeps what its summary says without its marker, which is
+what facts are extracted from when the span is later archived.
 
 **Facts are chosen when the front is made, not for each question.** Without a
 question to rank against, they are ranked by what they are, then by recency:
@@ -87,14 +88,16 @@ still hold.
 ### The same pass sweeps the front, and can overrule the sweeper
 
 Without a sweep of its own, the front would grow by one summary per cut forever.
-So after the cut is planned, every front entry — the ones earlier cuts made *and*
-the ones this cut has just made — is scored against the context the cut will
-leave, and a cold one is archived into facts. A turn the sweeper quoted can
+So after the cut is planned, the old generation — the entries earlier cuts made
+*and* the ones this cut has just made — is measured against its own token budget.
+When it is over, its coldest entries, scored against the context the cut will
+leave, are archived into facts until the rest fit; under the budget, nothing is
+archived (see [overview.md](overview.md)). A turn the sweeper quoted can
 therefore end the pass as facts:
 
 ```
 sweeper's decision        t0–t11 quoted or archived, t12 quoted, t13 summarised, t14 quoted
-front sweep (same pass)   the quotes of t0–t11 score cold in the context the cut leaves → facts
+front sweep (same pass)   over its budget; the quotes of t0–t11 are the coldest entries → facts
 what the pass reports     outcome: 2 quoted · 1 summarised · 12 reduced to facts
 ```
 
@@ -194,13 +197,17 @@ Three things made that untenable:
   on every request. *Accepted cost:* when stored facts outnumber the room for them,
   a question about one that was not chosen is answered without it in front of the
   model. Revisit if the benchmark shows decisions being missed.
-- **Front entries carry their coverage, as data.** *Rejected: a field on every
-  message* — the core vocabulary type would carry a summary-only concept on every
-  turn; *a coverage map beside the old generation* — two collections that every
-  eviction must keep aligned, and misattribute silently when one is missed; *a
-  per-turn ledger written at each cut* — a second record of state the generations
-  already imply, free to drift from them. On the entry, coverage leaves with the
-  entry when it is archived and is passed on to the facts it yields.
+- **Spans hold their turns, as data.** *Rejected: a field on every message* — the
+  core vocabulary type would carry a summary-only concept on every turn; *a
+  coverage map beside the old generation* — two collections that every archive
+  must keep aligned, and misattribute silently when one is missed; *a per-turn
+  ledger written at each cut* — a second record of state the generations already
+  imply, free to drift from them. A span's coverage is its turns, so it cannot
+  drift from them, and archiving a span changes its level without moving anything.
+  Its coverage is also passed on to the facts it yields.
+- **A turn leaves the young generation only into a span.** Committing a cut checks
+  that every departing turn lands in exactly one new span, and refuses the cut
+  otherwise: a plan that would lose a turn fails loudly instead of losing it.
 - **Facts are extracted from what an entry says, not from how it is shown.** A
   short turn stating a decision is too small to summarise, so a cut quotes it;
   when the quote went cold it was archived by parsing the quote as the model

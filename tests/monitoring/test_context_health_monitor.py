@@ -6,7 +6,7 @@ from llm_gc.config import GCConfig
 from llm_gc.engine import AgingDegradation, DegradationReason, GCResult, GCStatus
 from llm_gc.engine.sweep import SweepClassification, SweepEntry, SweepResult
 from llm_gc.events import Event, EventBus, EventType
-from llm_gc.models.generation_snapshot import EntryKind, FrontEntry, GenerationSnapshot
+from llm_gc.models.generation_snapshot import DetailLevel, GenerationSnapshot, Span
 from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.knowledge_entry import KnowledgeType
 from llm_gc.monitoring import ContextHealthMonitor
@@ -276,8 +276,8 @@ class TestSnapshotCompleted:
         landed. The sweep below classifies two turns COMPACT while storage holds
         one summary from an earlier pass - the signal must report storage."""
         monitor, bus, gen_memory = _make_monitor()
-        summary = FrontEntry(message=_make_message(turn_index=7, token_count=5), kind=EntryKind.SUMMARY,
-                             source_turns=(7, 8), text="msg")
+        summary = Span(turns=(_make_message(turn_index=7), _make_message(turn_index=8)), level=DetailLevel.COMPACTED,
+                       summary=_make_message(turn_index=7, token_count=5))
         gen_memory.snapshot = GenerationSnapshot(old=(summary,))
 
         lifecycle = self._snapshot(monitor, bus).generation_lifecycle

@@ -35,6 +35,11 @@ DEFAULT_MONITOR_MAX_SESSIONS = 1000
 # correctly means "no block fits" when the window is tiny.
 DEFAULT_MAX_MEMORY_RATIO = 0.1
 
+# The old generation's share of the window. Its summaries and quotes are archived
+# only once they exceed it, so a summary the recap has room for keeps every detail
+# it holds; archived, it is sent only as facts and lines cut to a fixed length.
+DEFAULT_MAX_OLD_GEN_RATIO = 0.2
+
 # Session lifecycle timings (rationale in doc/design/session/overview.md).
 DEFAULT_SESSION_TIMEOUT_S = 1800          # close a session idle this many seconds (30 min)
 DEFAULT_SESSION_SWEEP_INTERVAL_S = 300    # how often the idle sweeper runs (5 min)

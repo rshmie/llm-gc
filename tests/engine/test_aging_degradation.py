@@ -13,6 +13,7 @@ import asyncio
 import pytest
 
 from llm_gc.config import GCConfig
+from llm_gc.engine.generations.front import span_message
 from llm_gc.engine import DegradationReason, GCStatus
 from llm_gc.engine.compaction import BaseCompactor, CompactionStrategy, LLMCompactor, NoOpCompactor
 from llm_gc.engine.gc_service import GcService
@@ -70,7 +71,9 @@ def _snapshot(service) -> GenerationSnapshot:
 
 def _old_gen(service) -> list[Message]:
     state = service.session_manager.store.get(SESSION)
-    return [entry.message for entry in state.snapshot.old] if state is not None else []
+    if state is None:
+        return []
+    return [message for span in state.snapshot.old if (message := span_message(span)) is not None]
 
 
 class _ArchiveFailingMemory(GenerationalMemory):

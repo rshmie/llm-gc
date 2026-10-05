@@ -1,12 +1,16 @@
 import asyncio
 
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
 from llm_gc.config import GCConfig
+from llm_gc.engine import DegradationReason
 from llm_gc.engine.compaction import BaseCompactor, NoOpCompactor
 from llm_gc.engine.compaction.compaction_strategy import CompactionStrategy
 from llm_gc.engine.gc_result import CutOutcome
 from llm_gc.engine.gc_service import GcService
 from llm_gc.engine.gc_status import GCStatus
-from llm_gc.engine.generations.front import QUOTE_PREFIX
+from llm_gc.engine.generations.front import span_message
 from llm_gc.engine.generations.generational_memory import GenerationalMemory
 from llm_gc.engine.sweep import SweepClassification, SweepEntry, SweepResult
 from llm_gc.events import Event, EventBus, EventType
@@ -21,28 +25,27 @@ class _StubScorer:
     """Always scores 1.0, meaning "no opinion, keep it".
 
     The stub sweeper ignores the score when classifying young turns, but the
-    old-generation pass reads it directly - it has no strategy to delegate to,
-    because its decision is binary. A stub returning None was enough until that
-    pass existed, and this docstring used to say so.
+    old-generation pass reads it directly, to choose which entries make room when
+    the old generation is over its budget.
     """
 
     def score(self, message, conversation):
         return RelevanceScorerResult(message=message, combined_score=1.0, scorer_results=[])
 
 
-class _QuotesGoColdScorer:
-    """Scores a quote in the front 0.0 once `cold` is set, and everything else 1.0.
+class _ScoreByTurn:
+    """Scores each message by a caller-supplied {turn_index: score} map, defaulting to 1.0.
 
     Only the front sweep reads scores (the stub sweeper ignores them), so this
-    decides exactly which front entries a pass archives.
+    decides exactly which front entries an over-budget pass archives first.
     """
 
-    def __init__(self, cold: bool = True) -> None:
-        self.cold = cold
+    def __init__(self, scores: dict[int, float] | None = None) -> None:
+        self.scores = scores or {}
 
     def score(self, message, conversation):
-        cold = self.cold and message.content.startswith(QUOTE_PREFIX)
-        return RelevanceScorerResult(message=message, combined_score=0.0 if cold else 1.0, scorer_results=[])
+        return RelevanceScorerResult(message=message, combined_score=self.scores.get(message.turn_index, 1.0),
+                                     scorer_results=[])
 
 
 class _StubSweeper:
@@ -87,9 +90,11 @@ class _RaisingCompactor(BaseCompactor):
 
 
 def _old_gen(service: GcService, session_id: str = "s1") -> list[Message]:
-    """The session's own old generation - generations are per-session state."""
+    """What the front carries for the session's old generation: its kept and compacted spans."""
     state = service.session_manager.store.get(session_id)
-    return [entry.message for entry in state.snapshot.old] if state is not None else []
+    if state is None:
+        return []
+    return [message for span in state.snapshot.old if (message := span_message(span)) is not None]
 
 
 def _facts(service: GcService, session_id: str = "s1") -> list:
@@ -107,6 +112,15 @@ def _msg(turn_index: int) -> Message:
 # The tests below are about *what* a cut does, not *when*; the trigger has its own
 # class.
 _ALWAYS_AGE = GCConfig(context_window=1000, min_cut_tokens=0, last_n_turns_to_keep=1)
+
+# Every quote of a `_msg` turn is 15 tokens, so on a 1000-token window each 0.015
+# of `max_old_gen_ratio` is room for one more.
+_QUOTE_TOKENS = 15
+
+
+def _old_gen_budget(ratio: float) -> GCConfig:
+    """`_ALWAYS_AGE` with an old-generation budget, built anew so it is validated."""
+    return GCConfig(context_window=1000, min_cut_tokens=0, last_n_turns_to_keep=1, max_old_gen_ratio=ratio)
 
 
 def _make_service(compactor: BaseCompactor | None = None, scorer=None,
@@ -450,7 +464,7 @@ class TestTheCutOutcome:
     """
 
     def test_a_quote_archived_in_the_pass_that_made_it_is_reported_as_archived(self):
-        service, sweeper = _make_service(scorer=_QuotesGoColdScorer())
+        service, sweeper = _make_service(gc_config=_old_gen_budget(0.0))
 
         async def scenario():
             for index in (1, 2, 3):
@@ -464,23 +478,23 @@ class TestTheCutOutcome:
         assert result.outcome == CutOutcome(quoted=0, summarised=0, archived=2)
         assert _old_gen(service) == [], "the quote went straight to facts"
 
-    def test_an_earlier_entry_gone_cold_is_reported_apart_from_the_cut(self):
-        scorer = _QuotesGoColdScorer(cold=False)
-        service, sweeper = _make_service(scorer=scorer)
+    def test_an_earlier_entry_pushed_out_is_reported_apart_from_the_cut(self):
+        service, sweeper = _make_service(gc_config=_old_gen_budget(0.02))   # room for one quote
 
         async def scenario():
             for index in (1, 2, 3):
                 await service.gc_update("s1", _msg(index))
             sweeper.classifications = {2: SweepClassification.ARCHIVE}
             first = await service.gc_age("s1")
-            await service.gc_update("s1", _msg(4))
-            sweeper.classifications = {3: SweepClassification.ARCHIVE}
-            scorer.cold = True
+            for index in (4, 5):
+                await service.gc_update("s1", _msg(index))
+            # Turn 3 is quoted beside turn 1's quote, with room for only one.
+            sweeper.classifications = {4: SweepClassification.ARCHIVE}
             return first, await service.gc_age("s1")
 
         first, second = asyncio.run(scenario())
         assert first.outcome == CutOutcome(quoted=1, summarised=0, archived=1)
-        assert second.outcome == CutOutcome(quoted=0, summarised=0, archived=1, front_archived=1)
+        assert second.outcome == CutOutcome(quoted=1, summarised=0, archived=1, front_archived=1)
 
     def test_a_pass_that_cuts_nothing_has_no_outcome(self):
         service, _ = _make_service()
@@ -493,3 +507,107 @@ class TestTheCutOutcome:
         result = asyncio.run(scenario())
         assert result.status is GCStatus.BYPASSED_BATCH_TOO_SMALL
         assert result.outcome is None
+
+
+class TestTheOldGenBudget:
+    """The budget decides when an old-generation entry is archived; the score decides which.
+
+    Archived, an entry reaches the model only as facts and lines cut to a fixed
+    length, so archiving one the front had room for loses detail and saves nothing
+    that was needed. The decision-survival check lost seven answers that way, each
+    in the tail of a summary archived only because its score had decayed.
+    """
+
+    @staticmethod
+    def _cut_into_quotes(service: GcService, sweeper: _StubSweeper, quotes: int):
+        """Record turns 1..`quotes` plus two more, then cut once: the first `quotes`
+        turns are quoted, the next is archived so the cut compacts something, and the
+        last stays in the tail."""
+        async def scenario():
+            for index in range(1, quotes + 3):
+                await service.gc_update("s1", _msg(index))
+            sweeper.classifications = {quotes + 1: SweepClassification.ARCHIVE}
+            return await service.gc_age("s1")
+
+        return asyncio.run(scenario())
+
+    def test_a_cold_entry_stays_while_the_front_has_room(self):
+        """The fix itself. Scored as cold as possible, and kept, because nothing needs the room."""
+        service, sweeper = _make_service(scorer=_ScoreByTurn({1: 0.0, 2: 0.0}), gc_config=_old_gen_budget(0.03))
+
+        self._cut_into_quotes(service, sweeper, quotes=2)
+
+        assert [m.turn_index for m in _old_gen(service)] == [1, 2]
+
+    def test_over_budget_the_coldest_entry_goes_not_the_oldest(self):
+        service, sweeper = _make_service(scorer=_ScoreByTurn({1: 0.9, 2: 0.1, 3: 0.5}),
+                                         gc_config=_old_gen_budget(0.03))   # room for two quotes
+
+        self._cut_into_quotes(service, sweeper, quotes=3)
+
+        assert [m.turn_index for m in _old_gen(service)] == [1, 3]
+
+    def test_it_archives_only_until_the_old_generation_fits(self):
+        """Three quotes against room for exactly two: one goes, and a front exactly at
+        its budget is within it. With equal scores, the older entry goes."""
+        service, sweeper = _make_service(gc_config=_old_gen_budget(0.03))
+
+        self._cut_into_quotes(service, sweeper, quotes=3)
+
+        assert [m.turn_index for m in _old_gen(service)] == [2, 3]
+        assert sum(m.token_count for m in _old_gen(service)) == 2 * _QUOTE_TOKENS == service.gc_config.max_old_gen_tokens
+
+    def test_an_entry_that_fails_to_archive_stays_and_the_next_coldest_makes_room(self, monkeypatch):
+        """Archive first, remove second: a failed archive keeps the entry, and the
+        budget is still met by the next-coldest one rather than left exceeded."""
+        service, sweeper = _make_service(scorer=_ScoreByTurn({1: 0.0, 2: 0.5}),
+                                         gc_config=_old_gen_budget(0.015))   # room for one quote
+        extract = service.generational_memory.extract_knowledge
+
+        def failing_on_turn_one(message):
+            if message.turn_index == 1:
+                raise RuntimeError("extraction unavailable")
+            return extract(message)
+
+        monkeypatch.setattr(service.generational_memory, "extract_knowledge", failing_on_turn_one)
+
+        result = self._cut_into_quotes(service, sweeper, quotes=2)
+
+        assert [m.turn_index for m in _old_gen(service)] == [1]
+        assert [(d.reason, d.turn_indices) for d in result.degradations] == [(DegradationReason.ARCHIVE_FAILED, [1])]
+
+
+class TestNothingRecordedIsDestroyed:
+    """A turn leaves the young generation only into a span holding it as recorded,
+    and a span is never removed - whatever the passes decide, and whatever fails."""
+
+    @settings(max_examples=60, deadline=None)
+    @given(classifications=st.lists(st.sampled_from(list(SweepClassification)), min_size=1, max_size=24),
+           ratio=st.sampled_from([0.0, 0.015, 0.2]),
+           unreadable=st.sets(st.integers(0, 23), max_size=4))
+    def test_every_turn_is_held_exactly_once(self, classifications, ratio, unreadable):
+        service, sweeper = _make_service(gc_config=_old_gen_budget(ratio))
+        extract = service.generational_memory.extract_knowledge
+
+        def extract_or_fail(message):
+            if message.turn_index in unreadable:
+                raise RuntimeError("extraction unavailable")
+            return extract(message)
+
+        service.generational_memory.extract_knowledge = extract_or_fail
+        finished = _capture_gc_finished(service)
+
+        async def scenario():
+            for index, classification in enumerate(classifications):
+                sweeper.classifications[index] = classification
+                await service.gc_update("s1", _msg(index))
+
+        asyncio.run(scenario())
+        snapshot = service.session_manager.store.get("s1").snapshot
+
+        held = list(snapshot.young) + [turn for span in snapshot.old for turn in span.turns]
+        assert sorted(turn.turn_index for turn in held) == list(range(len(classifications)))
+        assert all(turn == _msg(turn.turn_index) for turn in held)
+        # A plan that would lose a turn is refused at commit and the pass reports an
+        # error: safe, but a collection that never happens. No pass may end that way.
+        assert not [event for event in finished if event.data["gc_result"].status is GCStatus.BYPASSED_ON_ERROR]

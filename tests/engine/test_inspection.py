@@ -18,7 +18,7 @@ from llm_gc.events import Event, EventBus, EventType
 from llm_gc.extraction import KnowledgeExtractor
 from llm_gc.llm import FakeProvider, LLMResponse, StopReason
 from llm_gc.models import KnowledgeEntry, Message
-from llm_gc.models.generation_snapshot import EntryKind, FrontEntry, GenerationSnapshot
+from llm_gc.models.generation_snapshot import DetailLevel, GenerationSnapshot, Span
 from llm_gc.models.knowledge_entry import KnowledgeType
 from llm_gc.scoring import RecencyScorer, RelevanceScorer, RelevanceType
 from llm_gc.session import SessionManager
@@ -92,28 +92,23 @@ class TestCoverage:
         service = _build()
         _converse(service, 12)
 
-        summaries = [entry for entry in _snapshot(service).old if entry.kind is EntryKind.SUMMARY]
+        summaries = [span for span in _snapshot(service).old if span.summary is not None]
         assert summaries, "the conversation is long enough to have been cut"
-        for entry in summaries:
-            assert entry.message.turn_index == entry.source_turns[0]
-            assert list(entry.source_turns) == list(range(entry.source_turns[0], entry.source_turns[-1] + 1))
+        for span in summaries:
+            assert span.summary is not None and span.summary.turn_index == span.first_turn
 
-    def test_every_recorded_turn_is_somewhere(self):
-        """The dashboard reports a turn that is neither verbatim nor in the front as
-        reduced to facts. That is only true if every departure leaves a trace:
-        archiving always files at least one entry, and an archived summary passes
-        its coverage on to its facts."""
+    def test_every_recorded_turn_is_kept_exactly_once(self):
+        """Nothing recorded is destroyed: each turn is in the tail or in exactly one
+        span, and the span holds the turn as it was recorded - archived ones too."""
         service = _build()
         _converse(service, 80)
         snapshot = _snapshot(service)
 
-        accounted = {message.turn_index for message in snapshot.young}
-        accounted |= {turn for entry in snapshot.old for turn in entry.source_turns}
-        accounted |= {turn for entry in snapshot.knowledge for turn in entry.covered_turns}
-
-        assert accounted == set(range(snapshot.recorded_turn_count))
-        assert any(len(entry.source_turns) > 1 for entry in snapshot.knowledge), \
-            "over 80 turns some summary has gone cold and been archived"
+        held = list(snapshot.young) + [turn for span in snapshot.old for turn in span.turns]
+        assert sorted(turn.turn_index for turn in held) == list(range(80))
+        assert all(turn == _turn(turn.turn_index) for turn in held)
+        assert any(span.level is DetailLevel.ARCHIVED and len(span.turns) > 1 for span in snapshot.old), \
+            "over 80 turns some summary has been archived, and its span still holds every turn"
 
     def test_cuts_are_counted_when_committed_not_when_attempted(self):
         service = _build()
@@ -213,8 +208,8 @@ class TestTheViewIsTheEngine:
                            knowledge_type=KnowledgeType.DECISION)
             for i in range(12)
         )
-        quote = FrontEntry(message=Message(role="user", content="[Quoted exactly] hello", token_count=5,
-                                           turn_index=0), kind=EntryKind.QUOTE, source_turns=(0,), text="hello")
+        quote = Span(turns=(Message(role="user", content="hello", token_count=1, turn_index=0),),
+                     level=DetailLevel.KEPT)
         service.session_manager.get_or_create(SESSION).snapshot = GenerationSnapshot(old=(quote,), knowledge=facts)
 
         front = service.inspect(SESSION).front

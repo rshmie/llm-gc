@@ -14,7 +14,7 @@ export function explainResult(r, before) {
     const moved = o.quoted + o.summarised + o.archived;
     return { tone: "good", title: `✓ Collected: the model now gets ${fmt(r.tokens_before - r.tokens_after)} fewer tokens`,
       body: [`${plural(moved, "older message")} moved into the recap: ${describeOutcome({ ...o, front_archived: 0 })}. The newest ones are untouched.`,
-        o.front_archived ? `${plural(o.front_archived, "message")} collected earlier had gone cold and ${o.front_archived === 1 ? "was" : "were"} archived too.` : null,
+        o.front_archived ? `${plural(o.front_archived, "message")} collected earlier ${o.front_archived === 1 ? "was" : "were"} archived too, to keep the old generation within its budget.` : null,
         "From now on every request carries this smaller version. Below, collected messages show what the model reads instead of them."].filter(Boolean),
       figures: figures(r.tokens_after), extra: problems, show: true };
   }

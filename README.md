@@ -66,7 +66,7 @@ Context is managed in three generations, inspired by generational garbage collec
 | **Old** | Older turns, quoted whole or summarised | Java's tenured generation |
 | **Permanent** | Extracted facts and decisions, never discarded | Java's permanent generation |
 
-As turns age, they move through generations: in full (young) → quoted or summarised (old) → facts extracted (permanent); a turn rated cold enough goes straight from young to facts. The old generation and the facts travel together in the recap at the start of every request, so they reach the model; facts are sent up to a share of the model's window.
+As turns age, they move through generations: in full (young) → quoted or summarised (old) → facts extracted (permanent); a turn rated cold enough goes straight from young to facts. The old generation and the facts travel together in the recap at the start of every request, so they reach the model. Each has its own share of the model's window: when the old generation outgrows its share, its coldest entries are archived into facts, and facts are sent up to theirs.
 
 ### Context Visualizer — epistemic transparency
 
@@ -246,7 +246,7 @@ async def on_turn(session_id: str, text: str, role: str, index: int) -> list[Mes
 **In scope — built today:**
 - Relevance scoring per conversation turn (four signals by default, a fifth optional)
 - Three-tier sweep classification (keep / compact / archive)
-- Generational memory (young / old / permanent) with fact extraction and supersession; cold summaries are archived into facts, and facts go back into the prompt
+- Generational memory (young / old / permanent) with fact extraction and supersession; the coldest summaries are archived into facts when the old generation outgrows its budget, and facts go back into the prompt
 - A summarising compactor that refuses any summary that does not shrink what it replaces
 - Collections: the prompt changes only at its start, the recap, in batches, so the provider's prompt cache and the model's thinking blocks stay valid
 - An Anthropic Messages proxy, streaming included, that finds each conversation by its content and never makes a reply wait on GC
@@ -317,11 +317,12 @@ you watch the dashboard:
 |---|---|---|---|
 | `min_cut_tokens` | `--min-cut-tokens` | 1000 | tokens of older messages to compact or archive before a collection runs |
 | `last_n_turns_to_keep` | `--keep-last` | 5 | newest messages always sent word for word |
-| `context_window` | `--context-window` | 128,000 (proxy: 200,000) | the model's window; the fact budget is a share of it |
+| `context_window` | `--context-window` | 128,000 (proxy: 200,000) | the model's window; the recap's two budgets are shares of it |
 | `keep_threshold` | | 0.7 | relevance at or above which a message is kept whole |
 | `archive_threshold` | | 0.3 | relevance below which a message is archived |
 | `min_compactable_tokens` | | 30 | messages this short are kept whole rather than summarised |
 | `max_memory_ratio` | | 0.1 | share of the window the recap may spend on facts; 0 turns facts off |
+| `max_old_gen_ratio` | | 0.2 | share of the window the recap may spend on summaries and quotes; above it, the coldest are archived into facts |
 
 An unknown setting is an error, so a misspelt one never looks configured.
 

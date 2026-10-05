@@ -14,10 +14,11 @@ All three approaches share the same failure mode: **information loss is inevitab
 uncontrolled.** The system cannot guarantee that a critical decision from turn 5 survives
 to turn 500.
 
-Generational memory solves this: turns age through tiers of decreasing token cost, and
-before any turn is fully removed, its **information** is preserved permanently — extracted into
-a durable knowledge entry where the extractor recognises one, or kept **verbatim** where it does
-not. The *knowledge* survives, and nothing leaves active context without a trace.
+Generational memory solves this: turns age through tiers of decreasing token cost, and no
+turn is ever destroyed. Every turn is kept whole in the **span** that condenses it, even once
+the front shows it only as facts, and its **information** is preserved permanently as well —
+extracted into a durable knowledge entry where the extractor recognises one, or kept
+**verbatim** where it does not. Nothing leaves active context without a trace.
 
 ---
 
@@ -76,7 +77,7 @@ sole determinant.**
 │              threshold and keep_threshold), and KEEP turns quoted   │
 │              word for word when a cut takes them. Each entry records│
 │              the turns it stands in for.                            │
-│  Size:       Variable (bounded — entries eventually ARCHIVE)        │
+│  Size:       Bounded by its own token budget (20% of the window)    │
 │  Storage:    Session store                                          │
 │  Token cost: MEDIUM (~80 tokens per 5-turn summary block)           │
 │  Analogy:    Short-term memory — "we talked about auth, something   │
@@ -117,7 +118,7 @@ sole determinant.**
 | Generation | Placement Criteria | Token Cost | Growth Pattern | Bounded? |
 |-----------|-------------------|-----------|---------------|----------|
 | Young | score >= keep_threshold OR override | High | Variable (depends on score distribution) | Soft — more high-scoring turns = larger young gen |
-| Old | archive_threshold <= score < keep_threshold | Medium | Linear with conversation length | Partially — entries eventually archive |
+| Old | archive_threshold <= score < keep_threshold | Medium | Linear until its token budget, then flat | Yes — by its own token budget |
 | Permanent | score < archive_threshold (after extraction) | Low | Sublinear (deduplicated facts) | Effectively yes — unique decisions are finite |
 
 The key insight: **summaries grow linearly, but knowledge entries grow sublinearly.** Whether you
@@ -176,7 +177,7 @@ SWEEPER ──── Classifies based on score + overrides:
                                                                │
                                                                ▼
                                                           PERMANENT GEN
-                                                          (facts stored, turn removed)
+                                                          (facts stored, turn kept in its span)
 ```
 
 ### Score Changes Over Time (Why Turns Move Between Generations)
@@ -262,21 +263,65 @@ filter the model would read an old value and its correction as two equal claims.
 
 ### How old gen is swept, and why it is the bound that matters
 
-The old generation is scored and swept as part of each cut, and entries —
-summaries and quotes — that have gone cold are archived into the permanent
-generation and removed. Without this a turn's journey would end at old gen: old
-gen would only ever grow, the assembled context would gain one summary per aged
-run forever, and old gen would become the leak that aging the young generation
-exists to prevent. Candidates include entries produced earlier in the same pass;
-one that is already cold is archived straight away and never enters old gen.
+The old generation has a token budget of its own: a share of the model's window
+(`max_old_gen_ratio`, 20% by default), beside the share the facts get. Each cut
+checks it. When the spans the front shows — summarised and quoted, including the
+ones the same cut has just made — add up to more than the budget, the coldest are
+archived until the rest fit: their facts are filed in the permanent generation, and
+the span stays in the old generation at the archived level, holding its turns. Under
+the budget nothing is archived, however cold. Without this, a turn's journey would end
+at old gen: old gen would only ever grow, the assembled context would gain one
+summary per aged run forever, and old gen would become the leak that aging the
+young generation exists to prevent.
+
+```
+each cut, after its batch is planned
+
+  old-gen entries: earlier cuts' + this cut's
+        │
+        ▼
+  total tokens within the budget? ── yes ──► nothing archived, however cold
+        │ no
+        ▼
+  score each one against the context the cut will leave
+        │
+        ▼
+  archive coldest first (the older first, on equal scores) until the rest fit
+        │
+        └── an archive that fails: the entry stays, a degradation is
+            reported, and the next-coldest entry makes the room
+```
+
+**The budget decides when an entry is archived; the score decides which.** An
+archived entry reaches the model only as facts and as lines shortened to one memory
+line each (180 characters), so a detail past that point in a summary is no longer
+sent. Archiving an entry the front had room for therefore loses detail and saves
+nothing the prompt needed. *Rejected: the score deciding when as well.* Recency
+decay takes every summary below `archive_threshold` within a few cuts, so the old
+generation would be archived on a schedule rather than when it needed room, on a
+conversation that never comes near the window just as on one that fills it.
+*Rejected: a longer memory line*, because every fact pays for it on every request
+and it still cuts somewhere. *Rejected: never archiving an old-gen entry*, because
+the recap would grow without bound. *Rejected: an absolute token count*, for the
+same reason as the fact budget: a number sane for a large window is ruinous for a
+small one. The accepted cost: the recap is larger until the old generation reaches
+its budget, and a summary that states a decision the conversation later replaced
+stays in front of the model for longer, since summaries are not superseded the way
+facts are. Worth revisiting if ordinary sessions reach the budget; reversing it is
+one setting and one branch.
+
+A span that a cut produces and that is already over the budget enters old gen
+archived. A span whose archive fails stays at its level — a span is archived only
+once its facts are filed — and the budget is met by the next-coldest span instead;
+the failure is reported.
 
 **Archiving reads what an entry says, not how it is shown.** An entry opens with a
 marker telling the model what it is — "[Quoted exactly] (turn 2, user)",
-"[Compacted … turns 13–16]" — and extraction parses the entry's text without it;
-parsed with it, the marker read as the first words of the turn, the fact in that
-sentence was lost, and a short stated decision fell out of the prompt as a raw
+"[Compacted … turns 13–16]" — and extraction parses the entry's text without it.
+Parsed with the marker, extraction would read the marker as the first words of the
+turn, lose the fact in that sentence, and file a short stated decision as a raw
 excerpt. The facts an archived entry yields carry every turn it covered, so a
-reader can still trace turn 15 after its summary is gone.
+reader can still trace turn 15 after its summary has left the front.
 
 **Two bands, not three.** A summary is kept or archived. The *re-compact into a
 longer-horizon summary* band described under Alternatives Considered is
@@ -291,33 +336,16 @@ is in every prompt; its extracted facts are in a prompt only if they win a place
 the front's fact budget at the next cut. So even a summary whose extraction finds
 nothing — kept verbatim as a `RAW` entry, at the same size it was — stops
 occupying the context unconditionally, at the cost that a `RAW` entry ranks last
-for that budget. Archiving happens before removal, so a failed archive leaves the
-summary where it was: unlike a young turn, an evicted summary has no original to
-fall back on.
+for that budget.
 
 **Scored against the assembled context, not against old gen alone.** Recency is
-positional, so a summary's age is its distance from the newest real turn. Scoring
-summaries only among themselves would make the oldest survivor always look recent,
-and the coldest summary would be permanently safe — a pass that appears to work
-while bounding nothing.
+positional, so a summary's age is its distance from the newest real turn. Scored
+only among themselves, the oldest surviving summary would always look recent, so
+the entries archived to make room would be chosen by the wrong measure.
 
-**No separate token budget, and this was settled by measurement rather than by
-argument.** Summaries carry the first turn index of their run, so decay already
-applies to them. Over 200 synthetic turns against a 700-token window: unswept, old
-gen reached 72 summaries and 2226 tokens and was still climbing linearly, with the
-compression ratio *worsening* from 0.20x to 0.51x as the conversation went on.
-Swept, old gen held at 9 summaries and the assembled context held at 537 tokens —
-constant, independent of conversation length — with the ratio improving from 0.61x
-to 0.12x. A token budget would be a second mechanism able to disagree with the
-score, and the score-driven bound is sufficient. What would change this: a decay
-rate or threshold setting where the bound exists but arrives too slowly to keep
-the context inside the window.
-
-That last result is the difference between compressing context and *bounding* it,
-and it is the claim the whole design rests on. Sweeping old gen is also only worth
-doing because injection exists: the two were always one idea, since moving a cold
-summary into the permanent generation is an improvement only if the permanent
-generation reaches the prompt. Before injection it would have been a deletion.
+Sweeping old gen is only worth doing because injection exists: the two are one
+idea, since moving a summary into the permanent generation is an improvement only
+if the permanent generation reaches the prompt.
 
 ---
 
@@ -479,6 +507,7 @@ transparency, the human provides judgment.
 | Heuristic extraction before LLM-based | Free, deterministic, testable. LLM-based extraction is more accurate and can be added behind the same interface. |
 | Supersede entries, don't delete | Deletion destroys history. Supersession preserves the decision chain for audit and visualization. |
 | Choose facts for the front at the cut, by type then recency | Injecting everything wastes tokens and grows with the session. Choosing per question would change the prompt on every request, breaking the provider's cache and the model's thinking blocks, so facts are chosen when a cut makes the front: decisions, then facts, then preferences, raw excerpts last. Accepted cost: a stored fact can miss the budget and not be sent, which the dashboard reports. |
+| Old gen archived by its own token budget, coldest first | The budget decides when and the score decides which. Archived, an entry is sent only as facts and lines of at most 180 characters, so archiving one the front had room for loses detail for nothing; recency decay alone would archive every summary within a few cuts. A share of the window (20%), not an absolute, so it scales with the model. Accepted cost: a larger recap until the budget is reached, and a summary stating a replaced decision stays visible for longer. |
 | ARCHIVE always leaves a trace | A turn is run through the extractor before it leaves active context; what extraction does not read — the whole turn, or the sentences of it no entry came from — is preserved **verbatim** as a `RAW` knowledge entry. Extraction recall is imperfect, so the verbatim fallback is what makes the no-information-loss guarantee actually hold. |
 | Young gen is NOT purely "last N" | Last N is a floor guarantee (those are always KEEP). But any turn scoring above keep_threshold also stays in young gen regardless of age. |
 | Aging happens in `gc.update` (cold path), not `gc.collect` | Compaction and extraction are the expensive work; doing them per request would add latency to every forwarded call. The ager runs after the response; the hot-path collect only assembles what the ager already produced. |

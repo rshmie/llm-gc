@@ -12,7 +12,7 @@ from llm_gc.engine.gc_result import AbandonedCut, CutOutcome, GCResult
 from llm_gc.engine.gc_status import GCStatus
 from llm_gc.engine.generations.fact_retriever import FactRetriever, LexicalFactRetriever
 from llm_gc.engine.generations.generational_memory import GenerationalMemory
-from llm_gc.engine.generations.front import Front, quote_turn, render_front
+from llm_gc.engine.generations.front import Front, render_front, span_message, stated_text
 from llm_gc.engine.compaction import CompactionResult
 from llm_gc.engine.cut_point import find_cut_point, is_safe_cut
 from llm_gc.engine.inspection import CutPreview, SessionInspection, batch_worth_cutting
@@ -23,9 +23,9 @@ from llm_gc.models import KnowledgeEntry, Message, SweepClassification
 from llm_gc.models.generation_snapshot import (
     AgingDelta,
     AppliedAging,
-    EntryKind,
-    FrontEntry,
+    DetailLevel,
     GenerationSnapshot,
+    Span,
     apply_aging,
 )
 from llm_gc.scoring import RelevanceScorer, RelevanceScorerResult
@@ -45,8 +45,8 @@ class _AgingPlan:
     """
 
     departed_turns: set[int] = field(default_factory=set)
-    new_entries: list[FrontEntry] = field(default_factory=list)
-    evicted_entries: list[FrontEntry] = field(default_factory=list)
+    new_spans: list[Span] = field(default_factory=list)
+    level_changes: list[tuple[Span, DetailLevel]] = field(default_factory=list)
     new_knowledge: list[KnowledgeEntry] = field(default_factory=list)
     promotions: list[tuple[list[int], CompactionResult]] = field(default_factory=list)
     archives: list[tuple[Message, list[KnowledgeEntry], str]] = field(default_factory=list)
@@ -55,8 +55,8 @@ class _AgingPlan:
     def delta(self) -> AgingDelta:
         return AgingDelta(
             departed_turns=frozenset(self.departed_turns),
-            new_entries=tuple(self.new_entries),
-            evicted_entries=tuple(self.evicted_entries),
+            new_spans=tuple(self.new_spans),
+            level_changes=tuple(self.level_changes),
             new_knowledge=tuple(self.new_knowledge),
         )
 
@@ -410,8 +410,10 @@ class GcService:
                 ok = await self._promote_run(session_id, [e.message for e in batch[position:end]], segment)
             elif entry.classification == SweepClassification.ARCHIVE:
                 ok = self._archive(session_id, entry.message, "young", segment)
+                if ok:
+                    segment.new_spans.append(Span(turns=(entry.message,), level=DetailLevel.ARCHIVED))
             else:
-                segment.new_entries.append(quote_turn(entry.message))
+                segment.new_spans.append(Span(turns=(entry.message,), level=DetailLevel.KEPT))
                 ok = True
             degradations.extend(segment.degradations)
             if not ok:
@@ -427,43 +429,53 @@ class GcService:
             if end > cut:
                 break
             plan.departed_turns |= segment.departed_turns
-            plan.new_entries.extend(segment.new_entries)
+            plan.new_spans.extend(segment.new_spans)
             plan.new_knowledge.extend(segment.new_knowledge)
             plan.archives.extend(segment.archives)
             plan.promotions.extend(segment.promotions)
         return plan, cut
 
     def _sweep_old_gen(self, session_id: str, base: GenerationSnapshot, plan: _AgingPlan) -> None:
-        """Archive the front's entries that have gone cold.
+        """Archive the front's coldest entries until the old generation fits its budget.
 
-        Without this, the front grows by one summary per cut forever. Two bands, not
-        three: summarising a summary compounds loss, so a cold entry is archived into
-        facts rather than re-summarised.
+        Without this, the front grows by one summary per cut forever. The budget
+        decides when an entry leaves and the score decides which, so an entry is
+        archived only to make room: archived, it is sent as facts and shortened
+        lines, and a summary the front has room for keeps every detail it holds.
+        Two bands, not three: summarising a summary compounds loss, so an entry is
+        archived into facts rather than re-summarised.
 
         Candidates include entries this cut just produced, and scoring runs against
         the context as it will stand after it - recency is positional, and scoring
         entries among themselves would make the oldest survivor always look recent.
         """
-        candidates = list(base.old) + plan.new_entries
-        if not candidates:
+        candidates = [(span, message) for span in list(base.old) + plan.new_spans
+                      if (message := span_message(span)) is not None]
+        excess = sum(message.token_count for _, message in candidates) - self.gc_config.max_old_gen_tokens
+        if excess <= 0:
             return
 
         tail_after = [message for message in base.young if message.turn_index not in plan.departed_turns]
-        assembled = _in_order([entry.message for entry in candidates] + tail_after)
+        assembled = _in_order([message for _, message in candidates] + tail_after)
+        # Older first among equal scores, so the order never depends on how the spans were listed.
+        coldest_first = sorted(candidates, key=lambda pair: (
+            self.relevance_scorer.score(pair[1], assembled).combined_score, pair[1].turn_index))
 
-        for entry in candidates:
-            score = self.relevance_scorer.score(entry.message, assembled).combined_score
-            if score >= self.gc_config.archive_threshold:
+        for span, message in coldest_first:
+            if excess <= 0:
+                break
+            text = stated_text(span)
+            stated = message.model_copy(update={"content": text, "token_count": count_tokens(text)})
+            if not self._archive(session_id, stated, "old", plan, source_turns=span.turn_indices,
+                                 from_summary=span.level is DetailLevel.COMPACTED):
+                # Kept, and reported: the next-coldest span makes the room instead.
                 continue
-            stated = entry.message.model_copy(update={"content": entry.text, "token_count": count_tokens(entry.text)})
-            if not self._archive(session_id, stated, "old", plan, source_turns=entry.source_turns,
-                                 from_summary=entry.kind is EntryKind.SUMMARY):
-                continue
-            if entry in plan.new_entries:
-                # Produced and archived in one cut: it never enters old gen.
-                plan.new_entries.remove(entry)
+            excess -= message.token_count
+            if span in plan.new_spans:
+                # Made and archived in one cut: it enters old gen already archived.
+                plan.new_spans[plan.new_spans.index(span)] = replace(span, level=DetailLevel.ARCHIVED)
             else:
-                plan.evicted_entries.append(entry)
+                plan.level_changes.append((span, DetailLevel.ARCHIVED))
 
     def _archive(self, session_id: str, message: Message, source_generation: str, plan: _AgingPlan,
                  source_turns: tuple[int, ...] = (), from_summary: bool = False) -> bool:
@@ -514,8 +526,8 @@ class GcService:
                 self._record_degradation(session_id, DegradationReason.COMPACTION_FAILED, turn_indices, err))
             return False
         text = result.summary_text if result.summary_text is not None else result.summary.content
-        plan.new_entries.append(FrontEntry(message=result.summary, kind=EntryKind.SUMMARY,
-                                           source_turns=tuple(turn_indices), text=text))
+        plan.new_spans.append(Span(turns=tuple(compact_run), level=DetailLevel.COMPACTED, summary=result.summary,
+                                   summary_text=text))
         plan.promotions.append((turn_indices, result))
         return True
 
@@ -592,14 +604,16 @@ def _in_order(messages: Sequence[Message]) -> list[Message]:
 def _cut_outcome(plan: _AgingPlan) -> CutOutcome:
     """Where a planned cut's turns end up, read from the plan after the front was swept.
 
-    A departed turn is quoted or summarised only if the entry standing for it is
-    still in the plan; otherwise it was archived, directly or with its new entry.
+    A departed turn is quoted or summarised only if its new span is still kept or
+    compacted; otherwise it was archived, directly or together with its span.
     """
-    in_front = {turn: entry.kind for entry in plan.new_entries for turn in entry.source_turns}
-    quoted = sum(1 for kind in in_front.values() if kind is EntryKind.QUOTE)
+    in_front = {turn: span.level for span in plan.new_spans if span.level is not DetailLevel.ARCHIVED
+                for turn in span.turn_indices}
+    quoted = sum(1 for level in in_front.values() if level is DetailLevel.KEPT)
     return CutOutcome(quoted=quoted, summarised=len(in_front) - quoted,
                       archived=len(plan.departed_turns) - len(in_front),
-                      front_archived=sum(len(entry.source_turns) for entry in plan.evicted_entries))
+                      front_archived=sum(len(span.turns) for span, level in plan.level_changes
+                                         if level is DetailLevel.ARCHIVED))
 
 
 def _compactable_tokens(batch: Sequence[SweepEntry]) -> int:

@@ -8,9 +8,9 @@ from hypothesis import strategies as st
 
 from llm_gc.models.generation_snapshot import (
     AgingDelta,
-    EntryKind,
-    FrontEntry,
+    DetailLevel,
     GenerationSnapshot,
+    Span,
     apply_aging,
     file_knowledge,
 )
@@ -22,11 +22,17 @@ def _turn(index: int) -> Message:
     return Message(role="user", content=f"turn {index}", token_count=5, turn_index=index)
 
 
-def _summary(first_turn: int, content: str | None = None) -> FrontEntry:
+def _summary(first_turn: int, last_turn: int | None = None, content: str | None = None) -> Span:
+    """A compacted span of `first_turn`..`last_turn` (two turns by default)."""
+    last = first_turn + 1 if last_turn is None else last_turn
     message = Message(role="assistant", content=content or f"summary from {first_turn}", token_count=3,
                       turn_index=first_turn)
-    return FrontEntry(message=message, kind=EntryKind.SUMMARY, source_turns=(first_turn, first_turn + 1),
-                      text=message.content)
+    return Span(turns=tuple(_turn(i) for i in range(first_turn, last + 1)), level=DetailLevel.COMPACTED,
+                summary=message, summary_text=message.content)
+
+
+def _archived(*indices: int) -> tuple[Span, ...]:
+    return tuple(Span(turns=(_turn(index),), level=DetailLevel.ARCHIVED) for index in indices)
 
 
 def _fact(topic: str, content: str, kind: KnowledgeType = KnowledgeType.DECISION) -> KnowledgeEntry:
@@ -58,33 +64,35 @@ class TestADeltaMergesOntoNewerState:
     def test_turns_recorded_during_the_pass_survive_the_commit(self):
         """The reason the model exists: aging computed against v7 commits onto v8."""
         base = _young(3, 4, 5, 10)
-        delta = AgingDelta(departed_turns=frozenset({3, 4, 5}), new_entries=(_summary(3),))
+        delta = AgingDelta(departed_turns=frozenset({3, 4, 5}), new_spans=(_summary(3, 5),))
         current = base.with_turn(_turn(11))
 
         aged = apply_aging(current, delta).snapshot
         assert [m.turn_index for m in aged.young] == [10, 11]
-        assert [e.message.turn_index for e in aged.old] == [3]
+        assert [span.first_turn for span in aged.old] == [3]
         assert aged.version == current.version + 1
 
-    def test_eviction_and_promotion_in_one_pass(self):
-        snapshot = GenerationSnapshot(young=(_turn(5), _turn(6)), old=(_summary(0), _summary(2)))
-        delta = AgingDelta(departed_turns=frozenset({5}), new_entries=(_summary(5),),
-                           evicted_entries=(_summary(0),))
+    def test_a_level_change_and_a_new_span_in_one_pass(self):
+        snapshot = GenerationSnapshot(young=(_turn(5), _turn(6), _turn(7)), old=(_summary(0), _summary(2)))
+        delta = AgingDelta(departed_turns=frozenset({5, 6}), new_spans=(_summary(5),),
+                           level_changes=((_summary(0), DetailLevel.ARCHIVED),))
         aged = apply_aging(snapshot, delta).snapshot
-        assert [e.message.turn_index for e in aged.old] == [2, 5]
+        assert [(span.first_turn, span.level) for span in aged.old] == [
+            (0, DetailLevel.ARCHIVED), (2, DetailLevel.COMPACTED), (5, DetailLevel.COMPACTED)]
 
-    def test_summaries_sharing_a_first_turn_index_are_evicted_individually(self):
-        """A regenerated turn re-sends its index, so two summaries can share one.
-        Evicting by index would remove both."""
+    def test_spans_sharing_a_first_turn_index_change_level_individually(self):
+        """A caller that re-sends a turn index can leave two spans starting at it.
+        Matching by index would change both."""
         first = _summary(4)
         second = _summary(4, content="a different summary")
-        aged = apply_aging(GenerationSnapshot(old=(first, second)), AgingDelta(evicted_entries=(first,))).snapshot
-        assert aged.old == (second,)
+        aged = apply_aging(GenerationSnapshot(old=(first, second)),
+                           AgingDelta(level_changes=((first, DetailLevel.ARCHIVED),))).snapshot
+        assert [span.level for span in aged.old] == [DetailLevel.ARCHIVED, DetailLevel.COMPACTED]
 
     @pytest.mark.parametrize("delta", [
-        AgingDelta(departed_turns=frozenset({99})),
-        AgingDelta(evicted_entries=(_summary(99),)),
-    ], ids=["unknown-turn", "unknown-summary"])
+        AgingDelta(departed_turns=frozenset({99}), new_spans=_archived(99)),
+        AgingDelta(level_changes=((_summary(99), DetailLevel.ARCHIVED),)),
+    ], ids=["unknown-turn", "unknown-span"])
     def test_a_delta_naming_content_that_is_gone_is_a_programmer_error(self, delta):
         """Only one pass ages a session at a time, so this means that rule broke.
         Merging anyway would silently drop or duplicate content."""
@@ -103,8 +111,41 @@ class TestADeltaMergesOntoNewerState:
         for index in sorted(recorded_during_pass):
             current = current.with_turn(_turn(index))
 
-        aged = apply_aging(current, AgingDelta(departed_turns=frozenset(departed))).snapshot
+        delta = AgingDelta(departed_turns=frozenset(departed), new_spans=_archived(*sorted(departed)))
+        aged = apply_aging(current, delta).snapshot
         assert {m.turn_index for m in aged.young} == (base_turns | recorded_during_pass) - departed
+        assert {span.first_turn for span in aged.old} == departed
+
+
+class TestNothingRecordedIsDestroyed:
+    """A turn leaves the young generation only into a span that holds its original."""
+
+    def test_a_turn_that_departs_without_a_span_is_refused(self):
+        with pytest.raises(ValueError, match="exactly one span"):
+            apply_aging(_young(0, 1, 2), AgingDelta(departed_turns=frozenset({0, 1}), new_spans=_archived(0)))
+
+    def test_a_turn_in_two_spans_is_refused(self):
+        with pytest.raises(ValueError, match="exactly one span"):
+            apply_aging(_young(0, 1), AgingDelta(departed_turns=frozenset({0}), new_spans=_archived(0, 0)))
+
+    def test_archiving_a_span_keeps_its_originals_and_summary(self):
+        """Archived is a level, not a deletion: the span can be shown in full again."""
+        span = _summary(0)
+        aged = apply_aging(GenerationSnapshot(old=(span,)),
+                           AgingDelta(level_changes=((span, DetailLevel.ARCHIVED),))).snapshot
+        assert aged.old[0].turns == span.turns
+        assert aged.old[0].summary == span.summary
+
+
+class TestASpanIsWellFormed:
+    @pytest.mark.parametrize("indices", [(), (3, 5), (4, 3)], ids=["empty", "gap", "backwards"])
+    def test_its_turns_are_consecutive(self, indices):
+        with pytest.raises(ValueError, match="consecutive"):
+            Span(turns=tuple(_turn(i) for i in indices), level=DetailLevel.KEPT)
+
+    def test_a_compacted_span_has_a_summary(self):
+        with pytest.raises(ValueError, match="no summary"):
+            Span(turns=(_turn(0),), level=DetailLevel.COMPACTED)
 
 
 class TestKnowledgeFiling:

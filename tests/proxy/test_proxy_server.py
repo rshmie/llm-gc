@@ -595,8 +595,10 @@ class TestTheMemoryBudgetCannotInvertTheSaving:
     """
 
     @staticmethod
-    def _savings(ratio: float) -> dict:
-        client, _, _, _ = _proxy(max_memory_ratio=ratio)
+    def _savings(ratio: float, old_gen_ratio: float = 0.0) -> dict:
+        # The old generation archives at once unless a test gives it room, so the
+        # fact budget is the only share of the window being measured.
+        client, _, _, _ = _proxy(max_memory_ratio=ratio, max_old_gen_ratio=old_gen_ratio)
         conversation: list[tuple[str, str]] = []
         for index in range(10):
             conversation.append(("user", f"turn {index}: we discussed the storage layer at length today"))
@@ -613,6 +615,13 @@ class TestTheMemoryBudgetCannotInvertTheSaving:
         generous share of a window is still a share of it."""
         stats = self._savings(0.25)
         assert stats["tokens_saved"] > 0, stats
+
+    def test_both_shares_together_never_cost_more_than_they_save(self):
+        """Nearly half of a 200-token window for the recap, against turns of a dozen
+        tokens: the saving can shrink to nothing, never below it, because a cut that
+        would not shrink the context is abandoned."""
+        stats = self._savings(0.25, old_gen_ratio=0.2)
+        assert stats["tokens_saved"] >= 0, stats
 
     def test_the_budget_is_derived_from_the_window(self):
         from llm_gc.config import GCConfig

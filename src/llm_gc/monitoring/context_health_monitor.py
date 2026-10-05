@@ -7,6 +7,7 @@ from llm_gc.config import GCConfig
 from llm_gc.config.constants import DEFAULT_MAX_RECENT_DEGRADATIONS, DEFAULT_MAX_RECENT_PASSES, \
     DEFAULT_MAX_RECENT_TRANSITIONS, DEFAULT_MONITOR_MAX_SESSIONS
 from llm_gc.engine import AgingDegradation, GCResult
+from llm_gc.engine.generations.front import span_message
 from llm_gc.engine.sweep import SweepClassification, SweepResult
 from llm_gc.events import Event, EventBus, EventType
 from llm_gc.models import KnowledgeEntry, Message
@@ -250,7 +251,7 @@ class ContextHealthMonitor:
         # summaries carry the turn index of the first turn in their run, so the
         # indices still point back at where the content came from.
         generations = self.read_generations(session_id) or GenerationSnapshot()
-        old_gen_messages = [entry.message for entry in generations.old]
+        old_gen_messages = [message for span in generations.old if (message := span_message(span)) is not None]
         old_gen_turn_indices = [message.turn_index for message in old_gen_messages]
         old_gen_tokens = sum(message.token_count for message in old_gen_messages)
 

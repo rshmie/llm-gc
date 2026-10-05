@@ -190,13 +190,11 @@ by turn and by fact:
        ╳╳ superseded                                           the next cut
 ```
 
-- **Per turn**, where it is now. A turn in the tail is verbatim; one covered by
-  a front entry is quoted or summarised; anything else has been reduced to facts
-  — and if every one of its facts was later contradicted, it is superseded. The
-  last case needs no record of its own: every departure from the young
-  generation leaves a front entry or at least one fact, and an archived front
-  entry passes the turns it covered on to its facts, so a turn found in neither
-  place can only have been reduced to facts.
+- **Per turn**, where it is now. A turn in the tail is verbatim; one in a span
+  the front shows is quoted or summarised; one in an archived span has been
+  reduced to facts — and if every one of its facts was later contradicted, it is
+  superseded. Every turn that leaves the young generation lands in a span, so
+  these cases cover every recorded turn.
 - **Per fact**, whether it is **sent**. Facts are chosen for the front by
   importance and then cut to a budget, so a fact can be stored and still never
   reach the model. *Stored, not sent* is the signal that matters most: the
@@ -318,15 +316,15 @@ prompt size it would have produced — and the dashboard says why in those terms
 "It would not have shrunk the context" alone tells a reader nothing they can act
 on.
 
-**What was said comes from the client, not the engine.** The engine keeps only
-what the model is sent; once a turn is summarised or reduced to facts its words
-are gone, by design. To show what was lost beside what remains, the proxy hands
-each request's conversation to a transcript recorder that exists only when the
-dashboard runs: text only, bounded by session count, dropped with its session.
-*Rejected: the engine keeps the originals* — a turn that was "removed" would
-still be held for the life of the session, in every deployment, dashboard or
-not. *Rejected: no originals* — the view could say turn 6 is facts only, but not
-what was said in it, which is the comparison a developer needs.
+**What was said is kept.** The engine keeps every turn it records, whole, for
+the life of its session: a span in the old generation holds the turns it
+condenses, so it can be shown at any level again. The dashboard shows a condensed
+turn's words beside what the model receives instead, taking them from a
+transcript recorder the proxy feeds while the dashboard runs: text only, bounded
+by session count, dropped with its session. *Accepted cost:* the engine holds
+every original in memory for every session, dashboard or not — the price of being
+able to restore one. *Rejected: no originals* — a turn reduced to facts could
+never be shown whole again, to the model or to a person.
 
 **It shows conversation content, so it is opt-in and localhost-only.** The proxy
 and the dashboard have different exposure: the proxy is an API meant, one day,

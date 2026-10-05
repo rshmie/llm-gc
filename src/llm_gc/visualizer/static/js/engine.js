@@ -488,6 +488,7 @@ export function renderSettings() {
     ["Keep from", "keep_threshold", c.keep_threshold, "relevance at or above this is kept, quoted whole"],
     ["Archive below", "archive_threshold", c.archive_threshold, "relevance below this is archived, reduced to facts"],
     ["Too short to compact", "min_compactable_tokens", c.min_compactable_tokens, "messages this short, in tokens, are kept whole"],
+    ["Old generation budget", "max_old_gen_tokens", c.max_old_gen_tokens, "most tokens of quotes and summaries in the recap; above it, the coldest are archived"],
     ["Fact budget", "max_memory_tokens", c.max_memory_tokens, "most tokens of facts in the recap"],
     ["The model's window", "context_window", c.context_window, "its capacity, in tokens", "--context-window"],
   ];
@@ -501,8 +502,8 @@ export function renderSettings() {
 // Young, old, permanent: where each message lives, from the session's own state.
 export function renderGenerations(k) {
   const young = k.turns.filter((t) => t.fidelity === "verbatim");
-  const quotes = k.front_entries.filter((e) => e.kind === "quote");
-  const summaries = k.front_entries.filter((e) => e.kind === "summary");
+  const quotes = k.front_entries.filter((e) => e.kind === "kept");
+  const summaries = k.front_entries.filter((e) => e.kind === "compacted");
   const active = k.facts.filter((f) => f.status === "active");
   const sent = active.filter((f) => f.sent).length;
   const replaced = k.facts.length - active.length;
@@ -522,9 +523,9 @@ export function renderGenerations(k) {
       links("messages", young.map((t) => t.turn_index))),
     arrow(`collection${k.cuts ? ` ×${fmt(k.cuts)}` : ""}`, "keep → quote · compact → summary"),
     box("old", "Old generation", "in the recap: kept or compacted", plural(k.front_entries.length, "entry", "entries"),
-      `${plural(quotes.length, "quote")} · ${plural(summaries.length, "summary", "summaries")} · ${plural(sum(k.front_entries), "token")}`,
+      `${plural(quotes.length, "quote")} · ${plural(summaries.length, "summary", "summaries")} · ${fmt(sum(k.front_entries))} of ${fmt(state.config ? state.config.max_old_gen_tokens : 0)} tokens`,
       [links("kept", covered(quotes, (e) => e.source_turns)), links("compacted", covered(summaries, (e) => e.source_turns))]),
-    arrow("goes cold", "archive → facts"),
+    arrow("over budget", "archive coldest → facts"),
     box("permanent", "Permanent generation", "archived facts and excerpts, sent in the recap", plural(active.length, "entry", "entries"),
       `${fmt(sent)} sent · ${fmt(active.length - sent)} stored only${replaced ? ` · ${fmt(replaced)} contradicted` : ""}`,
       links("from", covered(active, (f) => f.source_turns)))),

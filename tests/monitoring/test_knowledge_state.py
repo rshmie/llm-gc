@@ -12,7 +12,7 @@ from llm_gc.events import EventBus
 from llm_gc.extraction import KnowledgeExtractor
 from llm_gc.llm import FakeProvider, LLMResponse, StopReason
 from llm_gc.models import KnowledgeEntry, Message, SweepClassification
-from llm_gc.models.generation_snapshot import EntryKind, FrontEntry, GenerationSnapshot, file_knowledge
+from llm_gc.models.generation_snapshot import DetailLevel, GenerationSnapshot, Span, file_knowledge
 from llm_gc.models.knowledge_entry import KnowledgeStatus, KnowledgeType
 from llm_gc.monitoring.knowledge_state import KnowledgeState, TurnFidelity, project_knowledge_state
 from llm_gc.scoring import RecencyScorer, RelevanceScorer, RelevanceType
@@ -86,7 +86,7 @@ class TestWhereEachTurnIs:
             if turn.fidelity in (TurnFidelity.QUOTED, TurnFidelity.SUMMARISED):
                 entry = state.front_entries[turn.front_entry]
                 assert turn.turn_index in entry.source_turns
-                assert (entry.kind is EntryKind.QUOTE) == (turn.fidelity is TurnFidelity.QUOTED)
+                assert (entry.kind is DetailLevel.KEPT) == (turn.fidelity is TurnFidelity.QUOTED)
         assert max(tail) == 39, "the newest turns are always verbatim"
 
     def test_turns_of_an_archived_summary_keep_their_facts(self):
@@ -137,14 +137,14 @@ class TestWhatTheModelSees:
         """The signal that matters most: archived, kept, and still invisible to the
         model, because the front had no room for it."""
         facts = tuple(_fact(i, f"subject{i}", f"value{i}") for i in range(10))
-        quote = FrontEntry(message=Message(role="user", content="[Quoted exactly] hi", token_count=5,
-                                           turn_index=10), kind=EntryKind.QUOTE, source_turns=(10,), text="hi")
+        quote = Span(turns=(Message(role="user", content="hi", token_count=1, turn_index=10),),
+                     level=DetailLevel.KEPT)
         state = _seed(_service(context_window=2000, max_memory_ratio=0.03),
                       GenerationSnapshot(old=(quote,), knowledge=facts))
 
         sent = [f for f in state.facts if f.sent]
         assert 0 < len(sent) < len(facts)
-        assert state.front_entries[0].text == "[Quoted exactly] hi", "exactly what the model receives"
+        assert state.front_entries[0].text == "[Quoted exactly] (turn 10, user) hi", "exactly what the model receives"
         assert state.front_entries[0].stated_text == "hi", "what a person reads, without the marker"
         for turn in state.turns[:10]:
             assert turn.fidelity is TurnFidelity.FACTS_ONLY

@@ -9,6 +9,7 @@ and the compression ratio got *worse* as the conversation went on.
 import asyncio
 
 from llm_gc.config import GCConfig
+from llm_gc.engine.generations.front import span_message
 from llm_gc.engine import DegradationReason
 from llm_gc.engine.compaction import LLMCompactor
 from llm_gc.engine.gc_service import GcService
@@ -35,14 +36,15 @@ SUMMARY = LLMResponse(
 
 
 def _old_gen(service: GcService) -> list[Message]:
-    return [entry.message for entry in service.session_manager.store.get(SESSION).snapshot.old]
+    old = service.session_manager.store.get(SESSION).snapshot.old
+    return [message for span in old if (message := span_message(span)) is not None]
 
 
 def _facts(service: GcService) -> list:
     return service.session_manager.store.get(SESSION).snapshot.active_knowledge
 
 
-def _build(*, archive_threshold: float = 0.25, memory_cls=GenerationalMemory):
+def _build(*, archive_threshold: float = 0.25, max_old_gen_ratio: float = 0.2, memory_cls=GenerationalMemory):
     bus = EventBus()
     config = GCConfig(
         context_window=700,
@@ -51,6 +53,7 @@ def _build(*, archive_threshold: float = 0.25, memory_cls=GenerationalMemory):
         min_compactable_tokens=10,
         last_n_turns_to_keep=3,
         min_cut_tokens=60,
+        max_old_gen_ratio=max_old_gen_ratio,
     )
     memory = memory_cls(
         knowledge_extractor=KnowledgeExtractor(event_bus=bus),
@@ -117,18 +120,33 @@ class TestOldGenIsBounded:
 
         assert late <= early * 1.2, f"context grew from {early} to {late}"
 
-    def test_without_the_sweep_it_grows_without_bound(self):
-        """The control. `archive_threshold=0` makes nothing ever cold enough to
-        evict, which is exactly the behaviour this pass replaced — so if this test
-        ever passes the one above, the measurement is not measuring the sweep."""
-        service, memory = _build(archive_threshold=0.0)
+    def test_after_every_pass_it_is_within_its_budget(self):
+        """The bound itself, checked after every turn rather than at two samples."""
+        service, _ = _build()
+        budget = service.gc_config.max_old_gen_tokens
+        largest = 0
 
-        _converse(service, 80)
-        at_80 = len(_old_gen(service))
-        _converse(service, 80, start=80)
-        at_160 = len(_old_gen(service))
+        for start in range(0, 160, 10):
+            _converse(service, 10, start=start)
+            largest = max(largest, sum(m.token_count for m in _old_gen(service)))
 
-        assert at_160 > at_80
+        assert 0 < largest <= budget
+
+    def test_under_its_budget_nothing_leaves_it(self):
+        """The control. Summaries decay below `archive_threshold` within a few cuts,
+        and with room in the budget they stay anyway - so if this ever archives from
+        old gen, the score is deciding *when* again, not just *which*."""
+        service, _ = _build(max_old_gen_ratio=0.8)
+        archived = []
+        service.event_bus.subscribe(EventType.MESSAGE_ARCHIVED, archived.append)
+
+        _converse(service, 15)
+        at_15 = len(_old_gen(service))
+        _converse(service, 15, start=15)   # about 390 of its 560 tokens
+        at_30 = len(_old_gen(service))
+
+        assert at_30 > at_15
+        assert not [event for event in archived if event.data["source_generation"] == "old"]
 
 
 class TestWhereTheSummariesGo:

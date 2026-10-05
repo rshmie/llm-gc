@@ -53,6 +53,7 @@ from llm_gc.config.constants import (  # noqa: E402
 )
 from llm_gc.engine import GcService, build_gc_service  # noqa: E402
 from llm_gc.llm import AnthropicClient, FakeProvider, LLMResponse, StopReason  # noqa: E402
+from llm_gc.models.generation_snapshot import DetailLevel  # noqa: E402
 from llm_gc.monitoring import ContextHealthMonitor  # noqa: E402
 from llm_gc.proxy import DEFAULT_PROXY_PORT, SESSION_HEADER, create_app  # noqa: E402
 from llm_gc.utils import count_tokens  # noqa: E402
@@ -251,7 +252,7 @@ def demo(compactor_kind: str, api_key: str | None) -> None:
     print("that is the whole claim, arriving over HTTP.\n")
     # Generations belong to the session, not to the shared GenerationalMemory.
     snapshot = service.session_manager.store.get(SESSION).snapshot
-    print(f"  old gen: {len(snapshot.old)} summaries   "
+    print(f"  old gen: {sum(span.level is DetailLevel.COMPACTED for span in snapshot.old)} summaries   "
           f"permanent gen: {len(snapshot.active_knowledge)} facts\n")
 
 

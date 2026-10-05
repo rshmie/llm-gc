@@ -509,7 +509,7 @@ export function turnRow(turn, said, facts) {
     const viaSummary = kept.some((f) => f.from_summary);
     const intro = cat === "unseen" ? [h("span", { class: "st warn" }, "⚠ "), "The model sees nothing of this message. Stored, but not sent:"]
       : cat === "superseded" ? "Contradicted later, so no longer sent:"
-      : viaSummary ? "Compacted first; when its summary went cold, the summary was archived. Extraction read the summary and kept:"
+      : viaSummary ? "Compacted first; later the old generation needed room, so its summary was archived. Extraction read the summary and kept:"
       : "Archived: the message left the prompt, and extraction kept:";
     body = [textBlock(words?.text, { faded: true, key }), h("div", { class: "keeps" }, h("div", { class: "keeps-intro" }, intro),
       kept.length ? kept.map(factChip) : h("span", { class: "lost" }, "nothing"))];

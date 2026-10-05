@@ -1,5 +1,9 @@
 """One session's three generations, as immutable values.
 
+The old generation keeps every original it was given: a turn leaves the young
+generation only into a span, and a span is never removed, only shown at less
+detail.
+
 A snapshot is never changed in place; every change produces a new one. A reader
 that holds a snapshot therefore has a consistent view of the session for as long
 as it likes, across any number of `await`s, with no lock. Writers build the next
@@ -15,31 +19,49 @@ from llm_gc.models.message import Message
 from llm_gc.models.knowledge_entry import KnowledgeStatus
 
 
-class EntryKind(Enum):
-    """How an old-generation entry represents the turns it stands in for."""
+class DetailLevel(Enum):
+    """How much of a span the front carries, from most to least."""
 
-    SUMMARY = "summary"   # a run of turns condensed by the compactor
-    QUOTE = "quote"       # one turn kept word for word, scored too important to summarise
+    KEPT = "kept"              # the turns, word for word
+    COMPACTED = "compacted"    # the span's summary
+    ARCHIVED = "archived"      # only the facts extracted from it
 
 
 @dataclass(frozen=True)
-class FrontEntry:
-    """One old-generation entry: the message the front carries, and the turns it replaced.
+class Span:
+    """Turns condensed together, holding their originals, and how much of them the front carries.
 
-    `source_turns` is what lets a reader answer "where is turn 17 now?". The
-    entry's message records only its first turn, and a summary of turns 14-19 is
-    otherwise indistinguishable from one of turn 14 alone.
+    The originals are what make a level reversible: a span the front carries as
+    facts can be carried word for word again, from the turns themselves rather
+    than from anything derived from them.
 
-    `text` is what the entry says, without the marker its message opens with to
-    tell the model what it is. Facts are extracted from `text`: parsed from the
-    message, the marker read as the first words of the turn and the fact in that
-    sentence was lost.
+    `summary` is the compactor's message, marker included, as the front carries
+    it; `summary_text` is what it says without the marker.
+
+    Raises:
+        ValueError: The turns are empty or not consecutive, or the span is
+            COMPACTED without a summary. Each is a bug in whatever built it.
     """
 
-    message: Message
-    kind: EntryKind
-    source_turns: tuple[int, ...]
-    text: str
+    turns: tuple[Message, ...]
+    level: DetailLevel
+    summary: Message | None = None
+    summary_text: str | None = None
+
+    def __post_init__(self) -> None:
+        indices = [turn.turn_index for turn in self.turns]
+        if not indices or indices != list(range(indices[0], indices[0] + len(indices))):
+            raise ValueError(f"a span needs consecutive turns, got {indices}")
+        if self.level is DetailLevel.COMPACTED and self.summary is None:
+            raise ValueError(f"span at turn {indices[0]} is compacted but has no summary")
+
+    @property
+    def first_turn(self) -> int:
+        return self.turns[0].turn_index
+
+    @property
+    def turn_indices(self) -> tuple[int, ...]:
+        return tuple(turn.turn_index for turn in self.turns)
 
 
 @dataclass(frozen=True)
@@ -58,7 +80,7 @@ class GenerationSnapshot:
     """
 
     young: tuple[Message, ...] = ()
-    old: tuple[FrontEntry, ...] = ()
+    old: tuple[Span, ...] = ()
     knowledge: tuple[KnowledgeEntry, ...] = ()
     version: int = 0
     lineage: tuple[str, ...] = ()
@@ -78,7 +100,7 @@ class GenerationSnapshot:
         if self.lineage:
             return len(self.lineage)
         seen = [message.turn_index for message in self.young]
-        seen += [turn for entry in self.old for turn in entry.source_turns]
+        seen += [turn for span in self.old for turn in span.turn_indices]
         seen += [turn for entry in self.knowledge for turn in entry.covered_turns]
         return max(seen, default=-1) + 1
 
@@ -119,20 +141,20 @@ class GenerationSnapshot:
 class AgingDelta:
     """What one aging pass decided to change, computed against an earlier snapshot.
 
-    Expressed as things to remove and values to add, never as replacement lists,
-    so it can be applied to a snapshot that has gained turns since the pass began
-    without discarding them. Young turns are named by turn index; old-generation
-    entries by value, since two entries can share a first turn index.
+    Expressed as changes, never as replacement lists, so it can be applied to a
+    snapshot that has gained turns since the pass began without discarding them.
+    Young turns are named by turn index; spans by value, since a caller that
+    re-sends a turn index can leave two spans starting at the same turn.
     """
 
     departed_turns: frozenset[int] = frozenset()
-    new_entries: tuple[FrontEntry, ...] = ()
-    evicted_entries: tuple[FrontEntry, ...] = ()
+    new_spans: tuple[Span, ...] = ()
+    level_changes: tuple[tuple[Span, DetailLevel], ...] = ()
     new_knowledge: tuple[KnowledgeEntry, ...] = ()
 
     @property
     def is_empty(self) -> bool:
-        return not (self.departed_turns or self.new_entries or self.evicted_entries or self.new_knowledge)
+        return not (self.departed_turns or self.new_spans or self.level_changes or self.new_knowledge)
 
 
 @dataclass(frozen=True)
@@ -153,22 +175,30 @@ def apply_aging(snapshot: GenerationSnapshot, delta: AgingDelta) -> AppliedAging
     """Return the snapshot with `delta` applied, and the supersessions it caused.
 
     Raises:
-        ValueError: The delta names a turn or entry the snapshot does not hold.
-            Only one aging pass runs per session, so nothing else removes them;
-            reaching this means that invariant broke, and merging anyway would
-            silently drop or duplicate content.
+        ValueError: The delta names a turn or span the snapshot does not hold, or
+            a departing turn does not land in exactly one new span. Only one aging
+            pass runs per session, so nothing else removes them; reaching this
+            means an invariant broke, and merging anyway would silently drop or
+            duplicate content.
     """
     young_turns = {message.turn_index for message in snapshot.young}
     if missing := delta.departed_turns - young_turns:
         raise ValueError(f"aging delta removes turns not in the young generation: {sorted(missing)}")
-    if stale := [e.message.turn_index for e in delta.evicted_entries if e not in snapshot.old]:
-        raise ValueError(f"aging delta evicts entries not in the old generation: {sorted(stale)}")
+    landed = [turn for span in delta.new_spans for turn in span.turn_indices]
+    if sorted(landed) != sorted(delta.departed_turns):
+        raise ValueError(f"turns {sorted(delta.departed_turns)} depart but new spans hold {sorted(landed)}: "
+                         "every departing turn must land in exactly one span")
+    old = list(snapshot.old)
+    for span, level in delta.level_changes:
+        if span not in old:
+            raise ValueError(f"aging delta changes a span not in the old generation: turn {span.first_turn}")
+        old[old.index(span)] = replace(span, level=level)
 
     knowledge, supersessions = file_knowledge(snapshot.knowledge, delta.new_knowledge)
     aged = replace(
         snapshot,
         young=tuple(m for m in snapshot.young if m.turn_index not in delta.departed_turns),
-        old=tuple(e for e in snapshot.old if e not in delta.evicted_entries) + delta.new_entries,
+        old=tuple(old) + delta.new_spans,
         knowledge=knowledge,
         version=snapshot.version + 1,
     )

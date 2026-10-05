@@ -81,7 +81,7 @@ time ─────────────────────────
 
 1. **Plan.** The pass reads the current snapshot (the *base*) and works out what
    to change: which turns leave the young generation, which summaries and facts
-   are added, which cold summaries are evicted. Nothing reaches session state.
+   are added, which spans are archived. Nothing reaches session state.
 2. **Delta.** The plan is expressed as a **delta** — things to remove and values
    to add — never as replacement lists. A replacement list built from the base
    would erase any turn recorded while the pass was waiting.
