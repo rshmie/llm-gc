@@ -13,7 +13,7 @@ from collections import Counter
 import os
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,9 +25,12 @@ from evals.decision_survival.dataset import load_conversations
 from evals.decision_survival.grading import Presence, Verdict, grade, presence, split_answers
 from evals.decision_survival.harness import Effort, Run, rehearsal_model, rehearsal_summaries, run_conversation
 from llm_gc.config import GCConfig
+from llm_gc.engine import GcService, build_gc_service
 from llm_gc.llm import AnthropicClient, LLMProvider
+from llm_gc.monitoring import ContextHealthMonitor
+from llm_gc.visualizer import TranscriptRecorder, create_dashboard_app
 
-DEFAULT_MODEL = "claude-opus-5-5"
+DEFAULT_MODEL = "claude-sonnet-5-5" #"claude-opus-5-5"
 # As `run_proxy.py --serve` runs it; the memory budget is a share of this window.
 CONTEXT_WINDOW = 200_000
 RUNS_DIR = Path(__file__).with_name("runs")
@@ -66,27 +69,51 @@ def totals(results: Sequence[ProbeResult]) -> dict[str, int]:
     }
 
 
-async def check(args: argparse.Namespace, api_key: str | None) -> dict[str, Any]:
+async def check(args: argparse.Namespace, api_key: str | None, publish: Callable[[dict[str, Any]], None]) -> None:
     config = GCConfig(context_window=CONTEXT_WINDOW, min_cut_tokens=args.min_cut_tokens,
                       last_n_turns_to_keep=args.keep_last)
     conversations = [c for c in load_conversations() if not args.conversation or c.id in args.conversation]
     report: dict[str, Any] = {"settings": _settings(args), "conversations": []}
     every_probe: list[ProbeResult] = []
-    for conversation in conversations:
-        summaries: LLMProvider = rehearsal_summaries() if api_key is None else AnthropicClient(api_key=api_key)
-        try:
+    summaries: LLMProvider = rehearsal_summaries() if api_key is None else AnthropicClient(api_key=api_key)
+    # One engine for the run, each conversation in its own session, so one dashboard can show them all.
+    service = build_gc_service(config, summary_provider=summaries)
+    transcripts = TranscriptRecorder() if args.dashboard else None
+    dashboard = _serve_dashboard(service, config, transcripts, args.dashboard_port) if args.dashboard else None
+    try:
+        for conversation in conversations:
             run = await run_conversation(
-                conversation, config=config, summary_provider=summaries,
+                conversation, config=config, summary_provider=summaries, service=service,
+                on_client_history=transcripts.record if transcripts is not None else None,
                 model_transport=rehearsal_model(conversation) if api_key is None else _real_model,
                 api_key=api_key or "rehearsal", model=args.model, effort=cast(Effort, args.effort))
-        finally:
-            if isinstance(summaries, AnthropicClient):
-                await summaries.aclose()
-        results = grade_run(run)
-        every_probe += results
-        report["conversations"].append(_describe(run, results))
-    report["totals"] = totals(every_probe)
-    return report
+            results = grade_run(run)
+            every_probe += results
+            report["conversations"].append(_describe(run, results))
+        report["totals"] = totals(every_probe)
+        publish(report)
+        if dashboard is not None:
+            print(f"The dashboard stays open at http://127.0.0.1:{args.dashboard_port} to look at each "
+                  "conversation's sessions. Ctrl-C to stop.")
+            await dashboard
+    finally:
+        if isinstance(summaries, AnthropicClient):
+            await summaries.aclose()
+
+
+def _serve_dashboard(service: GcService, config: GCConfig, transcripts: TranscriptRecorder | None,
+                     port: int) -> asyncio.Task[None]:
+    import uvicorn
+
+    store = service.session_manager.store
+    monitor = ContextHealthMonitor(
+        event_bus=service.event_bus, gc_config=config,
+        read_generations=lambda session_id: (state.snapshot if session_id is not None
+                                             and (state := store.get(session_id)) is not None else None))
+    app = create_dashboard_app(service, monitor, transcripts=transcripts)
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
+    print(f"dashboard: http://127.0.0.1:{port} (each conversation is a session; it fills in as the check runs)")
+    return asyncio.create_task(server.serve())
 
 
 def print_report(report: dict[str, Any]) -> None:
@@ -159,18 +186,26 @@ def main() -> None:
     parser.add_argument("--keep-last", type=int, default=5)
     parser.add_argument("--conversation", action="append", help="run only this conversation id (repeatable)")
     parser.add_argument("--out", type=Path, help="results file (default: a new file in runs/)")
+    parser.add_argument("--dashboard", action="store_true", help="serve a live dashboard of the check's own engine")
+    parser.add_argument("--dashboard-port", type=int, default=9911, help="apart from the proxy's own dashboard")
     args = parser.parse_args()
 
     api_key = None if args.rehearse else os.environ.get("ANTHROPIC_API_KEY")
     if not args.rehearse and not api_key:
         sys.exit("ANTHROPIC_API_KEY is not set. Set it, or pass --rehearse to run offline.")
 
-    report = asyncio.run(check(args, api_key))
-    print_report(report)
-    out = args.out or RUNS_DIR / f"{datetime.now(UTC):%Y%m%d-%H%M%S}{'-rehearsal' if args.rehearse else ''}.json"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(report, indent=2))
-    print(f"results: {out}")
+    def publish(report: dict[str, Any]) -> None:
+        print_report(report)
+        out = args.out or RUNS_DIR / f"{datetime.now(UTC):%Y%m%d-%H%M%S}{'-rehearsal' if args.rehearse else ''}.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(report, indent=2))
+        print(f"results: {out}")
+
+    try:
+        asyncio.run(check(args, api_key, publish))
+    except KeyboardInterrupt:
+        # uvicorn re-raises the Ctrl-C after it has stopped the dashboard.
+        print("\nstopped")
 
 
 if __name__ == "__main__":

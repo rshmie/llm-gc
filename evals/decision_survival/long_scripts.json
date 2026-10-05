@@ -1,0 +1,75 @@
+{
+  "scripts": [
+    {
+      "id": "ticketing-platform",
+      "pairs": [
+        {"user": "We're building a ticketing platform for concerts and festivals, selling both reserved seats and general admission. Decision: we'll run everything on Google Cloud. What are the main components we need?",
+         "must_state": "Recommend that a seat a buyer selects is held for exactly 7 minutes while they complete checkout, after which it is released."},
+        {"user": "The checkout API must respond in under 300 ms at p99, and we can never sell the same seat twice. How do we guarantee that?"},
+        {"user": "The product owner is Lena Hoffmann; she signs off on anything customer-facing. How should the virtual waiting room work for big on-sales?",
+         "must_state": "Recommend admitting buyers from the waiting room in batches of 750 at a time."},
+        {"user": "Let's use Stripe for payments, with a 4% platform fee on each ticket. How should the payment flow interact with seat holds?"},
+        {"user": "We decided the first big on-sale is on April 18, for the Lisbon summer festival. What load should we prepare for, and how do we test it?",
+         "must_state": "Recommend a load test that targets 40,000 concurrent buyers."},
+        {"user": "How should refunds and exchanges work?"},
+        {"user": "What can we do about bots and scalpers?",
+         "must_state": "Recommend limiting each account to 6 tickets per event."},
+        {"user": "What should we monitor during an on-sale, and who gets paged?"},
+        {"user": "Change of plan: we're moving to AWS, because the parent company has an enterprise agreement there. What in the design depends on the cloud provider?"},
+        {"user": "How should we handle the mobile tickets themselves, the codes scanned at the gate?"},
+        {"user": "What happens if the venue loses its internet connection on the day of the show?"},
+        {"user": "How do we let promoters see their sales in real time?"},
+        {"user": "What do we need for accessibility in the seat map and the checkout?"},
+        {"user": "How would you phase the rollout?"},
+        {"user": "What are the biggest risks you see?"}
+      ],
+      "probes": [
+        {"id": "cloud", "question": "Which cloud provider will the platform run on?", "accept": ["aws", "amazon web services"], "reject": ["google cloud", "gcp"], "established_at": 16, "also_in": [17]},
+        {"id": "seat-hold", "question": "How long is a selected seat held during checkout?", "accept": ["7 minutes", "seven minutes", "7-minute", "seven-minute", "7 min"], "established_at": 1},
+        {"id": "checkout-latency", "question": "How fast must the checkout API respond at p99?", "accept": ["300 ms", "300ms", "300 milliseconds"], "established_at": 2},
+        {"id": "product-owner", "question": "Who is the product owner?", "accept": ["hoffmann", "lena"], "established_at": 4},
+        {"id": "admission-batch", "question": "How many buyers does the waiting room admit at a time?", "accept": ["750"], "established_at": 5},
+        {"id": "platform-fee", "question": "What platform fee is charged on each ticket?", "accept": ["4%", "4 percent", "four percent"], "established_at": 6},
+        {"id": "on-sale-date", "question": "When is the first big on-sale?", "accept": ["april 18", "18 april", "april 18th", "18th april", "18th of april", "apr 18"], "established_at": 8},
+        {"id": "load-test", "question": "How many concurrent buyers should the load test target?", "accept": ["40,000", "40000", "40k", "forty thousand"], "established_at": 9},
+        {"id": "ticket-limit", "question": "How many tickets can one account buy for an event?", "accept": ["6 tickets", "six tickets", "6 per account", "six per account", "6 per event", "six per event"], "established_at": 13}
+      ]
+    },
+    {
+      "id": "product-search",
+      "pairs": [
+        {"user": "We're rebuilding product search for an online furniture store. Decision: the search index is Elasticsearch. What should the architecture look like?",
+         "must_state": "Recommend a refresh interval of 15 seconds for the search index, so new products and price changes become searchable quickly."},
+        {"user": "Search must answer in under 120 ms at p95, and the catalogue has 3 million products. How should we model the documents?"},
+        {"user": "The search relevance lead is Kenji Watanabe. How should we approach ranking?",
+         "must_state": "Recommend boosting in-stock products by a factor of 1.8 in the ranking."},
+        {"user": "Let's use 9 shards with 2 replicas each for the index. Is that reasonable, and how do we handle growth?"},
+        {"user": "We decided to launch the new search on September 22. How do we roll it out safely?",
+         "must_state": "Recommend caching the results of the 10,000 most frequent queries."},
+        {"user": "How should autocomplete work?"},
+        {"user": "How do we measure whether search actually got better?",
+         "must_state": "Recommend running every ranking A/B test for at least 14 days."},
+        {"user": "How should we handle synonyms and misspellings?"},
+        {"user": "Change of plan: we're switching the index to OpenSearch, because the platform team already runs it. What changes?"},
+        {"user": "How do we keep the index in sync with the product database?"},
+        {"user": "What about filters and facets, like price, material and colour?"},
+        {"user": "Should we personalise results, and if so how?"},
+        {"user": "What do we need for search analytics?"},
+        {"user": "How should the team be on call for search?"},
+        {"user": "What are the biggest risks before launch?"}
+      ],
+      "probes": [
+        {"id": "engine", "question": "Which search engine does the index run on?", "accept": ["opensearch"], "reject": ["elasticsearch"], "established_at": 16, "also_in": [17]},
+        {"id": "refresh-interval", "question": "What refresh interval was recommended for the index?", "accept": ["15 seconds", "15-second", "fifteen seconds", "15s", "15 s"], "established_at": 1},
+        {"id": "search-latency", "question": "How fast must search answer at p95?", "accept": ["120 ms", "120ms", "120 milliseconds"], "established_at": 2},
+        {"id": "catalogue-size", "question": "How many products are in the catalogue?", "accept": ["3 million", "three million", "3,000,000", "3m"], "established_at": 2},
+        {"id": "relevance-lead", "question": "Who is the search relevance lead?", "accept": ["watanabe", "kenji"], "established_at": 4},
+        {"id": "stock-boost", "question": "By what factor are in-stock products boosted?", "accept": ["1.8"], "established_at": 5},
+        {"id": "shard-count", "question": "How many shards does the index use?", "accept": ["9 shards", "nine shards", "9 primary shards"], "established_at": 6},
+        {"id": "launch-date", "question": "When does the new search launch?", "accept": ["september 22", "22 september", "september 22nd", "22nd september", "22nd of september", "sept 22", "sep 22"], "established_at": 8},
+        {"id": "query-cache", "question": "How many of the most frequent queries should have their results cached?", "accept": ["10,000", "10000", "10k", "ten thousand"], "established_at": 9},
+        {"id": "ab-duration", "question": "How long should each ranking A/B test run at a minimum?", "accept": ["14 days", "fourteen days", "two weeks", "2 weeks"], "established_at": 13}
+      ]
+    }
+  ]
+}

@@ -29,6 +29,7 @@ class Probe:
     accept: tuple[str, ...]          # a right answer names one of these
     established_at: int              # the turn that states the current value
     reject: tuple[str, ...] = ()     # values the conversation later replaced
+    also_in: tuple[int, ...] = ()    # turns allowed to repeat it, such as the reply to a change of mind
 
 
 @dataclass(frozen=True)
@@ -62,7 +63,8 @@ def _conversation(item: dict) -> Conversation:
         id=item["id"],
         turns=tuple(Turn(role=turn["role"], text=turn["text"]) for turn in item["turns"]),
         probes=tuple(Probe(id=probe["id"], question=probe["question"], accept=tuple(probe["accept"]),
-                           established_at=probe["established_at"], reject=tuple(probe.get("reject", ())))
+                           established_at=probe["established_at"], reject=tuple(probe.get("reject", ())),
+                           also_in=tuple(probe.get("also_in", ())))
                      for probe in item["probes"]),
     )
     _validate(conversation)
@@ -79,8 +81,8 @@ def _validate(conversation: Conversation) -> None:
         raise ValueError(f"{where}: no probes")
     for probe in conversation.probes:
         at = f"{where}, probe {probe.id!r}"
-        if not 0 <= probe.established_at < len(conversation.turns):
-            raise ValueError(f"{at}: established_at {probe.established_at} is not a turn")
+        if not all(0 <= turn < len(conversation.turns) for turn in (probe.established_at, *probe.also_in)):
+            raise ValueError(f"{at}: established_at or also_in names a turn the conversation does not have")
         if not any(mentions(conversation.turns[probe.established_at].text, value) for value in probe.accept):
             raise ValueError(f"{at}: turn {probe.established_at} states none of {probe.accept}")
         if any(mentions(probe.question, value) for value in probe.accept):

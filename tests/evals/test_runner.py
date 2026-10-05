@@ -19,6 +19,7 @@ from evals.decision_survival.harness import (
 )
 from evals.decision_survival.run import ProbeResult, grade_run, totals
 from llm_gc.config import GCConfig
+from llm_gc.engine import build_gc_service
 from llm_gc.engine.generations.front import FRONT_HEADER
 from llm_gc.llm import FakeProvider, LLMResponse, StopReason
 
@@ -70,6 +71,31 @@ class TestARehearsedRun:
 
         assert any(degradation.startswith("compaction_refused: ") for degradation in run.degradations)
         assert any("compaction_refused" in warning for warning in cli._describe(run, grade_run(run))["warnings"])
+
+
+class TestOneEngineForARun:
+    def test_each_conversation_keeps_its_own_session_and_degradations(self):
+        """One engine serves a run so a dashboard can show it; its bus is shared, so a
+        conversation's warnings must not leak into another's, already returned, report."""
+        truncated = LLMResponse(text="partial", stop_reason=StopReason.TRUNCATED, input_tokens=0, output_tokens=1,
+                                model="m", provider="p")
+        provider = FakeProvider(responses=[truncated] * 200)
+        service = build_gc_service(CONFIG, summary_provider=provider)
+        first, second = load_conversations()[:2]
+
+        def run(conversation):
+            return asyncio.run(run_conversation(
+                conversation, config=CONFIG, summary_provider=provider, service=service,
+                model_transport=rehearsal_model(conversation), api_key="rehearsal",
+                model="claude-opus-5-5", effort="medium"))
+
+        earlier = run(first)
+        before = list(earlier.degradations)
+        later = run(second)
+
+        assert earlier.degradations == before, "the second conversation added to the first's report"
+        assert later.degradations
+        assert service.session_manager.store.get(first.id) and service.session_manager.store.get(second.id)
 
 
 class TestTotals:

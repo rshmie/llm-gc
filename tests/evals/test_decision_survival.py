@@ -33,7 +33,9 @@ class TestTheDataset:
             for probe in conversation.probes:
                 stated = [i for i, turn in enumerate(conversation.turns)
                           if any(mentions(turn.text, value) for value in probe.accept)]
-                assert stated == [probe.established_at], (conversation.id, probe.id)
+                # Only the turn that states it, and any turn the probe names as allowed to repeat it.
+                assert probe.established_at in stated, (conversation.id, probe.id)
+                assert set(stated) <= {probe.established_at, *probe.also_in}, (conversation.id, probe.id, stated)
 
     def test_a_probe_whose_answer_the_conversation_never_states_is_rejected(self, tmp_path):
         """It would be reported as a fact LLM-GC lost - the confusion the check exists to remove."""

@@ -64,10 +64,26 @@ The kinds sit at **different turns in different conversations** (the change of
 mind comes at turn 10, 6 and 14), so a result for a kind is not just a result for
 an age.
 
+**Two long conversations** (event ticketing, product search), 30 turns each, add
+what the short ones cannot reach. Their assistant answers run to 1,000 words or
+more, as real ones do, so a second collection archives what the first one kept or
+compacted, the path by which a live session put the user's own requirements out of
+view. They add two kinds of fact: **a detail only the assistant stated** ("hold a
+selected seat for 7 minutes"), and **a requirement phrased as a constraint** ("must
+respond in under 300 ms"), which extraction cannot read.
+
+Their user turns are written by hand; their assistant turns were written once by a
+model with `author.py` and frozen into the dataset. Each answer was checked as it
+was written: one that left out the figure it had to state, or mentioned another
+question's answer, was asked for again. Re-running `author.py` writes new text, so
+results are only comparable across runs made on the same frozen dataset.
+
 Rules every conversation follows, enforced by the loader and the tests:
 - turns alternate user and assistant and end with the assistant;
 - **each accepted answer appears in exactly one turn**, the one the probe names,
-  so an answer the model gives can only have come from that turn;
+  so an answer the model gives can only have come from that turn. The one
+  exception is named in the probe's `also_in`: the reply to a change of mind may
+  repeat the new value, as any real reply to "we're moving to AWS" would;
 - no question contains its own answer;
 - the content is synthetic. Results files store the prompt and replies, so a
   real conversation must never be added.
@@ -130,6 +146,11 @@ The engine settings that tuning changes are flags, `--min-cut-tokens` (300) and
 `--keep-last` (5), so two runs differ only in what is being tuned. At list prices
 a full run is estimated at well under a dollar: two short question calls and a few
 summary calls per conversation.
+
+Add `--dashboard` to watch the run on its own dashboard, at http://127.0.0.1:9911,
+separate from the proxy's. Each conversation is a session; the page stays open after
+the report, so you can see where each question's answer ended up: kept, compacted,
+archived, or out of view.
 
 Every run writes a results file to `runs/` (not committed): settings, the commit
 measured (marked `-dirty` when uncommitted changes were part of it), each verdict

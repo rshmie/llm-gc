@@ -18,9 +18,10 @@ from anthropic.types import MessageParam, OutputConfigParam
 from evals.decision_survival.dataset import Conversation
 from evals.decision_survival.grading import Presence, presence, question_message
 from llm_gc.config import GCConfig
-from llm_gc.engine import build_gc_service
+from llm_gc.engine import GcService, build_gc_service
 from llm_gc.events import Event, EventType
 from llm_gc.llm import FakeProvider, LLMProvider, LLMResponse, StopReason
+from llm_gc.models import Message
 from llm_gc.proxy import SESSION_HEADER, create_app
 from llm_gc.utils import count_tokens
 
@@ -56,14 +57,28 @@ class Run:
 
 
 async def run_conversation(conversation: Conversation, *, config: GCConfig, summary_provider: LLMProvider,
-                           model_transport: ModelTransport, api_key: str, model: str, effort: Effort) -> Run:
-    service = build_gc_service(config, summary_provider=summary_provider)
+                           model_transport: ModelTransport, api_key: str, model: str, effort: Effort,
+                           service: GcService | None = None,
+                           on_client_history: Callable[[str, list[Message]], None] | None = None) -> Run:
+    """One conversation through the proxy, then its questions both ways.
+
+    `service` shares one engine across a run, each conversation in its own session,
+    so one dashboard can show them all; without it the conversation gets its own.
+    """
+    service = service if service is not None else build_gc_service(config, summary_provider=summary_provider)
     degradations: list[str] = []
-    service.event_bus.subscribe(EventType.AGING_DEGRADED, lambda event: degradations.append(_reason(event)))
+
+    def record_degradation(event: Event) -> None:
+        # A shared engine announces every conversation's degradations on one bus.
+        if event.data.get("session_id") == conversation.id:
+            degradations.append(_reason(event))
+
+    service.event_bus.subscribe(EventType.AGING_DEGRADED, record_degradation)
     aging: list[asyncio.Future[None]] = []
     upstream = _ProxyUpstream(model_transport())
     upstream_client = httpx2.AsyncClient(transport=upstream)
-    app = create_app(service, http_client=upstream_client, schedule=lambda work: aging.append(_start(work)))
+    app = create_app(service, http_client=upstream_client, schedule=lambda work: aging.append(_start(work)),
+                     on_client_history=on_client_history)
     through_proxy = AsyncAnthropic(api_key=api_key, base_url=_PROXY_URL,
                                    default_headers={SESSION_HEADER: conversation.id},
                                    http_client=DefaultAsyncHttpxClient(transport=httpx2.ASGITransport(app=app)))
@@ -116,7 +131,7 @@ def rehearsal_summaries() -> LLMProvider:
     text = "Earlier turns continued the design discussion."
     response = LLMResponse(text=text, stop_reason=StopReason.COMPLETE, input_tokens=0,
                            output_tokens=count_tokens(text), model="rehearsal", provider="offline")
-    return FakeProvider(responses=[response] * 200)
+    return FakeProvider(responses=[response] * 5_000)
 
 
 class _ProxyUpstream(httpx2.AsyncBaseTransport):
