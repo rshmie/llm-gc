@@ -7,6 +7,7 @@ doc/design/sweeper-and-composition/compaction-mechanism.md.
 """
 
 import logging
+from collections.abc import Sequence
 
 from llm_gc.config.constants import (
     DEFAULT_COMPACTION_TARGET_RATIO,
@@ -180,6 +181,11 @@ class LLMCompactor(BaseCompactor):
             compaction_strategy=self.COMPACTION_STRATEGY,
             summary_text=summary_text,
         )
+
+    def worth_compacting(self, messages: Sequence[Message]) -> bool:
+        """See `BaseCompactor.worth_compacting`: the run must beat the provenance marker."""
+        run_tokens = sum(message.token_count for message in messages)
+        return run_tokens > self._minimum_viable_run_tokens(messages[0].turn_index, messages[-1].turn_index)
 
     def _minimum_viable_run_tokens(self, first_turn: int, last_turn: int) -> int:
         """The smallest run this compactor could shrink.

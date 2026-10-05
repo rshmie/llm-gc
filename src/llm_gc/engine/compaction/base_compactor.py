@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 
 from llm_gc.engine.compaction.compaction_result import CompactionResult
 from llm_gc.engine.compaction.compaction_strategy import CompactionStrategy
@@ -38,6 +39,15 @@ class BaseCompactor(ABC):
                 run. Callers leave the messages untouched.
         """
         ...
+
+    def worth_compacting(self, messages: Sequence[Message]) -> bool:
+        """Whether a summary of these turns could be shorter than they are.
+
+        Asked before `compact`, so a run too small to beat this compactor's marker
+        is simply left unsummarised, without a call or a refusal to report. True by
+        default: a compactor without a floor is asked to try.
+        """
+        return True
 
     def _format_summary_marker(self, first_turn: int, last_turn: int) -> str:
         """Build the marker every summary opens with, so the model never sees a
