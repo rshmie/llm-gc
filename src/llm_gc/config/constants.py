@@ -77,3 +77,7 @@ def get_default_config() -> dict[str, str | int | float]:
 DEFAULT_COMPACTION_TIMEOUT_S = 30.0       # wall-clock budget for one summarisation call
 DEFAULT_COMPACTION_TARGET_RATIO = 0.35    # output cap as a fraction of the run's own tokens
 DEFAULT_MIN_COMPACTION_OUTPUT_TOKENS = 64 # floor, so a short run still has room for one sentence
+# Room for reasoning on top of the summary target. Models that think by default
+# count thinking against the output cap, so a cap sized for the summary alone is
+# spent before the summary starts and every summary comes back truncated.
+DEFAULT_COMPACTION_THINKING_ALLOWANCE_TOKENS = 2_000

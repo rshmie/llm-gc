@@ -68,7 +68,7 @@ class TestARehearsedRun:
                                 model="m", provider="p")
         run = _run(summary_provider=FakeProvider(responses=[truncated] * 50))
 
-        assert "compaction_refused" in run.degradations
+        assert any(degradation.startswith("compaction_refused: ") for degradation in run.degradations)
         assert any("compaction_refused" in warning for warning in cli._describe(run, grade_run(run))["warnings"])
 
 

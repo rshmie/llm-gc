@@ -98,13 +98,23 @@ and it says so.
   than a guarantee.
 
 
-- **The output cap is a fraction of the run, with a floor.** A fixed cap is
-  either too tight for a long run — truncation, refusal, a wasted call — or too
-  loose for a short one, where the "summary" can legally be as long as its input
-  and nothing has been saved. Proportional makes the saving structural instead of
-  a hope about the model's brevity. The floor exists because a proportional cap on
-  a short run produces a budget too small for one sentence.
+- **The summary's length is a fraction of the run, with a floor, stated to the
+  model in words.** A fixed length is either too tight for a long run or too
+  loose for a short one, where the "summary" can be as long as its input and
+  nothing has been saved. The floor exists because a proportional target on a
+  short run is less than one sentence. Words, because models follow a word count
+  far better than a token count.
 
+- **The output budget is that target plus room to think.** Current models reason
+  before answering by default, and reasoning counts against the output cap. A cap
+  sized for the summary alone was spent before the summary started: in the first
+  live run of the decision-survival check every summary came back truncated and
+  was refused, so LLM-GC ran with its summariser effectively off and reported it.
+  Rejected: switching thinking off in the request, which is cheapest but is
+  accepted by some models and a 400 on others, so a deployment choosing a current
+  model would have every summary fail. Cost accepted: reasoning tokens are billed,
+  and length is steered by an instruction rather than enforced by the cap; the
+  refusal below still guarantees a summary is never longer than what it replaces.
 
 - **A summary that is not an improvement is refused, not filed.** Three cases:
   output that stopped at the token cap and is therefore missing its tail, output

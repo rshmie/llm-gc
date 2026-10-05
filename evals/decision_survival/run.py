@@ -9,6 +9,7 @@ How to read the numbers: README.md beside this file.
 import argparse
 import asyncio
 import json
+from collections import Counter
 import os
 import subprocess
 import sys
@@ -111,13 +112,17 @@ def print_report(report: dict[str, Any]) -> None:
 
 
 def _describe(run: Run, results: Sequence[ProbeResult]) -> dict[str, Any]:
-    warnings = [f"a clean-up degraded: {reason}" for reason in run.degradations]
+    by_reason = Counter(degradation.split(":", 1)[0] for degradation in run.degradations)
+    warnings = [f"a clean-up degraded {count}x with {reason}, e.g. "
+                f"{next(d for d in run.degradations if d.startswith(reason)).split(': ', 1)[1]}"
+                for reason, count in by_reason.items()]
     if run.bypassed:
         warnings.append(f"{run.bypassed} request(s) bypassed GC, so less GC was measured than configured")
     warnings += [f"the {arm} reply stopped with {answer.stop_reason!r}" for arm, answer
                  in (("LLM-GC", run.with_gc), ("whole", run.without_gc)) if answer.stop_reason != "end_turn"]
     return {
         "conversation": run.conversation.id, "cuts": run.cuts, "warnings": warnings,
+        "degradations": run.degradations,
         "prompt_tokens": {"with_gc": run.with_gc.input_tokens, "without_gc": run.without_gc.input_tokens},
         "probes": [asdict(result) for result in results],
         "replies": {"with_gc": run.with_gc.text, "without_gc": run.without_gc.text},

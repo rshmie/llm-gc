@@ -146,13 +146,13 @@ class TestWhatItSendsToTheModel:
         compactor, _, provider = _compactor([_response("A short summary.")])
         _compact(compactor)
 
-        assert provider.calls[0].system == load_prompt(COMPACTION_PROMPT)
+        assert provider.calls[0].system.startswith(load_prompt(COMPACTION_PROMPT))
 
     def test_a_prompt_override_is_honoured(self):
         compactor, _, provider = _compactor([_response("A short summary.")], system_prompt="be terse")
         _compact(compactor)
 
-        assert provider.calls[0].system == "be terse"
+        assert provider.calls[0].system.startswith("be terse")
 
     def test_an_injection_attempt_is_material_not_instruction(self):
         """It still goes inside the delimiters like any other text. This pins the
@@ -177,20 +177,19 @@ class TestWhatItSendsToTheModel:
         assert provider.calls[0].timeout_s == 7.5
 
 
-class TestTheOutputCap:
-    def test_the_cap_is_a_fraction_of_the_run(self):
-        """A fixed cap is either too tight for a long run or too loose for a short
-        one. Proportional means the saving is structural, not a hope about the
-        model's brevity."""
+class TestTheSummaryLength:
+    def test_the_target_is_a_fraction_of_the_run_stated_in_words(self):
+        """A fixed length is either too tight for a long run or too loose for a
+        short one. Words, because models follow a word count far better than a
+        token count."""
         compactor, _, provider = _compactor([_response("A short summary.")], target_ratio=0.5, min_output_tokens=1)
         _compact(compactor)
 
-        assert provider.calls[0].max_output_tokens == int(ORIGINAL_TOKENS * 0.5)
+        words = int(int(ORIGINAL_TOKENS * 0.5) * 0.75)
+        assert provider.calls[0].system.endswith(f"Write at most {words} words.")
 
     def test_the_floor_applies_to_short_runs(self):
-        """Without it, a 50-token run gets a 17-token budget, truncates
-        mid-sentence, and is refused — turning a short run into a guaranteed
-        wasted call.
+        """Without it, a 50-token run gets a 17-token target: less than one sentence.
 
         The run here is short but not tiny, because the provenance marker is a
         fixed ~15-token cost: below roughly that size no summary can ever be
@@ -198,8 +197,7 @@ class TestTheOutputCap:
         keep out of this method in the first place."""
         # Comfortably above the run-size floor (the marker is ~17 tokens, so the
         # floor is ~26) but small enough that target_ratio * run is under the
-        # output-cap floor. An earlier version of this test used a 25-token run and
-        # started failing when the run-size floor landed - it was one token under.
+        # target floor.
         text = (
             "Agreed on the retention window, and we should revisit the partitioning "
             "plan once the first month of production data has landed, since the "
@@ -210,7 +208,17 @@ class TestTheOutputCap:
         _compact(compactor, short_run)
 
         assert count_tokens(text) * 0.35 < 64, "the run must be small enough for the floor to bind"
-        assert provider.calls[0].max_output_tokens == 64
+        assert provider.calls[0].system.endswith(f"Write at most {int(64 * 0.75)} words.")
+
+    def test_the_budget_leaves_room_to_think_beyond_the_target(self):
+        """Models that think by default count their reasoning against the cap. A
+        cap sized for the summary alone was spent before the summary began, and
+        every summary came back truncated and was refused."""
+        compactor, _, provider = _compactor([_response("A short summary.")], target_ratio=0.5, min_output_tokens=1,
+                                            thinking_allowance_tokens=2_000)
+        _compact(compactor)
+
+        assert provider.calls[0].max_output_tokens == int(ORIGINAL_TOKENS * 0.5) + 2_000
 
 
 class TestRefusals:

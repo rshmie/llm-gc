@@ -1,7 +1,7 @@
 """A compactor that summarises by calling a model.
 
-Owns three things: how a run is presented to the model, the output cap, and when a
-returned summary must be refused. The HTTP call, wire format and error taxonomy
+Owns three things: how a run is presented to the model, how long its summary may
+be, and when a returned summary must be refused. The HTTP call, wire format and error taxonomy
 belong to the injected provider. See
 doc/design/sweeper-and-composition/compaction-mechanism.md.
 """
@@ -10,6 +10,7 @@ import logging
 
 from llm_gc.config.constants import (
     DEFAULT_COMPACTION_TARGET_RATIO,
+    DEFAULT_COMPACTION_THINKING_ALLOWANCE_TOKENS,
     DEFAULT_COMPACTION_TIMEOUT_S,
     DEFAULT_MIN_COMPACTION_OUTPUT_TOKENS,
 )
@@ -31,6 +32,10 @@ logger = logging.getLogger(__name__)
 TRANSCRIPT_OPEN = "<<<TRANSCRIPT"
 TRANSCRIPT_CLOSE = "TRANSCRIPT>>>"
 
+# Models follow a length in words far better than one in tokens; English prose
+# runs at about three words to four tokens.
+_WORDS_PER_TOKEN = 0.75
+
 
 class LLMCompactor(BaseCompactor):
     """Summarises a run of turns by calling a language model."""
@@ -45,6 +50,7 @@ class LLMCompactor(BaseCompactor):
         timeout_s: float = DEFAULT_COMPACTION_TIMEOUT_S,
         target_ratio: float = DEFAULT_COMPACTION_TARGET_RATIO,
         min_output_tokens: int = DEFAULT_MIN_COMPACTION_OUTPUT_TOKENS,
+        thinking_allowance_tokens: int = DEFAULT_COMPACTION_THINKING_ALLOWANCE_TOKENS,
         system_prompt: str | None = None,
     ) -> None:
         """Build the compactor.
@@ -54,11 +60,12 @@ class LLMCompactor(BaseCompactor):
             provider: Any `LLMProvider`, injected so this class needs no API key,
                 HTTP client, or knowledge of which vendor is configured.
             timeout_s: Wall-clock budget for one summarisation call.
-            target_ratio: Output cap as a fraction of the run's tokens. This is
-                what makes the saving structural rather than a hope about the
-                model's brevity.
-            min_output_tokens: Floor under that cap, so a short run still gets room
-                for a sentence instead of a guaranteed truncation.
+            target_ratio: The summary's target length as a fraction of the run's
+                tokens, stated to the model in words.
+            min_output_tokens: Floor under that target, so a short run still gets
+                room for a sentence.
+            thinking_allowance_tokens: Output budget beyond the target, for models
+                that reason before answering.
             system_prompt: Override for the shipped prompt, for evals comparing
                 wordings.
         """
@@ -67,6 +74,7 @@ class LLMCompactor(BaseCompactor):
         self._timeout_s = timeout_s
         self._target_ratio = target_ratio
         self._min_output_tokens = min_output_tokens
+        self._thinking_allowance_tokens = thinking_allowance_tokens
         # Read once: a prompt cannot change under a running process.
         self._system_prompt = system_prompt if system_prompt is not None else load_prompt(COMPACTION_PROMPT)
 
@@ -93,10 +101,11 @@ class LLMCompactor(BaseCompactor):
                 original_token_count=original_token_count,
             )
 
-        max_output_tokens = self._output_cap(original_token_count)
+        target_tokens = self._summary_target(original_token_count)
+        max_output_tokens = target_tokens + self._thinking_allowance_tokens
         response = await self.provider.generate(
             messages=[self._as_request(messages)],
-            system=self._system_prompt,
+            system=f"{self._system_prompt}\n\nWrite at most {int(target_tokens * _WORDS_PER_TOKEN)} words.",
             max_output_tokens=max_output_tokens,
             timeout_s=self._timeout_s,
         )
@@ -186,8 +195,8 @@ class LLMCompactor(BaseCompactor):
             return 10**9
         return int(marker_tokens / (1.0 - self._target_ratio))
 
-    def _output_cap(self, original_token_count: int) -> int:
-        """Token budget for the summary, proportional to the run with a floor."""
+    def _summary_target(self, original_token_count: int) -> int:
+        """The summary's length in tokens, proportional to the run with a floor."""
         return max(self._min_output_tokens, int(original_token_count * self._target_ratio))
 
     def _as_request(self, messages: list[Message]) -> Message:

@@ -159,7 +159,8 @@ def _start(work: Awaitable[None]) -> asyncio.Future[None]:
 
 
 def _reason(event: Event) -> str:
-    return str(event.data["degradation"].reason.value)
+    degradation = event.data["degradation"]
+    return f"{degradation.reason.value}: {degradation.detail}"
 
 
 def _message_response(text: str, *, input_tokens: int) -> httpx2.Response:

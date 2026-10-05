@@ -23,6 +23,7 @@ class Presence(StrEnum):
 
 
 _NUMBERED_LINE = re.compile(r"^\s*(\d+)\s*[.):]\s*(.*\S)")
+_ASIDE = re.compile(r"\([^()]*\)")
 
 
 def question_message(probes: Sequence[Probe]) -> str:
@@ -47,8 +48,14 @@ def split_answers(reply: str, count: int) -> list[str | None]:
 
 
 def grade(answer: str | None, probe: Probe) -> Verdict:
+    """The verdict on one answer, read without its parenthetical asides.
+
+    "MySQL 8 (changed from Postgres)" answers MySQL; the aside is history, not a
+    second answer. An answer that is only an aside is read whole.
+    """
     if answer is None:
         return Verdict.MISSING
+    answer = _ASIDE.sub(" ", answer).strip() or answer
     right = any(mentions(answer, value) for value in probe.accept)
     replaced = any(mentions(answer, value) for value in probe.reject)
     if right and replaced:

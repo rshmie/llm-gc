@@ -80,7 +80,9 @@ same prompt: asked one at a time, each request could trigger a clean-up before t
 next.
 
 Each answer gets one verdict, by whole-word matching against the probe's `accept`
-and `reject` lists:
+and `reject` lists. Parenthetical asides are read as history, not as a second
+answer: "MySQL 8 (changed from Postgres 16)" is right, while "MySQL or Postgres"
+is unclear. Models add such asides even when asked for the current value only.
 
 | Verdict | Meaning |
 |---|---|

@@ -78,6 +78,17 @@ class TestAnswers:
     def test_a_wrong_value_and_an_honest_unknown_are_different_verdicts(self, answer, verdict):
         assert grade(answer, DATABASE) is verdict
 
+    @pytest.mark.parametrize("answer, verdict", [
+        ("MySQL 8 (changed from Postgres 16)", Verdict.RIGHT),
+        ("Postgres 16 (later MySQL)", Verdict.WRONG),
+        ("MySQL or Postgres (not settled)", Verdict.UNCLEAR),
+        ("(MySQL 8)", Verdict.RIGHT),
+    ])
+    def test_a_parenthetical_aside_is_history_not_a_second_answer(self, answer, verdict):
+        """Models add "(changed from X)" even when asked for the current value only;
+        graded as a second answer, a right one was scored unclear in both arms."""
+        assert grade(answer, DATABASE) is verdict
+
     def test_the_questions_go_in_one_numbered_message(self):
         message = question_message([DATABASE, Probe(id="r", question="Retention?", accept=("30 days",), established_at=0)])
         assert message.endswith("1. Which database?\n2. Retention?")
