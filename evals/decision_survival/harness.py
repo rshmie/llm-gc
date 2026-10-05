@@ -98,6 +98,10 @@ async def run_conversation(conversation: Conversation, *, config: GCConfig, summ
         upstream.answering = True
         on_step("asking the questions through LLM-GC")
         with_gc = await _ask(through_proxy, asked, model, effort)
+        # Stopped now, not after the comparison: its collection would leave a dashboard
+        # showing a later state than the one the questions saw.
+        for work in aging:
+            work.cancel()
         on_step("asking them with the whole conversation")
         without_gc = await _ask(direct, asked, model, effort)
     finally:
