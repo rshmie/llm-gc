@@ -300,7 +300,12 @@ def serve(args: argparse.Namespace, api_key: str | None) -> None:
         # that writes them.
         await asyncio.gather(*(server.serve() for server in servers))
 
-    asyncio.run(run_all())
+    try:
+        asyncio.run(run_all())
+    except KeyboardInterrupt:
+        # Each server has already shut down cleanly by now: uvicorn re-raises the
+        # Ctrl-C after its shutdown so the program running it sees the signal too.
+        print("\nLLM-GC proxy stopped.")
 
 
 _STUB_PARAGRAPHS = [

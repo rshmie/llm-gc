@@ -12,8 +12,8 @@ export function explainResult(r, before) {
   if (r.status === "completed" && r.tokens_after < r.tokens_before) {
     const o = r.outcome;
     const moved = o.quoted + o.summarised + o.archived;
-    return { tone: "good", title: `✓ Cleaned up: the model now gets ${fmt(r.tokens_before - r.tokens_after)} fewer tokens`,
-      body: [`${plural(moved, "older message")} moved into the block at the start of the prompt: ${describeOutcome({ ...o, front_archived: 0 })}. The newest ones are untouched.`,
+    return { tone: "good", title: `✓ Collected: the model now gets ${fmt(r.tokens_before - r.tokens_after)} fewer tokens`,
+      body: [`${plural(moved, "older message")} moved into the recap: ${describeOutcome({ ...o, front_archived: 0 })}. The newest ones are untouched.`,
         o.front_archived ? `${plural(o.front_archived, "message")} collected earlier had gone cold and ${o.front_archived === 1 ? "was" : "were"} archived too.` : null,
         "From now on every request carries this smaller version. Below, collected messages show what the model reads instead of them."].filter(Boolean),
       figures: figures(r.tokens_after), extra: problems, show: true };
@@ -32,20 +32,44 @@ export function explainResult(r, before) {
       body: [`Collecting the ${plural(a.turns.length, "older message")} (${fmt(a.tokens_taken)} tokens now) would have left the model with ${fmt(a.context_tokens_after)} tokens instead of ${fmt(r.tokens_before)}. A collection is only made when it shrinks what the model gets, so LLM-GC left them word for word.`],
       list: why,
       after: "This is normal early in a conversation and when messages are short. It pays off as the conversation grows and older messages get longer.",
-      figures: [["now", `${fmt(r.tokens_before)} tokens`], ["if cleaned up", `${fmt(a.context_tokens_after)} tokens`]], extra: problems };
+      figures: [["now", `${fmt(r.tokens_before)} tokens`], ["if collected", `${fmt(a.context_tokens_after)} tokens`]], extra: problems };
   }
   if (r.status === "bypassed_batch_too_small") {
     const cut = before ? before.next_cut : null;
-    if (!cut || cut.turns.length === 0) {
-      return { tone: "muted", title: "– Nothing to collect yet",
-        body: [`The newest ${keepLast()} messages always stay word for word, and there are no older ones to collect yet. Keep talking: collections start once older messages build up.`] };
-    }
+    if (!cut || cut.turns.length === 0) return nothingWaiting(before);
     return { tone: "muted", title: "– Nothing to collect yet",
       body: [`The ${plural(cut.turns.length, "older message")} are all being kept whole (they are short, or rated important), so collecting them would save nothing.`] };
   }
   if (r.status === "bypassed_aging_in_flight") return { tone: "muted", title: "– A collection is already running", body: ["LLM-GC is already collecting this conversation. Try again in a moment."] };
   if (r.status === "bypassed_on_error") return { tone: "critical", title: "✕ The collection failed, and nothing changed", body: ["The conversation is exactly as it was. The error is in the proxy's log."] };
   return { tone: "muted", title: STATUS[r.status]?.text || r.status, body: [] };
+}
+
+// Nothing is waiting outside the newest messages: either nothing has aged out yet,
+// or the check after each reply has already collected everything that did.
+function nothingWaiting(k) {
+  const minimum = state.config ? `${fmt(state.config.min_cut_tokens)}-token` : "token";
+  if (k && k.cuts) {
+    return { tone: "muted", title: "– Nothing to collect: the automatic check already did",
+      body: [`Everything older than the newest ${keepLast()} messages has already been collected. GC checks after every reply, and collected each message as soon as it left the newest ${keepLast()}.`,
+        `Run GC now skips only the ${minimum} minimum, so it helps when older messages are waiting below it: short messages, or early in a conversation. None are waiting now.`] };
+  }
+  return { tone: "muted", title: "– Nothing to collect yet",
+    body: [`The conversation is still within its newest ${keepLast()} messages, which always stay word for word. Once older ones build up, Run GC now can collect them without waiting for the ${minimum} minimum.`] };
+}
+
+// The button says what it would do before it is pressed; it stays clickable to explain itself.
+export function renderRunGcButton() {
+  const button = $("run-gc");
+  if (button.dataset.running === "1") return;
+  const k = state.knowledge;
+  const cut = k ? k.next_cut : null;
+  const idle = !!cut && cut.turns.length === 0;
+  button.setAttribute("aria-disabled", String(idle));
+  button.title = !cut ? "Collect this conversation now, without waiting for the minimum."
+    : idle ? (k.cuts ? `Nothing to collect: everything older than the newest ${keepLast()} messages is already collected. Click to see why.`
+      : `Nothing to collect yet: the conversation is within its newest ${keepLast()} messages.`)
+    : `Collect the ${plural(cut.turns.length, "waiting message")} now: ${fmt(cut.compactable_tokens)} of ${fmt(cut.min_cut_tokens)} tokens ready, without waiting for the minimum.`;
 }
 
 export function showResult(explained) {

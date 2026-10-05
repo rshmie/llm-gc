@@ -40,7 +40,7 @@ export function setLive(stateName, text) {
   $("live-text").textContent = text;
 }
 
-// A brief, self-dismissing notice that a clean-up just ran. The CSS handles not animating its
+// A brief, self-dismissing notice that a collection just ran. The CSS handles not animating its
 // entrance and exit under reduced motion; either way it shows for the same few seconds.
 export function showCleanupNotice(text) {
   const stack = $("toast-stack");

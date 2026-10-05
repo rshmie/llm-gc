@@ -62,8 +62,8 @@ export const STATUS = {
 };
 export const TRANSITION = { promoted: "Compacted", archived: "Archived", superseded: "Fact contradicted",
   promoted_then_archived: "Compacted, then the summary archived" };
-// What a clean-up did to the messages it took. Always from the engine's outcome, never the sweeper's plan:
-// the same clean-up can overrule the plan, so a message planned to be quoted can end it as facts.
+// What a collection did to the messages it took. Always from the engine's outcome, never the sweeper's plan:
+// the same collection can overrule the plan, so a message planned to be quoted can end it as facts.
 export function describeOutcome(o) {
   return [o.quoted ? `${o.quoted} kept` : null, o.summarised ? `${o.summarised} compacted` : null,
     o.archived ? `${o.archived} archived` : null,
@@ -81,6 +81,7 @@ export const NOT_MOVED = {
 export const HEIGHT = { verbatim: 100, quoted: 100, summarised: 52, facts: 24, unseen: 24, superseded: 24 };
 // The ⓘ beside each LLM-GC at work card: the explanation its one-line subtitle leaves out.
 export const CARD_INFO = {
+  remembers: ["What the model remembers", "When a message is archived, extraction reads it and keeps what it can as facts, like “database: postgres”. Whatever it cannot turn into a fact is kept as an excerpt: the words as they were, so nothing disappears without a trace, though the recap sends only the first 180 characters of each. An excerpt of its summary comes from a message that was compacted first: when its summary went cold, the summary was archived, so the excerpt is LLM-GC's wording, not the message's. The recap sends a limited number of these, most important first."],
   generations: ["Generations", "Where each message lives, as in a generational garbage collector. New messages enter the young generation and are sent word for word. A collection (a cut, in the code) moves older ones out: keep quotes a message whole into the old generation, compact summarises it there, archive reduces it to facts in the permanent generation. The old generation and the facts are sent together in the recap, at the start of the prompt; an old-generation entry that goes cold is archived in turn."],
   next: ["Next collection", "GC checks after every reply, and a check collects when two things hold. First, enough older messages to collect: only those to be compacted or archived count, not ones kept whole or the newest few, since those save nothing. Second, the result must be smaller than the prompt is now; that can only be checked as it runs, because summaries aren't written until then. Run GC now skips the first condition, never the second."],
   rate: ["How each message is rated", "Each dot is a message's relevance, from 0 to 1, against your two thresholds: below the lower one it is archived, from the upper one kept, and compacted in between. A ring means a rule keeps it whole whatever its score. Only messages still word for word are rated; collected ones keep no score."],

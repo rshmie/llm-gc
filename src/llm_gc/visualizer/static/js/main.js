@@ -7,7 +7,7 @@ import { hideTooltip } from "./tooltip.js";
 import { THEMES, applyTheme, fillConfigValues, setGuide, setLive, showCleanupNotice, showTab } from "./shell.js";
 import { celebrateCleanup, clearMapCache, renderChips, renderCleanupLog, renderHero, renderMap, renderMemory, renderMessages, renderPrompt, renderStatus, renderTimeline, setPromptView } from "./conversation.js";
 import { initCards, renderChart, renderChecks, renderEngineStatus, renderGenerations, renderHistory, renderNext, renderProblems, renderProxy, renderRelevance, renderSettings } from "./engine.js";
-import { runGcNow } from "./run-gc.js";
+import { renderRunGcButton, runGcNow } from "./run-gc.js";
 
 function renderSessions() {
   const select = $("session-select");
@@ -79,6 +79,7 @@ async function refresh() {
       renderProblems();
       renderHistory();
     }
+    renderRunGcButton();
     setLive("live", `live · ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`);
   } catch {
     setLive("down", "proxy unreachable");

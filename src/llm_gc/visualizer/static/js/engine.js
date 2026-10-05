@@ -1,5 +1,5 @@
-// The engine view: what LLM-GC is doing to this conversation, and why. When the next clean-up
-// runs and why each message gets what it gets, what clean-ups did and couldn't do, every check,
+// The engine view: what LLM-GC is doing to this conversation, and why. When the next collection
+// runs and why each message gets what it gets, what collections did and couldn't do, every check,
 // and last the proxy's totals and settings, which apply to every conversation.
 
 import { BECOMES, BECOMES_CAT, CARD_INFO, CHART_HEIGHT, CHECKS_SHOWN, MOVES_SHOWN, MOVE_CAT, MOVE_KIND, NOT_MOVED, STATUS, TRANSITION, describeOutcome, swatch } from "./vocabulary.js";
@@ -106,7 +106,7 @@ export function renderProxy() {
         .map(([n, label]) => h("div", {}, h("b", {}, fmt(n)), h("span", {}, label))))));
 }
 
-// One line answers "is LLM-GC healthy?": the last check, and any move a clean-up couldn't make.
+// One line answers "is LLM-GC healthy?": the last check, and any move a collection couldn't make.
 export function renderEngineStatus() {
   const a = state.activity;
   const last = a && a.gc_breakdown;
@@ -132,8 +132,8 @@ function lastAttempt() {
   return passes.findLast((p) => p.abandoned_cut || (p.gc_status === "completed" && p.outcome)) || null;
 }
 
-// A clean-up has two conditions to meet, so they are shown as a checklist, each with its state,
-// beside what the clean-up would do to which messages - and which of those count toward the first.
+// A collection has two conditions to meet, so they are shown as a checklist, each with its state,
+// beside what the collection would do to which messages - and which of those count toward the first.
 export function renderNext(k) {
   const cut = k.next_cut;
   const taking = k.turns.filter((t) => t.becomes);
@@ -203,7 +203,7 @@ export function whyText(t) {
 }
 const DOT = { keep: "quoted", compact: "summarised", archive: "facts" };
 
-// The ratings lead with the messages the next clean-up takes; the rest fold under one line, and a
+// The ratings lead with the messages the next collection takes; the rest fold under one line, and a
 // long list scrolls inside the card with the threshold labels pinned.
 export function renderRelevance(k) {
   const c = state.config;
@@ -261,7 +261,7 @@ export function showWhy(turnIndex) {
 
 export function renderHistory() {
   const transitions = state.activity ? state.activity.generation_lifecycle.recent_transitions : [];
-  // Moves made by one clean-up arrive together; group them by time.
+  // Moves made by one collection arrive together; group them by time.
   const groups = [];
   for (const t of transitions) {
     const lastGroup = groups.at(-1);
@@ -378,7 +378,7 @@ export function renderChart() {
     grid.push(svg("line", { class: v === 0 ? "axis" : "grid", x1: M.l, x2: M.l + pw, y1: y(v), y2: y(v) }),
       svg("text", { class: "tick", x: M.l - 8, y: y(v) + 4, "text-anchor": "end" }, compact(v)));
   }
-  // Stepped: the prompt holds its size until the next message arrives, then jumps; a clean-up drops it.
+  // Stepped: the prompt holds its size until the next message arrives, then jumps; a collection drops it.
   let sentPath = `M${x(0)},${y(pts[0].before)}`;
   pts.forEach((d, n) => { if (n) sentPath += `H${x(d.i)}V${y(d.before)}`; if (d.after < d.before) sentPath += `V${y(d.after)}`; });
   const areaPath = `${sentPath}H${x(pts.at(-1).i)}V${y(0)}H${x(0)}Z`;

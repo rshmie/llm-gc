@@ -108,7 +108,7 @@ export function renderWindow(k) {
 
 // ----------------------------------------------------------------- the map: what the model has of each message
 
-// One bar per message, reused across renders and keyed by message: a clean-up changes a bar's
+// One bar per message, reused across renders and keyed by message: a collection changes a bar's
 // colour and height in place, which is what lets the change transition instead of jumping.
 const barCache = new Map();
 let lastCats = new Map();
@@ -196,7 +196,7 @@ export function renderMap(k) {
   });
   reconcile(barsHost, cells);
 
-  // The Sent row: the condensed block and the saving split the width of the condensed messages
+  // The Sent row: the recap and the saving split the width of the condensed messages
   // above them, and recent messages sit under themselves.
   const segs = ledger();
   const cond = items.filter((x) => !x.pending && x.cat !== "verbatim");
@@ -269,7 +269,7 @@ export function trace(ids, seg = null) {
   if (seg) seg.classList.add("linked");
 }
 
-// After a clean-up the condensed bars shrink first, then the block slides in beneath them; a brief
+// After a collection the collected bars shrink first, then the block slides in beneath them; a brief
 // glow marks where they went.
 export function celebrateCleanup() {
   if (reducedMotion() || !ledgerSegs) return;
@@ -373,7 +373,7 @@ export function renderTimeline(k) {
   const canFold = !filtered && folded.length - EARLIER_SHOWN >= RUN_MIN;
   const foldOlder = canFold && !ui.earlierOpen;
   const shown = foldOlder ? folded.slice(0, EARLIER_SHOWN) : folded;
-  // One line marks where the next clean-up's queue starts, and one where the condensed block starts.
+  // One line marks where the next collection's queue starts, and one where the recap starts.
   const items = [];
   let pastQueued = false, pastCondensed = false;
   for (const row of shown) {
@@ -438,11 +438,12 @@ export function fidTag(cat) {
 }
 
 const factStatus = (fact) => fact.status === "superseded"
-  ? h("span", {}, h("span", { class: "st" }, "↺ "), fact.superseded_by_turn !== null ? `replaced by #${fact.superseded_by_turn}` : "replaced")
-  : fact.sent ? h("span", {}, h("span", { class: "st good" }, "✓ "), "sent") : h("span", {}, h("span", { class: "st warn" }, "⚠ "), "not sent");
+  ? h("span", { class: "fact-status" }, h("span", { class: "st" }, "↺ "), fact.superseded_by_turn !== null ? `replaced by #${fact.superseded_by_turn}` : "replaced")
+  : fact.sent ? h("span", { class: "fact-status" }, h("span", { class: "st good" }, "✓ "), "sent")
+  : h("span", { class: "fact-status" }, h("span", { class: "st warn" }, "⚠ "), "not sent");
 
 // A fact in the sidebar: its topic above what it says, and whether the model is sent it.
-// A fact as the model reads it: cut where the condensed block cuts it, and saying so.
+// A fact as the model reads it: cut where the recap cuts it, and saying so.
 function sentContent(fact) {
   return [marked(fact.sent_content ?? fact.content), fact.shortened
     ? h("span", { class: "cut-note" }, ` ✂ the model gets only the start: ${fmt(fact.sent_content.length)} of ${fmt(fact.content.length)} characters`)
@@ -471,8 +472,18 @@ export function factRow(fact, { withFrom = true, onclick = null } = {}) {
 // A fact beside the message it came from, as a compact topic-and-value chip.
 function factChip(fact) {
   const raw = fact.knowledge_type === "raw";
-  return h("span", { class: `fact-chip s-${fact.status}`, title: raw ? excerptTitle(fact) : null },
-    h("b", {}, raw ? excerptLabel(fact) : fact.topic), h("span", {}, sentContent(fact)), factStatus(fact));
+  // A cut excerpt opens to everything stored, so what the model never gets is visible too.
+  const key = `fact-${fact.turn}-${fact.topic}-${fact.content.length}`;
+  const open = fact.shortened && ui.open.has(key);
+  const toggle = fact.shortened ? h("button", { class: "more", type: "button", "aria-expanded": String(open),
+    onclick: () => { if (ui.open.has(key)) ui.open.delete(key); else ui.open.add(key); renderTimeline(state.knowledge); } },
+    open ? "Hide what is stored" : "Show what is stored") : null;
+  return h("span", { class: `fact-chip s-${fact.status}${fact.shortened ? " long" : ""}`, title: raw ? excerptTitle(fact) : null },
+    h("b", {}, raw ? excerptLabel(fact) : fact.topic),
+    h("span", { class: "fact-text" }, sentContent(fact),
+      open ? h("span", { class: "stored-full" }, h("span", { class: "stored-label" }, "Stored in full, not sent beyond the start:"), marked(fact.content)) : null,
+      toggle),
+    factStatus(fact));
 }
 
 // "next: summarised" explains itself: hover for the reason, click for its rating on the Engine tab.
@@ -494,8 +505,11 @@ export function turnRow(turn, said, facts) {
   if (cat === "verbatim") body = textBlock(turn.text, { key });
   else if (cat === "quoted") body = textBlock(words ? words.text : state.knowledge.front_entries[turn.front_entry].stated_text, { key });
   else {
+    const viaSummary = kept.some((f) => f.from_summary);
     const intro = cat === "unseen" ? [h("span", { class: "st warn" }, "⚠ "), "The model sees nothing of this message. Stored, but not sent:"]
-      : cat === "superseded" ? "Contradicted later, so no longer sent:" : "The model keeps:";
+      : cat === "superseded" ? "Contradicted later, so no longer sent:"
+      : viaSummary ? "Compacted first; when its summary went cold, the summary was archived. Extraction read the summary and kept:"
+      : "Archived: the message left the prompt, and extraction kept:";
     body = [textBlock(words?.text, { faded: true, key }), h("div", { class: "keeps" }, h("div", { class: "keeps-intro" }, intro),
       kept.length ? kept.map(factChip) : h("span", { class: "lost" }, "nothing"))];
   }
@@ -665,7 +679,7 @@ export function renderMemory(k) {
     query() && !k.facts.some(matches) ? h("p", { class: "empty" }, "No fact matches.") : null);
 }
 
-// The clean-ups beside the facts: when each was made and what it did, then what comes next.
+// The collections beside the facts: when each was made and what it did, then what comes next.
 export function renderCleanupLog() {
   const k = state.knowledge;
   if (!k) return;
