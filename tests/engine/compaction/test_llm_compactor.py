@@ -189,25 +189,20 @@ class TestTheSummaryLength:
         assert provider.calls[0].system.endswith(f"Write at most {words} words.")
 
     def test_the_floor_applies_to_short_runs(self):
-        """Without it, a 50-token run gets a 17-token target: less than one sentence.
-
-        The run here is short but not tiny, because the provenance marker is a
-        fixed ~15-token cost: below roughly that size no summary can ever be
-        shorter than its input, which is what `min_compactable_tokens` exists to
-        keep out of this method in the first place."""
-        # Comfortably above the run-size floor (the marker is ~17 tokens, so the
-        # floor is ~26) but small enough that target_ratio * run is under the
-        # target floor.
+        """Without it, a 100-token run gets a 35-token target: barely a sentence once
+        the run holds more than one fact."""
         text = (
-            "Agreed on the retention window, and we should revisit the partitioning "
-            "plan once the first month of production data has landed, since the "
-            "platform team will have finished the migration by then."
+            "Agreed on the retention window, and we should revisit the partitioning plan once the first "
+            "month of production data has landed, since the platform team will have finished the migration "
+            "by then. Until that happens the nightly job keeps running on the old cluster, and the on-call "
+            "rota stays as it is, with the database team owning the alerts for replication lag. Once the "
+            "migration lands, the team will review the dashboards and retire the old alerts one at a time."
         )
         short_run = [Message(role="user", content=text, token_count=count_tokens(text), turn_index=1)]
         compactor, _, provider = _compactor([_response("The user agreed on retention.")], min_output_tokens=64)
         _compact(compactor, short_run)
 
-        assert count_tokens(text) * 0.35 < 64, "the run must be small enough for the floor to bind"
+        assert count_tokens(text) * 0.35 < 64 < count_tokens(text) - 20, "the floor must bind, and fit"
         assert provider.calls[0].system.endswith(f"Write at most {int(64 * 0.75)} words.")
 
     def test_the_budget_leaves_room_to_think_beyond_the_target(self):
@@ -455,6 +450,21 @@ class TestARunTooSmallToCompactIsRefusedBeforeTheCall:
         with pytest.raises(CompactionRefused):
             _compact(compactor, two_small_turns)
         assert provider.calls == []
+
+    def test_the_target_never_asks_for_more_than_fits_in_the_run(self):
+        """Asked for up to 48 words to replace a 24-word turn, the model wrote a
+        summary longer than the turn, refused after a paid call on every pass in
+        the decision-survival check's first live runs."""
+        text = ("We're designing the ingest service for the analytics platform. OK, decision: the database is "
+                "Postgres 16. Can you sketch the main components we need?")
+        turn = [Message(role="user", content=text, token_count=count_tokens(text), turn_index=0)]
+        compactor, _, provider = _compactor([_response("Chose Postgres 16.")], min_output_tokens=64)
+        _compact(compactor, turn)
+
+        marker = count_tokens(compactor._format_summary_marker(0, 0))
+        words = int((count_tokens(text) - marker - 1) * 0.75)
+        assert words < 64 * 0.75
+        assert provider.calls[0].system.endswith(f"Write at most {words} words.")
 
     def test_a_normal_run_is_unaffected(self):
         compactor, _, provider = _compactor([_response("Chose postgres with ninety-day retention.")])

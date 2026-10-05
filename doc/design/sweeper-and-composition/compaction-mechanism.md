@@ -103,7 +103,17 @@ and it says so.
   loose for a short one, where the "summary" can be as long as its input and
   nothing has been saved. The floor exists because a proportional target on a
   short run is less than one sentence. Words, because models follow a word count
-  far better than a token count.
+  far better than a token count. **The target never exceeds what fits inside the
+  run once the marker is added**: asked for up to 48 words to replace a 24-word
+  turn, a model writes a summary longer than the turn, which is refused after a
+  paid call, on every pass, until the turn joins a longer run.
+
+- **A refused run waits for a longer run rather than being quoted.** Turns cool
+  over time, so a short turn refused today usually joins a summarisable run a
+  pass or two later, and that run is where the saving is. Rejected: quoting a
+  too-short run at once. It is lossless and spends no call, but it gives up the
+  later saving; on short-turn conversations every cut then failed the
+  never-bigger rule and the proxy saved nothing.
 
 - **The output budget is that target plus room to think.** Current models reason
   before answering by default, and reasoning counts against the output cap. A cap

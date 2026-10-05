@@ -101,7 +101,7 @@ class LLMCompactor(BaseCompactor):
                 original_token_count=original_token_count,
             )
 
-        target_tokens = self._summary_target(original_token_count)
+        target_tokens = self._summary_target(original_token_count, first_turn, last_turn)
         max_output_tokens = target_tokens + self._thinking_allowance_tokens
         response = await self.provider.generate(
             messages=[self._as_request(messages)],
@@ -195,9 +195,11 @@ class LLMCompactor(BaseCompactor):
             return 10**9
         return int(marker_tokens / (1.0 - self._target_ratio))
 
-    def _summary_target(self, original_token_count: int) -> int:
-        """The summary's length in tokens, proportional to the run with a floor."""
-        return max(self._min_output_tokens, int(original_token_count * self._target_ratio))
+    def _summary_target(self, original_token_count: int, first_turn: int, last_turn: int) -> int:
+        """The summary's length in tokens: proportional to the run with a floor,
+        and never more than fits inside the run once the marker is added."""
+        room = original_token_count - count_tokens(self._format_summary_marker(first_turn, last_turn)) - 1
+        return min(max(self._min_output_tokens, int(original_token_count * self._target_ratio)), room)
 
     def _as_request(self, messages: list[Message]) -> Message:
         """Render the run into one delimited user message.
