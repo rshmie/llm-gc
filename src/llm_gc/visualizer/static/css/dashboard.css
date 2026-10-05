@@ -621,3 +621,7 @@ table.terms td:first-child { font-family: ui-monospace, SFMono-Regular, Menlo, m
 .prompt-msg pre.clamped { max-height: 9.6em; overflow: hidden; -webkit-mask-image: linear-gradient(to bottom, #000 65%, transparent); mask-image: linear-gradient(to bottom, #000 65%, transparent); }
 
 .run-gc[aria-disabled="true"] { opacity: .5; }
+
+.search-verdict { margin: 8px 0 2px; padding: 9px 12px; border-radius: 9px; font-size: 13px; border: 1px solid var(--hairline); }
+.search-verdict.good { background: var(--good-wash); }
+.search-verdict.warn { background: var(--warn-wash); }

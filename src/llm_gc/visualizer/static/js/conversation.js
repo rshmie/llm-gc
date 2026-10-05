@@ -390,6 +390,7 @@ export function renderTimeline(k) {
   }
   const timeline = $("timeline");
   timeline.hidden = !ui.listOpen;
+  renderSearchVerdict(k);
   const note = $("filter-note");
   note.hidden = !filtered || !ui.listOpen;
   if (filtered) {
@@ -637,6 +638,37 @@ function promptText(text, key) {
   const body = h("pre", { class: open ? "" : "clamped" }, marked(text));
   const more = h("button", { class: "more", type: "button", onclick: toggle }, open ? "Show less" : "Show more");
   return [body, more];
+}
+
+// A search answers the question it is usually asked: does the model still receive these words?
+// Matching is literal, as the search is, so the answer is about these exact words.
+function renderSearchVerdict(k) {
+  const box = $("search-verdict");
+  const words = ui.query.trim();
+  const said = [...saidByTurn().values()].filter((t) => has(t.text)).map((t) => t.turn_index);
+  const verbatim = k.turns.filter((t) => t.fidelity === "verbatim" && has(t.text)).map((t) => t.turn_index);
+  const inRecap = has(k.front_text);
+  const stored = k.facts.filter((f) => has(f.content));
+  box.hidden = !words || (!said.length && !verbatim.length && !inRecap && !stored.length);
+  if (box.hidden) return;
+  const where = (turns) => `message${turns.length > 1 ? "s" : ""} ${ranges(turns)}`;
+  const saidAt = said.length ? `Said in ${where(said)}. ` : "";
+  if (verbatim.length || inRecap) {
+    const how = [verbatim.length ? `word for word in ${where(verbatim)}` : null, inRecap ? "in the recap" : null].filter(Boolean).join(", and ");
+    box.className = "search-verdict good";
+    setChildren(box, h("b", {}, `“${words}”: the model receives it`), ` ${how}. ${saidAt}`);
+    return;
+  }
+  const kept = stored.map((f) => {
+    const what = f.knowledge_type === "raw" ? (f.from_summary ? "an excerpt of its summary" : "an excerpt") : `the fact “${f.topic}”`;
+    const why = f.status === "superseded" ? "contradicted later, so not sent"
+      : !f.sent ? "not among what the recap sends" : "past the part of it the recap sends";
+    return `${what} from ${where(f.source_turns)}, ${why}`;
+  });
+  box.className = "search-verdict warn";
+  setChildren(box, h("b", {}, `“${words}”: the model does not receive it.`), ` ${saidAt}`,
+    kept.length ? `LLM-GC stores it in ${kept.join("; and in ")}.`
+      : "LLM-GC kept nothing with these exact words. A summary may word it differently: try fewer words.");
 }
 
 export function setPromptView(on) {

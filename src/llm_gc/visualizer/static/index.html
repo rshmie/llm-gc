@@ -93,9 +93,10 @@
         <div class="toolbar" id="toolbar">
           <div class="search">
             <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="7" cy="7" r="4.8"/><path d="m10.6 10.6 3.6 3.6" stroke-linecap="round"/></svg>
-            <input type="search" id="search" placeholder="Find in this conversation, for example “database”" aria-label="Find in this conversation" autocomplete="off">
+            <input type="search" id="search" placeholder="Does the model still have it? Search, for example “database”" aria-label="Search this conversation, and whether the model still receives it" autocomplete="off">
           </div>
           <div class="chips" id="chips" role="group" aria-label="Show"></div>
+          <div class="search-verdict" id="search-verdict" role="status" hidden></div>
           <div class="filter-note" id="filter-note" hidden></div>
         </div>
         <div class="timeline" id="timeline"></div>
@@ -253,6 +254,7 @@
   <ol>
     <li><b>Out of view</b>: a message's facts were stored, but none made it into the recap, so the model sees nothing of it.</li>
     <li><b>An excerpt marked ✂</b>: the recap carries only its start.</li>
+    <li><b>Search</b> says whether the model still receives the words you type, and if not, where LLM-GC keeps them.</li>
     <li><b>A yellow banner</b>: a move a collection planned did not happen, for example a summary request that failed. Nothing is lost; the prompt is just bigger than planned.</li>
   </ol>
 
