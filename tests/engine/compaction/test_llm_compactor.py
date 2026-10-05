@@ -375,9 +375,8 @@ class TestItIsInterchangeableWithTheNoOp:
         from llm_gc.extraction import KnowledgeExtractor
 
         def _memory(compactor):
-            bus = EventBus()
             return GenerationalMemory(
-                knowledge_extractor=KnowledgeExtractor(event_bus=bus),
+                knowledge_extractor=KnowledgeExtractor(),
                 compactor=compactor,
             )
 
@@ -385,13 +384,16 @@ class TestItIsInterchangeableWithTheNoOp:
         llm_memory = _memory(LLMCompactor(event_bus=bus, provider=FakeProvider(responses=[_response("Short.")])))
         noop_memory = _memory(NoOpCompactor(event_bus=bus))
 
-        llm_summary = asyncio.run(llm_memory.summarise(RUN)).summary
-        noop_summary = asyncio.run(noop_memory.summarise(RUN)).summary
+        llm_span = asyncio.run(llm_memory.condense(RUN))[0]
+        noop_span = asyncio.run(noop_memory.condense(RUN))[0]
+        llm_summary, noop_summary = llm_span.summary, noop_span.summary
+        assert llm_summary is not None and noop_summary is not None
+        span_tokens = sum(turn.token_count for turn in llm_span.turns)
 
         # Same slot, same shape, same contract — and the whole point, a different
-        # size. The no-op is larger than the run it replaced; the real one is not.
+        # size. The no-op is larger than the turns it replaced; the real one is not.
         assert llm_summary.turn_index == noop_summary.turn_index == 4
-        assert llm_summary.token_count < ORIGINAL_TOKENS < noop_summary.token_count
+        assert llm_summary.token_count < span_tokens < noop_summary.token_count
 
 
 class TestThePromptShips:

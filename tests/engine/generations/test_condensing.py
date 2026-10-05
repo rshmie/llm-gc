@@ -111,7 +111,7 @@ _SUMMARY = LLMResponse(text="They settled on mysql for the database after a long
 def _memory(responses) -> tuple[GenerationalMemory, FakeProvider]:
     bus = EventBus()
     provider = FakeProvider(responses=responses)
-    return GenerationalMemory(knowledge_extractor=KnowledgeExtractor(event_bus=bus),
+    return GenerationalMemory(knowledge_extractor=KnowledgeExtractor(),
                               compactor=LLMCompactor(event_bus=bus, provider=provider)), provider
 
 

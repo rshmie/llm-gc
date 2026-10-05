@@ -3,23 +3,23 @@ from pydantic import BaseModel, Field
 
 from llm_gc.engine.aging_degradation import AgingDegradation
 from llm_gc.engine.gc_status import GCStatus
-from llm_gc.engine.sweep.sweep_result import SweepResult
 from llm_gc.models.message import Message
 
 class CutOutcome(BaseModel):
-    """Where the turns a cut took ended up once the whole pass had run.
+    """Where the turns a cut took ended up, and what it changed for turns condensed earlier.
 
-    Not the sweeper's decision: the same pass also sweeps the front, so an entry
-    the cut has just made can be archived at once when it scores cold against the
-    context the cut leaves - a turn the sweeper quoted can end the pass as facts.
+    The same pass re-plans every span, so it can show earlier turns with less
+    detail (to fit the budget, or because they went quiet) or with more (because
+    the conversation came back to them).
     """
 
     model_config = {"frozen": True}
 
     quoted: int                 # turns quoted word for word in the front
     summarised: int             # turns inside a summary in the front
-    archived: int               # turns reduced to facts
-    front_archived: int = 0     # turns earlier cuts had condensed, reduced to facts by this pass
+    archived: int               # turns shown by their index line and facts, or folded out of view
+    front_archived: int = 0     # turns earlier cuts had condensed, archived or folded by this pass
+    front_raised: int = 0       # turns earlier cuts had condensed, shown with more detail by this pass
 
 
 class AbandonedCut(BaseModel):
@@ -52,16 +52,19 @@ class GCResult(BaseModel):
     kept_count: int = Field(ge=0)
     compacted_count: int = Field(ge=0)
     archived_count: int = Field(ge=0)
-    sweep_result: Optional[SweepResult] = None
+    # The cut's turns by the level the plan gave them, in their own tokens.
+    kept_tokens: int = Field(default=0, ge=0)
+    compacted_tokens: int = Field(default=0, ge=0)
+    archived_tokens: int = Field(default=0, ge=0)
     duration_ms: float = Field(ge=0)
 
     degradations: list[AgingDegradation] = Field(default_factory=list)
     """What this pass intended and did not manage - see `AgingDegradation`.
 
     Empty on a clean pass, which is the common case and why it defaults rather
-    than being required. Note that `kept_count` / `compacted_count` /
-    `archived_count` describe the *sweeper's decision*: a consumer showing what a
-    pass did reads `outcome`, and reads this for the moves that failed.
+    than being required. `kept_count` / `compacted_count` / `archived_count` count
+    the cut's turns (the tail as kept) by the level the plan gave them; a consumer
+    showing what a pass did to earlier turns as well reads `outcome`.
 
     `status` deliberately stays COMPLETED when this list is non-empty. Status
     answers "did the pass run"; this answers "did everything it intended happen".

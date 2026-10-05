@@ -15,15 +15,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from llm_gc.config import GCConfig
-from llm_gc.engine.compaction import LLMCompactor
-from llm_gc.engine.gc_service import GcService
-from llm_gc.engine.generations import GenerationalMemory
-from llm_gc.engine.sweep import Sweeper, ThresholdSweepStrategy
-from llm_gc.events import EventBus
-from llm_gc.extraction import KnowledgeExtractor
+from llm_gc.engine import build_gc_service
 from llm_gc.llm import FakeProvider, LLMResponse, StopReason
 from llm_gc.proxy import SESSION_HEADER, create_app
-from llm_gc.scoring import RecencyScorer, RelevanceScorer, RelevanceType
 from llm_gc.session import SessionManager
 
 API_KEY = "sk-ant-super-secret"
@@ -50,35 +44,17 @@ SUMMARY = LLMResponse(
 
 def _engine(**config_overrides):
     """The real engine graph, with a scripted provider in place of a model."""
-    bus = EventBus()
     base = {
         "context_window": 200,
         "keep_threshold": 0.55,
         "archive_threshold": 0.25,
-        "min_compactable_tokens": 10,
         "last_n_turns_to_keep": 2,
-        "max_memory_ratio": 0.1,
         # Scaled to the 200-token window: a few turns' worth is worth a cut.
         "min_cut_tokens": 30,
     }
     base.update(config_overrides)
-    config = GCConfig(**base)
-    memory = GenerationalMemory(
-        knowledge_extractor=KnowledgeExtractor(event_bus=bus),
-        compactor=LLMCompactor(event_bus=bus, provider=FakeProvider(responses=[SUMMARY] * 200)),
-    )
-    return GcService(
-        session_manager=SessionManager(),
-        generational_memory=memory,
-        relevance_scorer=RelevanceScorer(
-            scorers=[RecencyScorer(decay_rate=0.3)], weights={RelevanceType.RECENCY: 1.0}, event_bus=bus
-        ),
-        sweeper=Sweeper(
-            sweeper_strategy=ThresholdSweepStrategy(gc_config=config), gc_config=config, event_bus=bus
-        ),
-        event_bus=bus,
-        gc_config=config,
-    ), memory
+    service = build_gc_service(GCConfig(**base), summary_provider=FakeProvider(responses=[SUMMARY] * 200))
+    return service, service.generational_memory
 
 
 def _proxy(upstream=None, *, gc_service=None, **engine_kwargs):
@@ -585,20 +561,19 @@ def test_an_unsupported_role_is_forwarded_for_the_provider_to_judge(role):
     assert json.loads(seen[0].content)["messages"][0]["role"] == role
 
 
-class TestTheMemoryBudgetCannotInvertTheSaving:
+class TestTheRecapBudgetCannotInvertTheSaving:
     """A regression guard with a measured origin.
 
     With an absolute memory budget, `max_memory_tokens=100` against a 200-token
     window made the proxy forward 21% MORE than the client sent: the injected block
-    consumed the whole saving and then some, silently. The budget is now a fraction
-    of the window, so the same mistake is not expressible.
+    consumed the whole saving and then some, silently. The recap's budget is a
+    share of the window, and a collection must pay for itself, so at no share can
+    the proxy forward more than the client sent.
     """
 
     @staticmethod
-    def _savings(ratio: float, old_gen_ratio: float = 0.0) -> dict:
-        # The old generation archives at once unless a test gives it room, so the
-        # fact budget is the only share of the window being measured.
-        client, _, _, _ = _proxy(max_memory_ratio=ratio, max_old_gen_ratio=old_gen_ratio)
+    def _savings(**config) -> dict:
+        client, _, _, _ = _proxy(**config)
         conversation: list[tuple[str, str]] = []
         for index in range(10):
             conversation.append(("user", f"turn {index}: we discussed the storage layer at length today"))
@@ -606,30 +581,24 @@ class TestTheMemoryBudgetCannotInvertTheSaving:
             conversation.append(("assistant", UPSTREAM_OK["content"][0]["text"]))
         return client.get("/stats").json()
 
-    def test_the_default_proportion_still_saves(self):
-        stats = self._savings(0.1)
-        assert stats["tokens_saved"] > 0, stats
-
-    def test_even_a_generous_proportion_still_saves(self):
-        """The property the ratio buys: memory scales with the window, so a
-        generous share of a window is still a share of it."""
-        stats = self._savings(0.25)
-        assert stats["tokens_saved"] > 0, stats
-
-    def test_both_shares_together_never_cost_more_than_they_save(self):
-        """Nearly half of a 200-token window for the recap, against turns of a dozen
-        tokens: the saving can shrink to nothing, never below it, because a cut that
-        would not shrink the context is abandoned."""
-        stats = self._savings(0.25, old_gen_ratio=0.2)
+    @pytest.mark.parametrize("ratio", [0.0, 0.3, 0.6, 1.0])
+    def test_no_share_of_the_window_makes_the_proxy_forward_more_than_it_was_sent(self, ratio):
+        stats = self._savings(context_window=200, max_recap_ratio=ratio)
         assert stats["tokens_saved"] >= 0, stats
+
+    def test_on_a_small_window_the_budget_bounds_the_front_and_saves(self):
+        """Turns of a dozen tokens are not worth condensing on their own merits; a
+        200-token window leaves the budget no choice, and folding pays."""
+        stats = self._savings(context_window=200, max_recap_ratio=0.3)
+        assert stats["tokens_saved"] > 0, stats
 
     def test_the_budget_is_derived_from_the_window(self):
         from llm_gc.config import GCConfig
 
-        assert GCConfig(context_window=1000, max_memory_ratio=0.1).max_memory_tokens == 100
-        assert GCConfig(context_window=200, max_memory_ratio=0.1).max_memory_tokens == 20
+        assert GCConfig(context_window=1000, max_recap_ratio=0.3).max_recap_tokens == 300
+        assert GCConfig(context_window=200, max_recap_ratio=0.3).max_recap_tokens == 60
         # One source of truth: there is no stored absolute to drift from the window.
-        assert GCConfig(context_window=128_000, max_memory_ratio=0.0).max_memory_tokens == 0
+        assert GCConfig(context_window=128_000, max_recap_ratio=0.0).max_recap_tokens == 0
 
 
 def _sse(*texts: str, stop: bool = True, error: bool = False) -> bytes:
@@ -778,12 +747,15 @@ class TestOneUsersConversationNeverReachesAnother:
         generation, Bob's prompt carried Alice's facts labelled as *his* memory.
         Every earlier test drove one session, and a small memory budget had
         hidden the block that carried them."""
-        client, _, _, seen = _proxy(max_memory_ratio=0.4)
+        client, _, _, seen = _proxy(context_window=400, max_recap_ratio=0.4)
         alice: list[tuple[str, str]] = []
         for i in range(14):
             alice.append(("user", f"Alice question {i}: the patient records database stores diagnoses for clinic {i}"))
             _post(client, _body(*alice), headers={SESSION_HEADER: "alice"})
             alice.append(("assistant", "Postgres, partitioned by day."))
+        alice_front = json.dumps(_sent(seen)["messages"][0])
+        assert "condensed by LLM-GC" in alice_front and "patient" in alice_front, \
+            "precondition: Alice's own condensed turns are in her front"
 
         bob_turns = [("user", "Bob here: help me plan a birthday party"), ("assistant", "Sure.")]
         _post(client, _body(*bob_turns[:1]), headers={SESSION_HEADER: "bob"})

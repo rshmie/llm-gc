@@ -133,8 +133,8 @@ def create_dashboard_app(
             sessions=sessions,
             config={"context_window": config.context_window, "min_cut_tokens": config.min_cut_tokens,
                     "last_n_turns_to_keep": config.last_n_turns_to_keep, "keep_threshold": config.keep_threshold,
-                    "archive_threshold": config.archive_threshold, "min_compactable_tokens": config.min_compactable_tokens,
-                    "max_memory_tokens": config.max_memory_tokens, "max_old_gen_tokens": config.max_old_gen_tokens},
+                    "archive_threshold": config.archive_threshold, "level_margin": config.level_margin,
+                    "max_recap_tokens": config.max_recap_tokens},
             proxy=read_proxy_stats() if read_proxy_stats is not None else None,
         )
 

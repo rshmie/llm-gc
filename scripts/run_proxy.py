@@ -34,6 +34,7 @@ Developer tooling, not library code, which is why it lives in `scripts/`.
 """
 
 import argparse
+from collections import Counter
 import asyncio
 import json
 import os
@@ -53,7 +54,6 @@ from llm_gc.config.constants import (  # noqa: E402
 )
 from llm_gc.engine import GcService, build_gc_service  # noqa: E402
 from llm_gc.llm import AnthropicClient, FakeProvider, LLMResponse, StopReason  # noqa: E402
-from llm_gc.models.generation_snapshot import DetailLevel  # noqa: E402
 from llm_gc.monitoring import ContextHealthMonitor  # noqa: E402
 from llm_gc.proxy import DEFAULT_PROXY_PORT, SESSION_HEADER, create_app  # noqa: E402
 from llm_gc.utils import count_tokens  # noqa: E402
@@ -108,16 +108,14 @@ _SCRIPTED_SUMMARIES = [
 
 
 def demo_config() -> GCConfig:
-    """Scaled so a twelve-turn scripted conversation is cut more than once."""
+    """Scaled so the recap's budget bites: older spans fold, recent ones are archived or summarised."""
     return GCConfig(
-        context_window=400,
+        context_window=900,
         keep_threshold=0.55,
         archive_threshold=0.25,
-        min_compactable_tokens=10,
         last_n_turns_to_keep=3,
         # Scaled to this demo's small window; real conversations use far larger batches.
         min_cut_tokens=60,
-        max_memory_ratio=0.15,
     )
 
 
@@ -247,13 +245,15 @@ def demo(compactor_kind: str, api_key: str | None) -> None:
         for line in message["content"].split("\n"):
             print(f"  {message['role']:>9}: {line[:88]}")
 
-    print("\nThe last turn asks which database was chosen. Turn 1 said postgres and was")
-    print("archived long before this request. Look for it in the memory block above:")
-    print("that is the whole claim, arriving over HTTP.\n")
+    print("\nEvery older exchange is in the front at the level its score earned: summarised,")
+    print("archived to the line naming it, or folded out of view once the budget ran out.")
+    print("The last turn asks which database was chosen; turn 1 said postgres. At this")
+    print("budget that exchange is folded: the model is told those turns exist, not what")
+    print("they said - and LLM-GC still holds them word for word.\n")
     # Generations belong to the session, not to the shared GenerationalMemory.
     snapshot = service.session_manager.store.get(SESSION).snapshot
-    print(f"  old gen: {sum(span.level is DetailLevel.COMPACTED for span in snapshot.old)} summaries   "
-          f"permanent gen: {len(snapshot.active_knowledge)} facts\n")
+    levels = Counter(span.level.value for span in snapshot.old)
+    print(f"  old gen: {len(snapshot.old)} spans {dict(levels)}   permanent gen: {len(snapshot.active_knowledge)} facts\n")
 
 
 def serve(args: argparse.Namespace, api_key: str | None) -> None:

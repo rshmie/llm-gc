@@ -6,9 +6,8 @@ from dataclasses import dataclass, field
 from llm_gc.config import GCConfig
 from llm_gc.config.constants import DEFAULT_MAX_RECENT_DEGRADATIONS, DEFAULT_MAX_RECENT_PASSES, \
     DEFAULT_MAX_RECENT_TRANSITIONS, DEFAULT_MONITOR_MAX_SESSIONS
-from llm_gc.engine import AgingDegradation, GCResult
+from llm_gc.engine import AgingDegradation, GCResult, GCStatus
 from llm_gc.engine.generations.front import span_message
-from llm_gc.engine.sweep import SweepClassification, SweepResult
 from llm_gc.events import Event, EventBus, EventType
 from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.generation_snapshot import GenerationSnapshot
@@ -105,7 +104,7 @@ class ContextHealthMonitor:
         record.passes.append(breakdown)
         record.last_pass = _PassSignals(
             token_budget=self._build_token_budget(gc_result), gc_breakdown=breakdown,
-            transformation_ratio=self._compute_transformation_ratio(gc_result.sweep_result),
+            transformation_ratio=self._compute_transformation_ratio(gc_result),
             young_turn_indices=young_turn_indices, young_tokens=young_tokens)
 
     def _on_message_promoted_to_old_gen(self, event: Event) -> None:
@@ -172,14 +171,8 @@ class ContextHealthMonitor:
 
     @staticmethod
     def _newest_turn_index(gc_result: GCResult) -> int | None:
-        """How far into the conversation the pass ran, or None for an empty one."""
-        if gc_result.sweep_result is not None and gc_result.sweep_result.sweep_entries:
-            return gc_result.sweep_result.sweep_entries[-1].turn_index
-        if gc_result.final_messages:
-            # Bypassed run: nothing was swept, so the untouched originals in
-            # final_messages are the only source for the current turn index.
-            return gc_result.final_messages[-1].turn_index
-        return None
+        """How far into the conversation the pass ran, or None when no turn is forwarded word for word."""
+        return max((message.turn_index for message in _tail(gc_result)), default=None)
 
     def _build_token_budget(self, gc_result: GCResult) -> TokenBudgetSignal | None:
         current_msg_turn_index = self._newest_turn_index(gc_result)
@@ -191,13 +184,14 @@ class ContextHealthMonitor:
                                  current_msg_turn_index=current_msg_turn_index)
 
     def _build_gc_breakdown(self, gc_result: GCResult, gc_completed_at: float) -> GCBreakdownSignal:
-        if gc_result.sweep_result is not None:
-            keep_tokens = gc_result.sweep_result.total_keep_tokens
-            compact_tokens = gc_result.sweep_result.total_compact_tokens
-            archive_tokens = gc_result.sweep_result.total_archive_tokens
+        if gc_result.status is GCStatus.COMPLETED:
+            # The cut's turns by planned level; the tail stayed word for word.
+            keep_tokens = gc_result.kept_tokens + sum(message.token_count for message in _tail(gc_result))
+            compact_tokens = gc_result.compacted_tokens
+            archive_tokens = gc_result.archived_tokens
         else:
-            # Bypassed run: no sweep measured token totals, but the producer's own
-            # claim (kept_count == len(messages)) is that everything stayed untouched.
+            # Nothing was condensed: the producer's own claim (kept_count ==
+            # len(messages)) is that everything stayed untouched.
             keep_tokens = gc_result.tokens_in_final
             compact_tokens = 0
             archive_tokens = 0
@@ -213,29 +207,23 @@ class ContextHealthMonitor:
                                  abandoned_cut=gc_result.abandoned_cut)
 
     @staticmethod
-    def _compute_transformation_ratio(sweep_result: SweepResult | None) -> float | None:
-        # A bypassed run has no sweep_result: no sweep ran, so there is no
-        # decision profile to report - None, not a fabricated 0.0.
-        if sweep_result is None:
+    def _compute_transformation_ratio(gc_result: GCResult) -> float | None:
+        """Of the young turns a completed pass looked at, the share of their tokens it condensed.
+
+        None for any other pass: nothing was condensed, so there is no profile to
+        report - not a fabricated 0.0.
+        """
+        if gc_result.status is not GCStatus.COMPLETED:
             return None
-        transformed_tokens = sweep_result.total_compact_tokens + sweep_result.total_archive_tokens
-        total_swept_tokens = sweep_result.total_keep_tokens + transformed_tokens
-        if total_swept_tokens == 0:
-            return None
-        return transformed_tokens / total_swept_tokens
+        transformed_tokens = gc_result.compacted_tokens + gc_result.archived_tokens
+        looked_at = transformed_tokens + gc_result.kept_tokens + sum(m.token_count for m in _tail(gc_result))
+        return transformed_tokens / looked_at if looked_at else None
 
     @staticmethod
     def _young_generation(gc_result: GCResult) -> tuple[list[int], int]:
-        if gc_result.sweep_result is not None:
-            # Young gen is still derived from the last sweep: KEEP is exactly the
-            # set of turns that stayed. (One known skew: a turn whose promotion
-            # failed is classified COMPACT but stays young, so it is undercounted
-            # here until the next pass reclassifies it.)
-            return ([entry.turn_index for entry in gc_result.sweep_result.sweep_entries
-                     if entry.classification == SweepClassification.KEEP],
-                    gc_result.sweep_result.total_keep_tokens)
-        # Bypassed run: everything the pass saw stayed live and untransformed.
-        return [message.turn_index for message in gc_result.final_messages], gc_result.tokens_in_final
+        """The turns forwarded word for word after the pass: the young generation as it stands."""
+        tail = _tail(gc_result)
+        return [message.turn_index for message in tail], sum(message.token_count for message in tail)
 
     def _build_generation_lifecycle(self, last_pass: _PassSignals | None, session_id: str | None,
                                     transitions: list[GenerationTransition]) -> GenerationLifeCycleSignal:
@@ -267,3 +255,7 @@ class ContextHealthMonitor:
                                          permanent_gen_entries=permanent_gen_entries,
                                          recent_transitions=transitions)
 
+
+def _tail(gc_result: GCResult) -> list[Message]:
+    """The turns a pass forwards word for word: everything but the front, which sits before turn 0."""
+    return [message for message in gc_result.final_messages if message.turn_index >= 0]

@@ -13,7 +13,6 @@ contradicted. See doc/design/generational-memory/overview.md.
 import re
 from dataclasses import dataclass
 
-from llm_gc.events import Event, EventBus, EventType
 from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.knowledge_entry import GENERAL_TOPIC, KnowledgeType
 
@@ -103,9 +102,6 @@ class KnowledgeExtractor:
         ],
     }
 
-    def __init__(self, event_bus: EventBus) -> None:
-        self.event_bus = event_bus
-
     def extract_knowledge(self, message: Message, message_turn: int) -> list[KnowledgeEntry]:
         """Extract whatever facts, decisions and preferences the turn states.
 
@@ -137,9 +133,6 @@ class KnowledgeExtractor:
             else:
                 unread.append(sentence)
 
-        if entries:
-            self.event_bus.emit(Event(event_type=EventType.KNOWLEDGE_ENTRIES_EXTRACTED,
-                                      data={"entries": entries, "message_turn": message_turn}))
         return Reading(entries=entries, unread=" ".join(unread))
 
     def _entries_in(self, statement: str, message_turn: int) -> list[KnowledgeEntry]:

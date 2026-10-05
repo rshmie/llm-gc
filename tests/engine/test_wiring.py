@@ -25,20 +25,18 @@ def test_every_component_reports_on_the_one_bus():
     # A component on a private bus would be invisible to the dashboard and the monitor.
     service = build_gc_service(GCConfig(), summary_provider=None)
 
-    assert service.relevance_scorer.event_bus is service.event_bus
-    assert service.sweeper.event_bus is service.event_bus
     assert service.generational_memory.compactor.event_bus is service.event_bus
-    assert service.generational_memory.knowledge_extractor.event_bus is service.event_bus
 
 
-def test_each_weighted_signal_has_its_scorer():
-    # Scores are divided by the sum of all weights: a weight with no scorer would
-    # deflate every score, and a scorer with no weight would count for nothing.
-    service = build_gc_service(GCConfig(), summary_provider=None)
+def test_the_shipped_weights_let_an_old_span_reach_the_top_band():
+    """Every level must be reachable by a span of any age, or one the conversation
+    returns to could never be shown in full again."""
+    config = GCConfig()
+    service = build_gc_service(config, summary_provider=None)
 
-    wired = {scorer.scorer_name for scorer in service.relevance_scorer.scorers}
-    assert wired == set(service.relevance_scorer.weights) == {
-        RelevanceType.RECENCY, RelevanceType.DENSITY, RelevanceType.DECISION, RelevanceType.REFERENCE}
+    assert {scorer.scorer_name for scorer in service.span_scorer.importance} == {
+        RelevanceType.DECISION, RelevanceType.DENSITY}
+    assert service.span_scorer.best_score_however_old >= config.keep_threshold + config.level_margin
 
 
 def test_two_services_share_no_state():

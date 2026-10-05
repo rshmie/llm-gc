@@ -9,19 +9,14 @@ reset, nothing announced on the bus.
 import asyncio
 
 from llm_gc.config import GCConfig
-from llm_gc.engine.compaction import LLMCompactor
+from llm_gc.engine import build_gc_service
 from llm_gc.engine.gc_service import GcService
 from llm_gc.engine.gc_status import GCStatus
-from llm_gc.engine.generations import GenerationalMemory
-from llm_gc.engine.sweep import Sweeper, ThresholdSweepStrategy
-from llm_gc.events import Event, EventBus, EventType
-from llm_gc.extraction import KnowledgeExtractor
+from llm_gc.events import Event, EventType
 from llm_gc.llm import FakeProvider, LLMResponse, StopReason
 from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.generation_snapshot import DetailLevel, GenerationSnapshot, Span
 from llm_gc.models.knowledge_entry import KnowledgeType
-from llm_gc.scoring import RecencyScorer, RelevanceScorer, RelevanceType
-from llm_gc.session import SessionManager
 from llm_gc.utils import count_tokens
 
 SESSION = "s"
@@ -37,25 +32,10 @@ SUMMARY = LLMResponse(
 
 
 def _build(**overrides) -> GcService:
-    """The real engine graph, scaled so cuts happen within a short conversation."""
-    bus = EventBus()
-    config = GCConfig(**{
-        "context_window": 700, "keep_threshold": 0.55, "archive_threshold": 0.25,
-        "min_compactable_tokens": 10, "last_n_turns_to_keep": 3, "min_cut_tokens": 60, **overrides,
-    })
-    return GcService(
-        session_manager=SessionManager(),
-        generational_memory=GenerationalMemory(
-            knowledge_extractor=KnowledgeExtractor(event_bus=bus),
-            compactor=LLMCompactor(event_bus=bus, provider=FakeProvider(responses=[SUMMARY] * 400)),
-        ),
-        relevance_scorer=RelevanceScorer(
-            scorers=[RecencyScorer(decay_rate=0.15)], weights={RelevanceType.RECENCY: 1.0}, event_bus=bus
-        ),
-        sweeper=Sweeper(sweeper_strategy=ThresholdSweepStrategy(gc_config=config), gc_config=config, event_bus=bus),
-        event_bus=bus,
-        gc_config=config,
-    )
+    """The real engine graph, scaled so collections happen within a short conversation."""
+    config = GCConfig(**{"context_window": 700, "keep_threshold": 0.55, "archive_threshold": 0.25,
+                         "last_n_turns_to_keep": 3, "min_cut_tokens": 60, **overrides})
+    return build_gc_service(config, summary_provider=FakeProvider(responses=[SUMMARY] * 400))
 
 
 def _turn(index: int) -> Message:
@@ -107,8 +87,9 @@ class TestCoverage:
         held = list(snapshot.young) + [turn for span in snapshot.old for turn in span.turns]
         assert sorted(turn.turn_index for turn in held) == list(range(80))
         assert all(turn == _turn(turn.turn_index) for turn in held)
-        assert any(span.level is DetailLevel.ARCHIVED and len(span.turns) > 1 for span in snapshot.old), \
-            "over 80 turns some summary has been archived, and its span still holds every turn"
+        condensed = (DetailLevel.ARCHIVED, DetailLevel.OUT_OF_VIEW)
+        assert any(span.level in condensed and len(span.turns) > 1 for span in snapshot.old), \
+            "over 80 turns on a small budget some span has been archived or folded, and still holds every turn"
 
     def test_cuts_are_counted_when_committed_not_when_attempted(self):
         service = _build()
@@ -136,7 +117,7 @@ class TestLookingChangesNothing:
         assert service.session_manager.store.get(SESSION).last_updated_at == before
 
     def test_nothing_is_announced(self):
-        """A preview reported as a sweep would have every subscriber record work
+        """A preview reported as a collection would have every subscriber record work
         that never happened."""
         service = _build()
         _converse(service, 10)
@@ -148,18 +129,21 @@ class TestLookingChangesNothing:
 
         assert heard == []
 
-    def test_a_real_pass_still_announces_after_a_preview(self):
-        """The preview silences a copy. Silencing the shared scorer instead would
-        pass the test above and quietly blind every subscriber from then on."""
+    def test_a_real_collection_still_announces_after_previews(self):
+        """Previews are silent because planning announces nothing, not because a
+        component was silenced - which would blind every subscriber from then on."""
         service = _build()
-        _record(service, 0)
-        service.inspect(SESSION)
         heard: list[Event] = []
-        service.event_bus.subscribe(EventType.SWEEP_COMPLETED, heard.append)
+        service.event_bus.subscribe(EventType.KNOWLEDGE_ENTRY_ADDED, heard.append)
 
-        asyncio.run(service.gc_age(SESSION))
+        async def scenario() -> None:
+            for index in range(20):
+                _record(service, index)
+                service.inspect(SESSION)
+                await service.gc_age(SESSION)
 
-        assert len(heard) == 1
+        asyncio.run(scenario())
+        assert heard, "collections after previews still file and announce facts"
 
 
 class TestTheViewIsTheEngine:
@@ -173,8 +157,8 @@ class TestTheViewIsTheEngine:
         assert inspection.context_tokens == sum(m.token_count for m in inspection.context)
 
     def test_the_preview_predicts_the_next_pass(self):
-        """The preview is the pass's own marking step, so its verdict must match
-        the pass that follows - turn after turn, across cuts."""
+        """The preview is the collection's own planning step, so its verdict must
+        match the pass that follows - turn after turn, across collections."""
         service = _build()
         finished: list[Event] = []
         service.event_bus.subscribe(EventType.GC_FINISHED, finished.append)
@@ -192,28 +176,31 @@ class TestTheViewIsTheEngine:
                     assert result.status is GCStatus.BYPASSED_BATCH_TOO_SMALL, index
                 elif not result.degradations and result.tokens_saved > 0:
                     departed = young_before - {m.turn_index for m in _snapshot(service).young}
-                    assert departed == {e.turn_index for e in preview.entries[:preview.cut]}, index
+                    assert departed == set(preview.turns), index
                     cuts_checked += 1
 
         asyncio.run(scenario())
         assert cuts_checked > 0
 
     def test_the_front_reports_exactly_the_facts_it_carries(self):
-        """Facts are chosen by importance and then cut to the memory budget. The
-        dashboard marks each fact as sent or stored-only, so the facts the front
-        reports must be precisely the ones whose text the model receives."""
-        service = _build(context_window=2000, max_memory_ratio=0.03)   # room for a few facts
-        facts = tuple(
-            KnowledgeEntry(message_turn=i, content=f"value{i}x{i}", topic_label=f"subject{i}",
-                           knowledge_type=KnowledgeType.DECISION)
-            for i in range(12)
-        )
-        quote = Span(turns=(Message(role="user", content="hello", token_count=1, turn_index=0),),
-                     level=DetailLevel.KEPT)
-        service.session_manager.get_or_create(SESSION).snapshot = GenerationSnapshot(old=(quote,), knowledge=facts)
+        """Facts reach the model on their archived span's line; a kept or compacted
+        span's words carry its facts already. The dashboard marks each fact as sent
+        or stored-only, so the facts the front reports must be precisely the ones
+        whose text the model receives."""
+        service = _build()
+        facts = tuple(KnowledgeEntry(message_turn=i, content=f"value{i}x{i}", topic_label=f"subject{i}",
+                                     knowledge_type=KnowledgeType.DECISION) for i in range(4))
+        archived = Span(turns=(Message(role="user", content="first", token_count=1, turn_index=0),
+                               Message(role="assistant", content="second", token_count=1, turn_index=1)),
+                        level=DetailLevel.ARCHIVED, index_line="first")
+        kept = Span(turns=(Message(role="user", content="third", token_count=1, turn_index=2),
+                           Message(role="assistant", content="fourth", token_count=1, turn_index=3)),
+                    level=DetailLevel.KEPT)
+        service.session_manager.get_or_create(SESSION).snapshot = GenerationSnapshot(old=(archived, kept),
+                                                                                    knowledge=facts)
 
         front = service.inspect(SESSION).front
 
-        assert 0 < len(front.facts) < len(facts)
+        assert front.facts == facts[:2]
         for fact in facts:
             assert (fact.content in front.message.content) == (fact in front.facts), fact.content

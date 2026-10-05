@@ -11,7 +11,7 @@ export const ui = { tab: "conversation", filter: "all", query: "", promptView: f
 export const keepLast = () => (state.config ? state.config.last_n_turns_to_keep : 5);
 // What bounds the facts the recap carries: its token budget, a share of the model's window.
 export const recapLimit = () => !state.config ? "a limited share of the window in facts"
-  : `${Number(state.config.max_memory_tokens).toLocaleString()} tokens of facts`;
+  : `${Number(state.config.max_recap_tokens).toLocaleString()} tokens`;
 export const captured = () => !!(state.transcript && state.transcript.captured);
 export const preview = (text, n = 150) => !text ? null : text.length > n ? `“${text.slice(0, n).trim()}…”` : `“${text}”`;
 

@@ -14,7 +14,6 @@ from enum import Enum
 from pydantic import BaseModel
 
 from llm_gc.engine.generations.front import span_message, stated_text
-from llm_gc.engine.generations.memory_block import shorten_for_block
 from llm_gc.engine.inspection import SessionInspection
 from llm_gc.models import KnowledgeEntry, SweepClassification
 from llm_gc.models.generation_snapshot import DetailLevel, Span
@@ -31,11 +30,18 @@ class TurnFidelity(Enum):
     SUPERSEDED = "superseded"    # only facts remain, and every one has since been contradicted
 
 
-# What a cut does to a turn of each classification (doc/design/generational-memory/the-cut.md).
-_FIDELITY_AFTER_CUT = {
-    SweepClassification.KEEP: TurnFidelity.QUOTED,
-    SweepClassification.COMPACT: TurnFidelity.SUMMARISED,
-    SweepClassification.ARCHIVE: TurnFidelity.FACTS_ONLY,
+# How a turn reads once its span is shown at each level, and the dashboard's word for that level.
+_FIDELITY_AT_LEVEL = {
+    DetailLevel.KEPT: TurnFidelity.QUOTED,
+    DetailLevel.COMPACTED: TurnFidelity.SUMMARISED,
+    DetailLevel.ARCHIVED: TurnFidelity.FACTS_ONLY,
+    DetailLevel.OUT_OF_VIEW: TurnFidelity.FACTS_ONLY,
+}
+_CLASSIFICATION_AT_LEVEL = {
+    DetailLevel.KEPT: SweepClassification.KEEP,
+    DetailLevel.COMPACTED: SweepClassification.COMPACT,
+    DetailLevel.ARCHIVED: SweepClassification.ARCHIVE,
+    DetailLevel.OUT_OF_VIEW: SweepClassification.ARCHIVE,
 }
 
 
@@ -130,7 +136,7 @@ def project_knowledge_state(inspection: SessionInspection) -> KnowledgeState:
         front_entries=[_front_entry_state(span) for span in entries],
         turns=_turn_states(inspection, entries, facts_by_turn, sent),
         facts=_fact_states(snapshot.knowledge, sent),
-        next_cut=NextCutState(turns=[entry.turn_index for entry in inspection.next_cut.entries[:inspection.next_cut.cut]],
+        next_cut=NextCutState(turns=list(inspection.next_cut.turns),
                               compactable_tokens=inspection.next_cut.compactable_tokens,
                               min_cut_tokens=inspection.next_cut.min_cut_tokens,
                               batch_ready=inspection.next_cut.batch_ready),
@@ -157,8 +163,6 @@ def _turn_states(inspection: SessionInspection, entries: tuple[Span, ...],
     covering = {turn: index for index, span in enumerate(entries) for turn in span.turn_indices}
     verbatim = {message.turn_index: message for message in inspection.tail}
     preview = inspection.next_cut
-    planned = {entry.turn_index: entry for entry in preview.entries}
-    in_cut = {entry.turn_index for entry in preview.entries[:preview.cut]}
 
     states: list[TurnState] = []
     for turn in range(inspection.snapshot.recorded_turn_count):
@@ -166,13 +170,12 @@ def _turn_states(inspection: SessionInspection, entries: tuple[Span, ...],
         state = TurnState(turn_index=turn, fidelity=TurnFidelity.FACTS_ONLY, facts_stored=len(facts),
                           facts_sent=sum(fact in sent for fact in facts))
         if turn in verbatim:
-            message, sweep = verbatim[turn], planned.get(turn)
+            message, level = verbatim[turn], preview.levels.get(turn)
             state.fidelity = TurnFidelity.VERBATIM
             state.role, state.tokens, state.text = message.role, message.token_count, message.content
-            if sweep is not None:
-                state.score, state.classification = sweep.relevance_score, sweep.classification
-                state.forced_keep = sweep.override_reason
-                state.becomes = _FIDELITY_AFTER_CUT[sweep.classification] if turn in in_cut else None
+            if level is not None:
+                state.score, state.classification = preview.scores[turn], _CLASSIFICATION_AT_LEVEL[level]
+                state.becomes = _FIDELITY_AT_LEVEL[level]
         elif turn in covering:
             state.front_entry = covering[turn]
             quoted = entries[covering[turn]].level is DetailLevel.KEPT
@@ -196,10 +199,9 @@ def _fact_states(knowledge: tuple[KnowledgeEntry, ...], sent: set[KnowledgeEntry
             replacement = next((later.message_turn for later in knowledge[position + 1:]
                                 if later.topic_label == fact.topic_label
                                 and later.knowledge_type is not KnowledgeType.RAW), None)
-        as_sent = shorten_for_block(fact.content)
         states.append(FactState(turn=fact.message_turn, source_turns=list(fact.covered_turns),
                                 topic=fact.topic_label, content=fact.content, knowledge_type=fact.knowledge_type,
-                                status=fact.knowledge_status, sent=fact in sent, sent_content=as_sent,
-                                shortened=as_sent != fact.content, from_summary=fact.from_summary,
+                                status=fact.knowledge_status, sent=fact in sent, sent_content=fact.content,
+                                shortened=False, from_summary=fact.from_summary,
                                 superseded_by_turn=replacement))
     return sorted(states, key=lambda state: state.turn)

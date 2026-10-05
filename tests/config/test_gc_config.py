@@ -18,19 +18,19 @@ def test_a_context_window_must_be_positive():
         GCConfig(context_window=-5)
 
 
-def test_the_memory_budget_is_a_share_of_the_window():
-    assert GCConfig(context_window=10_000, max_memory_ratio=0.1).max_memory_tokens == 1_000
+def test_the_recap_budget_is_a_share_of_the_window():
+    assert GCConfig(context_window=10_000, max_recap_ratio=0.3).max_recap_tokens == 3_000
 
 
-def test_the_old_generation_budget_is_a_share_of_the_window():
-    assert GCConfig(context_window=10_000, max_old_gen_ratio=0.2).max_old_gen_tokens == 2_000
+def test_the_keep_line_must_be_above_the_archive_line():
+    with pytest.raises(ValidationError, match="must be above"):
+        GCConfig(keep_threshold=0.3, archive_threshold=0.3)
 
 
-def test_the_recap_budgets_together_cannot_exceed_the_window():
-    """Each is a valid share alone; together they would promise the recap more than the model can take."""
-    with pytest.raises(ValidationError, match="together exceed"):
-        GCConfig(max_memory_ratio=0.6, max_old_gen_ratio=0.5)
-    GCConfig(max_memory_ratio=0.5, max_old_gen_ratio=0.5)
+def test_a_margin_wider_than_half_the_band_is_refused():
+    """A score between the lines could then never move a span either way."""
+    with pytest.raises(ValidationError, match="level_margin"):
+        GCConfig(keep_threshold=0.7, archive_threshold=0.3, level_margin=0.2)
 
 
 def test_an_unknown_setting_is_refused_rather_than_ignored():

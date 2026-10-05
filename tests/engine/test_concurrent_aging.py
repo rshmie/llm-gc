@@ -12,12 +12,11 @@ from llm_gc.engine.compaction.compaction_strategy import CompactionStrategy
 from llm_gc.engine.gc_service import GcService
 from llm_gc.engine.gc_status import GCStatus
 from llm_gc.engine.generations import GenerationalMemory
-from llm_gc.engine.sweep import SweepClassification, SweepEntry, SweepResult
 from llm_gc.events import Event, EventBus, EventType
 from llm_gc.extraction import KnowledgeExtractor
 from llm_gc.models import Message
-from llm_gc.scoring.relevance_scorer_result import RelevanceScorerResult
 from llm_gc.session import SessionManager
+from tests.engine.support import COMPACTED_SCORE, ScriptedSpanScorer
 
 SESSION = "s"
 
@@ -41,40 +40,13 @@ class _GatedCompactor(BaseCompactor):
                                 compaction_strategy=self.COMPACTION_STRATEGY)
 
 
-class _KeepScorer:
-    def score(self, message, conversation):
-        return RelevanceScorerResult(message=message, combined_score=1.0, scorer_results=[])
-
-
-class _CompactTurnsBelow:
-    """COMPACT every turn with an index below `limit`, KEEP the rest."""
-
-    def __init__(self, limit: int) -> None:
-        self.limit = limit
-
-    def sweep(self, conversation, relevance_scores):
-        entries = [
-            SweepEntry(message=m, relevance_score=0.5, turn_index=m.turn_index,
-                       classification=SweepClassification.COMPACT if m.turn_index < self.limit
-                       else SweepClassification.KEEP)
-            for m in conversation
-        ]
-        counts = {c: sum(1 for e in entries if e.classification == c) for c in SweepClassification}
-        return SweepResult(sweep_entries=entries, classification_counts=counts, processing_time_ms=0.0,
-                           total_keep_tokens=0, total_compact_tokens=0, total_archive_tokens=0)
-
-
 def _service():
     bus = EventBus()
     compactor = _GatedCompactor(event_bus=bus)
     service = GcService(
         session_manager=SessionManager(),
-        generational_memory=GenerationalMemory(
-            knowledge_extractor=KnowledgeExtractor(event_bus=bus),
-            compactor=compactor,
-        ),
-        relevance_scorer=_KeepScorer(),
-        sweeper=_CompactTurnsBelow(limit=3),
+        generational_memory=GenerationalMemory(knowledge_extractor=KnowledgeExtractor(), compactor=compactor),
+        span_scorer=ScriptedSpanScorer({0: COMPACTED_SCORE, 1: COMPACTED_SCORE, 2: COMPACTED_SCORE}),  # type: ignore[arg-type]
         event_bus=bus,
         gc_config=GCConfig(context_window=1000, min_cut_tokens=0, last_n_turns_to_keep=0, archive_threshold=0.0),
     )
@@ -222,7 +194,9 @@ class TestEventsDescribeCommittedChanges:
         _run(scenario())
         event, old_gen_size_when_announced = promoted[0]
         assert event.data["session_id"] == SESSION
-        assert old_gen_size_when_announced == 1, "a subscriber reading state sees the change it was told about"
+        committed = len(service.session_manager.store.get(SESSION).snapshot.old)
+        assert old_gen_size_when_announced == committed == 3, \
+            "a subscriber reading state sees the change it was told about"
 
 
 class TestACancelledPassLeavesNothingBehind:

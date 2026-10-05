@@ -1,6 +1,5 @@
 import pytest
 
-from llm_gc.events import EventBus, EventType
 from llm_gc.models import Message
 from llm_gc.models.generation_snapshot import file_knowledge
 from llm_gc.models.knowledge_entry import KnowledgeStatus, KnowledgeType
@@ -11,9 +10,8 @@ def _make_message(content: str) -> Message:
     return Message(role="user", content=content, token_count=10, turn_index=1)
 
 
-def _make_extractor(event_bus: EventBus | None = None) -> KnowledgeExtractor:
-    bus = event_bus if event_bus is not None else EventBus()
-    return KnowledgeExtractor(event_bus=bus)
+def _make_extractor() -> KnowledgeExtractor:
+    return KnowledgeExtractor()
 
 
 class TestFactExtraction:
@@ -158,32 +156,6 @@ class TestNoMatch:
         entries = extractor.extract_knowledge(message, message_turn=1)
 
         assert entries == []
-
-
-class TestEventEmission:
-    def test_emits_event_when_entries_extracted(self):
-        bus = EventBus()
-        received_events = []
-        bus.subscribe(EventType.KNOWLEDGE_ENTRIES_EXTRACTED, lambda e: received_events.append(e))
-        extractor = _make_extractor(event_bus=bus)
-
-        message = _make_message("The database is PostgreSQL")
-        extractor.extract_knowledge(message, message_turn=5)
-
-        assert len(received_events) == 1
-        assert "entries" in received_events[0].data
-        assert received_events[0].data["message_turn"] == 5
-
-    def test_does_not_emit_event_when_no_entries(self):
-        bus = EventBus()
-        received_events = []
-        bus.subscribe(EventType.KNOWLEDGE_ENTRIES_EXTRACTED, lambda e: received_events.append(e))
-        extractor = _make_extractor(event_bus=bus)
-
-        message = _make_message("Thanks for the help yesterday")
-        extractor.extract_knowledge(message, message_turn=1)
-
-        assert len(received_events) == 0
 
 
 class TestTopicLabelsAreBounded:
@@ -356,17 +328,6 @@ class TestOneEntryPerTypePerSentence:
         ]
 
         assert len(facts) == 1
-
-
-class TestTheEventStillFires:
-    def test_a_message_with_no_usable_topic_emits_nothing(self):
-        bus = EventBus()
-        received = []
-        bus.subscribe(EventType.KNOWLEDGE_ENTRIES_EXTRACTED, received.append)
-
-        _make_extractor(bus).extract_knowledge(_make_message("What is that?"), message_turn=1)
-
-        assert received == []
 
 
 class TestSentencesAsPeopleWriteThem:

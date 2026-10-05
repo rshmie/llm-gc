@@ -233,7 +233,7 @@
       <div class="grow"><span class="band">&lt; <b class="cfg" data-config="archive_threshold">…</b></span><b class="verb">archive</b><span class="to t-perm">reduced to facts</span></div>
     </div>
     <div class="gdest">
-      <div class="gnode g-old"><b>Old generation</b><span>Quotes and summaries, sent in the recap, up to <b class="cfg" data-config="max_old_gen_tokens">…</b> tokens.</span></div>
+      <div class="gnode g-old"><b>Old generation</b><span>Spans of older messages, each sent quoted, summarised or archived; the recap spends up to <b class="cfg" data-config="max_recap_tokens">…</b> tokens on them.</span></div>
       <div class="gcold">over budget →<br>archive coldest</div>
       <div class="gnode g-perm"><b>Permanent generation</b><span>Facts and excerpts; the recap sends up to <b class="cfg" data-recap-limit>…</b>.</span></div>
     </div>
@@ -242,8 +242,8 @@
   <h3>When a cut happens</h3>
   <ol>
     <li>After every reply, LLM-GC runs a <b>pass</b> (on screen, a <i>check</i>). Most passes change nothing.</li>
-    <li>The newest <b class="cfg" data-config="last_n_turns_to_keep">…</b> messages always stay in the young generation. Messages
-      of <b class="cfg" data-config="min_compactable_tokens">…</b> tokens or fewer are too short to compact: a collection keeps them whole.</li>
+    <li>The newest <b class="cfg" data-config="last_n_turns_to_keep">…</b> messages always stay in the young generation. A message
+      shorter than its own summary or index line is kept whole: a level is used only when it is cheaper.</li>
     <li>Once the older messages to be summarised or archived reach <b class="cfg" data-config="min_cut_tokens">…</b> tokens,
       the check makes a <b>collection</b> (a <i>cut</i> in the code) and moves them all at once. Changing the recap rarely keeps the
       provider's prompt cache working.</li>

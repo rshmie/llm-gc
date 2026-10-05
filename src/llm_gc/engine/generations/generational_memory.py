@@ -1,6 +1,7 @@
 from collections.abc import Sequence
+from dataclasses import replace
 
-from llm_gc.engine.compaction import BaseCompactor, CompactionResult
+from llm_gc.engine.compaction import BaseCompactor
 from llm_gc.engine.generations.condensing import (
     DEFAULT_MAX_SPAN_TOKENS,
     Condensed,
@@ -38,22 +39,39 @@ class GenerationalMemory:
         extraction that fails is recorded on its span instead of raised, because
         the span can still be shown word for word or by its index line.
         """
-        return [await self._condense_span(group) for group in group_exchanges(turns, self.max_span_tokens)]
+        return await self.summarise(self.draft(turns))
 
-    async def _condense_span(self, turns: tuple[Message, ...]) -> Condensed:
-        facts, facts_error = self._read_facts(turns)
-        index_line = self.index_writer.write(turns)
-        if not self.compactor.worth_compacting(turns):
-            return Condensed(turns=turns, index_line=index_line, facts=facts, facts_error=facts_error)
+    def draft(self, turns: Sequence[Message]) -> list[Condensed]:
+        """The spans these turns would make, with their facts and index lines but no summaries.
+
+        Cheap - no model call - so a collection can plan before it pays for
+        summaries, and a preview can show what the next collection would do.
+        """
+        drafts = []
+        for group in group_exchanges(turns, self.max_span_tokens):
+            facts, facts_error = self._read_facts(group)
+            drafts.append(Condensed(turns=group, index_line=self.index_writer.write(group), facts=facts,
+                                    facts_error=facts_error))
+        return drafts
+
+    def worth_summarising(self, turns: Sequence[Message]) -> bool:
+        """Whether a summary of these turns could be shorter than they are."""
+        return self.compactor.worth_compacting(turns)
+
+    async def summarise(self, drafts: Sequence[Condensed]) -> list[Condensed]:
+        """Each draft with its summary, or with why it has none."""
+        return [await self._summarise_one(draft) for draft in drafts]
+
+    async def _summarise_one(self, draft: Condensed) -> Condensed:
+        if not self.compactor.worth_compacting(draft.turns):
+            return draft
         try:
-            result = await self.compactor.compact(list(turns))
+            result = await self.compactor.compact(list(draft.turns))
         except Exception as err:
             # Any compactor's failure, a third party's included: the span is still made.
-            return Condensed(turns=turns, index_line=index_line, facts=facts, facts_error=facts_error,
-                             summary_error=err)
+            return replace(draft, summary_error=err)
         text = result.summary_text if result.summary_text is not None else result.summary.content
-        return Condensed(turns=turns, index_line=index_line, facts=facts, facts_error=facts_error,
-                         summary=result.summary, summary_text=text)
+        return replace(draft, summary=result.summary, summary_text=text)
 
     def _read_facts(self, turns: tuple[Message, ...]) -> tuple[tuple[KnowledgeEntry, ...], Exception | None]:
         try:
@@ -76,9 +94,6 @@ class GenerationalMemory:
             return [*reading.entries, _verbatim(message, reading.unread)]
         return reading.entries
 
-    async def summarise(self, compact_run: list[Message]) -> CompactionResult:
-        """Compact a run of turns into one summary."""
-        return await self.compactor.compact(compact_run)
 
 
 def _verbatim(message: Message, text: str) -> KnowledgeEntry:

@@ -5,43 +5,44 @@ code that builds the prompt and plans a cut, so what a dashboard shows cannot
 drift from what the engine does.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 
 from llm_gc.engine.generations.front import Front
-from llm_gc.engine.sweep import SweepEntry
 from llm_gc.models import Message
-from llm_gc.models.generation_snapshot import GenerationSnapshot
+from llm_gc.models.generation_snapshot import DetailLevel, GenerationSnapshot
 
 
 def batch_worth_cutting(cut: int, compactable_tokens: int, min_cut_tokens: int) -> bool:
-    """Whether a batch justifies a cut: something to compact, and at least `min_cut_tokens` of it.
+    """Whether a batch justifies a cut: something to condense, and at least `min_cut_tokens` of it.
 
-    A batch of only KEEP turns has nothing to compact - quoting them would cost a
-    cache reset for no saving - so zero compactable tokens is never enough, even
-    when `min_cut_tokens` is zero.
+    A batch the plan would keep entirely word for word condenses nothing - moving
+    it into the front would cost a cache reset for no saving - so zero is never
+    enough, even when `min_cut_tokens` is zero.
     """
     return cut > 0 and compactable_tokens > 0 and compactable_tokens >= min_cut_tokens
 
 
 @dataclass(frozen=True)
 class CutPreview:
-    """What the next aging pass would decide for the conversation as it stands.
+    """What the next collection would do for the conversation as it stands.
 
-    Computed by the pass's own marking step, without model calls and without
-    announcing anything on the bus. A ready batch is necessary, not sufficient: the
-    pass still abandons the cut if a summary is refused or the cut would not shrink
-    the context, and only the compactor's output can show that.
+    Planned the way a collection plans, without model calls and without announcing
+    anything; summaries are estimated. A ready batch is therefore necessary, not
+    sufficient: the collection still abandons the cut if it would not shrink the
+    context, which only real summaries can show.
     """
 
-    entries: tuple[SweepEntry, ...]   # every verbatim turn, scored and classified, in order
-    cut: int                          # leading verbatim turns a cut may remove; 0 when none is safe
-    compactable_tokens: int           # COMPACT and ARCHIVE tokens before the cut point
+    turns: tuple[int, ...]               # the verbatim turns the collection would take, in order
+    levels: Mapping[int, DetailLevel]    # each of those turns: the level its span would be shown at
+    scores: Mapping[int, float]          # each of those turns: its span's score
+    compactable_tokens: int              # tokens of those turns the plan would not keep word for word
     min_cut_tokens: int
 
     @property
     def batch_ready(self) -> bool:
-        return batch_worth_cutting(self.cut, self.compactable_tokens, self.min_cut_tokens)
+        return batch_worth_cutting(len(self.turns), self.compactable_tokens, self.min_cut_tokens)
 
 
 @dataclass(frozen=True)

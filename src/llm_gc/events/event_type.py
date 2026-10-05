@@ -11,7 +11,6 @@ class EventType(Enum):
    SWEEP_COMPLETED = "sweep_completed"
    KNOWLEDGE_ENTRY_ADDED = "knowledge_entry_added"
    KNOWLEDGE_ENTRY_SUPERSEDED = "knowledge_entry_superseded"
-   KNOWLEDGE_ENTRIES_EXTRACTED = "knowledge_entries_extracted"
    MESSAGE_PROMOTED_TO_OLD_GEN = "message_promoted_to_old_gen"
    MESSAGE_ARCHIVED = "message_archived"
    # Fires once per compactor invocation, regardless of whether real compaction occurred. Subscribers should inspect `method` and the

@@ -14,7 +14,7 @@ def _make_message(content: str, turn_index: int = 1) -> Message:
 
 def _make_generational_memory() -> GenerationalMemory:
     bus = EventBus()
-    return GenerationalMemory(knowledge_extractor=KnowledgeExtractor(event_bus=bus),
+    return GenerationalMemory(knowledge_extractor=KnowledgeExtractor(),
                               compactor=NoOpCompactor(event_bus=bus))
 
 
@@ -62,5 +62,5 @@ class TestItStoresNothing:
         memory = _make_generational_memory()
         before = dict(vars(memory))
         memory.extract_knowledge(_make_message("The database is PostgreSQL"))
-        asyncio.run(memory.summarise([_make_message("turn one", 1), _make_message("turn two", 2)]))
+        asyncio.run(memory.condense([_make_message("turn one", 1), _make_message("turn two", 2)]))
         assert vars(memory) == before

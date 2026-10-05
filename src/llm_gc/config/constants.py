@@ -21,24 +21,14 @@ DEFAULT_MAX_RECENT_PASSES = 50    # one pass runs after every request, so most a
 # least recently is dropped; it bounds memory if closed sessions are never forgotten.
 DEFAULT_MONITOR_MAX_SESSIONS = 1000
 
-# Permanent-generation injection. The cap is what makes the system stable, not a
-# nicety: archiving produces facts, injected facts are real tokens, and more
-# pressure causes more archiving. Bounded, that loop converges; unbounded, memory
-# grows with the session and undoes the saving archiving produced.
-# A *fraction* of the context window, not an absolute. Every other budget in
-# GCConfig that relates to the window is a ratio, and memory was the odd one out:
-# 200 tokens is 0.15% of a 128k window and 100% of a 200-token one, so the same
-# number was sane in production and ruinous in a small configuration. Measured on
-# a 200-token window, an absolute budget of 100 made a proxy forward 21% MORE than
-# the client sent - the memory block ate the entire saving and inverted the
-# system's value, silently. 10% leaves memory meaningful at every window size and
-# correctly means "no block fits" when the window is tiny.
-DEFAULT_MAX_MEMORY_RATIO = 0.1
-
-# The old generation's share of the window. Its summaries and quotes are archived
-# only once they exceed it, so a summary the recap has room for keeps every detail
-# it holds; archived, it is sent only as facts and lines cut to a fixed length.
-DEFAULT_MAX_OLD_GEN_RATIO = 0.2
+# The recap's one budget: everything the front shows for the turns before the tail,
+# at whatever level each span is shown. The cap is what makes the front bounded:
+# over it, the coldest spans lose detail first. A *fraction* of the window, never an
+# absolute: 200 tokens is nothing to a 128k window and all of a 200-token one, and
+# measured on a 200-token window an absolute memory budget of 100 made a proxy
+# forward 21% more than the client sent. Generous on purpose - the score decides
+# what is condensed; this only bounds the total.co
+DEFAULT_MAX_RECAP_RATIO = 0.3
 
 # Hysteresis around each detail-level band: a span moves up only once its score
 # clears a band by this much, and down only once it falls this far below one, so a

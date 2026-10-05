@@ -4,10 +4,9 @@ from pydantic import ValidationError
 
 from llm_gc.config import GCConfig
 from llm_gc.engine import AgingDegradation, DegradationReason, GCResult, GCStatus
-from llm_gc.engine.sweep import SweepClassification, SweepEntry, SweepResult
 from llm_gc.events import Event, EventBus, EventType
 from llm_gc.models.generation_snapshot import DetailLevel, GenerationSnapshot, Span
-from llm_gc.models import KnowledgeEntry, Message
+from llm_gc.models import KnowledgeEntry, Message, SweepClassification
 from llm_gc.models.knowledge_entry import KnowledgeType
 from llm_gc.monitoring import ContextHealthMonitor
 from llm_gc.monitoring.context_health import TransitionType
@@ -23,40 +22,34 @@ def _make_message(turn_index: int = 0, token_count: int = 10, content: str = "ms
     return Message(role="user", content=content, token_count=token_count, turn_index=turn_index)
 
 
-def _make_sweep_result(classifications: dict[int, SweepClassification], token_count: int = 10) -> SweepResult:
-    """Build a SweepResult from {turn_index: classification}, every message token_count tokens."""
-    entries = [SweepEntry(message=_make_message(turn, token_count), classification=classification,
-                          relevance_score=0.5, turn_index=turn)
-               for turn, classification in classifications.items()]
-    counts = {c: sum(1 for v in classifications.values() if v == c) for c in SweepClassification}
-    return SweepResult(sweep_entries=entries, classification_counts=counts, processing_time_ms=1.0,
-                       total_keep_tokens=counts[SweepClassification.KEEP] * token_count,
-                       total_compact_tokens=counts[SweepClassification.COMPACT] * token_count,
-                       total_archive_tokens=counts[SweepClassification.ARCHIVE] * token_count)
-
-
 def _make_completed_result(classifications: dict[int, SweepClassification], token_count: int = 10,
                            gc_run_id: str = "run-1") -> GCResult:
-    sweep_result = _make_sweep_result(classifications, token_count)
-    final_messages = [e.message for e in sweep_result.sweep_entries
-                      if e.classification != SweepClassification.ARCHIVE]
-    return GCResult(final_messages=final_messages, gc_run_id=gc_run_id, status=GCStatus.COMPLETED,
+    """A completed pass from {turn_index: what became of it}, every turn token_count tokens.
+
+    KEEP turns stay in the tail, forwarded word for word; COMPACT and ARCHIVE turns
+    were condensed into the front, which carries the summaries' tokens.
+    """
+    count = {c: sum(1 for v in classifications.values() if v == c) for c in SweepClassification}
+    tail = [_make_message(turn, token_count) for turn, c in classifications.items() if c == SweepClassification.KEEP]
+    front = Message(role="user", content="front", token_count=count[SweepClassification.COMPACT] * token_count,
+                    turn_index=-1)
+    return GCResult(final_messages=[front, *tail], gc_run_id=gc_run_id, status=GCStatus.COMPLETED,
                     tokens_before=len(classifications) * token_count,
-                    tokens_in_final=sweep_result.total_keep_tokens + sweep_result.total_compact_tokens,
-                    kept_count=sweep_result.classification_counts[SweepClassification.KEEP],
-                    compacted_count=sweep_result.classification_counts[SweepClassification.COMPACT],
-                    archived_count=sweep_result.classification_counts[SweepClassification.ARCHIVE],
-                    sweep_result=sweep_result, duration_ms=2.0)
+                    tokens_in_final=(count[SweepClassification.KEEP] + count[SweepClassification.COMPACT]) * token_count,
+                    kept_count=count[SweepClassification.KEEP], compacted_count=count[SweepClassification.COMPACT],
+                    archived_count=count[SweepClassification.ARCHIVE],
+                    compacted_tokens=count[SweepClassification.COMPACT] * token_count,
+                    archived_tokens=count[SweepClassification.ARCHIVE] * token_count, duration_ms=2.0)
 
 
 def _make_bypassed_result(messages: list[Message], status: GCStatus = GCStatus.BYPASSED_BATCH_TOO_SMALL,
                           failure_reason: str | None = None, failure_stage: str | None = None) -> GCResult:
-    """A bypassed run passes messages through untouched and carries no sweep_result."""
+    """A bypassed run passes messages through untouched."""
     total = sum(m.token_count for m in messages)
     return GCResult(final_messages=messages, gc_run_id="run-bypass", status=status,
                     failure_reason=failure_reason, failure_stage=failure_stage,
                     tokens_before=total, tokens_in_final=total, kept_count=len(messages),
-                    compacted_count=0, archived_count=0, sweep_result=None, duration_ms=1.0)
+                    compacted_count=0, archived_count=0, duration_ms=1.0)
 
 
 def _make_knowledge_entry(message_turn: int = 1, topic_label: str = "database",
@@ -244,7 +237,7 @@ class TestSnapshotCompleted:
         assert budget.current_tokens == 30  # 1 keep + 2 compact, 10 tokens each
         assert budget.context_window == 1000
         assert budget.pressure_ratio == 0.03
-        assert budget.current_msg_turn_index == 3  # last sweep entry's turn
+        assert budget.current_msg_turn_index == 3  # the newest turn forwarded word for word
 
     def test_breakdown_copies_counts_tokens_and_identity(self):
         monitor, bus, _ = _make_monitor()
@@ -264,10 +257,10 @@ class TestSnapshotCompleted:
         # (compact 20 + archive 10) / (keep 10 + compact 20 + archive 10)
         assert self._snapshot(monitor, bus).transformation_ratio == pytest.approx(30 / 40)
 
-    def test_young_gen_is_derived_from_the_sweep(self):
+    def test_young_gen_is_what_is_forwarded_word_for_word(self):
         monitor, bus, _ = _make_monitor()
         lifecycle = self._snapshot(monitor, bus).generation_lifecycle
-        assert lifecycle.young_gen_turn_indices == [3]      # the KEEP entries
+        assert lifecycle.young_gen_turn_indices == [3]      # the tail, not the front
         assert lifecycle.young_gen_count == 1
         assert lifecycle.young_gen_tokens == 10
 
@@ -315,7 +308,7 @@ class TestSnapshotBypassed:
                 snapshot.gc_breakdown.archive_count) == (3, 0, 0)
         assert (snapshot.gc_breakdown.keep_tokens, snapshot.gc_breakdown.compact_tokens,
                 snapshot.gc_breakdown.archive_tokens) == (30, 0, 0)
-        assert snapshot.transformation_ratio is None  # no sweep ran - nothing measured
+        assert snapshot.transformation_ratio is None  # nothing was condensed - nothing measured
 
     def test_below_threshold_turn_index_from_final_messages(self):
         monitor, bus, _ = _make_monitor()

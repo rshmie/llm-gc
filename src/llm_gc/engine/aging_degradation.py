@@ -1,7 +1,8 @@
-"""What a GC pass intended to do and did not manage.
+"""What a collection intended to do and did not manage.
 
-`GCResult`'s classification counts describe the sweeper's *decision*, so a pass
-whose compactions were all refused would report several and file none. See
+A span made without its summary is kept rather than compacted, and one made
+without its facts is archived by its index line alone; without these records the
+front would be larger, or thinner, than anything reported says. See
 doc/design/visibility/overview.md.
 """
 
@@ -11,7 +12,7 @@ from pydantic import BaseModel
 
 
 class DegradationReason(Enum):
-    """Why a turn that should have aged did not.
+    """Why part of a collection fell short.
 
     Separate values because the operator's next action differs for each.
     """
@@ -24,15 +25,18 @@ class DegradationReason(Enum):
     """The provider call failed."""
 
     ARCHIVE_FAILED = "archive_failed"
-    """Extraction or permanent-generation storage raised."""
+    """Extraction raised, so the span has no facts."""
+
+    RECAP_OVER_BUDGET = "recap_over_budget"
+    """Every span was folded out of view and the front still did not fit its budget."""
 
 
 class AgingDegradation(BaseModel):
     """One thing a completed GC pass meant to do and didn't.
 
     Attributes:
-        turn_indices: The turns that stayed in the young generation as a result.
-            A list, not a count, so a consumer can name which turns were affected.
+        turn_indices: The turns of the span that fell short. A list, not a
+            count, so a consumer can name which turns were affected.
         error_code: `LLMGCError.code` when the cause was one of ours; None
             otherwise, so consumers can branch on a stable string.
         detail: Short cause for logs and the dashboard. Carries the exception

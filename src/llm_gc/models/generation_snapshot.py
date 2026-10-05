@@ -37,7 +37,8 @@ class Span:
     than from anything derived from them.
 
     `summary` is the compactor's message, marker included, as the front carries
-    it; `summary_text` is what it says without the marker.
+    it; `summary_text` is what it says without the marker. `index_line` names what
+    the span is about, for the archived level.
 
     Raises:
         ValueError: The turns are empty or not consecutive, or the span is
@@ -48,6 +49,7 @@ class Span:
     level: DetailLevel
     summary: Message | None = None
     summary_text: str | None = None
+    index_line: str = ""
 
     def __post_init__(self) -> None:
         indices = [turn.turn_index for turn in self.turns]

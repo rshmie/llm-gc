@@ -206,7 +206,7 @@ class TestThresholdEntryFields:
 
 class TestThresholdConfigVariations:
     def test_low_keep_threshold_keeps_more(self):
-        config = GCConfig(keep_threshold=0.3, min_compactable_tokens=50)
+        config = GCConfig(keep_threshold=0.3, archive_threshold=0.1, min_compactable_tokens=50)
         strategy = ThresholdSweepStrategy(gc_config=config)
         msg = _make_message("Medium relevance message", token_count=100)
         scores = [_make_relevance_result(msg, 0.5)]

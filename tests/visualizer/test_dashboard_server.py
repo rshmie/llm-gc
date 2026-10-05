@@ -7,17 +7,11 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from llm_gc.config import GCConfig
-from llm_gc.engine.compaction import LLMCompactor
+from llm_gc.engine import build_gc_service
 from llm_gc.engine.gc_service import GcService
-from llm_gc.engine.generations import GenerationalMemory
-from llm_gc.engine.sweep import Sweeper, ThresholdSweepStrategy
-from llm_gc.events import EventBus
-from llm_gc.extraction import KnowledgeExtractor
 from llm_gc.llm import FakeProvider, LLMResponse, StopReason
 from llm_gc.models import Message
 from llm_gc.monitoring import ContextHealthMonitor
-from llm_gc.scoring import RecencyScorer, RelevanceScorer, RelevanceType
-from llm_gc.session import SessionManager
 from llm_gc.utils import count_tokens
 from llm_gc.visualizer import TranscriptRecorder, create_dashboard_app
 
@@ -27,18 +21,10 @@ SUMMARY = LLMResponse(text="Earlier turns covered the storage decision and the r
 
 
 def _engine() -> tuple[GcService, ContextHealthMonitor]:
-    bus = EventBus()
-    config = GCConfig(context_window=700, keep_threshold=0.55, archive_threshold=0.25, min_compactable_tokens=10,
-                      last_n_turns_to_keep=3, min_cut_tokens=60)
-    service = GcService(
-        session_manager=SessionManager(),
-        generational_memory=GenerationalMemory(
-            knowledge_extractor=KnowledgeExtractor(event_bus=bus),
-            compactor=LLMCompactor(event_bus=bus, provider=FakeProvider(responses=[SUMMARY] * 400))),
-        relevance_scorer=RelevanceScorer(scorers=[RecencyScorer(decay_rate=0.15)],
-                                         weights={RelevanceType.RECENCY: 1.0}, event_bus=bus),
-        sweeper=Sweeper(sweeper_strategy=ThresholdSweepStrategy(gc_config=config), gc_config=config, event_bus=bus),
-        event_bus=bus, gc_config=config)
+    config = GCConfig(context_window=700, keep_threshold=0.55, archive_threshold=0.25, last_n_turns_to_keep=3,
+                      min_cut_tokens=60)
+    service = build_gc_service(config, summary_provider=FakeProvider(responses=[SUMMARY] * 400))
+    bus = service.event_bus
     store = service.session_manager.store
     monitor = ContextHealthMonitor(
         event_bus=bus, gc_config=config,
