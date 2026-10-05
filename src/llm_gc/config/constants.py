@@ -42,7 +42,8 @@ DEFAULT_MAX_OLD_GEN_RATIO = 0.2
 
 # Hysteresis around each detail-level band: a span moves up only once its score
 # clears a band by this much, and down only once it falls this far below one, so a
-# score hovering at a line does not change the front at every collection.
+# score hovering at a line does not show the model a span in full at one collection
+# and only its facts at the next.
 DEFAULT_LEVEL_MARGIN = 0.05
 
 # Session lifecycle timings (rationale in doc/design/session/overview.md).

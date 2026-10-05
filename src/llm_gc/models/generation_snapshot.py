@@ -22,9 +22,10 @@ from llm_gc.models.knowledge_entry import KnowledgeStatus
 class DetailLevel(Enum):
     """How much of a span the front carries, from most to least."""
 
-    KEPT = "kept"              # the turns, word for word
-    COMPACTED = "compacted"    # the span's summary
-    ARCHIVED = "archived"      # only the facts extracted from it
+    KEPT = "kept"                # the turns, word for word
+    COMPACTED = "compacted"      # the span's summary
+    ARCHIVED = "archived"        # only the facts extracted from it
+    OUT_OF_VIEW = "out_of_view"  # folded with its neighbours into one line naming the turns
 
 
 @dataclass(frozen=True)
