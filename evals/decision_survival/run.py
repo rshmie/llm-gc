@@ -9,10 +9,10 @@ How to read the numbers: README.md beside this file.
 import argparse
 import asyncio
 import json
-from collections import Counter
 import os
 import subprocess
 import sys
+from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import httpx2
+import uvicorn
 
 from evals.decision_survival.dataset import load_conversations
 from evals.decision_survival.grading import Presence, Verdict, grade, presence, split_answers
@@ -86,11 +87,20 @@ async def check(args: argparse.Namespace, api_key: str | None, publish: Callable
     try:
         for conversation in conversations:
             progress.begin(conversation.id, "starting")
-            run = await run_conversation(
-                conversation, config=config, summary_provider=summaries, service=service,
-                on_client_history=transcripts.record if transcripts is not None else None, on_step=progress.update,
-                model_transport=rehearsal_model(conversation) if api_key is None else _real_model,
-                api_key=api_key or "rehearsal", model=args.model, effort=cast(Effort, args.effort))
+            try:
+                run = await run_conversation(
+                    conversation, config=config, summary_provider=summaries, service=service,
+                    on_client_history=transcripts.record if transcripts is not None else None,
+                    on_step=progress.update,
+                    model_transport=rehearsal_model(conversation) if api_key is None else _real_model,
+                    api_key=api_key or "rehearsal", model=args.model, effort=cast(Effort, args.effort))
+            except Exception as err:
+                # A provider error or a dropped connection costs this conversation, not the
+                # ones already paid for: it is reported, kept out of the totals, and the run fails.
+                failure = f"{type(err).__name__}: {err}"
+                report["conversations"].append({"conversation": conversation.id, "failed": failure})
+                progress.end(True, f"FAILED, {failure[:160]},")
+                continue
             results = grade_run(run)
             every_probe += results
             report["conversations"].append(_describe(run, results))
@@ -102,16 +112,18 @@ async def check(args: argparse.Namespace, api_key: str | None, publish: Callable
         if dashboard is not None:
             print(f"The dashboard stays open at http://127.0.0.1:{args.dashboard_port} to look at each "
                   "conversation's sessions. Ctrl-C to stop.")
-            await dashboard
+            await dashboard[1]
     finally:
+        if dashboard is not None and not dashboard[1].done():
+            # Stopped, not cancelled: a cancelled server logs a traceback that buries the real error.
+            dashboard[0].should_exit = True
+            await dashboard[1]
         if isinstance(summaries, AnthropicClient):
             await summaries.aclose()
 
 
 def _serve_dashboard(service: GcService, config: GCConfig, transcripts: TranscriptRecorder | None,
-                     port: int) -> asyncio.Task[None]:
-    import uvicorn
-
+                     port: int) -> tuple[uvicorn.Server, asyncio.Task[None]]:
     store = service.session_manager.store
     monitor = ContextHealthMonitor(
         event_bus=service.event_bus, gc_config=config,
@@ -120,7 +132,7 @@ def _serve_dashboard(service: GcService, config: GCConfig, transcripts: Transcri
     app = create_dashboard_app(service, monitor, transcripts=transcripts)
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
     print(f"dashboard: http://127.0.0.1:{port} (each conversation is a session; it fills in as the check runs)")
-    return asyncio.create_task(server.serve())
+    return server, asyncio.create_task(server.serve())
 
 
 def print_report(report: dict[str, Any]) -> None:
@@ -129,6 +141,9 @@ def print_report(report: dict[str, Any]) -> None:
           f"\nmodel {settings['model']} (effort {settings['effort']}) · min_cut_tokens {settings['min_cut_tokens']}"
           f" · keep_last {settings['keep_last']} · code {settings['code_version']}")
     for item in report["conversations"]:
+        if "failed" in item:
+            print(f"\n{item['conversation']}: FAILED, so its questions are not in the totals\n  {item['failed']}")
+            continue
         tokens = item["prompt_tokens"]
         saved = 1 - tokens["with_gc"] / tokens["without_gc"] if tokens["without_gc"] else 0.0
         print(f"\n{item['conversation']}: {item['cuts']} cuts · prompt {tokens['with_gc']:,} tokens "
@@ -140,6 +155,9 @@ def print_report(report: dict[str, Any]) -> None:
         for probe in item["probes"]:
             print(f"  {probe['probe']:<{width}}  {probe['presence']:<14} {probe['with_gc']:<12} {probe['without_gc']}")
     t = report["totals"]
+    failed = [item["conversation"] for item in report["conversations"] if "failed" in item]
+    if failed:
+        print(f"\nINCOMPLETE: {', '.join(failed)} failed; the totals cover the other conversations only.")
     print(f"\nright with LLM-GC {t['right_with_gc']}/{t['probes']} · sent whole {t['right_without_gc']}/{t['probes']}"
           f" · lost to LLM-GC {t['lost_to_gc']} · absent from the prompt {t['absent_from_prompt']}"
           f" · present but missed {t['present_but_missed']}\n")
@@ -201,7 +219,10 @@ def main() -> None:
     if not args.rehearse and not api_key:
         sys.exit("ANTHROPIC_API_KEY is not set. Set it, or pass --rehearse to run offline.")
 
+    published: list[dict[str, Any]] = []
+
     def publish(report: dict[str, Any]) -> None:
+        published.extend(report["conversations"])
         print_report(report)
         out = args.out or RUNS_DIR / f"{datetime.now(UTC):%Y%m%d-%H%M%S}{'-rehearsal' if args.rehearse else ''}.json"
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -213,6 +234,8 @@ def main() -> None:
     except KeyboardInterrupt:
         # uvicorn re-raises the Ctrl-C after it has stopped the dashboard.
         print("\nstopped")
+    if any("failed" in item for item in published):
+        sys.exit(1)
 
 
 if __name__ == "__main__":

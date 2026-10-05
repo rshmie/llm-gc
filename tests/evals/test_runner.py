@@ -1,5 +1,6 @@
 """The decision-survival runner, driven offline: the real proxy and engine, stand-in models."""
 
+import argparse
 import asyncio
 import json
 
@@ -152,3 +153,23 @@ def test_a_run_says_what_it_is_doing_at_each_step():
     assert steps[-2:] == ["asking the questions through LLM-GC", "asking them with the whole conversation"]
     assert any(not step.endswith(" 0 collections so far") for step in steps if step.startswith("turn")), \
         "the collection count moves as the conversation plays"
+
+
+def test_a_failed_conversation_is_reported_and_the_others_still_count(monkeypatch):
+    """One provider error used to end the run and discard every conversation already paid for."""
+    rejecting = httpx2.Response(400, json={"type": "error", "error": {"type": "invalid_request_error",
+                                                                      "message": "rejected for the test"}})
+    real = cli.rehearsal_model
+    monkeypatch.setattr(cli, "rehearsal_model", lambda conversation: (
+        (lambda: httpx2.MockTransport(lambda request: rejecting)) if conversation.id == "clinic-booking"
+        else real(conversation)))
+    args = argparse.Namespace(rehearse=True, model="claude-opus-5-5", effort="medium", min_cut_tokens=300,
+                              keep_last=5, conversation=["ingest-service", "clinic-booking"], dashboard=False,
+                              dashboard_port=0, out=None)
+    published = []
+
+    asyncio.run(cli.check(args, None, published.append))
+
+    ingest, clinic = published[0]["conversations"]
+    assert "failed" not in ingest and "rejected for the test" in clinic["failed"]
+    assert published[0]["totals"]["probes"] == len(ingest["probes"]), "the failure is kept out of the totals"
