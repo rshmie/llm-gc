@@ -32,3 +32,6 @@ benchmarks/
 uv.lock
 # macOS
 .DS_Store
+
+# Decision-survival check results; a run cited as evidence is committed on purpose
+evals/decision_survival/runs/

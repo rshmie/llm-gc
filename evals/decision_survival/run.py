@@ -1,0 +1,172 @@
+"""Run the decision-survival check and report which facts LLM-GC kept.
+
+    python -m evals.decision_survival.run --rehearse     # offline: no key, no cost
+    ANTHROPIC_API_KEY=... python -m evals.decision_survival.run
+
+How to read the numbers: README.md beside this file.
+"""
+
+import argparse
+import asyncio
+import json
+import os
+import subprocess
+import sys
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, cast
+
+import httpx2
+
+from evals.decision_survival.dataset import load_conversations
+from evals.decision_survival.grading import Presence, Verdict, grade, presence, split_answers
+from evals.decision_survival.harness import Effort, Run, rehearsal_model, rehearsal_summaries, run_conversation
+from llm_gc.config import GCConfig
+from llm_gc.llm import AnthropicClient, LLMProvider
+
+DEFAULT_MODEL = "claude-opus-5-5"
+# As `run_proxy.py --serve` runs it; the memory budget is a share of this window.
+CONTEXT_WINDOW = 200_000
+RUNS_DIR = Path(__file__).with_name("runs")
+
+
+@dataclass(frozen=True)
+class ProbeResult:
+    probe: str
+    presence: Presence
+    with_gc: Verdict
+    without_gc: Verdict
+    answer_with_gc: str | None
+    answer_without_gc: str | None
+
+
+def grade_run(run: Run) -> list[ProbeResult]:
+    probes = run.conversation.probes
+    with_gc = split_answers(run.with_gc.text, len(probes))
+    without_gc = split_answers(run.without_gc.text, len(probes))
+    return [ProbeResult(probe=probe.id, presence=presence(probe, run.forwarded), with_gc=grade(ours, probe),
+                        without_gc=grade(theirs, probe), answer_with_gc=ours, answer_without_gc=theirs)
+            for probe, ours, theirs in zip(probes, with_gc, without_gc, strict=True)]
+
+
+def totals(results: Sequence[ProbeResult]) -> dict[str, int]:
+    return {
+        "probes": len(results),
+        "right_with_gc": sum(r.with_gc is Verdict.RIGHT for r in results),
+        "right_without_gc": sum(r.without_gc is Verdict.RIGHT for r in results),
+        # The headline: what the model knew from the whole conversation and not from ours.
+        "lost_to_gc": sum(r.without_gc is Verdict.RIGHT and r.with_gc is not Verdict.RIGHT for r in results),
+        "absent_from_prompt": sum(r.presence is Presence.ABSENT for r in results),
+        # In the prompt and still answered wrong: a presentation problem, not a loss.
+        "present_but_missed": sum(r.presence is not Presence.ABSENT and r.with_gc is not Verdict.RIGHT
+                                  for r in results),
+    }
+
+
+async def check(args: argparse.Namespace, api_key: str | None) -> dict[str, Any]:
+    config = GCConfig(context_window=CONTEXT_WINDOW, min_cut_tokens=args.min_cut_tokens,
+                      last_n_turns_to_keep=args.keep_last)
+    conversations = [c for c in load_conversations() if not args.conversation or c.id in args.conversation]
+    report: dict[str, Any] = {"settings": _settings(args), "conversations": []}
+    every_probe: list[ProbeResult] = []
+    for conversation in conversations:
+        summaries: LLMProvider = rehearsal_summaries() if api_key is None else AnthropicClient(api_key=api_key)
+        try:
+            run = await run_conversation(
+                conversation, config=config, summary_provider=summaries,
+                model_transport=rehearsal_model(conversation) if api_key is None else _real_model,
+                api_key=api_key or "rehearsal", model=args.model, effort=cast(Effort, args.effort))
+        finally:
+            if isinstance(summaries, AnthropicClient):
+                await summaries.aclose()
+        results = grade_run(run)
+        every_probe += results
+        report["conversations"].append(_describe(run, results))
+    report["totals"] = totals(every_probe)
+    return report
+
+
+def print_report(report: dict[str, Any]) -> None:
+    settings = report["settings"]
+    print(f"\n{'REHEARSAL (offline stand-ins; checks the path, not the model)' if settings['rehearsal'] else ''}"
+          f"\nmodel {settings['model']} (effort {settings['effort']}) · min_cut_tokens {settings['min_cut_tokens']}"
+          f" · keep_last {settings['keep_last']} · code {settings['code_version']}")
+    for item in report["conversations"]:
+        tokens = item["prompt_tokens"]
+        saved = 1 - tokens["with_gc"] / tokens["without_gc"] if tokens["without_gc"] else 0.0
+        print(f"\n{item['conversation']}: {item['cuts']} cuts · prompt {tokens['with_gc']:,} tokens "
+              f"vs {tokens['without_gc']:,} sent whole ({saved:.0%} smaller)")
+        for warning in item["warnings"]:
+            print(f"  WARNING: {warning}")
+        width = max(len("probe"), *(len(probe["probe"]) for probe in item["probes"]))
+        print(f"  {'probe':<{width}}  {'in the prompt':<14} {'with LLM-GC':<12} sent whole")
+        for probe in item["probes"]:
+            print(f"  {probe['probe']:<{width}}  {probe['presence']:<14} {probe['with_gc']:<12} {probe['without_gc']}")
+    t = report["totals"]
+    print(f"\nright with LLM-GC {t['right_with_gc']}/{t['probes']} · sent whole {t['right_without_gc']}/{t['probes']}"
+          f" · lost to LLM-GC {t['lost_to_gc']} · absent from the prompt {t['absent_from_prompt']}"
+          f" · present but missed {t['present_but_missed']}\n")
+
+
+def _describe(run: Run, results: Sequence[ProbeResult]) -> dict[str, Any]:
+    warnings = [f"a clean-up degraded: {reason}" for reason in run.degradations]
+    if run.bypassed:
+        warnings.append(f"{run.bypassed} request(s) bypassed GC, so less GC was measured than configured")
+    warnings += [f"the {arm} reply stopped with {answer.stop_reason!r}" for arm, answer
+                 in (("LLM-GC", run.with_gc), ("whole", run.without_gc)) if answer.stop_reason != "end_turn"]
+    return {
+        "conversation": run.conversation.id, "cuts": run.cuts, "warnings": warnings,
+        "prompt_tokens": {"with_gc": run.with_gc.input_tokens, "without_gc": run.without_gc.input_tokens},
+        "probes": [asdict(result) for result in results],
+        "replies": {"with_gc": run.with_gc.text, "without_gc": run.without_gc.text},
+        "forwarded": run.forwarded,
+    }
+
+
+def _settings(args: argparse.Namespace) -> dict[str, Any]:
+    return {"rehearsal": args.rehearse, "model": args.model, "effort": args.effort,
+            "min_cut_tokens": args.min_cut_tokens, "keep_last": args.keep_last, "context_window": CONTEXT_WINDOW,
+            "code_version": _code_version(), "started_at": datetime.now(UTC).isoformat(timespec="seconds")}
+
+
+def _code_version() -> str | None:
+    """The commit measured, marked dirty when uncommitted changes were part of the run."""
+    try:
+        done = subprocess.run(["git", "describe", "--always", "--dirty"], capture_output=True, text=True,
+                              check=True, cwd=Path(__file__).parent)
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return done.stdout.strip()
+
+
+def _real_model() -> httpx2.AsyncBaseTransport:
+    return httpx2.AsyncHTTPTransport()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--rehearse", action="store_true", help="offline stand-ins for every model call")
+    parser.add_argument("--model", default=DEFAULT_MODEL, help="the model asked the questions")
+    parser.add_argument("--effort", default="medium", choices=("low", "medium", "high", "xhigh", "max"))
+    parser.add_argument("--min-cut-tokens", type=int, default=300)
+    parser.add_argument("--keep-last", type=int, default=5)
+    parser.add_argument("--conversation", action="append", help="run only this conversation id (repeatable)")
+    parser.add_argument("--out", type=Path, help="results file (default: a new file in runs/)")
+    args = parser.parse_args()
+
+    api_key = None if args.rehearse else os.environ.get("ANTHROPIC_API_KEY")
+    if not args.rehearse and not api_key:
+        sys.exit("ANTHROPIC_API_KEY is not set. Set it, or pass --rehearse to run offline.")
+
+    report = asyncio.run(check(args, api_key))
+    print_report(report)
+    out = args.out or RUNS_DIR / f"{datetime.now(UTC):%Y%m%d-%H%M%S}{'-rehearsal' if args.rehearse else ''}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(report, indent=2))
+    print(f"results: {out}")
+
+
+if __name__ == "__main__":
+    main()

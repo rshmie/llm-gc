@@ -42,34 +42,59 @@ This is the **Mark** phase of the Mark-Sweep-Compact pipeline (inspired by how g
 
 ## The Five Dimensions of Relevance
 
-A single "relevance score" is too blunt — a message can be old but contain a critical decision, or recent but completely empty ("ok", "thanks"). We decompose relevance into five independent signals, each measuring a different aspect:
+A single "relevance score" is too blunt — a message can be old but contain a critical decision, or recent but completely empty ("ok", "thanks"). We decompose relevance into five independent signals, each measuring a different aspect. Four are wired into the default engine:
 
-| Scorer | Question It Answers | Weight | Status |
-|--------|-------------------|--------|--------|
-| [Recency](recency-scorer.md) | How recent is this message? | 0.30 | ✅ Built |
-| [Similarity](similarity-scorer.md) | How related is it to the current query? | 0.30 | ✅ Built |
-| [Density](density-scorer.md) | How information-rich is it? | 0.15 | ✅ Built |
-| [Decision](decision-scorer.md) | Does it contain decisions or preferences? | 0.15 | ✅ Built |
-| [Reference](reference-scorer.md) | Is it referenced by later messages? | 0.10 | ✅ Built |
+| Scorer | Question It Answers | Default weight |
+|--------|-------------------|--------|
+| [Recency](recency-scorer.md) | How recent is this message? | 0.60 |
+| [Similarity](similarity-scorer.md) | How related is it to the current query? | not wired by default |
+| [Density](density-scorer.md) | How information-rich is it? | 0.20 |
+| [Decision](decision-scorer.md) | Does it contain decisions or preferences? | 0.10 |
+| [Reference](reference-scorer.md) | Is it referenced by later messages? | 0.10 |
 
-### Why These Weights?
+### The default engine, and why these weights
 
-Recency and similarity get the highest weight (0.30 each) because they're the strongest general-purpose signals — recent messages and messages related to the current topic are almost always relevant.
+The scorers, their weights and the rest of the engine are wired in one place,
+`build_gc_service`, which the proxy runs and the decision-survival check measures.
+One definition is the point: a check that built its own engine would report numbers
+about an engine nobody runs.
 
-Decision and density get moderate weight (0.15 each) — they capture content quality rather than temporal/topical relevance.
+```
+                        build_gc_service(config, summary_provider)
+                                        │
+        ┌───────────────────────────────┼─────────────────────────────┐
+        ▼                               ▼                             ▼
+  RelevanceScorer                Sweeper (threshold)          GenerationalMemory
+  recency 0.6, density 0.2,                                   extractor + compactor
+  decision 0.1, reference 0.1                                 (LLMCompactor, or NoOp
+                                                               when no provider)
+        │                               │                             │
+        └──────────────► GcService ◄────┴─────────────────────────────┘
+                            ▲                      ▲
+                     proxy (run_proxy.py)    decision-survival check
+```
 
-Reference gets the lowest weight (0.10) because it's a supporting signal — useful but not sufficient on its own.
+- **Recency dominates (0.6).** Generational compaction already decides *when* a
+  turn leaves the verbatim tail by age; the score decides *how* it leaves (quoted,
+  summarised, archived). Age is the signal that is right most often for that call.
+- **The content signals lift what age would let go.** Density (0.2) keeps
+  information-rich turns quoted rather than summarised; decision and reference
+  (0.1 each) are narrower regex signals, so they nudge rather than decide.
+- **Similarity is not wired by default.** It needs a ~90 MB embedding model, a
+  cold start, and CPU-heavy encoding on the scoring path, for a gain nobody has
+  measured. It plugs in as a fifth scorer when a measurement says it pays.
+- **These are draft values**, chosen while tracing real conversations and not
+  yet tuned. The decision-survival check is how a change to them is judged: a
+  saving is only kept if no fact it protects is lost.
 
-These weights are configurable via `GCConfig` and will be auto-tuned in later phases.
+Weights are normalised at construction, so they need not sum exactly to one.
+Library users with different needs build their own `RelevanceScorer`; the
+default is a starting point, not a contract.
 
 ### Combined Score Formula
 
 ```
-combined_score = 0.30 × recency
-              + 0.30 × similarity
-              + 0.15 × density
-              + 0.15 × decision
-              + 0.10 × reference
+combined_score = Σ weight_i × score_i      (weights normalised to sum to 1)
 ```
 
 Every scorer outputs a normalized score in **[0.0, 1.0]**, so the combined score is also in [0.0, 1.0].

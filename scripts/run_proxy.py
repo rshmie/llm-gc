@@ -52,24 +52,10 @@ from llm_gc.config.constants import (  # noqa: E402
     DEFAULT_LAST_N_TURNS_TO_KEEP,
     DEFAULT_MIN_CUT_TOKENS,
 )
-from llm_gc.engine.compaction import LLMCompactor, NoOpCompactor  # noqa: E402
-from llm_gc.engine.gc_service import GcService  # noqa: E402
-from llm_gc.engine.generations import GenerationalMemory  # noqa: E402
-from llm_gc.engine.sweep import Sweeper, ThresholdSweepStrategy  # noqa: E402
-from llm_gc.events import EventBus  # noqa: E402
-from llm_gc.extraction import KnowledgeExtractor  # noqa: E402
+from llm_gc.engine import GcService, build_gc_service  # noqa: E402
 from llm_gc.llm import AnthropicClient, FakeProvider, LLMResponse, StopReason  # noqa: E402
 from llm_gc.monitoring import ContextHealthMonitor  # noqa: E402
 from llm_gc.proxy import DEFAULT_PROXY_PORT, SESSION_HEADER, create_app  # noqa: E402
-from llm_gc.scoring import (  # noqa: E402
-    DecisionScorer,
-    DensityScorer,
-    RecencyScorer,
-    ReferenceScorer,
-    RelevanceScorer,
-    RelevanceType,
-)
-from llm_gc.session import SessionManager  # noqa: E402
 from llm_gc.utils import count_tokens  # noqa: E402
 from llm_gc.visualizer import TranscriptRecorder, create_dashboard_app  # noqa: E402
 
@@ -142,57 +128,29 @@ def serve_config(args: argparse.Namespace) -> GCConfig:
                     last_n_turns_to_keep=args.keep_last)
 
 
-def build_engine(config: GCConfig, *, api_key: str | None, compactor_kind: str) -> tuple[GcService, GenerationalMemory, str]:
-    """The production engine graph. Only the compactor varies."""
-    bus = EventBus()
-
+def build_engine(config: GCConfig, *, api_key: str | None, compactor_kind: str) -> tuple[GcService, str]:
+    """The proxy's engine, and a label saying which summariser it calls."""
     if compactor_kind == "noop":
-        compactor = NoOpCompactor(event_bus=bus)
-        label = "NoOpCompactor (baseline: wraps the run, does not summarise)"
-    elif api_key:
-        compactor = LLMCompactor(event_bus=bus, provider=AnthropicClient(api_key=api_key))
-        label = "LLMCompactor -> AnthropicClient (live compaction calls)"
-    else:
-        provider = FakeProvider(
-            responses=[
-                LLMResponse(
-                    text=text,
-                    stop_reason=StopReason.COMPLETE,
-                    input_tokens=0,
-                    output_tokens=count_tokens(text),
-                    model="scripted",
-                    provider="offline",
-                )
-                for text in _SCRIPTED_SUMMARIES
-            ]
-        )
-        compactor = LLMCompactor(event_bus=bus, provider=provider)
-        label = "LLMCompactor -> scripted provider (no ANTHROPIC_API_KEY; wording canned, arithmetic real)"
-
-    memory = GenerationalMemory(
-        knowledge_extractor=KnowledgeExtractor(event_bus=bus),
-        compactor=compactor,
+        return (build_gc_service(config, summary_provider=None),
+                "NoOpCompactor (baseline: wraps the run, does not summarise)")
+    if api_key:
+        return (build_gc_service(config, summary_provider=AnthropicClient(api_key=api_key)),
+                "LLMCompactor -> AnthropicClient (live compaction calls)")
+    provider = FakeProvider(
+        responses=[
+            LLMResponse(
+                text=text,
+                stop_reason=StopReason.COMPLETE,
+                input_tokens=0,
+                output_tokens=count_tokens(text),
+                model="scripted",
+                provider="offline",
+            )
+            for text in _SCRIPTED_SUMMARIES
+        ]
     )
-    service = GcService(
-        session_manager=SessionManager(),
-        generational_memory=memory,
-        relevance_scorer=RelevanceScorer(
-            scorers=[RecencyScorer(decay_rate=0.15), DensityScorer(), DecisionScorer(), ReferenceScorer()],
-            weights={
-                RelevanceType.RECENCY: 0.6,
-                RelevanceType.DENSITY: 0.2,
-                RelevanceType.DECISION: 0.1,
-                RelevanceType.REFERENCE: 0.1,
-            },
-            event_bus=bus,
-        ),
-        sweeper=Sweeper(
-            sweeper_strategy=ThresholdSweepStrategy(gc_config=config), gc_config=config, event_bus=bus
-        ),
-        event_bus=bus,
-        gc_config=config,
-    )
-    return service, memory, label
+    return (build_gc_service(config, summary_provider=provider),
+            "LLMCompactor -> scripted provider (no ANTHROPIC_API_KEY; wording canned, arithmetic real)")
 
 
 def _stub_upstream(forwarded: list[dict]):
@@ -223,7 +181,7 @@ def _stub_upstream(forwarded: list[dict]):
 
 def demo(compactor_kind: str, api_key: str | None) -> None:
     """Replay a conversation through the real proxy over real HTTP."""
-    service, memory, label = build_engine(demo_config(), api_key=api_key, compactor_kind=compactor_kind)
+    service, label = build_engine(demo_config(), api_key=api_key, compactor_kind=compactor_kind)
     forwarded: list[dict] = []
 
     def run_now(coro) -> None:
@@ -304,7 +262,7 @@ def serve(args: argparse.Namespace, api_key: str | None) -> None:
     import uvicorn
 
     config = serve_config(args)
-    service, _, label = build_engine(config, api_key=api_key, compactor_kind=args.compactor)
+    service, label = build_engine(config, api_key=api_key, compactor_kind=args.compactor)
     stub = httpx2.AsyncClient(transport=httpx2.MockTransport(_stub_provider)) if args.stub_upstream else None
     # Transcripts are a second copy of every conversation, so they exist only for the dashboard.
     transcripts = TranscriptRecorder() if args.dashboard else None

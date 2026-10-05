@@ -4,6 +4,7 @@ from llm_gc.engine.context_composer import ContextComposer
 from llm_gc.engine.garbage_collector import GarbageCollector
 from llm_gc.engine.gc_service import GcService
 from llm_gc.engine.gc_status import GCStatus
+from llm_gc.engine.wiring import build_gc_service
 
 __all__ = ["AbandonedCut", "AgingDegradation", "CutOutcome", "DegradationReason", "GCResult", "ContextComposer",
-           "GarbageCollector", "GCStatus", "GcService"]
+           "GarbageCollector", "GCStatus", "GcService", "build_gc_service"]
