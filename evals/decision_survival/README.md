@@ -47,9 +47,9 @@ straight to the model.
 
 ## The dataset
 
-`conversations.json` holds three design conversations in different domains
-(an ingest service, clinic booking, a fraud model), 18 turns each. Each carries
-the same six kinds of fact, because each kind fails in its own way:
+`conversations.json` holds five design conversations. Three are short (an ingest
+service, clinic booking, a fraud model): 18 turns of answers around 160 words. They
+carry the same six kinds of fact, because each kind fails in its own way:
 
 | Kind | Example | Why it is hard |
 |---|---|---|
@@ -140,12 +140,13 @@ nothing, and a "model" that answers right exactly when the answer is in what it
 was sent. It checks the whole path and shows what survives *without* summaries.
 It says nothing about a real model, and its numbers are never evidence.
 
-A live run asks the questions with `claude-opus-5-5` at effort `medium` (change
-them with `--model`, `--effort`), and summarises with LLM-GC's own compactor model.
-The engine settings that tuning changes are flags, `--min-cut-tokens` (300) and
-`--keep-last` (5), so two runs differ only in what is being tuned. At list prices
-a full run is estimated at well under a dollar: two short question calls and a few
-summary calls per conversation.
+A live run asks the questions with `claude-sonnet-5-5` at effort `medium` (change
+them with `--model`, `--effort`; keep them fixed across runs you compare), and
+summarises with LLM-GC's own compactor model. The engine settings that tuning changes
+are flags, `--min-cut-tokens` (300) and `--keep-last` (5), so two runs differ only in
+what is being tuned. A full run takes about five minutes; its cost is mostly the long
+conversations, each about 50,000 tokens when sent whole, plus the summary calls at
+their collections.
 
 Add `--dashboard` to watch the run on its own dashboard, at http://127.0.0.1:9911,
 separate from the proxy's. Each conversation is a session; the page stays open after
@@ -161,9 +162,16 @@ to `evidence/` under a descriptive name and committed with the change that cites
 it. Committing every run would bury the few that matter; committing none would
 leave claims pointing at nothing.
 
+| Run | Short conversations | Long conversations | What it shows |
+|---|---|---|---|
+| [size-budget-2026-10-05](evidence/size-budget-2026-10-05.json) | 18/18, prompts 17–24% smaller | 12/19, prompts 64% smaller | The recap's facts limited by size alone. On the long conversations every fact the user stated survives (11/11), and 1 of 8 details stated only inside an assistant answer does: each of the seven was in an excerpt of an archived summary, sent only up to its first 180 characters. |
+
+Questions asked by `claude-sonnet-5-5` at effort `medium`, `min_cut_tokens 300`,
+`keep_last 5`.
+
 ## What it does not tell you
 
-- **Small and single-sample.** 18 probes, one answer each. Models and summaries
+- **Small and single-sample.** 37 probes, one answer each. Models and summaries
   vary from run to run, so a difference of one or two probes between two runs is
   not a result. Repeat both runs before acting on a close one.
 - **Clean conversations.** Written to be clear, with every fact stated once and
