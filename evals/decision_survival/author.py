@@ -18,6 +18,7 @@ from typing import Any, cast
 
 from evals.decision_survival.dataset import DATASET, load_conversations, mentions
 from evals.decision_survival.harness import Effort
+from evals.decision_survival.progress import Progress
 
 SCRIPTS = Path(__file__).with_name("long_scripts.json")
 DEFAULT_MODEL = "claude-sonnet-5-5"
@@ -32,7 +33,7 @@ PERSONA = ("You are an experienced software architect helping a product team des
 Answer = Callable[[list[dict[str, str]], str], str]
 
 
-def author_conversation(script: dict[str, Any], answer: Answer, report: Callable[[str], None] = print
+def author_conversation(script: dict[str, Any], answer: Answer, progress: Progress | None = None
                         ) -> dict[str, Any]:
     """The script with every assistant turn written and checked; raises naming a turn that could not be."""
     probes = script["probes"]
@@ -44,15 +45,18 @@ def author_conversation(script: dict[str, Any], answer: Answer, report: Callable
         allowed = stated_here + [p for p in probes if index in p.get("also_in", ())]
         forbidden = sorted({value for p in probes if p not in allowed for value in p["accept"]})
         instructions = _instructions(pair.get("must_state"), forbidden)
-        for attempt in range(1, ATTEMPTS + 1):
+        for _ in range(ATTEMPTS):
+            if progress is not None:
+                progress.begin(f"{script['id']} turn {index}", "thinking…")
             text = answer(turns, instructions)
             problem = _problem(text, stated_here, forbidden)
+            if progress is not None:
+                progress.end(problem is None, f"{len(text.split()):,} words" if problem is None
+                             else f"{problem}, asking again")
             if problem is None:
                 break
-            report(f"  {script['id']} turn {index}: {problem}, asking again")
         else:
             raise RuntimeError(f"{script['id']} turn {index}: {problem} after {ATTEMPTS} attempts")
-        report(f"  {script['id']} turn {index} written ({len(text.split())} words, attempt {attempt})")
         turns.append({"role": "assistant", "text": text})
     return {"id": script["id"], "turns": turns, "probes": probes}
 
@@ -115,7 +119,7 @@ def _problem(text: str, stated_here: list[dict[str, Any]], forbidden: list[str])
     return f"mentions {', '.join(leaked)}" if leaked else None
 
 
-def _claude(model: str, effort: Effort, usage: dict[str, int]) -> Answer:
+def _claude(model: str, effort: Effort, usage: dict[str, int], on_words: Callable[[int], None]) -> Answer:
     import anthropic
     from anthropic.types.beta import BetaOutputConfigParam
 
@@ -133,6 +137,10 @@ def _claude(model: str, effort: Effort, usage: dict[str, int]) -> Answer:
         with client.beta.messages.stream(model=model, max_tokens=16_000, system=PERSONA, messages=messages,
                                          output_config=output_config,
                                          betas=["server-side-fallback-2026-07-01"], fallbacks="default") as stream:
+            words = 0
+            for text in stream.text_stream:
+                words += text.count(" ") + text.count("\n")
+                on_words(words)
             message = stream.get_final_message()
         if message.stop_reason != "end_turn":
             raise RuntimeError(f"the answer stopped with {message.stop_reason!r}")
@@ -152,11 +160,11 @@ def main() -> None:
 
     scripts = [s for s in json.loads(SCRIPTS.read_text())["scripts"] if not args.only or s["id"] in args.only]
     usage: dict[str, int] = {}
-    answer = _claude(args.model, cast(Effort, args.effort), usage)
-    conversations = []
-    for script in scripts:
-        print(f"{script['id']}: {len(script['pairs'])} answers to write")
-        conversations.append(author_conversation(script, answer))
+    progress = Progress(total=sum(len(script["pairs"]) for script in scripts))
+    answer = _claude(args.model, cast(Effort, args.effort), usage,
+                     lambda words: progress.update(f"writing… {words:,} words"))
+    print(f"{progress.total} answers to write, each a minute or so")
+    conversations = [author_conversation(script, answer, progress) for script in scripts]
     freeze(conversations)
     print(f"\nwrote {', '.join(s['id'] for s in scripts)} into {DATASET.name}")
     print("tokens: " + ", ".join(f"{key} {value:,}" for key, value in usage.items()))

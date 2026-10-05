@@ -138,3 +138,17 @@ def _result(*, with_gc: Verdict, without_gc: Verdict = Verdict.RIGHT,
             presence: Presence = Presence.VERBATIM) -> ProbeResult:
     return ProbeResult(probe="p", presence=presence, with_gc=with_gc, without_gc=without_gc,
                        answer_with_gc=None, answer_without_gc=None)
+
+
+def test_a_run_says_what_it_is_doing_at_each_step():
+    """A long conversation plays for minutes; without steps the run looks stuck."""
+    steps = []
+    asyncio.run(run_conversation(
+        CONVERSATION, config=CONFIG, summary_provider=rehearsal_summaries(),
+        model_transport=rehearsal_model(CONVERSATION), api_key="rehearsal", model="claude-opus-5-5",
+        effort="medium", on_step=steps.append))
+
+    assert steps[0] == f"turn 1/{len(CONVERSATION.turns)} · 0 collections so far"
+    assert steps[-2:] == ["asking the questions through LLM-GC", "asking them with the whole conversation"]
+    assert any(not step.endswith(" 0 collections so far") for step in steps if step.startswith("turn")), \
+        "the collection count moves as the conversation plays"

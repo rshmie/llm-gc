@@ -24,6 +24,7 @@ import httpx2
 from evals.decision_survival.dataset import load_conversations
 from evals.decision_survival.grading import Presence, Verdict, grade, presence, split_answers
 from evals.decision_survival.harness import Effort, Run, rehearsal_model, rehearsal_summaries, run_conversation
+from evals.decision_survival.progress import Progress, plural
 from llm_gc.config import GCConfig
 from llm_gc.engine import GcService, build_gc_service
 from llm_gc.llm import AnthropicClient, LLMProvider
@@ -80,16 +81,22 @@ async def check(args: argparse.Namespace, api_key: str | None, publish: Callable
     service = build_gc_service(config, summary_provider=summaries)
     transcripts = TranscriptRecorder() if args.dashboard else None
     dashboard = _serve_dashboard(service, config, transcripts, args.dashboard_port) if args.dashboard else None
+    progress = Progress(total=len(conversations))
+    print(f"{plural(len(conversations), 'conversation')} to check")
     try:
         for conversation in conversations:
+            progress.begin(conversation.id, "starting")
             run = await run_conversation(
                 conversation, config=config, summary_provider=summaries, service=service,
-                on_client_history=transcripts.record if transcripts is not None else None,
+                on_client_history=transcripts.record if transcripts is not None else None, on_step=progress.update,
                 model_transport=rehearsal_model(conversation) if api_key is None else _real_model,
                 api_key=api_key or "rehearsal", model=args.model, effort=cast(Effort, args.effort))
             results = grade_run(run)
             every_probe += results
             report["conversations"].append(_describe(run, results))
+            counted = totals(results)
+            progress.end(True, f"{plural(run.cuts, 'collection')}, right {counted['right_with_gc']}/{counted['probes']} "
+                               f"with LLM-GC and {counted['right_without_gc']}/{counted['probes']} sent whole,")
         report["totals"] = totals(every_probe)
         publish(report)
         if dashboard is not None:

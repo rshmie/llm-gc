@@ -59,7 +59,8 @@ class Run:
 async def run_conversation(conversation: Conversation, *, config: GCConfig, summary_provider: LLMProvider,
                            model_transport: ModelTransport, api_key: str, model: str, effort: Effort,
                            service: GcService | None = None,
-                           on_client_history: Callable[[str, list[Message]], None] | None = None) -> Run:
+                           on_client_history: Callable[[str, list[Message]], None] | None = None,
+                           on_step: Callable[[str], None] = lambda status: None) -> Run:
     """One conversation through the proxy, then its questions both ways.
 
     `service` shares one engine across a run, each conversation in its own session,
@@ -87,6 +88,7 @@ async def run_conversation(conversation: Conversation, *, config: GCConfig, summ
     turns = [_message(turn.role, turn.text) for turn in conversation.turns]
     try:
         for end in range(1, len(turns), 2):
+            on_step(f"turn {end}/{len(turns)} · {_cuts(service, conversation.id)} collections so far")
             await through_proxy.messages.create(model=model, max_tokens=_SCRIPTED_MAX_TOKENS, messages=turns[:end])
             # Aging runs after every response, as in production; finishing it here
             # means each request sees the state the previous one left.
@@ -94,7 +96,9 @@ async def run_conversation(conversation: Conversation, *, config: GCConfig, summ
             aging.clear()
         asked = [*turns, _message("user", question_message(conversation.probes))]
         upstream.answering = True
+        on_step("asking the questions through LLM-GC")
         with_gc = await _ask(through_proxy, asked, model, effort)
+        on_step("asking them with the whole conversation")
         without_gc = await _ask(direct, asked, model, effort)
     finally:
         # Aging after the questions prepares a request that never comes.
@@ -105,9 +109,8 @@ async def run_conversation(conversation: Conversation, *, config: GCConfig, summ
         await direct.close()
         await upstream_client.aclose()
 
-    state = service.session_manager.store.get(conversation.id)
     return Run(conversation=conversation, with_gc=with_gc, without_gc=without_gc,
-               forwarded=upstream.forwarded_messages(), cuts=state.snapshot.cut_count if state else 0,
+               forwarded=upstream.forwarded_messages(), cuts=_cuts(service, conversation.id),
                bypassed=app.state.metrics.gc_bypassed, degradations=degradations)
 
 
@@ -163,6 +166,11 @@ async def _ask(client: AsyncAnthropic, messages: Sequence[MessageParam], model: 
                                             output_config=output_config)
     text = "".join(block.text for block in response.content if block.type == "text")
     return Answer(text=text, input_tokens=response.usage.input_tokens, stop_reason=response.stop_reason)
+
+
+def _cuts(service: GcService, session_id: str) -> int:
+    state = service.session_manager.store.get(session_id)
+    return state.snapshot.cut_count if state else 0
 
 
 def _message(role: str, text: str) -> MessageParam:
