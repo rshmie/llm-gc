@@ -121,7 +121,7 @@ export function renderEngineStatus() {
     h("span", { class: "msg-text" }, h("b", {}, failed ? "The last check failed, and nothing changed." : problems ? `${plural(problems, "planned move")} didn't happen.` : "LLM-GC is working normally."),
       ` ${lastText}`, failed && last.failure_reason ? ` ${last.failure_stage}: ${last.failure_reason}` : null),
     problems ? h("button", { class: "link-btn", type: "button", onclick: () => openCard("notmoved", true) }, "See why →")
-      : h("span", { class: "then" }, "Every move a clean-up planned was made.")));
+      : h("span", { class: "then" }, "Every move a collection planned was made.")));
 }
 
 // ----------------------------------------------------------------- what happens next, and why
@@ -142,9 +142,9 @@ export function renderNext(k) {
   const share = cut.min_cut_tokens > 0 ? Math.min(1, cut.compactable_tokens / cut.min_cut_tokens) : (cut.compactable_tokens > 0 ? 1 : 0);
   const newest = k.turns.filter((t) => t.fidelity === "verbatim" && !t.becomes).length;
 
-  const lede = !taking.length ? "Nothing to clean up yet."
+  const lede = !taking.length ? "Nothing to collect yet."
     : cut.batch_ready ? "Ready: it runs after the next reply, if the result is smaller."
-    : `Waiting for ${fmt(cut.min_cut_tokens - cut.compactable_tokens)} more tokens of messages to condense.`;
+    : `Waiting for ${fmt(cut.min_cut_tokens - cut.compactable_tokens)} more tokens of messages to compact or archive.`;
   const check = (tone, icon, title, figure, ...body) => h("li", { class: `ck tone-${tone}` },
     h("span", { class: "ck-badge", "aria-hidden": "true" }, icon),
     h("div", {}, h("div", { class: "ck-head" }, h("b", {}, title), figure), body));
@@ -155,8 +155,8 @@ export function renderNext(k) {
       h("span", {}, h("b", {}, plural(turns.length, "message")), ` ${label}`, note ? h("span", { class: "would-note" }, ` (${note})`) : null),
       h("span", { class: "num" }, `${fmt(tokensOf(turns))} tokens`)) : null;
   };
-  const counted = [row("summarised", "summarised"), row("facts_only", "reduced to facts")].filter(Boolean);
-  const notCounted = [row("quoted", "quoted whole", "short or rated important"),
+  const counted = [row("summarised", "compacted"), row("facts_only", "archived")].filter(Boolean);
+  const notCounted = [row("quoted", "kept whole", "short or rated important"),
     newest ? h("li", {}, swatch("verbatim"), h("span", {}, h("b", {}, `The newest ${plural(newest, "message")}`), " stay word for word"), h("span")) : null].filter(Boolean);
 
   fill("panel-next",
@@ -165,14 +165,14 @@ export function renderNext(k) {
       h("div", {},
         h("div", { class: "label" }, "It runs when both hold"),
         h("ul", { class: "ck-list" },
-          check(cut.batch_ready ? "good" : "wait", cut.batch_ready ? "✓" : "…", "Enough to condense",
+          check(cut.batch_ready ? "good" : "wait", cut.batch_ready ? "✓" : "…", "Enough to collect",
             h("span", { class: "num" }, countEl("next-ready", cut.compactable_tokens), ` of ${fmt(cut.min_cut_tokens)} tokens`),
             h("div", { class: `meter${cut.batch_ready ? " ready" : ""}`, role: "meter", "aria-valuemin": "0", "aria-valuemax": String(cut.min_cut_tokens),
-              "aria-valuenow": String(cut.compactable_tokens), "aria-label": "Tokens of messages to condense" }, meterBar("next-ready", share * 100)),
-            h("p", {}, "Only messages that will be summarised or reduced to facts count. Quoting a message whole saves nothing.")),
+              "aria-valuenow": String(cut.compactable_tokens), "aria-label": "Tokens of messages to compact or archive" }, meterBar("next-ready", share * 100)),
+            h("p", {}, "Only messages to be compacted or archived count. Keeping a message whole saves nothing.")),
           refused
             ? check("warn", "!", "Makes the prompt smaller", h("span", { class: "num" }, `${fmt(refused.tokens_before)} → ${fmt(refused.abandoned_cut.context_tokens_after)}`),
-              h("p", {}, `The last try, ${agoTs(refused.gc_completed_at)}, would have made it bigger, so nothing changed. Each condensed message carries a short label, so condensing a few short messages costs more than it saves.`))
+              h("p", {}, `The last try, ${agoTs(refused.gc_completed_at)}, would have made it bigger, so nothing changed. Each message in the recap carries a short label, so collecting a few short messages costs more than it saves.`))
             : check("wait", "…", "Makes the prompt smaller", null,
               h("p", {}, "Checked as it runs, because the summaries aren't written until then. If the result would be bigger, nothing changes.")))),
       h("div", {},
@@ -190,16 +190,16 @@ export function whyText(t) {
   if (t.score === null || t.score === undefined) return "Not rated.";
   const s = t.score.toFixed(2);
   if (t.forced_keep) {
-    if (t.forced_keep.includes("too short")) return `Kept whole: too short to condense (${c ? `${c.min_compactable_tokens} tokens or fewer` : "very short"}), whatever its relevance of ${s}.`;
+    if (t.forced_keep.includes("too short")) return `Kept whole: too short to compact (${c ? `${c.min_compactable_tokens} tokens or fewer` : "very short"}), whatever its relevance of ${s}.`;
     if (t.forced_keep.includes("last_n")) {
-      const later = t.score >= high ? "quoted whole" : t.score < low ? "reduced to facts" : "summarised";
+      const later = t.score >= high ? "kept (quoted whole)" : t.score < low ? "archived (reduced to facts)" : "compacted (summarised)";
       return `Kept word for word: among the newest ${keepLast()}, whatever its relevance. At ${s} it would be ${later} once older.`;
     }
     return `Kept whole by a rule (relevance ${s}).`;
   }
-  if (t.classification === "keep") return `Relevance ${s}: at or above ${high.toFixed(2)}, so quoted whole.`;
-  if (t.classification === "archive") return `Relevance ${s}: below ${low.toFixed(2)}, so reduced to facts.`;
-  return `Relevance ${s}: between ${low.toFixed(2)} and ${high.toFixed(2)}, so summarised.`;
+  if (t.classification === "keep") return `Relevance ${s}: at or above ${high.toFixed(2)}, so kept (quoted whole).`;
+  if (t.classification === "archive") return `Relevance ${s}: below ${low.toFixed(2)}, so archived (reduced to facts).`;
+  return `Relevance ${s}: between ${low.toFixed(2)} and ${high.toFixed(2)}, so compacted (summarised).`;
 }
 const DOT = { keep: "quoted", compact: "summarised", archive: "facts" };
 
@@ -220,7 +220,7 @@ export function renderRelevance(k) {
     h("div", { class: "rate-lab" }, `#${t.turn_index} · ${t.role === "user" ? "You" : "AI"}`),
     h("div", { class: "rate-track" }, h("span", { class: `rate-dot${t.forced_keep ? " forced" : ` f-${DOT[t.classification]}`}`, style: `left:${t.score * 100}%`,
       ...hoverTip(`Message ${t.turn_index} · ${speakerName(t.role)}`, whyText(t), tipQuote(preview(t.text, 120))) })),
-    h("div", { class: "rate-why" }, whyText(t), t.becomes ? h("div", { class: "then" }, `→ next clean-up: ${BECOMES[t.becomes]}`) : null));
+    h("div", { class: "rate-why" }, whyText(t), t.becomes ? h("div", { class: "then" }, `→ next collection: ${BECOMES[t.becomes]}`) : null));
   const head = (label, n, open, toggles) => toggles
     ? h("button", { class: "rate-group", type: "button", "aria-expanded": String(open), onclick: () => { ui.stayOpen = !ui.stayOpen; renderRelevance(state.knowledge); } },
       chevron(), label, h("span", { class: "n" }, `· ${n}`))
@@ -229,19 +229,19 @@ export function renderRelevance(k) {
     h("div", { class: "rate-list" },
       h("div", { class: "rate-row rate-axis", "aria-hidden": "true" }, h("div"),
         h("div", { class: "rate-track" },
-          h("span", { class: "zone", style: `left:${(low / 2) * 100}%` }, `facts · below ${low}`),
-          h("span", { class: "zone", style: `left:${((low + high) / 2) * 100}%` }, "summarise"),
-          h("span", { class: "zone", style: `left:${((high + 1) / 2) * 100}%` }, `quote whole · ${high}+`)), h("div")),
-      taking.length ? [head("In the next clean-up", taking.length, true, false), taking.map(row)] : null,
+          h("span", { class: "zone", style: `left:${(low / 2) * 100}%` }, `archive · below ${low}`),
+          h("span", { class: "zone", style: `left:${((low + high) / 2) * 100}%` }, "compact"),
+          h("span", { class: "zone", style: `left:${((high + 1) / 2) * 100}%` }, `keep · ${high}+`)), h("div")),
+      taking.length ? [head("In the next collection", taking.length, true, false), taking.map(row)] : null,
       staying.length ? [head("Staying word for word", staying.length, stayOpen, taking.length > 0), stayOpen ? staying.map(row) : null] : null,
       condensed.length ? h("div", { class: "rate-gone" },
-        condensed.length === 1 ? `Message ${condensed[0].turn_index} was condensed by an earlier clean-up, so it is no longer rated. `
-          : `${plural(condensed.length, "message")} were condensed by earlier clean-ups, so they are no longer rated. `,
+        condensed.length === 1 ? `Message ${condensed[0].turn_index} left the young generation in an earlier collection, so it is no longer rated. `
+          : `${plural(condensed.length, "message")} left the young generation in earlier collections, so they are no longer rated. `,
         h("button", { class: "link-btn", type: "button", onclick: () => openCard("moves", true) }, "See what moved")) : null),
     h("div", { class: "rate-legend" },
-      h("span", {}, h("span", { class: "rate-dot f-facts" }), "reduce to facts"),
-      h("span", {}, h("span", { class: "rate-dot f-summarised" }), "summarise"),
-      h("span", {}, h("span", { class: "rate-dot f-quoted" }), "quote whole"),
+      h("span", {}, h("span", { class: "rate-dot f-facts" }), "archive"),
+      h("span", {}, h("span", { class: "rate-dot f-summarised" }), "compact"),
+      h("span", {}, h("span", { class: "rate-dot f-quoted" }), "keep"),
       h("span", {}, h("span", { class: "rate-dot forced" }), "kept whole by a rule")));
 }
 
@@ -284,7 +284,7 @@ export function renderHistory() {
         for (const type of ["promoted", "archived"]) if (!byType[type].length) delete byType[type];
       }
       return h("li", {},
-        h("div", { class: "event-head" }, h("b", {}, "Clean-up"), h("span", { class: "when" }, agoTs(g.at))),
+        h("div", { class: "event-head" }, h("b", {}, "Collection"), h("span", { class: "when" }, agoTs(g.at))),
         h("div", { class: "event-lines" }, Object.entries(byType).map(([type, items]) => h("div", {},
           h("span", { class: "k" }, swatch(MOVE_CAT[type] || "verbatim"), TRANSITION[type] || type, MOVE_KIND[type] ? h("span", { class: "kind" }, MOVE_KIND[type]) : null),
           h("span", {}, type === "superseded"
@@ -292,7 +292,7 @@ export function renderHistory() {
             : messageLinks(items.map((t) => t.turn_index)))))));
     })),
     groups.length > MOVES_SHOWN ? h("button", { class: "link-btn show-all", type: "button", onclick: () => { ui.allMoves = !ui.allMoves; renderHistory(); } },
-      ui.allMoves ? "Show fewer" : `Show all ${groups.length} clean-ups`) : null,
+      ui.allMoves ? "Show fewer" : `Show all ${groups.length} collections`) : null,
   ] : h("p", { class: "empty" }, "Nothing has moved yet."));
 }
 
@@ -335,7 +335,7 @@ export function renderChart() {
   const passes = state.activity ? state.activity.recent_passes : [];
   const cutsDone = passes.filter((p) => p.gc_status === "completed" && p.tokens_saved > 0);
   const lastCut = cutsDone.at(-1);
-  fill("cuts-stat", h("span", { class: "label", style: "justify-content:flex-end" }, "Clean-ups"),
+  fill("cuts-stat", h("span", { class: "label", style: "justify-content:flex-end" }, "Collections"),
     h("span", { class: "n" }, state.knowledge ? fmt(state.knowledge.cuts) : "—"),
     lastCut ? `last ${agoTs(lastCut.gc_completed_at)}: ${fmt(lastCut.tokens_before)} → ${fmt(lastCut.tokens_before - lastCut.tokens_saved)}` : "none in the recent checks");
   const width = Math.round(host.clientWidth);
@@ -360,7 +360,7 @@ export function renderChart() {
     h("span", {}, h("span", { class: "line-key", style: "background:var(--accent)" }), "Sent to the model"),
     withWritten ? h("span", {}, h("span", { class: "line-key", style: "background:var(--written)" }), "The conversation as written") : null,
     // Each mark in the legend is the chart's own marker.
-    cuts.length ? h("span", {}, svg("svg", { width: 12, height: 12, viewBox: "0 0 12 12" }, svg("circle", { cx: 6, cy: 6, r: 4.5, fill: "var(--accent)" })), "clean-up") : null,
+    cuts.length ? h("span", {}, svg("svg", { width: 12, height: 12, viewBox: "0 0 12 12" }, svg("circle", { cx: 6, cy: 6, r: 4.5, fill: "var(--accent)" })), "collection") : null,
     skipped.length ? h("span", {}, svg("svg", { width: 12, height: 12, viewBox: "0 0 12 12" }, svg("circle", { cx: 6, cy: 6, r: 4, fill: "var(--surface)", stroke: "var(--ink-3)", "stroke-width": 1.5 })), "skipped: would not have shrunk the prompt") : null,
     failed.length ? h("span", {}, h("span", { class: "dot critical" }), "failed") : null);
 
@@ -399,7 +399,7 @@ export function renderChart() {
   }
   const cross = svg("line", { class: "cross", x1: 0, x2: 0, y1: M.t, y2: M.t + ph, style: "display:none" });
   const root = svg("svg", { height: CHART_HEIGHT, viewBox: `0 0 ${width} ${CHART_HEIGHT}`, role: "img",
-    "aria-label": `Prompt size over the last ${passes.length} checks: now ${fmt(last.after)} tokens sent${last.written !== null ? `, ${fmt(last.written)} as written` : ""}, ${plural(cuts.length, "clean-up")}.` },
+    "aria-label": `Prompt size over the last ${passes.length} checks: now ${fmt(last.after)} tokens sent${last.written !== null ? `, ${fmt(last.written)} as written` : ""}, ${plural(cuts.length, "collection")}.` },
     svg("defs", {}, svg("linearGradient", { id: "g-area", x1: 0, y1: 0, x2: 0, y2: 1 },
       svg("stop", { offset: 0, style: "stop-color:var(--accent);stop-opacity:.28" }), svg("stop", { offset: 1, style: "stop-color:var(--accent);stop-opacity:0" }))),
     grid, bands,
@@ -430,7 +430,7 @@ export function renderChart() {
       statusChip(d.p.gc_status),
       figure("sent to the model", d.after < d.before ? `${fmt(d.before)} → ${fmt(d.after)}` : fmt(d.before)),
       d.written !== null ? figure("as written", fmt(d.written)) : null,
-      d.p.abandoned_cut ? figure("a clean-up would have made it", fmt(d.p.abandoned_cut.context_tokens_after)) : null,
+      d.p.abandoned_cut ? figure("a collection would have made it", fmt(d.p.abandoned_cut.context_tokens_after)) : null,
       d.after < d.before && d.p.outcome ? figure("messages", describeOutcome(d.p.outcome)) : null,
       d.p.degradations.length ? h("div", { class: "tip-row" }, h("span", { class: "st warn" }, "⚠ "), plural(d.p.degradations.length, "move"), " didn't happen") : null,
     ]);
@@ -483,16 +483,51 @@ export function renderSettings() {
   if (!c) return;
   // The flag is how to change a setting while watching here; the rest are GCConfig fields.
   const rows = [
-    ["Clean-up size", "min_cut_tokens", c.min_cut_tokens, "tokens of messages rated to condense before a clean-up runs", "--min-cut-tokens"],
-    ["Always word for word", "last_n_turns_to_keep", c.last_n_turns_to_keep, "newest messages never condensed", "--keep-last"],
-    ["Quote whole from", "keep_threshold", c.keep_threshold, "relevance at or above this is kept word for word"],
-    ["Facts below", "archive_threshold", c.archive_threshold, "relevance below this is reduced to facts"],
-    ["Too short to condense", "min_compactable_tokens", c.min_compactable_tokens, "messages this short, in tokens, are kept whole"],
-    ["Facts per block", "max_memory_facts", c.max_memory_facts, "most facts the condensed block carries"],
-    ["Fact budget", "max_memory_tokens", c.max_memory_tokens, "most tokens of facts in the condensed block"],
+    ["Collection size", "min_cut_tokens", c.min_cut_tokens, "tokens of messages to compact or archive before a collection runs", "--min-cut-tokens"],
+    ["Always word for word", "last_n_turns_to_keep", c.last_n_turns_to_keep, "newest messages never collected", "--keep-last"],
+    ["Keep from", "keep_threshold", c.keep_threshold, "relevance at or above this is kept, quoted whole"],
+    ["Archive below", "archive_threshold", c.archive_threshold, "relevance below this is archived, reduced to facts"],
+    ["Too short to compact", "min_compactable_tokens", c.min_compactable_tokens, "messages this short, in tokens, are kept whole"],
+    ["Facts in the recap", "max_memory_facts", c.max_memory_facts, "most facts the recap carries"],
+    ["Fact budget", "max_memory_tokens", c.max_memory_tokens, "most tokens of facts in the recap"],
     ["The model's window", "context_window", c.context_window, "its capacity, in tokens", "--context-window"],
   ];
   fill("settings", rows.map(([label, name, value, desc, flag]) => h("div", { class: "setting" },
     h("div", { class: "name" }, label, h("code", {}, name)), h("div", { class: "value" }, fmt(value)),
     h("div", { class: "desc" }, desc, flag ? h("div", {}, "change with ", h("code", { class: "flag" }, `run_proxy.py ${flag}`)) : null))));
+}
+
+// --------------------------------------------------------------- the three generations
+
+// Young, old, permanent: where each message lives, from the session's own state.
+export function renderGenerations(k) {
+  const young = k.turns.filter((t) => t.fidelity === "verbatim");
+  const quotes = k.front_entries.filter((e) => e.kind === "quote");
+  const summaries = k.front_entries.filter((e) => e.kind === "summary");
+  const active = k.facts.filter((f) => f.status === "active");
+  const sent = active.filter((f) => f.sent).length;
+  const replaced = k.facts.length - active.length;
+  const sum = (items) => items.reduce((total, item) => total + item.tokens, 0);
+  const box = (key, title, gloss, count, detail, which) => h("div", { class: `gen-box gen-${key}` },
+    h("div", { class: "gen-title" }, title), h("div", { class: "gen-gloss" }, gloss),
+    h("div", { class: "gen-count" }, count), h("div", { class: "gen-detail" }, detail),
+    h("div", { class: "gen-links" }, which));
+  const arrow = (verb, how) => h("div", { class: "gen-arrow", "aria-hidden": "true" },
+    h("span", { class: "gen-verb" }, verb), h("span", { class: "gen-line" }), h("span", { class: "gen-how" }, how));
+  // Which messages each generation holds, each a link to the message.
+  const links = (label, numbers) => numbers.length ? h("div", {}, `${label}: `, messageLinks(numbers)[1]) : null;
+  const covered = (items, turnsOf) => items.flatMap(turnsOf);
+  fill("generations", h("div", { class: "gen-flow" },
+    box("young", "Young generation", "sent word for word", plural(young.length, "message"),
+      `${plural(sum(young), "token")} · the newest ${keepLast()} always stay`,
+      links("messages", young.map((t) => t.turn_index))),
+    arrow(`collection${k.cuts ? ` ×${fmt(k.cuts)}` : ""}`, "keep → quote · compact → summary"),
+    box("old", "Old generation", "in the recap: kept or compacted", plural(k.front_entries.length, "entry", "entries"),
+      `${plural(quotes.length, "quote")} · ${plural(summaries.length, "summary", "summaries")} · ${plural(sum(k.front_entries), "token")}`,
+      [links("kept", covered(quotes, (e) => e.source_turns)), links("compacted", covered(summaries, (e) => e.source_turns))]),
+    arrow("goes cold", "archive → facts"),
+    box("permanent", "Permanent generation", "archived facts and excerpts, sent in the recap", plural(active.length, "entry", "entries"),
+      `${fmt(sent)} sent · ${fmt(active.length - sent)} stored only${replaced ? ` · ${fmt(replaced)} contradicted` : ""}`,
+      links("from", covered(active, (f) => f.source_turns)))),
+    h("p", { class: "gen-note" }, "Archive inside a collection goes straight from young to permanent. Messages are counted once their reply arrives."));
 }

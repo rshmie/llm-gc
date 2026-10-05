@@ -142,6 +142,17 @@ class TestWhereTheSummariesGo:
 
         assert _facts(service), "evicted summaries must leave something behind"
 
+    def test_what_an_evicted_summary_leaves_is_marked_as_its_summary(self):
+        """Its text is LLM-GC's summary, not the turns' own words, and an excerpt of it
+        must not be shown as if it were the message."""
+        service, _ = _build()
+
+        _converse(service, 120)
+
+        from_summaries = [fact for fact in _facts(service) if fact.from_summary]
+        assert from_summaries
+        assert all(len(fact.covered_turns) >= 1 for fact in from_summaries)
+
     def test_eviction_is_announced_as_an_archive_from_old_gen(self):
         """Both hops are archives, but one ends a turn's first hop and the other its
         last. A transitions timeline that conflated them would show a turn archived

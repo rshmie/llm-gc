@@ -65,19 +65,24 @@ def fit_facts(entries: list[KnowledgeEntry], max_tokens: int) -> list[KnowledgeE
 def render_memory_block(entries: list[KnowledgeEntry]) -> str:
     """The block's text as it will be sent: relevance picks, chronology displays."""
     in_order = sorted(entries, key=lambda entry: entry.message_turn)
-    body = "\n".join(_format_fact(entry) for entry in in_order)
+    body = "\n".join(format_fact(entry) for entry in in_order)
     return f"{MEMORY_BLOCK_HEADER}\n{body}"
 
 
-def _format_fact(entry: KnowledgeEntry) -> str:
+def shorten_for_block(content: str) -> str:
+    """An entry's content as the block carries it: cut to `MEMORY_FACT_MAX_CHARS`."""
+    if len(content) <= MEMORY_FACT_MAX_CHARS:
+        return content
+    return content[: MEMORY_FACT_MAX_CHARS - len(_TRUNCATION_MARKER)].rstrip() + _TRUNCATION_MARKER
+
+
+def format_fact(entry: KnowledgeEntry) -> str:
     """One line per fact, carrying its origin turn.
 
     A `RAW` entry is labelled an excerpt, not a fact: extraction found nothing in
     that turn, so calling it a fact would overstate what is known.
     """
-    content = entry.content
-    if len(content) > MEMORY_FACT_MAX_CHARS:
-        content = content[: MEMORY_FACT_MAX_CHARS - len(_TRUNCATION_MARKER)].rstrip() + _TRUNCATION_MARKER
+    content = shorten_for_block(entry.content)
 
     if entry.knowledge_type is KnowledgeType.RAW:
         return f"- (turn {entry.message_turn}) excerpt: {content}"

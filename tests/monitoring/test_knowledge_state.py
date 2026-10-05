@@ -162,6 +162,19 @@ class TestWhatTheModelSees:
         assert state.turns[1].fidelity is TurnFidelity.SUPERSEDED
         assert state.turns[6].fidelity is TurnFidelity.FACTS_ONLY
 
+    def test_a_long_excerpt_reports_the_cut_the_model_gets(self):
+        """The dashboard once called a 2,136-token excerpt "the message itself" while
+        the model received its first 180 characters."""
+        long_text = "word " * 400
+        knowledge = (_fact(1, "__raw__", long_text, KnowledgeType.RAW), _fact(2, "__raw__", "short", KnowledgeType.RAW))
+        state = _seed(_service(context_window=100_000), GenerationSnapshot(young=(_turn(3),), knowledge=knowledge))
+
+        cut, whole = state.facts
+        assert cut.sent and whole.sent
+        assert cut.shortened and cut.sent_content.endswith("...") and len(cut.sent_content) < len(long_text)
+        assert cut.sent_content in (state.front_text or ""), "exactly the words the front carries"
+        assert not whole.shortened and whole.sent_content == "short"
+
     def test_a_raw_excerpt_supersedes_nothing(self):
         knowledge, _ = file_knowledge((), (_fact(1, "database", "postgres"),
                                            _fact(2, "__raw__", "chatter", KnowledgeType.RAW)))

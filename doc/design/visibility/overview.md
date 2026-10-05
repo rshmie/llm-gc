@@ -284,12 +284,30 @@ It polls once a second, and fetches a session's content again only when it has
 changed. Server-push (WebSocket) delivery is a planned upgrade of the transport,
 not of the split.
 
-**It speaks to someone who has never read these docs.** The interface says
-*clean-up*, *condensed block*, *message* and *check* where the design says cut,
-front, turn and pass; every remaining term carries an explanation where it
-appears, naming the design's word, and a short guide opens until it is
-dismissed. *Rejected: the design vocabulary with a glossary page* — a reader who
-must leave the screen to decode it has been handed engine telemetry again. Token
+**One vocabulary, explained where it appears.** The interface uses the design's
+words for what the collector decides, *keep*, *compact* and *archive*, and for
+where a message lives, the *young*, *old* and *permanent* generations. Three words
+are plainer on screen than in the code, and each one's explanation names the
+code's word: a *collection* is a cut (a check that moves messages out of the young
+generation), the *recap* is the front (the first message of every request), and a
+*check* is a pass. Every term carries a short explanation where it appears, and the
+guide maps each on-screen word to the code's.
+
+```
+code      cut          front    pass    keep   compact     archive    young generation
+screen    collection   recap    check   kept   compacted   archived   word for word
+```
+
+*Rejected: a separate plain vocabulary*, which the dashboard first used (clean-up,
+condensed block, quoted whole, kept as facts): read beside the code, two
+vocabularies for one system confused more than either, and "clean-up" read as
+something that triggers GC rather than what GC does after a reply. *Rejected: the
+code's words alone*: "cut" reads as truncation and "front" means nothing on its
+own. *Rejected, earlier: the design vocabulary with a glossary page*: a reader who
+must leave the screen to decode it has been handed engine telemetry again. *Cost
+accepted:* cut and front differ between screen and code; renaming them in the code
+touches public configuration (`min_cut_tokens`), so it is a decision for before
+1.0, not a cosmetic one. Token
 figures compare like with like: the conversation as written counts only the
 messages the session has recorded, because the newest message reaches it with
 the next request, and comparing the whole transcript showed a saving equal to

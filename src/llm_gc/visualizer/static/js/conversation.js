@@ -14,7 +14,7 @@ const smooth = () => (reducedMotion() ? "auto" : "smooth");
 export const speakerName = (role) => role === "user" ? "You" : role ? role[0].toUpperCase() + role.slice(1) : "—";
 const avatarText = (role) => role === "user" ? "You" : role === "assistant" ? "AI" : (role || "?").slice(0, 2).toUpperCase();
 const avatar = (role) => h("div", { class: `av ${role === "user" ? "user" : "assistant"}`, "aria-hidden": "true" }, avatarText(role));
-const changeForm = (n) => `${n === 1 ? "1 message changes" : `${fmt(n)} messages change`} form at the next clean-up.`;
+const changeForm = (n) => `${n === 1 ? "1 message changes" : `${fmt(n)} messages change`} form at the next collection.`;
 
 export function renderHero(k) {
   renderSize(k);
@@ -42,21 +42,21 @@ export function renderStatus() {
     action ? h("button", { class: "link-btn", type: "button", onclick: action[1] }, `${action[0]} →`) : null);
   const items = [];
   if (counts.unseen) items.push(line("warn", "!", `The model sees nothing of ${plural(counts.unseen, "message")}.`,
-    `Their facts were stored, but the condensed block carries at most ${maxFacts()} facts and theirs didn't make it.`, ["Show them", toMessages("unseen")]));
+    `Their facts were stored, but the recap carries at most ${maxFacts()} facts and theirs didn't make it.`, ["Show them", toMessages("unseen")]));
   if (unsent) items.push(line("warn", "!", `${plural(unsent, "fact")} stored but not sent.`,
-    "Ranked below the facts the condensed block has room for, so the model can't see them.",
+    "Ranked below the facts the recap has room for, so the model can't see them.",
     ["Show the facts", () => $("memory-unsent")?.scrollIntoView({ behavior: smooth(), block: "start" })]));
   if (problems) items.push(line("warn", "!", `${plural(problems, "planned move")} didn't happen.`,
     "Those messages stayed word for word: nothing is lost, the prompt is just bigger than planned.",
     ["See why", () => { showTab("engine"); openCard("notmoved", true); }]));
   if (!items.length) {
     items.push(line("good", "✓", k.cuts ? "Nothing is out of view." : "The model sees the whole conversation.",
-      k.cuts ? "Every condensed message still reaches the model quoted, summarised or as a sent fact." : "Nothing has been condensed yet.", null,
+      k.cuts ? "Every collected message still reaches the model kept, compacted, or as a sent fact." : "Nothing has been collected yet.", null,
       next && !k.next_cut.batch_ready ? h("span", { class: "then" }, `→ ${changeForm(next)}`,
         h("button", { class: "link-btn", type: "button", onclick: () => { showTab("engine"); openCard("rate", true); } }, "Why these?")) : null));
   }
-  if (k.aging_in_flight) items.push(line("", "…", "LLM-GC is cleaning up this conversation.", "The map updates when it finishes."));
-  if (k.next_cut.batch_ready) items.push(line("", "→", "A clean-up runs after the next reply.", `Messages ${ranges(k.next_cut.turns)} will change form.`, ["Show them", toMessages("next")]));
+  if (k.aging_in_flight) items.push(line("", "…", "LLM-GC is collecting this conversation.", "The map updates when it finishes."));
+  if (k.next_cut.batch_ready) items.push(line("", "→", "A collection runs after the next reply.", `Messages ${ranges(k.next_cut.turns)} will change form.`, ["Show them", toMessages("next")]));
   if (contradicted) items.push(line("", "↺", `${plural(contradicted, "fact")} contradicted later.`,
     "The newer fact is sent and the old one isn't. Check the replacement is the one you meant.", ["Show them", toMessages("superseded")]));
   if (!captured()) items.push(line("", "i", "What was said wasn't captured.",
@@ -71,14 +71,14 @@ export function renderSize(k) {
   const sent = k.context_tokens;
   const saved = written === null ? null : written - sent;
   const [tone, text] = written === null ? ["", "The words weren't captured, so there's nothing to compare with"]
-    : k.cuts === 0 ? ["", "Same as written: nothing condensed yet"]
+    : k.cuts === 0 ? ["", "Same as written: nothing collected yet"]
     : saved >= 0 ? ["good", `↓ ${fmt(saved)} saved · ${percent(saved, written)}% less than as written`]
-    : ["", `↑ ${fmt(-saved)} more than as written: the condensed block outgrew what it replaced`];
+    : ["", `↑ ${fmt(-saved)} more than as written: the recap outgrew what it replaced`];
   fill("panel-size",
     h("div", { class: "label" }, "Each request carries, now", info("size")),
     h("div", { class: "hero-row" }, h("span", { class: "hero" }, countEl("size-sent", sent)), h("span", { class: "hero-unit" }, "tokens"),
       h("span", { class: `delta${tone ? ` ${tone}` : ""}` }, text)),
-    h("p", { class: "hero-sub" }, "The size of one request today: the conversation as the model gets it, condensed block first. Your new message comes on top of this. The running total is on the Engine tab."));
+    h("p", { class: "hero-sub" }, "The size of one request today: the conversation as the model gets it, the recap first. Your new message comes on top of this. The running total is on the Engine tab."));
 }
 
 export function renderHolds(k) {
@@ -155,7 +155,7 @@ export function renderMap(k) {
     const g = groupOf(x), r = runs.at(-1);
     if (r && r.g === g) { r.n++; r.w += width(x); } else runs.push({ g, n: 1, w: width(x) });
   }
-  const GROUP = { condensed: "Condensed", next: "Next clean-up", kept: "Word for word", newest: "" };
+  const GROUP = { condensed: "Collected", next: "Next collection", kept: "Word for word", newest: "" };
   setChildren($("an-labels"), runs.map((r) => h("div", { class: "an-l", style: `flex-grow:${r.w}` },
     h("span", { title: r.g === "newest" ? "Your newest message" : null }, r.g === "newest" ? " " : [h("b", {}, GROUP[r.g]), ` · ${r.n}`]))));
 
@@ -189,7 +189,7 @@ export function renderMap(k) {
     el._tip = x.pending
       ? [`Message ${x.i} · ${speakerName(x.role)} · ${size}`, "Your newest message: recorded, with its reply, once the next request arrives.", tipQuote(preview(x.text))]
       : [[swatch(x.cat), `Message ${x.i} · ${speakerName(x.role)} · ${size}`], `${CATS[x.cat].label}: ${CATS[x.cat].desc}`,
-        t.becomes ? `Next clean-up: ${BECOMES[t.becomes]}. ${whyText(t)}` : null,
+        t.becomes ? `Next collection: ${BECOMES[t.becomes]}. ${whyText(t)}` : null,
         GONE.has(x.cat) && keeps.length ? `Keeps ${plural(keeps.length, "fact")}, ${keeps.filter((f) => f.sent).length} sent` : null,
         tipQuote(preview(x.text)), h("div", { class: "tip-row muted" }, "Click to open it")];
     return el._cell;
@@ -210,8 +210,8 @@ export function renderMap(k) {
   const recent = k.context_tokens - k.front_tokens;
   const pendTok = pend.reduce((n, x) => n + (x.tok ?? 0), 0);
   const parts = {
-    block: [blockW, `The condensed block · ${plural(k.front_tokens, "token")}`, "Stands in for the condensed messages above it.", cond],
-    saved: [condW - blockW, `Saved · ${plural(saved ?? 0, "token")}`, "What clean-ups took out of every request.", cond],
+    block: [blockW, `The recap · ${plural(k.front_tokens, "token")}`, "Stands in for the collected messages above it.", cond],
+    saved: [condW - blockW, `Saved · ${plural(saved ?? 0, "token")}`, "What collections took out of every request.", cond],
     recent: [sum(verb), `Recent messages · ${plural(recent, "token")}`, "Sent word for word.", verb],
     pending: [sum(pend), `Your newest · ${plural(pendTok, "token")}`, "Sent with your next request, on top of the rest.", pend],
   };
@@ -235,13 +235,13 @@ function renderKey(k, items, { saved, recent, pendTok }) {
     h("div", { class: "an-rowlab" }, "Bars"),
     h("div", { class: "items" },
       ORDER.filter((key) => counts[key]).map((key) => item(h("i", { class: `lg f-${key}`, style: `height:${Math.max(3, Math.round(HEIGHT[key] * 0.14))}px` }), CATS[key].label)),
-      queued ? item(h("i", { class: "qdot" }), "Dot: queued for the next clean-up, in the colour it will become") : null,
+      queued ? item(h("i", { class: "qdot" }), "Dot: queued for the next collection, in the colour it will become") : null,
       pending ? item(h("i", { class: "key pending" }), "Outline: your newest message") : null),
     h("div", { class: "an-rowlab" }, "Sent"),
     h("div", { class: "items" },
-      k.front_tokens ? item(h("i", { class: "key block" }), "Condensed block ", h("b", {}, fmt(k.front_tokens))) : null,
+      k.front_tokens ? item(h("i", { class: "key block" }), "Recap ", h("b", {}, fmt(k.front_tokens))) : null,
       saved > 0 && k.front_tokens ? item(h("i", { class: "key saved" }), "Saved ", h("b", {}, fmt(saved))) : null,
-      saved < 0 ? item(null, "The condensed block is ", h("b", {}, fmt(-saved)), " tokens larger than what it replaced") : null,
+      saved < 0 ? item(null, "The recap is ", h("b", {}, fmt(-saved)), " tokens larger than what it replaced") : null,
       item(h("i", { class: "key recent" }), "Recent messages ", h("b", {}, fmt(recent))),
       pending ? item(h("i", { class: "key pending" }), "Your newest ", h("b", {}, fmt(pendTok)), ", sent next") : null));
 }
@@ -308,7 +308,7 @@ export function renderChips(k) {
       svg("path", { d: "M4 6l4 4 4-4", fill: "none", stroke: "currentColor", "stroke-width": 1.8, "stroke-linecap": "round", "stroke-linejoin": "round" })));
   fill("chips", chip("all", "All", k.turns.length + pending),
     ORDER.filter((key) => counts[key]).map((key) => chip(key, CATS[key].label, counts[key], swatch(key))),
-    nextCount ? chip("next", "Next clean-up", nextCount, h("span", { class: "qdot" })) : null, toggle);
+    nextCount ? chip("next", "Next collection", nextCount, h("span", { class: "qdot" })) : null, toggle);
 }
 
 export function buildRows(k) {
@@ -379,11 +379,11 @@ export function renderTimeline(k) {
   for (const row of shown) {
     if (!filtered && !pastQueued && !pastCondensed && isQueued(row)) {
       pastQueued = true;
-      items.push(h("div", { class: "boundary" }, h("span", {}, "↑ Stays word for word · ↓ Queued for the next clean-up")));
+      items.push(h("div", { class: "boundary" }, h("span", {}, "↑ Stays word for word · ↓ Queued for the next collection")));
     }
     if (!filtered && !pastCondensed && isCondensed(row)) {
       pastCondensed = true;
-      items.push(h("div", { class: "boundary" }, h("span", {}, "↑ Sent word for word · ↓ In the condensed block, ", h("b", {}, fmt(k.front_tokens)), " tokens")));
+      items.push(h("div", { class: "boundary" }, h("span", {}, "↑ Sent word for word · ↓ In the recap, ", h("b", {}, fmt(k.front_tokens)), " tokens")));
     }
     items.push(row.kind === "run" ? runRow(row, said, facts) : row.kind === "summary" ? summaryRow(row, said)
       : row.kind === "pending" ? pendingRow(row.pending) : turnRow(row.turn, said, facts));
@@ -394,7 +394,7 @@ export function renderTimeline(k) {
   note.hidden = !filtered || !ui.listOpen;
   if (filtered) {
     const shownCount = visible.reduce((n, row) => n + (row.kind === "summary" ? row.turns.length : 1), 0);
-    setChildren(note, `Showing ${plural(shownCount, "message")}${query() ? ` matching “${ui.query.trim()}”` : ""}${ui.filter !== "all" ? ` · ${ui.filter === "next" ? "next clean-up" : CATS[ui.filter].tag}` : ""}`,
+    setChildren(note, `Showing ${plural(shownCount, "message")}${query() ? ` matching “${ui.query.trim()}”` : ""}${ui.filter !== "all" ? ` · ${ui.filter === "next" ? "next collection" : CATS[ui.filter].tag}` : ""}`,
       h("button", { class: "link-btn", type: "button", onclick: () => { ui.query = ""; $("search").value = ""; setFilter("all"); } }, "Show all"));
   }
   const olderCount = folded.slice(EARLIER_SHOWN).reduce((n, row) => n + rowMessageCount(row), 0);
@@ -442,27 +442,42 @@ const factStatus = (fact) => fact.status === "superseded"
   : fact.sent ? h("span", {}, h("span", { class: "st good" }, "✓ "), "sent") : h("span", {}, h("span", { class: "st warn" }, "⚠ "), "not sent");
 
 // A fact in the sidebar: its topic above what it says, and whether the model is sent it.
+// A fact as the model reads it: cut where the condensed block cuts it, and saying so.
+function sentContent(fact) {
+  return [marked(fact.sent_content ?? fact.content), fact.shortened
+    ? h("span", { class: "cut-note" }, ` ✂ the model gets only the start: ${fmt(fact.sent_content.length)} of ${fmt(fact.content.length)} characters`)
+    : null];
+}
+
+function excerptLabel(fact) {
+  return fact.from_summary ? "excerpt of its summary" : "excerpt";
+}
+
+function excerptTitle(fact) {
+  return fact.from_summary
+    ? "LLM-GC's summary of this message, kept as an excerpt when the summary was archived: not the message's own words"
+    : "an excerpt: the words extraction could not turn into a fact";
+}
+
 export function factRow(fact, { withFrom = true, onclick = null } = {}) {
   const raw = fact.knowledge_type === "raw";
   return h(onclick ? "button" : "div", { class: `fact s-${fact.status}`, type: onclick ? "button" : null, onclick,
     title: onclick ? "Show the message it came from" : null },
-    h("span", { class: "fact-topic", title: raw ? "an excerpt: nothing more specific could be pulled out" : fact.topic }, raw ? "excerpt" : fact.topic),
-    h("span", { class: "fact-what" }, marked(fact.content)),
+    h("span", { class: "fact-topic", title: raw ? excerptTitle(fact) : fact.topic }, raw ? excerptLabel(fact) : fact.topic),
+    h("span", { class: "fact-what" }, sentContent(fact)),
     h("span", { class: "fact-meta" }, withFrom ? h("span", { class: "num" }, `#${ranges(fact.source_turns)}`) : null, factStatus(fact)));
 }
 
 // A fact beside the message it came from, as a compact topic-and-value chip.
 function factChip(fact) {
   const raw = fact.knowledge_type === "raw";
-  // Beside its own message, an excerpt of that whole message would only repeat the words above it.
-  const wholeTurn = raw && fact.source_turns.length === 1;
-  return h("span", { class: `fact-chip s-${fact.status}` }, h("b", {}, raw ? "excerpt" : fact.topic),
-    h("span", {}, wholeTurn ? "the message itself" : marked(fact.content)), factStatus(fact));
+  return h("span", { class: `fact-chip s-${fact.status}`, title: raw ? excerptTitle(fact) : null },
+    h("b", {}, raw ? excerptLabel(fact) : fact.topic), h("span", {}, sentContent(fact)), factStatus(fact));
 }
 
 // "next: summarised" explains itself: hover for the reason, click for its rating on the Engine tab.
 export function nextTag(turn) {
-  return h("button", { class: "tag next why", type: "button", "aria-label": `Next clean-up: ${BECOMES[turn.becomes]}. Show why on the Engine tab`,
+  return h("button", { class: "tag next why", type: "button", "aria-label": `Next collection: ${BECOMES[turn.becomes]}. Show why on the Engine tab`,
     onpointerenter: (e) => showTooltip(e, `Why ${BECOMES[turn.becomes]}?`, whyText(turn), h("div", { class: "tip-row muted" }, "Click to see its rating on the Engine tab")),
     onpointerleave: hideTooltip, onclick: () => { hideTooltip(); showWhy(turn.turn_index); } },
     h("span", { class: `swatch f-${BECOMES_CAT[turn.becomes]}` }), `next: ${BECOMES[turn.becomes]}`);
@@ -502,18 +517,21 @@ export function summaryRow(row, said) {
   const first = turns[0].turn_index, last = turns.at(-1).turn_index;
   const key = `orig-${first}`;
   const open = ui.open.has(key) || (query() && turns.some((t) => has(said.get(t.turn_index)?.text)));
+  // A message's size as written lives in the transcript: the session stops counting it once it moves.
+  const sizes = turns.map((t) => said.get(t.turn_index)?.tokens);
+  const written = sizes.every((n) => typeof n === "number") ? sizes.reduce((sum, n) => sum + n, 0) : null;
   return h("article", { class: "msg", id: `entry-${first}`, "data-turns": turns.map((t) => t.turn_index).join(",") },
     h("div", { class: "msg-no" }, first === last ? first : `${first}–${last}`),
     h("div", { "aria-hidden": "true" }),
     h("div", { class: "msg-body" },
       h("div", { class: "msg-head" }, h("span", { class: "who" }, plural(turns.length, "message")), fidTag("summarised")),
-      h("div", { class: "summary-box" }, h("div", { class: "label" }, `The model reads this instead · ${plural(entry.tokens, "token")}, in place of ${plural(turns.reduce((sum, t) => sum + t.tokens, 0), "token")} as written`), h("div", { class: "text" }, marked(entry.stated_text))),
+      h("div", { class: "summary-box" }, h("div", { class: "label" }, `The model reads this instead · ${plural(entry.tokens, "token")}${written === null ? "" : `, in place of ${plural(written, "token")} as written`}`), h("div", { class: "text" }, marked(entry.stated_text))),
       h("button", { class: "more orig-toggle", type: "button", "aria-expanded": String(!!open),
         onclick: () => { if (ui.open.has(key)) ui.open.delete(key); else ui.open.add(key); renderTimeline(state.knowledge); } },
         `${open ? "Hide" : "Show"} what was said in ${turns.length > 1 ? `messages ${first}–${last}` : `message ${first}`}`),
       open ? turns.map((t) => h("div", { class: "orig", id: `turn-${t.turn_index}` },
         h("div", { class: "msg-head" }, h("span", { class: "who" }, speakerName(said.get(t.turn_index)?.role)), h("span", { class: "num" }, `message ${t.turn_index}`),
-          h("span", { class: "tok" }, plural(t.tokens, "token"))),
+          typeof said.get(t.turn_index)?.tokens === "number" ? h("span", { class: "tok" }, plural(said.get(t.turn_index).tokens, "token")) : null),
         textBlock(said.get(t.turn_index)?.text, { faded: true, key: `t-${t.turn_index}` }))) : null));
 }
 
@@ -584,12 +602,27 @@ export function renderPrompt(k) {
   } }, "Copy");
   setChildren($("prompt"),
     h("div", { class: "prompt-head" }, h("div", { class: "note" }, "The conversation as LLM-GC forwards it, before your next message. ",
-      k.front_text ? "The condensed block stays byte for byte the same until the next clean-up, so the provider can keep it cached."
-        : "Nothing has been condensed, so your app's own request is forwarded untouched."), copy),
+      k.front_text ? "The recap stays byte for byte the same until the next collection, so the provider can keep it cached."
+        : "Nothing has been collected, so your app's own request is forwarded untouched."), copy),
     k.front_text ? h("div", { class: "prompt-msg front" }, h("div", { class: "msg-head" }, h("span", { class: "who" }, "user"),
-      h("span", { class: "tag" }, h("span", { class: "key block" }), `the condensed block · ${plural(k.front_tokens, "token")}`), info("block")), h("pre", {}, marked(k.front_text))) : null,
+      h("span", { class: "tag" }, h("span", { class: "key block" }), `the recap · ${plural(k.front_tokens, "token")}`), info("block")), promptText(k.front_text, "prompt-front")) : null,
     tail.map((t) => h("div", { class: "prompt-msg" }, h("div", { class: "msg-head" }, h("span", { class: "who" }, t.role),
-      h("span", { class: "num" }, `message ${t.turn_index} · ${plural(t.tokens, "token")}`)), h("pre", {}, marked(t.text || "(no text)")))));
+      h("span", { class: "num" }, `message ${t.turn_index} · ${plural(t.tokens, "token")}`)), promptText(t.text || "(no text)", `prompt-${t.turn_index}`))));
+}
+
+// A long block starts folded, as messages do elsewhere; Copy still takes the whole prompt.
+function promptText(text, key) {
+  if (text.length <= CLAMP_CHARS && text.split("\n").length <= 8) return h("pre", {}, marked(text));
+  const open = ui.open.has(key) || (query() && has(text));
+  const toggle = () => {
+    const nowOpen = !ui.open.has(key);
+    if (nowOpen) ui.open.add(key); else ui.open.delete(key);
+    body.classList.toggle("clamped", !nowOpen);
+    more.textContent = nowOpen ? "Show less" : "Show more";
+  };
+  const body = h("pre", { class: open ? "" : "clamped" }, marked(text));
+  const more = h("button", { class: "more", type: "button", onclick: toggle }, open ? "Show less" : "Show more");
+  return [body, more];
 }
 
 export function setPromptView(on) {
@@ -609,11 +642,11 @@ export function renderMemory(k) {
   const groups = [
     { id: "sent", title: "Sent to the model", icon: h("span", { class: "st good" }, "✓"), facts: active.filter((f) => f.sent) },
     { id: "unsent", title: "Stored, not sent", icon: h("span", { class: "st warn" }, "⚠"), facts: active.filter((f) => !f.sent),
-      note: `The condensed block carries at most ${maxFacts()} facts, most important first. The model cannot see these.` },
+      note: `The recap carries at most ${maxFacts()} facts, most important first. The model cannot see these.` },
     { id: "superseded", title: "Contradicted later", icon: h("span", { class: "st" }, "↺"), facts: k.facts.filter((f) => f.status === "superseded") },
   ];
   if (!k.facts.length) {
-    fill("memory", h("p", { class: "empty", style: "margin-top:10px" }, "Nothing yet. When a clean-up condenses a message, the facts it established appear here."));
+    fill("memory", h("p", { class: "empty", style: "margin-top:10px" }, "Nothing yet. When a collection archives a message, the facts it established appear here."));
     return;
   }
   fill("memory",
@@ -642,9 +675,9 @@ export function renderCleanupLog() {
   const whenWhy = h("button", { class: "link-btn", type: "button", onclick: () => { showTab("engine"); openCard("next", true); } }, "When and why");
   fill("cleanup-log",
     cuts.length ? cuts.map((p) => h("li", {}, h("div", {},
-      h("b", {}, "Clean-up"), h("span", { class: "when" }, ` · ${agoTs(p.gc_completed_at)}`),
+      h("b", {}, "Collection"), h("span", { class: "when" }, ` · ${agoTs(p.gc_completed_at)}`),
       h("div", { class: "muted" }, `${p.outcome ? `${describeOutcome(p.outcome)} · ` : ""}${fmt(p.tokens_before)} → ${fmt(p.tokens_before - p.tokens_saved)} tokens`))))
-      : k.cuts ? null : h("li", { class: "future" }, h("div", { class: "muted" }, "No clean-ups yet.")),
-    h("li", { class: "future" }, h("div", {}, h("b", {}, "Next clean-up"),
+      : k.cuts ? null : h("li", { class: "future" }, h("div", { class: "muted" }, "No collections yet.")),
+    h("li", { class: "future" }, h("div", {}, h("b", {}, "Next collection"),
       h("div", { class: "muted" }, next ? `${next === 1 ? "1 message" : `${next} messages`} will change form. ` : "Nothing is queued to change yet. ", whenWhy))));
 }

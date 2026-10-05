@@ -454,7 +454,8 @@ class GcService:
             if score >= self.gc_config.archive_threshold:
                 continue
             stated = entry.message.model_copy(update={"content": entry.text, "token_count": count_tokens(entry.text)})
-            if not self._archive(session_id, stated, "old", plan, source_turns=entry.source_turns):
+            if not self._archive(session_id, stated, "old", plan, source_turns=entry.source_turns,
+                                 from_summary=entry.kind is EntryKind.SUMMARY):
                 continue
             if entry in plan.new_entries:
                 # Produced and archived in one cut: it never enters old gen.
@@ -463,7 +464,7 @@ class GcService:
                 plan.evicted_entries.append(entry)
 
     def _archive(self, session_id: str, message: Message, source_generation: str, plan: _AgingPlan,
-                 source_turns: tuple[int, ...] = ()) -> bool:
+                 source_turns: tuple[int, ...] = (), from_summary: bool = False) -> bool:
         """Extract a turn's or entry's facts into the plan; False if extraction failed.
 
         `source_turns` carries an old-generation entry's coverage onto its facts, so
@@ -481,6 +482,8 @@ class GcService:
             return False
         if source_turns:
             entries = [replace(entry, source_turns=source_turns) for entry in entries]
+        if from_summary:
+            entries = [replace(entry, from_summary=True) for entry in entries]
         plan.new_knowledge.extend(entries)
         plan.archives.append((message, entries, source_generation))
         return True

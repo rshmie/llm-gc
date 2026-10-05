@@ -25,7 +25,7 @@
       <label for="session-select">Conversation</label>
       <select id="session-select"><option>none yet</option></select>
     </div>
-    <button class="run-gc" id="run-gc" disabled title="Clean up this conversation now, without waiting for enough messages rated to condense.">Run GC now</button>
+    <button class="run-gc" id="run-gc" disabled title="Collect this conversation now, without waiting for enough messages to compact or archive.">Run GC now</button>
     <span class="live" id="live" data-state="connecting" role="status"><span class="dot"></span><span id="live-text">connecting…</span></span>
     <button class="icon-btn" id="theme" type="button" title="Theme: follow the system">◐</button>
     <button class="icon-btn" id="open-guide" type="button" title="How LLM-GC works, and what the words mean" aria-label="How it works">?</button>
@@ -34,8 +34,8 @@
 
 <main class="wrap">
   <section class="intro" id="intro" hidden>
-    <p><b>LLM-GC keeps a long conversation's prompt from growing without limit.</b> It condenses older
-      messages, and this page shows exactly what the model can still see of them.</p>
+    <p><b>LLM-GC keeps a long conversation's prompt from growing without limit.</b> It collects older
+      messages, keeping, compacting or archiving each, and this page shows exactly what the model can still see of them.</p>
     <button class="btn" id="intro-guide" type="button">How it works</button>
     <button class="x" id="intro-close" type="button" aria-label="Dismiss">×</button>
   </section>
@@ -49,7 +49,7 @@
     <ol>
       <li>Start the proxy with the dashboard: <code>python scripts/run_proxy.py --serve --dashboard</code></li>
       <li>Talk through it: <code>python scripts/chat.py</code>, or point any Anthropic client at <code>http://127.0.0.1:9900</code></li>
-      <li>Watch each message move from word for word into the condensed block as the conversation grows.</li>
+      <li>Watch each message move from word for word into the recap as the conversation grows.</li>
     </ol>
   </section>
 
@@ -104,11 +104,11 @@
       <aside class="side">
         <section class="card memory" aria-labelledby="memory-title">
           <h2 id="memory-title">What the model remembers</h2>
-          <div class="sub">Facts kept from condensed messages. Click one to see where it came from.</div>
+          <div class="sub">Facts from archived messages. Click one to see where it came from.</div>
           <div id="memory"></div>
         </section>
         <section class="card" aria-labelledby="cleanups-title">
-          <h2 id="cleanups-title">Clean-ups</h2>
+          <h2 id="cleanups-title">Collections</h2>
           <ul class="log" id="cleanup-log"></ul>
         </section>
       </aside>
@@ -119,16 +119,20 @@
   <div id="view-engine" class="view" role="tabpanel" aria-labelledby="tab-engine" hidden>
     <div class="eng-intro">
       <h1>LLM-GC at work</h1>
-      <p>When the next clean-up runs and why, what clean-ups have done to this conversation, and a record of every check.</p>
+      <p>When the next collection runs and why, what collections have done to this conversation, and a record of every check.</p>
     </div>
     <div class="proxy-line" id="proxy-line"></div>
     <div class="status-stack" id="eng-status" role="status"></div>
+    <section class="card gen-card" aria-labelledby="gen-title">
+      <h2 id="gen-title">Generations<button class="info" type="button" data-info="generations" aria-label="About generations">i</button></h2>
+      <div id="generations"></div>
+    </section>
 
     <div class="eng-stack">
       <section class="card eng-card" data-card="next" aria-labelledby="next-title">
         <div class="card-head">
-          <div><h2 id="next-title">Next clean-up<button class="info" type="button" data-info="next" aria-label="About Next clean-up">i</button></h2></div>
-          <button class="collapse card-toggle" type="button" aria-expanded="true" aria-controls="next-body" aria-label="Collapse Next clean-up" title="Collapse"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <div><h2 id="next-title">Next collection<button class="info" type="button" data-info="next" aria-label="About Next collection">i</button></h2></div>
+          <button class="collapse card-toggle" type="button" aria-expanded="true" aria-controls="next-body" aria-label="Collapse Next collection" title="Collapse"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         </div>
         <div class="card-body" id="next-body">
           <div id="panel-next"></div>
@@ -148,7 +152,7 @@
     <div class="eng-grid pair" id="eng-pair">
       <section class="card eng-card" data-card="moves" aria-labelledby="moves-title">
         <div class="card-head">
-          <div><h2 id="moves-title">What moved, and when<button class="info" type="button" data-info="moves" aria-label="About What moved, and when">i</button></h2><div class="sub">By clean-up. Click a message to open it.</div></div>
+          <div><h2 id="moves-title">What moved, and when<button class="info" type="button" data-info="moves" aria-label="About What moved, and when">i</button></h2><div class="sub">By collection. Click a message to open it.</div></div>
           <button class="collapse card-toggle" type="button" aria-expanded="true" aria-controls="moves-body" aria-label="Collapse What moved, and when" title="Collapse"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         </div>
         <div class="card-body" id="moves-body">
@@ -157,7 +161,7 @@
       </section>
       <section class="card eng-card" data-card="notmoved" aria-labelledby="notmoved-title">
         <div class="card-head">
-          <div><h2 id="notmoved-title">What didn't move, and why<button class="info" type="button" data-info="notmoved" aria-label="About What didn't move, and why">i</button></h2><div class="sub">Planned moves a clean-up couldn't make.</div></div>
+          <div><h2 id="notmoved-title">What didn't move, and why<button class="info" type="button" data-info="notmoved" aria-label="About What didn't move, and why">i</button></h2><div class="sub">Planned moves a collection couldn't make.</div></div>
           <button class="collapse card-toggle" type="button" aria-expanded="true" aria-controls="notmoved-body" aria-label="Collapse What didn't move, and why" title="Collapse"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         </div>
         <div class="card-body" id="notmoved-body">
@@ -210,23 +214,69 @@
     <h2 id="guide-title">How LLM-GC works</h2>
     <button class="x" id="close-guide" type="button" aria-label="Close">×</button>
   </div>
-  <p>Every request your app makes carries the whole conversation, so it grows with every message. LLM-GC sits in
-    between and keeps it from growing without limit, while showing you exactly what the model can still see.</p>
-  <div class="anatomy" aria-hidden="true"><div class="blk">condensed block</div><div class="msgx">message</div><div class="msgx">message</div><div class="msgx">newest</div></div>
-  <div class="anatomy-caption" aria-hidden="true"><div style="flex:1.5">older messages, condensed</div><div style="flex:3">recent messages, word for word</div></div>
-  <h3>What happens to a message</h3>
+  <p>Every request your app makes carries the whole conversation again, so the prompt grows with every message.
+    LLM-GC is a garbage collector for that conversation: it keeps the prompt from growing without limit, and shows
+    exactly what the model can still see. Numbers in <b class="cfg">this colour</b> are your proxy's settings.</p>
+
+  <h3>What one request carries</h3>
+  <div class="anatomy" aria-hidden="true"><div class="blk">recap</div><div class="msgx">young generation</div><div class="newx">your new message</div></div>
+  <div class="anatomy-caption" aria-hidden="true"><div style="flex:1.5">old and permanent generations (the front)</div><div style="flex:1">the newest <b class="cfg" data-config="last_n_turns_to_keep">…</b>, word for word</div><div style="flex:1">&nbsp;</div></div>
+
+  <h3>How a message moves through the generations</h3>
+  <div class="gflow" role="img" aria-label="Every message starts in the young generation. A collection moves older messages out by relevance: keep quotes them and compact summarises them into the old generation, archive reduces them to facts in the permanent generation. Old-generation entries that go cold are archived into the permanent generation.">
+    <div class="gnode g-young"><b>Young generation</b><span>Every message starts here and is sent word for word.</span></div>
+    <div class="gcut">↓ <b>a collection</b> takes the older messages, each by its relevance</div>
+    <div class="grows">
+      <div class="grow"><span class="band">≥ <b class="cfg" data-config="keep_threshold">…</b></span><b class="verb">keep</b><span class="to t-old">quoted whole</span></div>
+      <div class="grow"><span class="band">between</span><b class="verb">compact</b><span class="to t-old">summarised</span></div>
+      <div class="grow"><span class="band">&lt; <b class="cfg" data-config="archive_threshold">…</b></span><b class="verb">archive</b><span class="to t-perm">reduced to facts</span></div>
+    </div>
+    <div class="gdest">
+      <div class="gnode g-old"><b>Old generation</b><span>Quotes and summaries, sent in the recap.</span></div>
+      <div class="gcold">goes cold →<br>archive</div>
+      <div class="gnode g-perm"><b>Permanent generation</b><span>Facts and excerpts; the recap sends up to <b class="cfg" data-config="max_memory_facts">…</b>.</span></div>
+    </div>
+  </div>
+
+  <h3>When a cut happens</h3>
   <ol>
-    <li><b>Recent messages</b> go to the model word for word.</li>
-    <li>LLM-GC rates every older message for relevance. Once enough low-rated ones build up, it condenses them in one
-      <b>clean-up</b> into a single <b>condensed block</b> at the start of the prompt: important messages quoted whole,
-      routine ones summarised, cold ones reduced to facts like <code>database: postgres</code>.</li>
-    <li>The condensed block carries only a few facts. A message whose facts did not make it is <b>out of view</b>:
-      stored, but the model cannot see it. That is what to watch for.</li>
-    <li><b>Run GC now</b> does a clean-up immediately instead of waiting, and tells you what changed, or why nothing did.</li>
+    <li>After every reply, LLM-GC runs a <b>pass</b> (on screen, a <i>check</i>). Most passes change nothing.</li>
+    <li>The newest <b class="cfg" data-config="last_n_turns_to_keep">…</b> messages always stay in the young generation. Messages
+      of <b class="cfg" data-config="min_compactable_tokens">…</b> tokens or fewer are too short to compact: a collection keeps them whole.</li>
+    <li>Once the older messages to be summarised or archived reach <b class="cfg" data-config="min_cut_tokens">…</b> tokens,
+      the check makes a <b>collection</b> (a <i>cut</i> in the code) and moves them all at once. Changing the recap rarely keeps the
+      provider's prompt cache working.</li>
+    <li>A cut that would make the prompt bigger is skipped. <b>Run GC now</b> cuts at once, ignoring the token minimum but never that rule.</li>
   </ol>
+
+  <h3>What to watch</h3>
+  <ol>
+    <li><b>Out of view</b>: a message's facts were stored, but none made it into the recap, so the model sees nothing of it.</li>
+    <li><b>An excerpt marked ✂</b>: the recap carries only its start.</li>
+    <li><b>A yellow banner</b>: a move a collection planned did not happen, for example a summary request that failed. Nothing is lost; the prompt is just bigger than planned.</li>
+  </ol>
+
+  <h3>The words, in the code and on screen</h3>
+  <table class="terms">
+    <thead><tr><th>Code and docs</th><th>On screen</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td>pass</td><td>check</td><td>runs after every reply</td></tr>
+      <tr><td>cut</td><td>collection</td><td>a check that moved messages out of the young generation</td></tr>
+      <tr><td>front</td><td>recap</td><td>the first message of every request: the old and permanent generations</td></tr>
+      <tr><td>young generation</td><td>word for word</td><td>recent messages, sent as written</td></tr>
+      <tr><td>keep</td><td>kept</td><td>quoted whole into the old generation</td></tr>
+      <tr><td>compact</td><td>compacted</td><td>replaced by a summary in the old generation</td></tr>
+      <tr><td>archive</td><td>archived</td><td>reduced to facts in the permanent generation</td></tr>
+    </tbody>
+  </table>
+
+  <p class="guide-links">Source, design docs and issues:
+    <a href="https://github.com/rshmie/llm-gc" target="_blank" rel="noopener noreferrer">github.com/rshmie/llm-gc</a> ·
+    <a href="https://github.com/rshmie/llm-gc/tree/main/doc/design" target="_blank" rel="noopener noreferrer">how it is designed</a></p>
+
   <h3>The colours</h3>
   <div class="colours" id="guide-colours"></div>
-  <h3>The words</h3>
+  <h3>More terms</h3>
   <dl class="glossary" id="glossary"></dl>
 </aside>
 </div>

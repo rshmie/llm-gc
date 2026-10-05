@@ -4,15 +4,15 @@ import { CATS, GLOSSARY, GUIDE_TERMS, ORDER, swatch } from "./vocabulary.js";
 import { $, clearMotionCaches, fill, h, plural, setChildren, storeGet, storeSet } from "./dom.js";
 import { getJSON, sessionPath, state, ui } from "./state.js";
 import { hideTooltip } from "./tooltip.js";
-import { THEMES, applyTheme, setGuide, setLive, showCleanupNotice, showTab } from "./shell.js";
+import { THEMES, applyTheme, fillConfigValues, setGuide, setLive, showCleanupNotice, showTab } from "./shell.js";
 import { celebrateCleanup, clearMapCache, renderChips, renderCleanupLog, renderHero, renderMap, renderMemory, renderMessages, renderPrompt, renderStatus, renderTimeline, setPromptView } from "./conversation.js";
-import { initCards, renderChart, renderChecks, renderEngineStatus, renderHistory, renderNext, renderProblems, renderProxy, renderRelevance, renderSettings } from "./engine.js";
+import { initCards, renderChart, renderChecks, renderEngineStatus, renderGenerations, renderHistory, renderNext, renderProblems, renderProxy, renderRelevance, renderSettings } from "./engine.js";
 import { runGcNow } from "./run-gc.js";
 
 function renderSessions() {
   const select = $("session-select");
   const options = state.sessions.map((s) => h("option", { value: s.session_id, title: s.session_id },
-    `${s.title ? s.title : s.session_id} · ${plural(s.recorded_turns, "message")} · ${plural(s.cuts, "clean-up")}${s.aging_in_flight ? " · cleaning up…" : ""}`));
+    `${s.title ? s.title : s.session_id} · ${plural(s.recorded_turns, "message")} · ${plural(s.cuts, "collection")}${s.aging_in_flight ? " · collecting…" : ""}`));
   setChildren(select, options.length ? options : h("option", {}, "none yet"));
   select.disabled = !options.length;
   if (state.selected) select.value = state.selected;
@@ -34,6 +34,7 @@ async function refresh() {
   try {
     const overview = await getJSON("/api/overview");
     state.config = overview.config;
+    fillConfigValues(state.config);
     state.proxy = overview.proxy;
     state.sessions = overview.sessions;
     if (!state.sessions.some((s) => s.session_id === state.selected)) {
@@ -63,14 +64,14 @@ async function refresh() {
           renderConversation();
           if (previousCuts !== null && k.cuts > previousCuts) {
             showCleanupNotice(k.cuts - previousCuts > 1
-              ? `${plural(k.cuts - previousCuts, "clean-up")} just ran: messages were condensed.`
-              : "A clean-up just ran: messages were condensed.");
+              ? `${plural(k.cuts - previousCuts, "collection")} just ran: older messages left the young generation.`
+              : "A collection just ran: older messages left the young generation.");
             celebrateCleanup();
           }
         }
       }
       state.activity = await getJSON(sessionPath("/activity"));
-      if (state.knowledge) { renderStatus(); renderCleanupLog(); renderNext(state.knowledge); }
+      if (state.knowledge) { renderStatus(); renderCleanupLog(); renderNext(state.knowledge); renderGenerations(state.knowledge); }
       renderProxy();
       renderEngineStatus();
       renderChart();
@@ -133,7 +134,7 @@ $("intro").hidden = storeGet("llmgc.intro") === "dismissed";
 ui.listOpen = storeGet("llmgc.messages") !== "closed";
 fill("glossary", GUIDE_TERMS.map((term) => [h("dt", {}, GLOSSARY[term][0]), h("dd", {}, GLOSSARY[term][1])]));
 fill("guide-colours", ORDER.map((key) => h("div", {}, swatch(key), h("div", {}, h("b", {}, CATS[key].label), h("span", {}, ` — ${GLOSSARY[key][1]}`)))),
-  h("div", {}, h("span", { class: "qdot", style: "margin:3px 2px 0" }), h("div", {}, h("b", {}, "Queued for the next clean-up"), h("span", {}, " — a dot on the message's bar, in the colour it will become. On the map, a bar's height shows how much of the message the model still has, and its width how long the message is."))));
+  h("div", {}, h("span", { class: "qdot", style: "margin:3px 2px 0" }), h("div", {}, h("b", {}, "Queued for the next collection"), h("span", {}, " — a dot on the message's bar, in the colour it will become. On the map, a bar's height shows how much of the message the model still has, and its width how long the message is."))));
 
 refresh();
 setInterval(refresh, 1000);

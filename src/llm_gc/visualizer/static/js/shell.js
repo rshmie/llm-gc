@@ -1,6 +1,6 @@
 // The page around the views: tabs, the guide, the theme, the live indicator.
 
-import { $, h, storeSet } from "./dom.js";
+import { $, fmt, h, storeSet } from "./dom.js";
 import { state, ui } from "./state.js";
 import { renderChart } from "./engine.js";
 
@@ -58,4 +58,12 @@ export function offerReturn(tab, scrollY) {
   const pill = h("button", { id: "return-pill", class: "return-pill", type: "button", "data-tab": tab,
     onclick: () => { showTab(tab); requestAnimationFrame(() => window.scrollTo({ top: scrollY })); } }, `← Back to ${label}`);
   document.body.append(pill);
+}
+
+// The settings quoted in the page's own text, filled from the running proxy's config.
+export function fillConfigValues(config) {
+  for (const el of document.querySelectorAll("[data-config]")) {
+    const value = config[el.dataset.config];
+    if (typeof value === "number") el.textContent = Number.isInteger(value) ? fmt(value) : value.toFixed(2);
+  }
 }

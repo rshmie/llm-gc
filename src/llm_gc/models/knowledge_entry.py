@@ -27,7 +27,8 @@ class KnowledgeEntry:
     `message_turn` is the turn the entry is labelled with. `source_turns` names
     every turn it was derived from when that is more than one - facts extracted
     from a summary of turns 14-19 are labelled 14 and come from all six. Empty
-    means the entry comes from `message_turn` alone.
+    means the entry comes from `message_turn` alone. `from_summary` marks content
+    taken from LLM-GC's summary of those turns, not from their own words.
     """
     message_turn: int
     content: str
@@ -36,6 +37,7 @@ class KnowledgeEntry:
     knowledge_status: KnowledgeStatus = KnowledgeStatus.ACTIVE
     created_at: datetime = field(default_factory=datetime.now)
     source_turns: tuple[int, ...] = ()
+    from_summary: bool = False
 
     @property
     def covered_turns(self) -> tuple[int, ...]:

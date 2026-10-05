@@ -13,6 +13,7 @@ from enum import Enum
 
 from pydantic import BaseModel
 
+from llm_gc.engine.generations.memory_block import shorten_for_block
 from llm_gc.engine.inspection import SessionInspection
 from llm_gc.models import KnowledgeEntry, SweepClassification
 from llm_gc.models.generation_snapshot import EntryKind, FrontEntry
@@ -74,6 +75,9 @@ class FactState(BaseModel):
     knowledge_type: KnowledgeType
     status: KnowledgeStatus
     sent: bool                            # in the front, so the model sees it
+    sent_content: str                     # the content as the front carries it, cut if over the line limit
+    shortened: bool                       # the front carries only the start of `content`
+    from_summary: bool                    # the content is LLM-GC's summary of the turns, not their words
     superseded_by_turn: int | None = None
 
 
@@ -187,7 +191,10 @@ def _fact_states(knowledge: tuple[KnowledgeEntry, ...], sent: set[KnowledgeEntry
             replacement = next((later.message_turn for later in knowledge[position + 1:]
                                 if later.topic_label == fact.topic_label
                                 and later.knowledge_type is not KnowledgeType.RAW), None)
+        as_sent = shorten_for_block(fact.content)
         states.append(FactState(turn=fact.message_turn, source_turns=list(fact.covered_turns),
                                 topic=fact.topic_label, content=fact.content, knowledge_type=fact.knowledge_type,
-                                status=fact.knowledge_status, sent=fact in sent, superseded_by_turn=replacement))
+                                status=fact.knowledge_status, sent=fact in sent, sent_content=as_sent,
+                                shortened=as_sent != fact.content, from_summary=fact.from_summary,
+                                superseded_by_turn=replacement))
     return sorted(states, key=lambda state: state.turn)
