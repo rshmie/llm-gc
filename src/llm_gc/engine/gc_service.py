@@ -14,8 +14,7 @@ from llm_gc.engine.generations.condensing import Condensed
 from llm_gc.engine.generations.front import (
     FRONT_OVERHEAD_TOKENS,
     Front,
-    active_facts_by_turn,
-    facts_of,
+    KnowledgeIndex,
     folded_line,
     level_costs,
     render_front,
@@ -55,6 +54,7 @@ class _Planned:
     spans: tuple[Span, ...]
     new_from: int
     scores: tuple[float, ...]
+    options: tuple[LevelOptions, ...]
     plan: Plan
     new_facts: tuple[KnowledgeEntry, ...]
 
@@ -77,6 +77,17 @@ class _Planned:
         """Tokens of the cut's turns the plan would not keep word for word."""
         return sum(turn.token_count for span, level in self.placed if level is not DetailLevel.KEPT
                    for turn in span.turns)
+
+    def cut_saving(self, front_exists: bool) -> int:
+        """What the cut's new spans save against the turns they replace, at the costs planned.
+
+        Estimated when the summaries are: a collection checks it before paying for
+        them. A session's first cut also pays for the front's own header.
+        """
+        new = zip(self.spans[self.new_from:], self.options[self.new_from:], self.plan.levels[self.new_from:],
+                  strict=True)
+        saved = sum(sum(turn.token_count for turn in span.turns) - option.cost(level) for span, option, level in new)
+        return saved - (0 if front_exists else FRONT_OVERHEAD_TOKENS)
 
     def tokens_at(self, *levels: DetailLevel) -> int:
         return sum(turn.token_count for span, level in self.placed if level in levels for turn in span.turns)
@@ -286,9 +297,14 @@ class GcService:
             young = _in_order(base.young)
             cut = find_cut_point(young, self.gc_config.last_n_turns_to_keep)
             drafts = self.generational_memory.draft(young[:cut])
-            if not batch_worth_cutting(cut, self._plan(base, young, cut, drafts, estimate_summaries=True)
-                                       .compactable_tokens, min_cut_tokens):
+            estimated = self._plan(base, young, cut, drafts, estimate_summaries=True)
+            if not batch_worth_cutting(cut, estimated.compactable_tokens, min_cut_tokens):
                 return self._unchanged_result(base, gc_run_id, GCStatus.BYPASSED_BATCH_TOO_SMALL, start)
+            if (saving := estimated.cut_saving(front_exists=bool(base.old))) <= 0:
+                # Decided before any summary is bought: a cut that cannot pay for itself
+                # would buy summaries only to discard them, on every pass.
+                return self._unchanged_result(base, gc_run_id, GCStatus.BYPASSED_NO_SAVING, start,
+                                              abandoned_cut=self._abandoned(base, estimated, saving))
 
             current_stage = "condense"
             condensed = await self.generational_memory.summarise(drafts)
@@ -313,11 +329,8 @@ class GcService:
                             extra={"session_id": session_id, "gc_run_id": gc_run_id})
                 return self._unchanged_result(base, gc_run_id, GCStatus.BYPASSED_NO_SAVING, start,
                                               degradations=degradations,
-                                              abandoned_cut=AbandonedCut(
-                                                  turns=[turn.turn_index for turn in planned.cut_turns],
-                                                  outcome=planned.outcome(),
-                                                  tokens_taken=sum(t.token_count for t in planned.cut_turns),
-                                                  context_tokens_after=projected))
+                                              abandoned_cut=self._abandoned(
+                                                  base, planned, self._context_tokens(base) - projected))
         except Exception as err:
             logger.exception("gc_age failed",
                              extra={"session_id": session_id, "gc_run_id": gc_run_id, "stage": current_stage})
@@ -343,15 +356,16 @@ class GcService:
         """Score every span against what is being discussed now, and give each its level.
 
         "Now" is what the user said in the tail. With `estimate_summaries`, a new
-        span that could be summarised is costed at the compactor's target ratio,
-        because its summary has not been paid for yet.
+        span that could be summarised is costed as its archived line plus the
+        compactor's target share of its words, because its summary has not been
+        paid for yet.
         """
         new = [Span(turns=draft.turns, level=DetailLevel.KEPT, summary=draft.summary,
                     summary_text=draft.summary_text, index_line=draft.index_line) for draft in condensed]
         spans = list(base.old) + new
         new_facts = tuple(fact for draft in condensed for fact in draft.facts)
         knowledge, _ = file_knowledge(base.knowledge, new_facts)
-        facts_by_turn = active_facts_by_turn(knowledge)
+        annotated = KnowledgeIndex(knowledge)
 
         now = [turn for turn in young[cut:] if turn.role == "user" and not tool_result_ids(turn)]
         newest_turn = base.recorded_turn_count - 1
@@ -359,18 +373,25 @@ class GcService:
 
         options = []
         for index, (span, score) in enumerate(zip(spans, scores, strict=True)):
-            kept, compacted, archived = level_costs(span, facts_of(span, facts_by_turn))
+            kept, compacted, archived = level_costs(span, annotated.for_span(span))
             is_new = index >= len(base.old)
             if compacted is None and is_new and estimate_summaries and self.generational_memory.worth_summarising(
                     span.turns):
-                compacted = int(kept * DEFAULT_COMPACTION_TARGET_RATIO)
+                # A summarised span shows its archived line too, so its summary costs on top of that.
+                compacted = archived + int(kept * DEFAULT_COMPACTION_TARGET_RATIO)
             options.append(LevelOptions(score=score, current=None if is_new else span.level, kept_tokens=kept,
                                         compacted_tokens=compacted, archived_tokens=archived))
 
         fold = count_tokens(folded_line(spans[0].first_turn, spans[-1].turns[-1].turn_index, len(spans))) if spans else 0
         plan = plan_levels(options, self._bands, self.gc_config.max_recap_tokens - FRONT_OVERHEAD_TOKENS, fold)
-        return _Planned(spans=tuple(spans), new_from=len(base.old), scores=tuple(scores), plan=plan,
-                        new_facts=new_facts)
+        return _Planned(spans=tuple(spans), new_from=len(base.old), scores=tuple(scores), options=tuple(options),
+                        plan=plan, new_facts=new_facts)
+
+    def _abandoned(self, base: GenerationSnapshot, planned: _Planned, saving: int) -> AbandonedCut:
+        """The cut a pass planned and did not make, and what it would have left the context at."""
+        return AbandonedCut(turns=[turn.turn_index for turn in planned.cut_turns], outcome=planned.outcome(),
+                            tokens_taken=sum(turn.token_count for turn in planned.cut_turns),
+                            context_tokens_after=self._context_tokens(base) - saving)
 
     def _report_failures(self, session_id: str, condensed: Sequence[Condensed]) -> list[AgingDegradation]:
         """A degradation for each span made without its summary, or without its facts, because something failed.

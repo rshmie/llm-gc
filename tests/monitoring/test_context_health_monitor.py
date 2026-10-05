@@ -4,6 +4,7 @@ from pydantic import ValidationError
 
 from llm_gc.config import GCConfig
 from llm_gc.engine import AgingDegradation, DegradationReason, GCResult, GCStatus
+from llm_gc.engine.generations.front import FRONT_OVERHEAD_TOKENS, render_front
 from llm_gc.events import Event, EventBus, EventType
 from llm_gc.models.generation_snapshot import DetailLevel, GenerationSnapshot, Span
 from llm_gc.models import KnowledgeEntry, Message, SweepClassification
@@ -277,7 +278,9 @@ class TestSnapshotCompleted:
 
         assert lifecycle.old_gen_turn_indices == [7]
         assert lifecycle.old_gen_count == 1
-        assert lifecycle.old_gen_tokens == 5
+        front = render_front((summary,), ())
+        assert lifecycle.old_gen_tokens == front.message.token_count - FRONT_OVERHEAD_TOKENS, \
+            "what the front spends on it, not the summary's own size"
 
     def test_old_gen_reads_empty_on_the_stateless_path(self):
         """The stateless collect path classifies COMPACT but never promotes, so

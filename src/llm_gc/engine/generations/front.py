@@ -1,10 +1,11 @@
 """The front: one message standing in for every turn a cut has removed.
 
 It shows each span of the old generation at its detail level, in conversation
-order. It changes only when a collection commits, and rendering is
-deterministic, so the front's bytes are identical on every request in between -
-which is what lets the provider cache it and keeps the model's thinking blocks
-valid.
+order. Levels are nested - each shows everything the level below it shows - so
+showing a span with more detail never takes anything away. The front changes only
+when a collection commits, and rendering is deterministic, so its bytes are
+identical on every request in between, which is what lets the provider cache it
+and keeps the model's thinking blocks valid.
 """
 
 from collections.abc import Iterable, Sequence
@@ -16,19 +17,52 @@ from llm_gc.models.generation_snapshot import DetailLevel, Span
 from llm_gc.models.knowledge_entry import GENERAL_TOPIC, KnowledgeStatus
 from llm_gc.utils import count_tokens
 
-FRONT_HEADER = (
-    "[Earlier in this conversation, condensed by LLM-GC. The turns before the ones that follow are shown "
-    "below with less detail: quoted exactly, summarised, archived to a line naming them and their facts, "
-    "or folded out of view.]"
-)
-CONDENSED_HEADER = "[Earlier conversation, in order]"
 QUOTE_PREFIX = "[Quoted exactly]"
+SUMMARISED_PREFIX = "[Summarised]"
 ARCHIVED_PREFIX = "[Archived]"
 FOLDED_PREFIX = "[Out of view]"
+
+FRONT_HEADER = (
+    "[Earlier turns, condensed by LLM-GC: quoted exactly, summarised, archived to an opening line and its facts, "
+    "or out of view. If a detail you need is not shown, say so rather than guess.]"
+)
+CONDENSED_HEADER = "[Earlier conversation, in order]"
 _SEPARATOR = " · "
 
 FRONT_OVERHEAD_TOKENS = count_tokens(f"{FRONT_HEADER}\n\n{CONDENSED_HEADER}\n")
 """What the front costs before it shows any span: the share of the recap budget no span can use."""
+
+
+@dataclass(frozen=True)
+class Annotations:
+    """What the front adds to a span beyond its own words.
+
+    `facts` are the active facts read from its turns; `replaced` pairs each of its
+    facts the conversation later replaced with the fact that replaced it.
+    """
+
+    facts: tuple[KnowledgeEntry, ...] = ()
+    replaced: tuple[tuple[KnowledgeEntry, KnowledgeEntry], ...] = ()
+
+
+class KnowledgeIndex:
+    """The permanent generation arranged for rendering: each span's annotations by its turns.
+
+    Built once per front, so rendering every span reads the knowledge once.
+    """
+
+    def __init__(self, knowledge: Sequence[KnowledgeEntry]) -> None:
+        self._active: dict[int, list[KnowledgeEntry]] = {}
+        self._replaced: dict[int, list[tuple[KnowledgeEntry, KnowledgeEntry]]] = {}
+        for position, fact in enumerate(knowledge):
+            if fact.knowledge_status is KnowledgeStatus.ACTIVE:
+                self._active.setdefault(fact.message_turn, []).append(fact)
+            elif (replacement := _replacement(fact, knowledge[position + 1:])) is not None:
+                self._replaced.setdefault(fact.message_turn, []).append((fact, replacement))
+
+    def for_span(self, span: Span) -> Annotations:
+        return Annotations(facts=tuple(fact for turn in span.turn_indices for fact in self._active.get(turn, ())),
+                           replaced=tuple(pair for turn in span.turn_indices for pair in self._replaced.get(turn, ())))
 
 
 @dataclass(frozen=True)
@@ -40,39 +74,36 @@ class Front:
     """
 
     message: Message
-    facts: tuple[KnowledgeEntry, ...]   # the facts it carries, on its archived spans' lines
-    spans: tuple[Span, ...]             # the spans it shows word for word or summarised, in order
+    entries: tuple[tuple[Span, str], ...]   # every span with lines of its own, and exactly those lines
+    facts: tuple[KnowledgeEntry, ...]       # the facts those lines carry
 
 
-def span_message(span: Span) -> Message | None:
-    """What the front carries for a kept or compacted span; None at the levels that need its facts.
+def span_text(span: Span, annotations: Annotations) -> str:
+    """What the front carries for a span at its level; a folded span shares a line with its run.
 
-    The message records the span's first turn: recency is positional, and a
-    summary of turns 14-19 sits where turn 14 did.
+    Raises:
+        ValueError: The span is folded, or compacted without a summary.
     """
-    if span.level is DetailLevel.COMPACTED:
-        return span.summary
+    if span.level is DetailLevel.OUT_OF_VIEW:
+        raise ValueError("a folded span has no line of its own")
     if span.level is DetailLevel.KEPT:
-        content = "\n".join(f"{QUOTE_PREFIX} (turn {turn.turn_index}, {turn.role}) {turn.content}"
-                            for turn in span.turns)
-        return Message(role=span.turns[0].role, content=content, token_count=count_tokens(content),
-                       turn_index=span.first_turn)
-    return None
+        lines = [f"{QUOTE_PREFIX} (turn {turn.turn_index}, {turn.role}) {turn.content}" for turn in span.turns]
+    elif span.level is DetailLevel.COMPACTED:
+        if span.summary is None:
+            raise ValueError(f"span at turn {span.first_turn} is compacted but has no summary")
+        summary = span.summary_text if span.summary_text is not None else span.summary.content
+        lines = [_heading(SUMMARISED_PREFIX, span, annotations.facts), summary]
+    else:
+        lines = [_heading(ARCHIVED_PREFIX, span, annotations.facts)]
+    lines += [_replaced_note(old, new) for old, new in annotations.replaced]
+    return "\n".join(lines)
 
 
 def stated_text(span: Span) -> str:
-    """What the front says for a span, without the markers it adds: for a person to read."""
+    """What a kept or compacted span says, without the front's markers: for a person to read."""
     if span.level is DetailLevel.COMPACTED and span.summary is not None:
         return span.summary_text if span.summary_text is not None else span.summary.content
     return "\n".join(turn.content for turn in span.turns)
-
-
-def archived_line(span: Span, facts: Sequence[KnowledgeEntry]) -> str:
-    """An archived span's one line: which turns, what was asked, and the facts read from them."""
-    heading = f"{ARCHIVED_PREFIX} ({_turns(span.first_turn, span.turns[-1].turn_index)}) {span.index_line}".rstrip()
-    stated = [fact.content if fact.topic_label == GENERAL_TOPIC else f"{fact.topic_label}: {fact.content}"
-              for fact in facts]
-    return _SEPARATOR.join([heading, *stated])
 
 
 def folded_line(first_turn: int, last_turn: int, spans: int) -> str:
@@ -82,25 +113,13 @@ def folded_line(first_turn: int, last_turn: int, spans: int) -> str:
             "folded to stay within the budget.")
 
 
-def active_facts_by_turn(knowledge: Iterable[KnowledgeEntry]) -> dict[int, list[KnowledgeEntry]]:
-    """The active facts, keyed by the turn each was read from, in the order they were filed."""
-    by_turn: dict[int, list[KnowledgeEntry]] = {}
-    for fact in knowledge:
-        if fact.knowledge_status is KnowledgeStatus.ACTIVE:
-            by_turn.setdefault(fact.message_turn, []).append(fact)
-    return by_turn
-
-
-def facts_of(span: Span, facts_by_turn: dict[int, list[KnowledgeEntry]]) -> list[KnowledgeEntry]:
-    return [fact for turn in span.turn_indices for fact in facts_by_turn.get(turn, ())]
-
-
-def level_costs(span: Span, facts: Sequence[KnowledgeEntry]) -> tuple[int, int | None, int]:
+def level_costs(span: Span, annotations: Annotations) -> tuple[int, int | None, int]:
     """Tokens the front would spend on the span kept, compacted and archived; compacted is None without a summary."""
-    quoted = span_message(replace(span, level=DetailLevel.KEPT))
-    assert quoted is not None
-    compacted = span.summary.token_count if span.summary is not None else None
-    return quoted.token_count, compacted, count_tokens(archived_line(span, facts))
+    def cost(level: DetailLevel) -> int:
+        return count_tokens(span_text(replace(span, level=level), annotations))
+
+    compacted = cost(DetailLevel.COMPACTED) if span.summary is not None else None
+    return cost(DetailLevel.KEPT), compacted, cost(DetailLevel.ARCHIVED)
 
 
 def render_front(old: Sequence[Span], knowledge: Sequence[KnowledgeEntry]) -> Front | None:
@@ -110,9 +129,9 @@ def render_front(old: Sequence[Span], knowledge: Sequence[KnowledgeEntry]) -> Fr
     with one; the turn index of -1 places it before every real turn. Consecutive
     folded spans share one line.
     """
-    facts_by_turn = active_facts_by_turn(knowledge)
+    index = KnowledgeIndex(knowledge)
     lines: list[str] = []
-    shown: list[Span] = []
+    entries: list[tuple[Span, str]] = []
     carried: list[KnowledgeEntry] = []
     for folded, run in groupby(sorted(old, key=lambda span: span.first_turn),
                                key=lambda span: span.level is DetailLevel.OUT_OF_VIEW):
@@ -121,20 +140,37 @@ def render_front(old: Sequence[Span], knowledge: Sequence[KnowledgeEntry]) -> Fr
             lines.append(folded_line(spans[0].first_turn, spans[-1].turns[-1].turn_index, len(spans)))
             continue
         for span in spans:
-            message = span_message(span)
-            if message is not None:
-                lines.append(message.content)
-                shown.append(span)
-            else:
-                facts = facts_of(span, facts_by_turn)
-                lines.append(archived_line(span, facts))
-                carried.extend(facts)
+            annotations = index.for_span(span)
+            text = span_text(span, annotations)
+            lines.append(text)
+            entries.append((span, text))
+            if span.level is not DetailLevel.KEPT:
+                carried.extend(annotations.facts)
     if not lines:
         return None
 
     content = f"{FRONT_HEADER}\n\n{CONDENSED_HEADER}\n" + "\n".join(lines)
     message = Message(role="user", content=content, token_count=count_tokens(content), turn_index=-1)
-    return Front(message=message, facts=tuple(carried), spans=tuple(shown))
+    return Front(message=message, entries=tuple(entries), facts=tuple(carried))
+
+
+def _heading(prefix: str, span: Span, facts: Iterable[KnowledgeEntry]) -> str:
+    """A span's first line: which turns, what was said first, and the facts read from them."""
+    heading = f"{prefix} ({_turns(span.first_turn, span.turns[-1].turn_index)}) {span.index_line}".rstrip()
+    return _SEPARATOR.join([heading, *(_stated(fact) for fact in facts)])
+
+
+def _replaced_note(old: KnowledgeEntry, new: KnowledgeEntry) -> str:
+    return f"↳ Replaced later (turn {new.message_turn}): {_stated(new)}, not {old.content}."
+
+
+def _stated(fact: KnowledgeEntry) -> str:
+    return fact.content if fact.topic_label == GENERAL_TOPIC else f"{fact.topic_label}: {fact.content}"
+
+
+def _replacement(fact: KnowledgeEntry, later: Sequence[KnowledgeEntry]) -> KnowledgeEntry | None:
+    """The fact that superseded `fact`: the next one filed on its topic that could."""
+    return next((entry for entry in later if entry.topic_label == fact.topic_label and entry.can_supersede), None)
 
 
 def _turns(first: int, last: int) -> str:

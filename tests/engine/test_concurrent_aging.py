@@ -16,7 +16,7 @@ from llm_gc.events import Event, EventBus, EventType
 from llm_gc.extraction import KnowledgeExtractor
 from llm_gc.models import Message
 from llm_gc.session import SessionManager
-from tests.engine.support import COMPACTED_SCORE, ScriptedSpanScorer
+from tests.engine.support import COMPACTED_SCORE, ScriptedSpanScorer, turn
 
 SESSION = "s"
 
@@ -54,8 +54,8 @@ def _service():
 
 
 def _turn(index: int) -> Message:
-    # Sized like a real turn, so a cut can remove more than the front's headers cost.
-    return Message(role="user", content=f"turn {index}", token_count=100, turn_index=index)
+    # Sized like a real turn, so a summary is worth buying and a cut pays for itself.
+    return turn(index)
 
 
 async def _start_aging(service: GcService, compactor: _GatedCompactor) -> asyncio.Task:
@@ -110,7 +110,7 @@ class TestTheHotPathNeverWaits:
         during, after = _run(scenario())
         assert 3 in _indices(during), "recorded turns must not wait for aging to finish"
         assert _indices(after) == [-1, 3], "turns 0-2 are in the front; turn 3 kept"
-        assert "[Compacted]" in after[0].content
+        assert "[Summarised]" in after[0].content
 
 
 class TestOnePassAtATime:

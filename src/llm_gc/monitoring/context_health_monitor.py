@@ -7,7 +7,7 @@ from llm_gc.config import GCConfig
 from llm_gc.config.constants import DEFAULT_MAX_RECENT_DEGRADATIONS, DEFAULT_MAX_RECENT_PASSES, \
     DEFAULT_MAX_RECENT_TRANSITIONS, DEFAULT_MONITOR_MAX_SESSIONS
 from llm_gc.engine import AgingDegradation, GCResult, GCStatus
-from llm_gc.engine.generations.front import span_message
+from llm_gc.engine.generations.front import FRONT_OVERHEAD_TOKENS, render_front
 from llm_gc.events import Event, EventBus, EventType
 from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.generation_snapshot import GenerationSnapshot
@@ -230,18 +230,14 @@ class ContextHealthMonitor:
         young_gen_turn_indices = last_pass.young_turn_indices if last_pass is not None else []
         young_gen_tokens = last_pass.young_tokens if last_pass is not None else 0
 
-        # Old gen is read from real storage, not derived from COMPACT counts.
-        # The derivation reported only the *last pass's* COMPACT turns, so a
-        # session that had promoted four turns over four passes still showed
-        # "old_gen_count: 1" while generational memory held four summaries - and
-        # on the stateless collect path, which classifies COMPACT but never
-        # promotes, it reported a populated old gen that was in fact empty. The
-        # summaries carry the turn index of the first turn in their run, so the
-        # indices still point back at where the content came from.
+        # Old gen is read from real storage, never derived from a pass's counts: a
+        # pass reports only what it moved, and storage is what the model is sent.
+        # Each span is named by its first turn; its tokens are what the front
+        # spends on it at its level.
         generations = self.read_generations(session_id) or GenerationSnapshot()
-        old_gen_messages = [message for span in generations.old if (message := span_message(span)) is not None]
-        old_gen_turn_indices = [message.turn_index for message in old_gen_messages]
-        old_gen_tokens = sum(message.token_count for message in old_gen_messages)
+        front = render_front(generations.old, generations.knowledge)
+        old_gen_turn_indices = [span.first_turn for span in generations.old]
+        old_gen_tokens = front.message.token_count - FRONT_OVERHEAD_TOKENS if front is not None else 0
 
         # Permanent-gen contents and the transitions log are standing facts,
         # real even before any GC pass has ever run.

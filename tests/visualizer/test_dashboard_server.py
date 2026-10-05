@@ -36,7 +36,8 @@ def _engine() -> tuple[GcService, ContextHealthMonitor]:
 def _converse(service: GcService, session_id: str, turns: int) -> None:
     async def scenario() -> None:
         for index in range(turns):
-            text = f"the topic{index % 8} is version {index} and we walked through the implications at length."
+            text = (f"the topic{index % 8} is version {index}. "
+                    + "We walked through the implications for throughput and retention at length. " * 4)
             turn = Message(role="user" if index % 2 == 0 else "assistant", content=text,
                            token_count=count_tokens(text), turn_index=index)
             service.gc_record(session_id, [turn], [f"{session_id}-{index}"])
@@ -132,7 +133,8 @@ class TestOneSession:
         state = _client(service, monitor).get("/api/sessions/s").json()
 
         assert len(state["turns"]) == 30
-        assert {t["fidelity"] for t in state["turns"]} >= {"verbatim", "summarised"}
+        fidelities = {t["fidelity"] for t in state["turns"]}
+        assert "verbatim" in fidelities and fidelities - {"verbatim"}, "the tail, and turns condensed before it"
         assert state["front_text"] is not None
 
     def test_activity_is_the_sessions_own(self):

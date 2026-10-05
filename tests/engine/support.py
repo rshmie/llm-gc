@@ -27,13 +27,13 @@ SUMMARY = LLMResponse(text="The turn weighed storage options, replication and fa
                       stop_reason=StopReason.COMPLETE, input_tokens=0, output_tokens=14, model="scripted",
                       provider="offline")
 
-_BODY = ("We compared the storage layer options at length, weighing replication, failover, retention "
-         "and the cost of each replica under the expected load. ") * 4
+_SENTENCE = ("We compared the storage layer options at length, weighing replication, failover, retention "
+             "and the cost of each replica under the expected load. ")
 
 
-def turn(index: int, role: str = "user", opening: str | None = None) -> Message:
-    """A turn with its own one-sentence opening and a long body."""
-    text = f"{opening or f'Turn {index} is about storage.'} {_BODY}"
+def turn(index: int, role: str = "user", opening: str | None = None, length: int = 4) -> Message:
+    """A turn with its own one-sentence opening and a body `length` sentences long."""
+    text = f"{opening or f'Turn {index} is about storage.'} {_SENTENCE * length}"
     return Message(role=role, content=text, token_count=count_tokens(text), turn_index=index)
 
 

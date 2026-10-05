@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from llm_gc.config import GCConfig
 from llm_gc.engine import build_gc_service
+from llm_gc.engine.generations.front import FRONT_HEADER
 from llm_gc.llm import FakeProvider, LLMResponse, StopReason
 from llm_gc.proxy import SESSION_HEADER, create_app
 from llm_gc.session import SessionManager
@@ -787,7 +788,7 @@ def _converse_through(client, seen, turns: int, *, extra_content=None, header="s
 
 
 def _is_front(message: dict) -> bool:
-    return isinstance(message["content"], str) and message["content"].startswith("[Earlier in this conversation")
+    return isinstance(message["content"], str) and message["content"].startswith(FRONT_HEADER)
 
 
 class TestTheCutShape:

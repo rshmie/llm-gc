@@ -14,7 +14,7 @@ from llm_gc.engine.gc_status import GCStatus
 from llm_gc.events import EventType
 from llm_gc.models.generation_snapshot import DetailLevel
 from llm_gc.utils import count_tokens
-from tests.engine.support import ARCHIVED_SCORE, COMPACTED_SCORE, KEPT_SCORE, make_service, turn
+from tests.engine.support import ARCHIVED_SCORE, COMPACTED_SCORE, KEPT_SCORE, SUMMARY, make_service, turn
 
 KEPT, COMPACTED, ARCHIVED = DetailLevel.KEPT, DetailLevel.COMPACTED, DetailLevel.ARCHIVED
 
@@ -81,8 +81,9 @@ class TestEachSpanTakesTheLevelItsScoreEarns:
 
         assert [message.turn_index for message in prompt] == [-1, 3]
         assert prompt[0].role == "user", "the provider requires the conversation to open with a user turn"
-        assert lines[-3].startswith("[Quoted exactly] (turn 0, user) Turn 0 is about storage.")
-        assert lines[-2].startswith("[Compacted")
+        assert lines[-4].startswith("[Quoted exactly] (turn 0, user) Turn 0 is about storage.")
+        assert lines[-3].startswith("[Summarised] (turn 1) Turn 1 is about storage."), "its opening line, then"
+        assert lines[-2] == SUMMARY.text, "its summary"
         assert lines[-1].startswith("[Archived] (turn 2) Turn 2 is about storage.")
 
     def test_an_archived_span_carries_the_facts_read_from_its_turns(self):
@@ -189,18 +190,43 @@ class TestTheBatchDecidesWhen:
         assert manual.status is GCStatus.COMPLETED and manual.tokens_saved > 0
         assert _young(service) == [2], "the newest turns stay word for word"
 
-    def test_a_collection_that_would_not_shrink_the_context_is_abandoned_and_explained(self):
-        service, _, _ = make_service(compactor=_FailingCompactor(event_bus=None), default_score=COMPACTED_SCORE)
-        _converse(service, 2)
+    def test_a_cut_that_cannot_pay_for_itself_buys_no_summaries(self):
+        """Decided on the estimate: a session's first cut also pays for the front's
+        header, and one short span's summary saves less than that. Bought and then
+        discarded, the summaries would be paid for again on every pass."""
+        service, _, provider = make_service(default_score=COMPACTED_SCORE)
+        results = []
 
-        result = asyncio.run(service.gc_age("s", ignore_batch_minimum=True))
+        async def scenario():
+            for index in range(2):
+                _record(service, turn(index, length=2))
+                results.append(await service.gc_age("s"))
 
-        # Without a summary the span is kept: quoted in the front, it is larger than it was.
-        assert result.status is GCStatus.BYPASSED_NO_SAVING
-        assert _young(service) == [0, 1]
+        asyncio.run(scenario())
+        result = results[-1]
+        assert result.status is GCStatus.BYPASSED_NO_SAVING and provider.calls == []
         assert result.abandoned_cut is not None and result.abandoned_cut.turns == [0]
+        assert result.abandoned_cut.context_tokens_after >= result.tokens_before, "and it says by how much"
+        assert _young(service) == [0, 1]
+
+    def test_a_cut_whose_summaries_fail_is_abandoned_after_the_fact(self):
+        """The estimate said the cut would pay; without its summary the span is kept,
+        quoted, and larger than it was - so the cut does not pay, and says so."""
+        service, _, _ = make_service(compactor=_FailingCompactor(event_bus=None), default_score=COMPACTED_SCORE)
+        results = []
+
+        async def scenario():
+            for index in range(2):
+                _record(service, turn(index, length=8))
+                results.append(await service.gc_age("s"))
+
+        asyncio.run(scenario())
+        result = results[-1]
+        assert result.status is GCStatus.BYPASSED_NO_SAVING
+        assert result.abandoned_cut is not None
         assert result.abandoned_cut.outcome == CutOutcome(quoted=1, summarised=0, archived=0)
-        assert result.abandoned_cut.context_tokens_after >= result.tokens_before
+        assert DegradationReason.COMPACTION_FAILED in {d.reason for d in result.degradations}
+        assert _young(service) == [0, 1]
 
 
 class TestLevelsAreReplannedAtEveryCollection:

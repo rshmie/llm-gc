@@ -34,8 +34,8 @@ _SUBJECTS = ("database postgres replicas failover", "cache redis eviction expiry
 
 def _turn(index: int) -> Message:
     words = _SUBJECTS[index % 8].split()
-    text = (f"The {words[0]} is version {index}. We weighed {', '.join(words[1:])} and the {words[1]} "
-            f"trade-offs at some length this morning.")
+    text = f"The {words[0]} is version {index}. " + (f"We weighed {', '.join(words[1:])} and the {words[1]} "
+                                                       f"trade-offs at some length this morning. ") * 4
     return Message(role="user" if index % 2 == 0 else "assistant", content=text,
                    token_count=count_tokens(text), turn_index=index)
 
