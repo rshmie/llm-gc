@@ -488,7 +488,6 @@ export function renderSettings() {
     ["Keep from", "keep_threshold", c.keep_threshold, "relevance at or above this is kept, quoted whole"],
     ["Archive below", "archive_threshold", c.archive_threshold, "relevance below this is archived, reduced to facts"],
     ["Too short to compact", "min_compactable_tokens", c.min_compactable_tokens, "messages this short, in tokens, are kept whole"],
-    ["Facts in the recap", "max_memory_facts", c.max_memory_facts, "most facts the recap carries"],
     ["Fact budget", "max_memory_tokens", c.max_memory_tokens, "most tokens of facts in the recap"],
     ["The model's window", "context_window", c.context_window, "its capacity, in tokens", "--context-window"],
   ];

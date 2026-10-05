@@ -2,13 +2,9 @@
 
 from llm_gc import __version__
 
-APP_NAME = "llm-gc"
 APP_VERSION = __version__
 
-DEFAULT_MODEL = "claude-sonnet-4-6"
 DEFAULT_CONTEXT_WINDOW = 128_000
-DEFAULT_GC_THRESHOLD = 0.7
-DEFAULT_SWEEP_STRATEGY = "threshold"
 DEFAULT_KEEP_THRESHOLD = 0.7
 DEFAULT_ARCHIVE_THRESHOLD = 0.3
 DEFAULT_MIN_COMPACTABLE_TOKENS = 30
@@ -38,7 +34,6 @@ DEFAULT_MONITOR_MAX_SESSIONS = 1000
 # system's value, silently. 10% leaves memory meaningful at every window size and
 # correctly means "no block fits" when the window is tiny.
 DEFAULT_MAX_MEMORY_RATIO = 0.1
-DEFAULT_MAX_MEMORY_FACTS = 8      # retrieved before the token budget is applied
 
 # Session lifecycle timings (rationale in doc/design/session/overview.md).
 DEFAULT_SESSION_TIMEOUT_S = 1800          # close a session idle this many seconds (30 min)
@@ -60,19 +55,6 @@ DECISION_SCORER_PATTERN = (r'\b(?:keep|delete|summarize|uncertain|concluded|chos
 REFERENCE_SCORER_PATTERN = (r'\b(?:as I mentioned|as you said|like you said|as we discussed|like we discussed|as I said|like I said|as mentioned|as noted|as we said|as we mentioned|as we noted|'
                             r'earlier|previously|before|going back to|back to your point|back to what you said|referring back to|'
                             r'to reiterate|to repeat|as noted|referring to|regarding what)\b')
-
-def get_default_config() -> dict[str, str | int | float]:
-    return {
-        "app_name": APP_NAME,
-        "app_version": APP_VERSION,
-        "model": DEFAULT_MODEL,
-        "context_window": DEFAULT_CONTEXT_WINDOW,
-        "gc_threshold": DEFAULT_GC_THRESHOLD,
-        "sweep_strategy": DEFAULT_SWEEP_STRATEGY,
-        "keep_threshold": DEFAULT_KEEP_THRESHOLD,
-        "min_compactable_tokens": DEFAULT_MIN_COMPACTABLE_TOKENS,
-        "last_n_turns_to_keep": DEFAULT_LAST_N_TURNS_TO_KEEP,
-    }
 # LLM compaction (rationale in doc/design/sweeper-and-composition/compaction-mechanism.md).
 DEFAULT_COMPACTION_TIMEOUT_S = 30.0       # wall-clock budget for one summarisation call
 DEFAULT_COMPACTION_TARGET_RATIO = 0.35    # output cap as a fraction of the run's own tokens

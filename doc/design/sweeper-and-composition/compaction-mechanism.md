@@ -109,18 +109,16 @@ and it says so.
   paid call, on every pass, until the turn joins a longer run.
 
 - **A refused run waits for a longer run rather than being quoted.** Turns cool
-  over time, so a short turn refused today usually joins a summarisable run a
-  pass or two later, and that run is where the saving is. Rejected: quoting a
+  over time, so a short turn refused at one cut usually joins a summarisable run
+  at a later one, and that run is where the saving is. Rejected: quoting a
   too-short run at once. It is lossless and spends no call, but it gives up the
-  later saving; on short-turn conversations every cut then failed the
-  never-bigger rule and the proxy saved nothing.
+  later saving; on a conversation of short turns every cut would fail the
+  never-bigger rule and save nothing.
 
 - **The output budget is that target plus room to think.** Current models reason
   before answering by default, and reasoning counts against the output cap. A cap
-  sized for the summary alone was spent before the summary started: in the first
-  live run of the decision-survival check every summary came back truncated and
-  was refused, so LLM-GC ran with its summariser effectively off and reported it.
-  Rejected: switching thinking off in the request, which is cheapest but is
+  sized for the summary alone is spent before the summary starts, so every summary
+  comes back truncated and is refused. Rejected: switching thinking off in the request, which is cheapest but is
   accepted by some models and a 400 on others, so a deployment choosing a current
   model would have every summary fail. Cost accepted: reasoning tokens are billed,
   and length is steered by an instruction rather than enforced by the cap; the

@@ -9,6 +9,9 @@ chosen when a cut is made, so the front is identical on every request between cu
 
 import asyncio
 
+import pytest
+from pydantic import ValidationError
+
 from llm_gc.config import GCConfig
 from llm_gc.engine.compaction import NoOpCompactor
 from llm_gc.engine.gc_service import GcService
@@ -37,7 +40,6 @@ def _config(**overrides) -> GCConfig:
         "last_n_turns_to_keep": 2,
         "min_cut_tokens": 1000,     # no cut during these tests: facts are placed directly
         "max_memory_ratio": 0.6,
-        "max_memory_facts": 6,
     }
     base.update(overrides)
     return GCConfig(**base)
@@ -168,14 +170,15 @@ class TestTheBudgetIsEnforcedOnTheRealPrompt:
         facts_section = front.content.split(MEMORY_BLOCK_HEADER, 1)[1]
         assert count_tokens(MEMORY_BLOCK_HEADER + facts_section) <= service.gc_config.max_memory_tokens
 
-    def test_max_memory_facts_caps_how_many_are_chosen(self):
-        service = _build(_config(max_memory_facts=2))
-        for index in range(6):
+    def test_by_default_only_the_token_budget_limits_the_facts(self):
+        """Every fact that fits the budget is sent: no count leaves out facts there is room for."""
+        service = _build(_config(context_window=2000))
+        for index in range(12):
             _store(service, f"topic{index}", f"fact {index}", turn=index)
 
         front = _front(_collect(service))
         assert front is not None
-        assert front.content.count("\n- (turn") == 2
+        assert front.content.count("\n- (turn") == 12
 
     def test_front_tokens_count_toward_the_reported_context(self):
         """The front is real tokens in the real prompt. A context size that omitted
@@ -196,10 +199,10 @@ class TestFactsCanBeTurnedOff:
         _store(service, "database", "postgres", turn=2)
         assert _front(_collect(service)) is None
 
-    def test_zero_memory_facts_leaves_facts_out(self):
-        service = _build(_config(max_memory_facts=0))
-        _store(service, "database", "postgres", turn=2)
-        assert _front(_collect(service)) is None
+    def test_the_retired_count_setting_is_refused_rather_than_ignored(self):
+        """Ignored, a caller passing it would believe facts were capped or off when they were not."""
+        with pytest.raises(ValidationError, match="max_memory_facts"):
+            GCConfig(max_memory_facts=0)
 
 
 class TestTheRetrieverIsSwappable:
@@ -254,7 +257,8 @@ class TestTheFrontKeepsWhatMattersMost:
         """Found by running the proxy demo: ranked by recency alone, the front kept
         two later acknowledgements ("Understood. I have noted that.") and dropped
         the turn-2 decision the whole demo exists to show surviving."""
-        service = _build(_config(max_memory_facts=2))
+        # A budget with room for about two entries, so ranking decides which survive.
+        service = _build(_config(max_memory_ratio=0.22))
         _store(service, "database", "postgres, partitioned by day", turn=2, kind=KnowledgeType.DECISION)
         for turn in (10, 11, 12):
             _store(service, "__raw__", f"Understood, noted ({turn}).", turn=turn, kind=KnowledgeType.RAW)

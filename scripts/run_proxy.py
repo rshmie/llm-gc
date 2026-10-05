@@ -8,9 +8,8 @@ Two modes.
     python scripts/run_proxy.py
 
 Starts the real proxy app against a stub upstream, replays a conversation through
-real HTTP, and prints what the client sent versus what was forwarded, per request.
-This is the proxy's equivalent of `trace_session.py`: the engine's own trace shows
-the generations moving, this shows the wire.
+real HTTP, and prints what the client sent versus what was forwarded, per request:
+the dashboard shows the generations moving, this shows the wire.
 
 **Serve (real traffic to a real provider), with the live dashboard:**
 
@@ -111,7 +110,6 @@ def demo_config() -> GCConfig:
     """Scaled so a twelve-turn scripted conversation is cut more than once."""
     return GCConfig(
         context_window=400,
-        gc_threshold=0.5,
         keep_threshold=0.55,
         archive_threshold=0.25,
         min_compactable_tokens=10,

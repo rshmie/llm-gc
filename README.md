@@ -2,14 +2,15 @@
 
 > **Status: work in progress.** The engine and an Anthropic-compatible proxy are built
 > and tested — relevance scoring, three-tier classification, generational memory with
-> fact extraction and supersession, a summarising compactor, cuts that keep the
+> fact extraction and supersession, a summarising compactor, collections that keep the
 > provider's prompt cache and thinking blocks valid, streaming, and a live dashboard
-> (`python scripts/run_proxy.py --serve --dashboard` → http://localhost:9901). 691 tests
-> pass.
+> (`python scripts/run_proxy.py --serve --dashboard` → http://localhost:9901). A
+> decision-survival check measures what the model can still answer after LLM-GC has
+> condensed a conversation; its current results are under [Measured results](#measured-results).
 >
 > What is **not** done yet: the OpenAI-compatible endpoint, a verified run of Claude Code
-> through the proxy, and the benchmarks behind the claims below — **every savings
-> figure below is a target, not a measurement.** Nothing is pip-installable yet.
+> through the proxy, and keeping long assistant answers whole enough to survive — the
+> check shows LLM-GC still losing most of their details. Nothing is pip-installable yet.
 
 If you've spent 50+ turns in a Claude Code session, you've probably noticed the model starts forgetting things. The database you agreed on, the auth approach you picked, the thing you explicitly said *not* to do — it's all still in the conversation, but buried under 130K tokens of old file reads, stale command outputs, and resolved debugging context. The model either hallucinates a wrong answer or tells you "I don't have that context."
 
@@ -33,9 +34,9 @@ But cleaning context is only half of it. The other half is **transparency**. Tod
 
 LLM-GC intercepts LLM API calls, optimizes the conversation context, and forwards the cleaned version. Three operations, inspired by classic GC algorithms:
 
-1. **Mark** — Score every conversation turn for relevance to the current query
-2. **Sweep** — Remove dead turns, compress stale ones, extract key facts before discarding
-3. **Compact** — Assemble clean context: system prompt + extracted memories + compressed summaries + recent turns
+1. **Mark** — Score every turn older than the newest few for relevance
+2. **Sweep** — Classify each: **keep** (quote it whole), **compact** (summarise it), or **archive** (extract its facts)
+3. **Compact** — Assemble the prompt: one recap message (quotes, summaries and facts), then the recent turns word for word; the system prompt is never touched
 
 ### Generational memory
 
@@ -44,10 +45,10 @@ Context is managed in three generations, inspired by generational garbage collec
 | Generation | What it holds | Analogy |
 |---|---|---|
 | **Young** | Recent turns in full detail | Java's young/eden space |
-| **Old** | Older turns compressed into summaries | Java's tenured generation |
+| **Old** | Older turns, quoted whole or summarised | Java's tenured generation |
 | **Permanent** | Extracted facts and decisions, never discarded | Java's permanent generation |
 
-As turns age, they move through generations: kept in full (young) → compressed (old) → facts extracted (permanent) → original discarded. Key decisions survive indefinitely in the permanent generation and are retrieved when relevant.
+As turns age, they move through generations: in full (young) → quoted or summarised (old) → facts extracted (permanent). The old generation and the facts travel together in the recap at the start of every request, so they reach the model; facts are sent up to a share of the model's window.
 
 ### Context Visualizer — epistemic transparency
 
@@ -69,7 +70,7 @@ LLM-GC's Context Visualizer solves this. Every GC component already computes ric
 - **Turn relevance** — each recent turn's score against the keep and archive thresholds, and what the next cut will make of it
 - **Post-Session Analysis** *(planned)* — After a session ends: full timeline of when quality peaked, when it degraded, which decisions survived, where the danger zones were
 
-There is deliberately **no single "health score" or "hallucination risk" number**. A number labelled "risk" claims an accuracy no heuristic can back without ground-truth hallucination labels — and a dishonest number is a new black box, which is the opposite of the point. If the planned learned predictor (Phases 11-12) can be defensibly grounded in real labels, an aggregate ships *alongside* the signals; until then, the signals do the part that can be done honestly, and you do the part that can't yet be automated honestly. **Aggregation is earned, not assumed.** Most tools optimize context silently. LLM-GC shows you what's happening and lets YOU decide if the AI's output is trustworthy right now.
+There is deliberately **no single "health score" or "hallucination risk" number**. A number labelled "risk" claims an accuracy no heuristic can back without ground-truth hallucination labels — and a dishonest number is a new black box, which is the opposite of the point. If a learned predictor can be defensibly grounded in real labels, an aggregate ships *alongside* the signals; until then, the signals do the part that can be done honestly, and you do the part that can't yet be automated honestly. **Aggregation is earned, not assumed.** Most tools optimize context silently. LLM-GC shows you what's happening and lets YOU decide if the AI's output is trustworthy right now.
 
 ## The GC Analogy
 
@@ -116,8 +117,8 @@ Three things follow, and they shape the whole design:
 ## Installation
 
 > The steps below set up a local development environment to build and test LLM-GC. This is
-> what works today. The end-user install (`pip install llm-gc`, the proxy, the SDK wrapper) is
-> the target experience once the project ships — see [Planned Usage](#planned-usage) below.
+> what works today: the proxy and the dashboard run from `scripts/`. A `pip install llm-gc`
+> package is not available yet.
 
 ### Prerequisites
 
@@ -185,52 +186,44 @@ pytest                # run the test suite
 ruff check .          # lint
 ```
 
-## Planned usage
+## Using it
 
-### With Claude Code (primary use case)
+### With any Anthropic client
 
-```bash
-pip install llm-gc
-
-# If using Claude Code directly:
-llm-gc start
-export ANTHROPIC_BASE_URL=http://localhost:9900
-
-# If using Claude Code through a company proxy (e.g. port 6655):
-llm-gc start --forward-to http://localhost:6655
-# Then update .claude config to point base_url at http://localhost:9900
-
-# That's it. Use Claude Code as normal.
-# Context Visualizer runs at http://localhost:9901 — open it to see live session health.
-```
-
-### Library (full control)
+Point the client at the proxy and change nothing else. The client's own API key is
+forwarded, never stored:
 
 ```python
-from llm_gc import GarbageCollector
-
-gc = GarbageCollector(strategy="generational")
-result = gc.collect(messages=my_messages, query=current_query)
-
-# Send optimized messages to LLM
-response = client.messages.create(messages=result.messages)
-
-print(f"Decisions preserved: {len(result.memories_used)}")
-print(f"Saved {result.tokens_saved} tokens ({result.savings_pct}%)")
+import anthropic
+client = anthropic.Anthropic(base_url="http://127.0.0.1:9900")
 ```
 
-### SDK wrapper (one import change)
+`python scripts/chat.py` is exactly that, as a terminal chat. Claude Code can be pointed
+the same way (`ANTHROPIC_BASE_URL=http://127.0.0.1:9900 claude`), but that path has not
+yet been verified on real sessions.
+
+### As a library
 
 ```python
-from llm_gc import Anthropic  # drop-in replacement
-client = Anthropic()
-# Everything else identical. GC is automatic.
+from llm_gc.config import GCConfig
+from llm_gc.engine import build_gc_service
+from llm_gc.llm import AnthropicClient
+from llm_gc.models import Message
+from llm_gc.utils import count_tokens
+
+service = build_gc_service(GCConfig(context_window=200_000),
+                           summary_provider=AnthropicClient(api_key="sk-ant-..."))
+
+async def on_turn(session_id: str, text: str, role: str, index: int) -> list[Message]:
+    turn = Message(role=role, content=text, token_count=count_tokens(text), turn_index=index)
+    await service.gc_update(session_id, turn)     # record the turn, then run a pass
+    return await service.gc_collect(session_id)   # what to send: the recap, then recent turns
 ```
 
 ## What LLM-GC does and doesn't do
 
 **In scope — built today:**
-- Relevance scoring per conversation turn (five signals, weighted)
+- Relevance scoring per conversation turn (four signals by default, a fifth optional)
 - Three-tier sweep classification (keep / compact / archive)
 - Generational memory (young / old / permanent) with fact extraction and supersession; cold summaries are archived into facts, and facts go back into the prompt
 - A summarising compactor that refuses any summary that does not shrink what it replaces
@@ -239,11 +232,13 @@ client = Anthropic()
 - Per-session state that reads never wait for
 - A live dashboard: what the model knows of each turn, and what LLM-GC did
 - Configurable thresholds
+- A decision-survival check: scripted conversations asked about their own facts, through LLM-GC and sent whole
 
 **In scope — not built yet:**
 - The OpenAI-compatible endpoint
 - Claude Code through the proxy, verified on real traffic
-- Benchmarks for the savings and quality claims
+- Keeping long assistant answers whole enough that their details survive
+- Broader benchmarks, on real sessions rather than scripted ones
 - Post-session analysis (session timeline, decision survival, GC effectiveness report)
 
 **Does not handle (not our problem):**
@@ -277,14 +272,14 @@ report** the operation rather than perform it silently:
 - **Under your policy** — thresholds, conservatism, never-drop rules are yours, not the provider's
 - **Cross-client** — a proxy works for anything speaking the provider's API
 
-Once the real compactor lands, LLM-GC uses the *same mechanism* provider compaction
-uses. It is not an alternative to compaction; it is a governance and transparency layer
-around it.
+LLM-GC's compactor uses the *same mechanism* provider compaction uses: a model
+summarises. It is not an alternative to compaction; it is a governance and transparency
+layer around it.
 
 ## Measured results
 
-These numbers come from profiling **real Claude Code sessions**. They measure the
-problem and a naive baseline. They do **not** measure LLM-GC, which isn't finished.
+The first numbers come from profiling **real Claude Code sessions**: they measure the
+problem and a naive baseline. The second set, further down, measures LLM-GC itself.
 
 ```
 STAGE 0 — THE PROBLEM (7 real sessions, 1,742 API calls, 130M cumulative tokens)
@@ -302,55 +297,44 @@ window gets 46–95%. Saving them *without throwing away the decisions that made
 conversation worth having* is the hard part, and it's the only reason to build anything
 more complicated than truncation.
 
-### Targets — not yet measured
+### What LLM-GC keeps, measured
 
-Stated so they can be checked later, and so nobody mistakes them for results:
+The decision-survival check plays scripted conversations through the proxy, then asks
+the model about details they established, once through LLM-GC and once with the whole
+conversation; a question answered right only with the whole conversation is a fact
+LLM-GC lost. Method: [evals/decision_survival/README.md](evals/decision_survival/README.md).
 
-| | Without LLM-GC | Target with LLM-GC |
-|---|---|---|
-| Decisions recoverable at turn 50 | ~10% | 90%+ |
-| Context growth | linear | bounded |
-| Token reduction | none | 40–60%, as a byproduct |
+| Conversations | Right through LLM-GC | Right sent whole | Prompt through LLM-GC |
+|---|---|---|---|
+| 3 short (18 turns, ~160-word answers) | 17/18 | 18/18 | 17–24% smaller |
+| 2 long (30 turns, ~1,500-word answers) | 5/19 | 19/19 | 64–66% smaller |
 
-Two honesty notes on that last row. First, LLM-GC doesn't reclaim context yet, so the
-figure today is **worse than zero** — see the status banner. Second, when it is measured
-it will be measured against **cached-token pricing**, not raw token counts: rewriting the
-prompt prefix invalidates the provider's prompt cache, so a real reduction in tokens can
-still be an increase in cost. A savings number that ignores that isn't an honest number,
-and this project would rather publish an awkward one.
+Short conversations keep almost everything. On long ones LLM-GC condenses hard and loses
+most details — chiefly those stated only in long assistant answers, which end up as
+excerpts the recap cuts short. That is the work in progress, and these numbers will be
+replaced as it lands.
+
+Savings will also be judged against **cached-token pricing**, not raw token counts:
+rewriting the start of the prompt invalidates the provider's prompt cache, so a real
+reduction in tokens can still be an increase in cost. A savings number that ignores that
+isn't an honest number.
 
 ## Configuration
 
-```yaml
-# ~/.llm-gc/config.yaml
-gc:
-  strategy: generational     # the only strategy in v1.0 (see "GC strategies" above)
-  aggressiveness: 0.6        # 0.0 (keep all) to 1.0 (aggressive trim)
-  young_gen_size: 8          # keep last N turns in full
+The library takes a `GCConfig`; the proxy script exposes the settings worth turning while
+you watch the dashboard:
 
-scoring:
-  recency: 0.30
-  similarity: 0.30
-  density: 0.15
-  decision: 0.15
-  reference: 0.10
+| `GCConfig` | `run_proxy.py` flag | Default | What it decides |
+|---|---|---|---|
+| `min_cut_tokens` | `--min-cut-tokens` | 1000 | tokens of older messages to compact or archive before a collection runs |
+| `last_n_turns_to_keep` | `--keep-last` | 5 | newest messages always sent word for word |
+| `context_window` | `--context-window` | 128,000 (proxy: 200,000) | the model's window; the fact budget is a share of it |
+| `keep_threshold` | | 0.7 | relevance at or above which a message is kept whole |
+| `archive_threshold` | | 0.3 | relevance below which a message is archived |
+| `min_compactable_tokens` | | 30 | messages this short are kept whole rather than summarised |
+| `max_memory_ratio` | | 0.1 | share of the window the recap may spend on facts; 0 turns facts off |
 
-storage:
-  session: sqlite            # memory | sqlite | redis
-  permanent: sqlite          # memory | sqlite | postgres
-
-models:
-  embedding: local           # local | openai | ollama
-  summarizer: api            # api | ollama | heuristic
-
-visualizer:
-  enabled: true              # enable/disable the dashboard
-  port: 9901                 # web dashboard port
-  realtime: true             # WebSocket live updates
-  post_session_report: true  # generate analysis when session ends
-  # signals only — an aggregated risk display ships only if the learned
-  # predictor (Phases 11-12) can ground it in real hallucination labels
-```
+An unknown setting is an error, so a misspelt one never looks configured.
 
 ## GC strategies
 
@@ -376,16 +360,16 @@ subsystem works, why it exists, and **why it has that shape — including the cr
 alternatives that were rejected and the reason.**
 
 - [Overview](doc/overview.md) — why this project exists, the core principles, how the pieces fit
-- [Scoring](doc/design/scoring/overview.md) — the five relevance signals and how they combine
+- [Scoring](doc/design/scoring/overview.md) — the relevance signals and the default weighting
 - [Sweeping](doc/design/sweeper-and-composition/sweeping-mechanism.md) — three-tier KEEP / COMPACT / ARCHIVE classification
-- [Composition](doc/design/sweeper-and-composition/composition-mechanism.md) — assembling classified turns back into a message list
-- [Compaction](doc/design/sweeper-and-composition/compaction-mechanism.md) — summarising compacted runs, and why the default does nothing
+- [The cut](doc/design/generational-memory/the-cut.md) — when a collection happens, and how the recap is assembled
+- [Compaction](doc/design/sweeper-and-composition/compaction-mechanism.md) — summarising compacted runs, and refusing a summary that does not help
 - [Generational memory](doc/design/generational-memory/overview.md) — young / old / permanent, and supersession
 - [Session management](doc/design/session/overview.md) — per-conversation state and its concurrency contract
 - [Visibility](doc/design/visibility/overview.md) — transparency vs. observability, and why there is no aggregate risk score
 - [Events](doc/design/events/overview.md) — the pub/sub bus every component instruments through
-- [Storage](doc/design/storage.md) — schema versioning, so an upgrade never destroys retained knowledge
-- [Failure handling](doc/design/failure-handling.md) — the circuit breaker, and keeping degradation visible
+- [Storage](doc/design/storage.md) *(planned)* — schema versioning, so an upgrade never destroys retained knowledge
+- [Failure handling](doc/design/failure-handling.md) *(planned)* — the circuit breaker, and keeping degradation visible
 
 A full index is in [doc/README.md](doc/README.md).
 

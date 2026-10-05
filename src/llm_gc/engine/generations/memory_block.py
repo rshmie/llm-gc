@@ -1,6 +1,6 @@
 """Rendering retrieved facts into the one message that carries them."""
 
-from llm_gc.models import KnowledgeEntry, Message
+from llm_gc.models import KnowledgeEntry
 from llm_gc.models.knowledge_entry import KnowledgeType
 from llm_gc.utils import count_tokens
 
@@ -13,32 +13,6 @@ MEMORY_FACT_MAX_CHARS = 180
 on `RAW` entries, which are whole turns."""
 
 _TRUNCATION_MARKER = "..."
-
-
-def format_memory_block(entries: list[KnowledgeEntry], max_tokens: int) -> Message | None:
-    """Render ranked entries into one message, within a token budget.
-
-    Args:
-        entries: Ranked, most relevant first. Order matters: the budget is spent
-            from the front, so the dropped entries are the least relevant.
-        max_tokens: Ceiling for the whole block, header included.
-
-    Returns:
-        One `Message`, or None when there is nothing to inject or no room — so the
-        caller appends nothing rather than a header with no facts under it.
-    """
-    kept = fit_facts(entries, max_tokens)
-    if not kept:
-        return None
-
-    content = render_memory_block(kept)
-    return Message(
-        role="user",
-        content=content,
-        token_count=count_tokens(content),
-        # Before every real turn; -1 rather than 0, which may be a live turn.
-        turn_index=-1,
-    )
 
 
 def fit_facts(entries: list[KnowledgeEntry], max_tokens: int) -> list[KnowledgeEntry]:

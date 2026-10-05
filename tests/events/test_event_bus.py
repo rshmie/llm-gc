@@ -5,15 +5,15 @@ def test_subscribe_and_emit():
     received = []
     def test_callback(event: Event):
         received.append(event)
-    bus.subscribe(EventType.TOKEN_COUNT, test_callback)
+    bus.subscribe(EventType.GC_FINISHED, test_callback)
 
-    bus.emit(Event(event_type=EventType.TOKEN_COUNT, data={"count": 5}))
+    bus.emit(Event(event_type=EventType.GC_FINISHED, data={"count": 5}))
     assert len(received) == 1
     assert received[0].data["count"] == 5
 
 def test_emit_with_no_subscribers_do_not_raise_error():
     bus = EventBus()
-    bus.emit(Event(event_type=EventType.TOKEN_COUNT, data={"count": 10}))
+    bus.emit(Event(event_type=EventType.GC_FINISHED, data={"count": 10}))
 
 def test_multiple_callbacks():
     bus = EventBus()
@@ -39,9 +39,9 @@ def test_wrong_event_type():
     received = []
     def test_callback(event: Event):
         received.append(event)
-    bus.subscribe(EventType.TOKEN_COUNT, test_callback)
+    bus.subscribe(EventType.GC_FINISHED, test_callback)
 
-    bus.emit(Event(event_type=EventType.GC_FINISHED, data={"gc_run_id": 2}))
+    bus.emit(Event(event_type=EventType.SWEEP_COMPLETED, data={"gc_run_id": 2}))
     assert len(received) == 0
 
 
@@ -49,9 +49,9 @@ def test_emit_does_not_raise_when_subscriber_throws():
     bus = EventBus()
     def bad_subscriber(event: Event):
         raise ValueError("boom")
-    bus.subscribe(EventType.TOKEN_COUNT, bad_subscriber)
+    bus.subscribe(EventType.GC_FINISHED, bad_subscriber)
 
-    bus.emit(Event(event_type=EventType.TOKEN_COUNT, data={"count": 1}))  # must not raise
+    bus.emit(Event(event_type=EventType.GC_FINISHED, data={"count": 1}))  # must not raise
 
 
 def test_emit_calls_remaining_subscribers_after_one_throws():
@@ -62,9 +62,9 @@ def test_emit_calls_remaining_subscribers_after_one_throws():
     def good_subscriber(event: Event):
         received.append(event)
 
-    bus.subscribe(EventType.TOKEN_COUNT, bad_subscriber)
-    bus.subscribe(EventType.TOKEN_COUNT, good_subscriber)
+    bus.subscribe(EventType.GC_FINISHED, bad_subscriber)
+    bus.subscribe(EventType.GC_FINISHED, good_subscriber)
 
-    bus.emit(Event(event_type=EventType.TOKEN_COUNT, data={"count": 1}))
+    bus.emit(Event(event_type=EventType.GC_FINISHED, data={"count": 1}))
 
     assert len(received) == 1

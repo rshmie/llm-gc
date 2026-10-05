@@ -1,17 +1,16 @@
 """The HTTP proxy: GC on the request path.
 
-An app points its SDK here instead of at the provider and changes nothing else.
-Each request's conversation is replaced by the garbage-collected version:
+An app points its SDK here instead of at the provider and changes nothing else:
 
     client sends the full conversation
-      -> its last message is the new turn
-      -> gc_collect(session, query=new turn) returns OUR maintained context
-      -> forward [our context] + [new turn]
+      -> the session is reconciled with it: continued, rewound, or started over
+      -> turns it has not seen are recorded
+      -> forward the recap, then the client's own recent turns and the new one
       -> return the provider's answer unchanged
-      -> after responding, record both turns with gc_update()
+      -> after responding, a pass ages the session; a cut changes the next request
 
-The client's history is ignored; we send ours. Any failure in our own machinery
-forwards the client's original request untouched. See doc/design/ for rationale.
+Any failure in our own machinery forwards the client's original request untouched.
+See doc/design/proxy/overview.md.
 """
 
 import asyncio

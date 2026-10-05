@@ -56,7 +56,6 @@ export const STATUS = {
   bypassed_batch_too_small: { tone: "", icon: "–", text: "nothing to collect yet" },
   bypassed_no_saving:       { tone: "", icon: "–", text: "skipped: it would have made the prompt bigger" },
   bypassed_aging_in_flight: { tone: "", icon: "–", text: "skipped: a collection was already running" },
-  bypassed_below_threshold: { tone: "", icon: "–", text: "skipped: below threshold" },
   bypassed_on_error:        { tone: "critical", icon: "✕", text: "failed: nothing changed" },
   discarded_session_closed: { tone: "", icon: "–", text: "discarded: the conversation had closed" },
 };

@@ -134,7 +134,7 @@ def create_dashboard_app(
             config={"context_window": config.context_window, "min_cut_tokens": config.min_cut_tokens,
                     "last_n_turns_to_keep": config.last_n_turns_to_keep, "keep_threshold": config.keep_threshold,
                     "archive_threshold": config.archive_threshold, "min_compactable_tokens": config.min_compactable_tokens,
-                    "max_memory_facts": config.max_memory_facts, "max_memory_tokens": config.max_memory_tokens},
+                    "max_memory_tokens": config.max_memory_tokens},
             proxy=read_proxy_stats() if read_proxy_stats is not None else None,
         )
 

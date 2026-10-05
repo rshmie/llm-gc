@@ -5,7 +5,7 @@
 
 import { BECOMES, BECOMES_CAT, CATS, CLAMP_CHARS, EARLIER_SHOWN, FACTS_SHOWN, GLOSSARY, GONE, HEIGHT, MIN_BAR_PX, ORDER, RUN_MIN, categoryOf, describeOutcome, swatch } from "./vocabulary.js";
 import { $, agoTs, countEl, fill, fmt, h, meterBar, percent, plural, ranges, reducedMotion, setChildren, storeSet, svg } from "./dom.js";
-import { captured, countCats, factsByTurn, has, marked, maxFacts, pendingTurns, preview, query, saidByTurn, state, turnMatches, ui } from "./state.js";
+import { captured, countCats, factsByTurn, has, marked, pendingTurns, recapLimit, preview, query, saidByTurn, state, turnMatches, ui } from "./state.js";
 import { hideTooltip, info, showTooltip, tipQuote, hoverTip } from "./tooltip.js";
 import { offerReturn, showTab } from "./shell.js";
 import { openCard, showWhy, whyText } from "./engine.js";
@@ -42,7 +42,7 @@ export function renderStatus() {
     action ? h("button", { class: "link-btn", type: "button", onclick: action[1] }, `${action[0]} →`) : null);
   const items = [];
   if (counts.unseen) items.push(line("warn", "!", `The model sees nothing of ${plural(counts.unseen, "message")}.`,
-    `Their facts were stored, but the recap carries at most ${maxFacts()} facts and theirs didn't make it.`, ["Show them", toMessages("unseen")]));
+    `Their facts were stored, but the recap carries at most ${recapLimit()} and theirs didn't make it.`, ["Show them", toMessages("unseen")]));
   if (unsent) items.push(line("warn", "!", `${plural(unsent, "fact")} stored but not sent.`,
     "Ranked below the facts the recap has room for, so the model can't see them.",
     ["Show the facts", () => $("memory-unsent")?.scrollIntoView({ behavior: smooth(), block: "start" })]));
@@ -656,7 +656,7 @@ export function renderMemory(k) {
   const groups = [
     { id: "sent", title: "Sent to the model", icon: h("span", { class: "st good" }, "✓"), facts: active.filter((f) => f.sent) },
     { id: "unsent", title: "Stored, not sent", icon: h("span", { class: "st warn" }, "⚠"), facts: active.filter((f) => !f.sent),
-      note: `The recap carries at most ${maxFacts()} facts, most important first. The model cannot see these.` },
+      note: `The recap carries at most ${recapLimit()}, most important first. The model cannot see these.` },
     { id: "superseded", title: "Contradicted later", icon: h("span", { class: "st" }, "↺"), facts: k.facts.filter((f) => f.status === "superseded") },
   ];
   if (!k.facts.length) {

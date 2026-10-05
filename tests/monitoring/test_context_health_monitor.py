@@ -15,8 +15,8 @@ from llm_gc.monitoring.context_health import TransitionType
 
 # ---- Helper factories -------------------------------------------------------
 #
-# Same pattern as test_garbage_collector.py: small builders that take only the
-# fields a given test cares about and fill the rest with sensible defaults.
+# Small builders that take only the fields a given test cares about and fill the
+# rest with sensible defaults.
 
 
 def _make_message(turn_index: int = 0, token_count: int = 10, content: str = "msg") -> Message:
@@ -49,7 +49,7 @@ def _make_completed_result(classifications: dict[int, SweepClassification], toke
                     sweep_result=sweep_result, duration_ms=2.0)
 
 
-def _make_bypassed_result(messages: list[Message], status: GCStatus = GCStatus.BYPASSED_BELOW_THRESHOLD,
+def _make_bypassed_result(messages: list[Message], status: GCStatus = GCStatus.BYPASSED_BATCH_TOO_SMALL,
                           failure_reason: str | None = None, failure_stage: str | None = None) -> GCResult:
     """A bypassed run passes messages through untouched and carries no sweep_result."""
     total = sum(m.token_count for m in messages)
@@ -310,7 +310,7 @@ class TestSnapshotBypassed:
         _emit_gc_finished(bus, _make_bypassed_result([_make_message(turn_index=t) for t in range(3)]))
 
         snapshot = monitor.get_snapshot()
-        assert snapshot.gc_breakdown.gc_status == GCStatus.BYPASSED_BELOW_THRESHOLD
+        assert snapshot.gc_breakdown.gc_status == GCStatus.BYPASSED_BATCH_TOO_SMALL
         assert (snapshot.gc_breakdown.keep_count, snapshot.gc_breakdown.compact_count,
                 snapshot.gc_breakdown.archive_count) == (3, 0, 0)
         assert (snapshot.gc_breakdown.keep_tokens, snapshot.gc_breakdown.compact_tokens,

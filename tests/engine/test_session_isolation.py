@@ -114,27 +114,3 @@ def test_a_removed_session_takes_its_memory_with_it():
         return await service.gc_collect("alice")
 
     assert "frankfurt" not in _text(asyncio.run(scenario()))
-
-
-def test_the_stateless_composer_keeps_conversations_apart():
-    """The library path had the same leak: `ContextComposer` archived into a shared
-    store, so one composer serving two conversations mixed their facts."""
-    from llm_gc.engine.context_composer import ContextComposer
-
-    bus = EventBus()
-    composer = ContextComposer(
-        event_bus=bus,
-        generational_memory=GenerationalMemory(knowledge_extractor=KnowledgeExtractor(event_bus=bus),
-                                               compactor=NoOpCompactor(event_bus=bus)),
-        compactor=NoOpCompactor(event_bus=bus),
-    )
-    sweep = _SweepFirstTurn(SweepClassification.ARCHIVE)
-
-    def compose(turns: list[Message]):
-        return asyncio.run(composer.compose(sweep.sweep(turns, [])))
-
-    alice = compose([_turn(0, ALICE_SECRET), _turn(1, "noted")])
-    bob = compose([_turn(0, "hello, I am planning a party"), _turn(1, "fun")])
-
-    assert any("frankfurt" in e.content for e in alice.archived_knowledge), "precondition"
-    assert not any("frankfurt" in e.content for e in bob.archived_knowledge)

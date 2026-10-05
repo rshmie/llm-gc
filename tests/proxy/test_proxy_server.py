@@ -53,13 +53,11 @@ def _engine(**config_overrides):
     bus = EventBus()
     base = {
         "context_window": 200,
-        "gc_threshold": 0.4,
         "keep_threshold": 0.55,
         "archive_threshold": 0.25,
         "min_compactable_tokens": 10,
         "last_n_turns_to_keep": 2,
         "max_memory_ratio": 0.1,
-        "max_memory_facts": 5,
         # Scaled to the 200-token window: a few turns' worth is worth a cut.
         "min_cut_tokens": 30,
     }

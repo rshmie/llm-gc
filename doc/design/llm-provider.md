@@ -157,15 +157,15 @@ mode would be a new provider wiring, not a redesign.
 ## Why this shape
 
 - **`generate` is async, and so is everything that reaches it.** The real caller,
-  `GcService.gc_update`, already runs on the event loop. A blocking HTTP call
+  the aging pass in `GcService`, already runs on the event loop. A blocking HTTP call
   there would freeze every other session on the server for the several seconds a
   model call takes. That looks fine in a one-person demo and falls over the first
   time two people use it. The rejected alternative was a synchronous interface
   that callers move onto a thread. It keeps a simple entry point for library
   users with no event loop, but it makes offloading a rule every caller must
-  remember, and forgetting it fails silently. The cost accepted: the stateless
-  `GarbageCollector.collect` becomes a coroutine, so synchronous library users
-  need `asyncio.run` or a small convenience wrapper.
+  remember, and forgetting it fails silently. The cost accepted: the library's
+  entry points are coroutines, so synchronous callers need `asyncio.run` or a
+  small convenience wrapper.
 
 
 - **The interface is checked by the type checker.** Python doesn't enforce type

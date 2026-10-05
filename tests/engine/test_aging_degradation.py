@@ -36,7 +36,6 @@ TURN_COUNT = 10
 # aging path runs repeatedly rather than once.
 CONFIG = GCConfig(
     context_window=200,
-    gc_threshold=0.3,
     keep_threshold=0.6,
     archive_threshold=0.05,
     min_compactable_tokens=5,

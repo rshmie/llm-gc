@@ -234,6 +234,16 @@ deployment opts out and how a benchmark measures what they are worth. Ranking si
 behind an interface, so a deployment with its own ranking supplies one without
 changing the engine.
 
+**The budget is a size, not a count.** The front carries facts up to a share of the
+model's window (10% by default), so memory grows with the conversation only until
+that share is spent and can never crowd the window. *Rejected: a count limit.* Facts
+are chosen once per cut, with no question to rank them against, so a count can only
+leave out facts the budget has room for; cost and the window are both measured in
+tokens, which the size budget measures directly. *Rejected: sending everything*,
+which lets memory grow without bound until it costs more than the turns it
+replaced. When the budget is reached, what does not fit is shown as out of view;
+condensing the permanent generation further is the answer to that.
+
 **Selection and presentation use different orderings.** Importance decides what
 survives the budget; the surviving facts are shown in conversation order, because
 the front is read top to bottom and a fact from turn 2 belongs before one from
@@ -554,8 +564,8 @@ of what the transparency layer reports; only active facts reach the prompt.
 
 All four are emitted **after** the aging pass commits, so each describes a change
 that is now in the session's state, and a pass that is discarded announces
-nothing. `MESSAGE_ADDED_TO_YOUNG_GEN` remains a reserved type with no emitter —
-young-generation membership is just the turns in the session's snapshot.
+nothing. Joining the young generation needs no event: young-generation membership
+is just the turns in the session's snapshot.
 
 These events feed the health monitor's transitions timeline. Where each turn and
 fact stands *now* is read from the session's state rather than from events — see

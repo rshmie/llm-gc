@@ -4,7 +4,6 @@ from pydantic import BaseModel, Field
 from llm_gc.engine.aging_degradation import AgingDegradation
 from llm_gc.engine.gc_status import GCStatus
 from llm_gc.engine.sweep.sweep_result import SweepResult
-from llm_gc.models.knowledge_entry import KnowledgeEntry
 from llm_gc.models.message import Message
 
 class CutOutcome(BaseModel):
@@ -47,7 +46,7 @@ class GCResult(BaseModel):
     gc_run_id: str
     status: GCStatus
     failure_reason: Optional[str] = None  # human-readable; None if not bypassed
-    failure_stage: Optional[str] = None  # "score" | "sweep" | "compose" | None
+    failure_stage: Optional[str] = None  # "score" | "sweep" | "age" | "sweep_old_gen" | None
     tokens_before: int = Field(ge=0)
     tokens_in_final: int = Field(ge=0)
     kept_count: int = Field(ge=0)
@@ -55,16 +54,6 @@ class GCResult(BaseModel):
     archived_count: int = Field(ge=0)
     sweep_result: Optional[SweepResult] = None
     duration_ms: float = Field(ge=0)
-
-    archived_knowledge: list[KnowledgeEntry] = Field(default_factory=list)
-    """Facts recovered from the turns this pass archived, supersession applied.
-
-    Filled by the stateless `GarbageCollector`, which stores nothing and so hands
-    back everything it produced. Only this pass's archives: a caller that feeds
-    `final_messages` back in has already dropped the earlier archived turns, so it
-    accumulates these the same way it accumulates the conversation. Empty on the
-    session path, where facts are committed to the session instead.
-    """
 
     degradations: list[AgingDegradation] = Field(default_factory=list)
     """What this pass intended and did not manage - see `AgingDegradation`.

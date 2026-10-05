@@ -92,7 +92,7 @@ listening.
 **One monitor serves every session, and keeps them apart.** Every event names
 the session it describes, and the monitor keeps a separate record per session:
 its last pass, its transitions, and its recent degradations. Events with no
-session — the stateless library path — share one record. The number of records
+session share one record. The number of records
 is bounded, dropping the session heard from least recently, so a monitor never
 grows with the number of conversations a proxy has ever served.
 
@@ -298,16 +298,14 @@ code      cut          front    pass    keep   compact     archive    young gene
 screen    collection   recap    check   kept   compacted   archived   word for word
 ```
 
-*Rejected: a separate plain vocabulary*, which the dashboard first used (clean-up,
-condensed block, quoted whole, kept as facts): read beside the code, two
-vocabularies for one system confused more than either, and "clean-up" read as
-something that triggers GC rather than what GC does after a reply. *Rejected: the
-code's words alone*: "cut" reads as truncation and "front" means nothing on its
-own. *Rejected, earlier: the design vocabulary with a glossary page*: a reader who
-must leave the screen to decode it has been handed engine telemetry again. *Cost
-accepted:* cut and front differ between screen and code; renaming them in the code
-touches public configuration (`min_cut_tokens`), so it is a decision for before
-1.0, not a cosmetic one. Token
+*Rejected: a separate plain vocabulary* (clean-up, condensed block, quoted whole,
+kept as facts): read beside the code, two vocabularies for one system confuse more
+than either, and "clean-up" reads as something that triggers GC rather than what GC
+does after a reply. *Rejected: the code's words alone*: "cut" reads as truncation
+and "front" means nothing on its own. *Rejected: the design vocabulary with a
+glossary page*: a reader who must leave the screen to decode it has been handed
+engine telemetry again. *Cost accepted:* cut and front differ between screen and
+code, and the guide maps them. Token
 figures compare like with like: the conversation as written counts only the
 messages the session has recorded, because the newest message reaches it with
 the next request, and comparing the whole transcript showed a saving equal to

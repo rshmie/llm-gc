@@ -46,7 +46,6 @@ def _build(*, archive_threshold: float = 0.25, memory_cls=GenerationalMemory):
     bus = EventBus()
     config = GCConfig(
         context_window=700,
-        gc_threshold=0.5,
         keep_threshold=0.55,
         archive_threshold=archive_threshold,
         min_compactable_tokens=10,

@@ -233,14 +233,14 @@ not just what it does.
 **The engine**
 
 - **[design/scoring/overview.md](design/scoring/overview.md)** — how a turn's
-  relevance is measured across five dimensions, and how the scores combine.
+  relevance is measured, and how the scores combine.
   Each scorer has its own doc alongside it.
 - **[design/sweeper-and-composition/sweeping-mechanism.md](design/sweeper-and-composition/sweeping-mechanism.md)**
   — how scores become KEEP / COMPACT / ARCHIVE classifications.
-- **[design/sweeper-and-composition/composition-mechanism.md](design/sweeper-and-composition/composition-mechanism.md)**
-  — how those classifications are assembled back into a message list.
+- **[design/generational-memory/the-cut.md](design/generational-memory/the-cut.md)**
+  — when a collection happens, and how the recap is assembled.
 - **[design/sweeper-and-composition/compaction-mechanism.md](design/sweeper-and-composition/compaction-mechanism.md)**
-  — how compacted runs are summarised, and why the default does nothing.
+  — how compacted runs are summarised, and when a summary is refused.
 
 **Memory and state**
 

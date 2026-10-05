@@ -136,8 +136,10 @@ class GcService:
         opts out and how a benchmark measures what they are worth.
         """
         facts: list[KnowledgeEntry] = []
-        if self.gc_config.max_memory_facts > 0 and self.gc_config.max_memory_tokens > 0:
-            facts = self.fact_retriever.retrieve(snapshot.active_knowledge, None, self.gc_config.max_memory_facts)
+        if self.gc_config.max_memory_tokens > 0:
+            # Ranked whole: the token budget, applied as the front is rendered, decides how many fit.
+            knowledge = snapshot.active_knowledge
+            facts = self.fact_retriever.retrieve(knowledge, None, len(knowledge))
         return render_front(snapshot.old, facts, self.gc_config.max_memory_tokens)
 
     async def gc_collect(self, session_id: str) -> list[Message]:
@@ -211,7 +213,7 @@ class GcService:
         return state
 
     async def gc_update(self, session_id: str, new_turn: Message) -> None:
-        """Record one turn, then age the session if it is under pressure."""
+        """Record one turn, then run a pass over the session: the library's one-call loop."""
         state = self.session_manager.get_or_create(session_id)
         state.snapshot = state.snapshot.with_turn(new_turn)
         await self.gc_age(session_id)

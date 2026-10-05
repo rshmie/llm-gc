@@ -236,6 +236,3 @@ Three things made that untenable:
   loses its thinking for that step; the provider advises against compacting
   mid-round. Correct, and costs reasoning once per cut. The fix is to hold a new
   front back until a request that is not a tool result.
-- **The stateless library path** (`GarbageCollector.collect`) still recomposes the
-  whole conversation per call; the cut shape applies to the session path the proxy
-  uses.

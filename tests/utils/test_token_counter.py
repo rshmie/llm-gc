@@ -5,11 +5,9 @@ def test_token_counter():
     text = "Hi, there!"
     assert(count_tokens(text) > 0)
 
-def test_token_counter_with_anthropic_fall_back():
+def test_tokens_are_counted_by_the_cl100k_base_encoding():
     text = "Hi, there!"
-    claude_token_count = count_tokens(text, "claude-sonnet-4-6")
-    open_ai_token_count = len(tiktoken.get_encoding("cl100k_base").encode(text))
-    assert(claude_token_count == open_ai_token_count)
+    assert count_tokens(text) == len(tiktoken.get_encoding("cl100k_base").encode(text))
 
 def test_empty_string_returns_zero_token():
     text = ""
