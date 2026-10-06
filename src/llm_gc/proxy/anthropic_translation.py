@@ -7,7 +7,8 @@ web layer.
 
 import json
 import logging
-from collections.abc import Sequence
+import re
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -28,6 +29,12 @@ _TOOL_CALL = "[tool call: {name}] {input}"
 _TOOL_RESULT = "[tool result] {output}"
 _TOOL_ERROR = "[tool result, error] {output}"
 _ATTACHMENTS = {"image": "[image]", "document": "[document]"}
+
+# A client can also place instructions inside a turn's text, in this element: Claude
+# Code wraps CLAUDE.md, memory, the date and notes about files in it, in the user's
+# messages and in tool results. Lifted out of the turn, so it is never condensed.
+_REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
+_BLANK_RUN = re.compile(r"\n{3,}")
 
 # A client can place instructions inside its conversation, as messages of this role:
 # Claude Code adds its environment and its tools' instructions after a user turn.
@@ -80,12 +87,13 @@ def extract_messages(payload: dict[str, Any]) -> list[Message]:
         if role not in _ROLES:
             raise ConfigError(f"messages[{index}] has unsupported role {role!r}")
 
-        content = _content_as_text(raw.get("content"), index)
+        content, lifted = _lift_instructions(_content_as_text(raw.get("content"), index), role)
         messages.append(
             Message(
                 role=role,
                 content=content,
                 token_count=count_tokens(content),
+                instructions=lifted,
                 # Its place in the conversation, instructions not counted, so a turn's
                 # index does not depend on where the client puts its instructions.
                 turn_index=len(messages),
@@ -95,6 +103,36 @@ def extract_messages(payload: dict[str, Any]) -> list[Message]:
     if not messages:
         raise ConfigError("request body has no user or assistant turn")
     return messages
+
+
+def carry_instructions(front: Message, stood_in: Sequence[Message]) -> Message:
+    """The front, opened by the instructions of the turns it stands in for, word for word.
+
+    In order, each said once: a client that repeats an instruction in many turns,
+    as Claude Code does after each file it reads, gains nothing from the copies.
+    """
+    carried = tuple(dict.fromkeys(text for turn in stood_in for text in turn.instructions))
+    if not carried:
+        return front
+    blocks = [{"type": "text", "text": text} for text in (*carried, front.content)]
+    return front.model_copy(update={"raw_content": blocks, "instructions": carried})
+
+
+def instruction_tokens(messages: Iterable[Message]) -> int:
+    """Tokens of the instructions these turns carry: sent whole, with or without GC."""
+    return sum(count_tokens(text) for message in messages for text in message.instructions)
+
+
+def _lift_instructions(text: str, role: str) -> tuple[str, tuple[str, ...]]:
+    """A turn's text without the client's instruction elements, and those elements in order.
+
+    Only the user's side: that is where a client writes, and an assistant reply that
+    quotes the element is conversation.
+    """
+    lifted = tuple(_REMINDER.findall(text)) if role == "user" else ()
+    if not lifted:
+        return text, ()
+    return _BLANK_RUN.sub("\n\n", _REMINDER.sub("", text)).strip(), lifted
 
 
 def extract_instructions(payload: dict[str, Any]) -> list[Instruction]:

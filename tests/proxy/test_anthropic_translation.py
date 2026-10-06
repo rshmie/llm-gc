@@ -6,7 +6,13 @@ from llm_gc.engine.generations.front import Annotations, span_text
 from llm_gc.exceptions import ConfigError
 from llm_gc.models import Message
 from llm_gc.models.generation_snapshot import DetailLevel, Span
-from llm_gc.proxy.anthropic_translation import Instruction, extract_instructions, extract_messages, rewrite_messages
+from llm_gc.proxy.anthropic_translation import (
+    Instruction,
+    carry_instructions,
+    extract_instructions,
+    extract_messages,
+    rewrite_messages,
+)
 from llm_gc.utils import count_tokens
 
 # The shape Claude Code sends: its environment, then its tools' instructions, as system
@@ -89,6 +95,54 @@ class TestToolTurnsAreRead:
 
         assert '[tool call: Bash] {"command": "pytest -q"}' in quoted
         assert "[tool result] 42 passed in 1.2s" in quoted
+
+
+REMINDER = "<system-reminder>\nContents of CLAUDE.md: use uv, never pip.\n</system-reminder>"
+
+
+class TestInstructionsInsideATurn:
+    """A client's instructions inside a message are not the conversation: the engine
+    must not summarise them, and the model must still receive them word for word."""
+
+    def test_they_are_lifted_out_of_the_users_words_in_order(self):
+        later = "<system-reminder>Today is Tuesday.</system-reminder>"
+        payload = {"messages": [{"role": "user", "content": [
+            {"type": "text", "text": REMINDER}, {"type": "text", "text": later}, {"type": "text", "text": "Help me design it."}]}]}
+
+        turn = extract_messages(payload)[0]
+
+        assert turn.content == "Help me design it."
+        assert turn.instructions == (REMINDER, later)
+        assert turn.token_count == count_tokens("Help me design it.")
+
+    def test_they_are_lifted_out_of_a_tool_result(self):
+        result = {"type": "tool_result", "tool_use_id": "t1", "content": f"line one\n{REMINDER}"}
+
+        turn = extract_messages({"messages": [{"role": "user", "content": [result]}]})[0]
+
+        assert turn.content == "[tool result] line one" and turn.instructions == (REMINDER,)
+
+    def test_an_assistant_reply_quoting_one_is_conversation(self):
+        payload = {"messages": [{"role": "user", "content": "what does it say?"},
+                                {"role": "assistant", "content": f"It says: {REMINDER}"}]}
+
+        reply = extract_messages(payload)[1]
+
+        assert REMINDER in reply.content and reply.instructions == ()
+
+    def test_they_open_the_front_once_each_in_order(self):
+        """Claude Code repeats some instructions after every file it reads; a copy
+        per turn would add nothing the first one did not say."""
+        later = "<system-reminder>Today is Tuesday.</system-reminder>"
+        stood_in = [Message(role="user", content="a", turn_index=0, instructions=(REMINDER,)),
+                    Message(role="user", content="b", turn_index=2, instructions=(later, REMINDER))]
+        front = Message(role="user", content="[front]", token_count=1, turn_index=-1)
+
+        carried = carry_instructions(front, stood_in)
+
+        assert carried.raw_content == [{"type": "text", "text": REMINDER}, {"type": "text", "text": later},
+                                       {"type": "text", "text": "[front]"}]
+        assert carry_instructions(front, [_turn(0)]) is front, "nothing to carry, nothing changed"
 
 
 class TestWritingBack:

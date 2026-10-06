@@ -355,7 +355,10 @@ attributed to the user. *Rejected: showing the message only while it is being
 answered* — a chat client's latest message would vanish once its reply arrived.
 For the same reason a turn carrying tool results is shown as *tool results*, not
 as the user's words: the client sends what its tools returned under the user's
-role. *Accepted cost:* the engine holds
+role. Instructions the client wrote into a message — Claude Code's
+`<system-reminder>` blocks — show as a tag with their size, not among its words:
+they are not conversation, are never condensed, and are not counted in the
+request's size, which covers what LLM-GC can change. *Accepted cost:* the engine holds
 every original in memory for every session, dashboard or not — the price of being
 able to restore one. *Rejected: no originals* — an archived turn could
 never be shown whole again, to the model or to a person.
@@ -527,7 +530,12 @@ panel opens with the facts the model cannot see and with each replacement, shown
 as the old value and the new one, so a false replacement is plain at a glance.
 Every fact sits folded below them; most are on the page already, on their
 exchange's line. *Rejected: every fact first, grouped by how it is sent.* The
-groups that needed a look sat under forty notes that did not.
+groups that needed a look sat under forty notes that did not. The list is headed
+with how far it reaches — on record up to the newest collected message — because
+facts are read only at a collection: a change of plan in a recent message is in
+its words, which the model receives as written, and is filed once that message is
+collected. Headed "current", a value the conversation had already changed read as
+still in force.
 
 ### A banner only for what needs a look
 

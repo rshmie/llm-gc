@@ -97,6 +97,29 @@ that no longer exists.
   each instruction back — after the turn it followed, or right after the front when
   that turn was collected. Condensed, Claude Code's own instructions could be
   summarised away; passed over, every Claude Code request went untouched.
+- **So are instructions inside a message.** Claude Code also writes instructions
+  into the user's messages and tool results, each wrapped in a `<system-reminder>`
+  element: CLAUDE.md, memory and the user's context arrive in the first message
+  this way. Each element is lifted out of its turn's text, so the engine never
+  summarises, scores or quotes it, and kept on the turn. A recent turn goes as the
+  client sent it, elements in place; once a turn is collected, its elements open
+  the front, word for word, in order, each said once — Claude Code repeats some
+  after every file it reads. Summarised with their message, the model read a
+  paraphrase of the project's rules, or nothing of them.
+
+  ```
+  message 0 as sent:   <system-reminder>CLAUDE.md…</system-reminder>  Help me design…
+  engine reads:        Help me design…
+  after a collection:  front = [ <system-reminder>CLAUDE.md…</system-reminder> , recap ]
+  ```
+
+  *Rejected: never collecting the first message* — it protects one message's
+  instructions and none of the later ones. *Rejected: keeping only standing
+  instructions* — telling a standing rule from a passing note needs each client's
+  meaning. *Rejected: sending them as system messages* — it changes how the client's
+  words reach the model. *Accepted cost:* a long session's instructions all stay in
+  every request, as they would without LLM-GC; another client's instructions inside
+  a message, in another wrapper, are condensed like conversation.
 - **Every other Anthropic endpoint passes through untouched.** A client such as
   Claude Code also counts tokens and lists models through the same base URL; those
   requests are forwarded with their method, path, query, headers and body, and

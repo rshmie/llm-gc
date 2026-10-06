@@ -265,6 +265,28 @@ class TestTheClientsHistoryIsReplaced:
         instructions = [m["content"] for m in sent if m["role"] == "system"]
         assert instructions == [f"instruction {index}" for index in range(10)], "each once, in order"
 
+    def test_instructions_inside_a_message_reach_the_model_word_for_word_after_a_cut(self):
+        """Claude Code wraps CLAUDE.md, memory and context in <system-reminder> blocks
+        inside the user's first message. Summarised with that message, the model read
+        a paraphrase of them, or nothing; lifted out, they open the recap word for
+        word, once each, and no summary is written from them."""
+        client, service, _, seen = _proxy()
+        reminder = "<system-reminder>Project rule: never commit to main.</system-reminder>"
+        messages: list[dict] = []
+        for index in range(10):
+            text = f"turn {index}: we discussed the storage layer at length today"
+            messages.append({"role": "user", "content": [{"type": "text", "text": reminder}, {"type": "text", "text": text}]})
+            _post(client, {"model": "claude-sonnet-5", "max_tokens": 512, "messages": messages})
+            messages.append({"role": "assistant", "content": UPSTREAM_OK["content"][0]["text"]})
+
+        sent = _sent(seen)["messages"]
+        front = next(message for message in sent if _is_front(message))
+        assert front["content"][0] == {"type": "text", "text": reminder}, "said once, ahead of the recap"
+        assert sum(json.dumps(message).count("Project rule") for message in sent) == 1 + sum(
+            1 for message in sent if not _is_front(message) and message["role"] == "user"), "once in the recap, as sent in each recent turn"
+        summariser = service.generational_memory.compactor.provider
+        assert summariser.calls and not any("Project rule" in str(call.messages) for call in summariser.calls)
+
     def test_a_client_moving_its_cache_markers_stays_one_conversation_within_the_limit(self):
         """Claude Code marks the newest turns for caching on every request. The
         conversation must stay one session, and after a cut the forwarded turns must
@@ -865,7 +887,10 @@ def _converse_through(client, seen, turns: int, *, extra_content=None, header="s
 
 
 def _is_front(message: dict) -> bool:
-    return isinstance(message["content"], str) and message["content"].startswith(FRONT_HEADER)
+    """The recap message: its text, or its last text block once instructions open it."""
+    content = message["content"]
+    text = content if isinstance(content, str) else (content[-1].get("text", "") if content else "")
+    return text.startswith(FRONT_HEADER)
 
 
 class TestTheCutShape:

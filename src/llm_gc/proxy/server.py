@@ -32,9 +32,11 @@ from llm_gc.models import Message
 from llm_gc.models.generation_snapshot import GenerationSnapshot
 from llm_gc.proxy.anthropic_translation import (
     Instruction,
+    carry_instructions,
     extract_instructions,
     extract_messages,
     forwardable_headers,
+    instruction_tokens,
     rewrite_messages,
 )
 from llm_gc.proxy.session_identity import SESSION_HEADER, chain_hashes
@@ -223,6 +225,7 @@ async def _handle(app: FastAPI, request: Request) -> Response:
     history, new_turn = client_messages[:-1], client_messages[-1]
     # Instructions count on both sides of the ratio: they are sent, whole, either way.
     client_history_tokens = (sum(message.token_count for message in client_messages)
+                             + instruction_tokens(client_messages)
                              + sum(instruction.token_count for instruction in instructions))
     metrics.tokens_in_client_history += client_history_tokens
 
@@ -347,8 +350,9 @@ async def _apply_gc(
     calls, thinking blocks and the provider's prompt cache are all preserved. The
     client's instructions are never condensed: each goes back in place.
     """
-    instruction_tokens = sum(instruction.token_count for instruction in instructions)
-    client_tokens = sum(message.token_count for message in history) + new_turn.token_count + instruction_tokens
+    sent_whole = sum(instruction.token_count for instruction in instructions)
+    client_tokens = (sum(message.token_count for message in history) + new_turn.token_count
+                     + instruction_tokens([*history, new_turn]) + sent_whole)
     if session_id is None:
         return original_body, client_tokens
 
@@ -363,9 +367,14 @@ async def _apply_gc(
     # they arrived: the client moves its cache markers onto the newest turns, and
     # markers kept from earlier requests would pile up past the provider's limit.
     sent_now = {message.turn_index: message for message in history}
-    forwarded = [sent_now.get(message.turn_index, message) for message in collected] + [new_turn]
+    # The front stands in for every turn before the first one sent as written; the
+    # instructions in those turns open it, word for word, as this request has them.
+    first_sent = next((message.turn_index for message in collected if message.turn_index >= 0), len(history))
+    stood_in = [message for message in history if message.turn_index < first_sent]
+    forwarded = [carry_instructions(message, stood_in) if message.turn_index < 0
+                 else sent_now.get(message.turn_index, message) for message in collected] + [new_turn]
     body = rewrite_messages(payload, forwarded, strip_thinking_before=valid_from, instructions=instructions)
-    return _dump_json(body), sum(m.token_count for m in forwarded) + instruction_tokens
+    return _dump_json(body), sum(m.token_count for m in forwarded) + instruction_tokens(forwarded) + sent_whole
 
 
 async def _age(app: FastAPI, session_id: str) -> None:

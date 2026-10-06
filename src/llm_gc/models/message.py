@@ -16,12 +16,19 @@ class Message(BaseModel):
     sent it - images, tool calls, thinking blocks - so a turn forwarded verbatim is
     forwarded byte for byte. It never leaves through serialisation or repr: it can
     hold an attached file, and conversation content must not reach logs or events.
+
+    `instructions` is text the client placed inside the turn for the model rather
+    than as conversation - Claude Code's `<system-reminder>` blocks, for one. It is
+    not in `content`, so the engine never condenses it; whoever forwards a collected
+    turn delivers it word for word. Excluded from serialisation for the same reason
+    as `raw_content`.
     """
     role: Literal["user", "assistant", "system"]
     content: str
     token_count: int = 0
     turn_index: int = 0
     raw_content: Any = Field(default=None, exclude=True, repr=False)
+    instructions: tuple[str, ...] = Field(default=(), exclude=True, repr=False)
 
     def preview(self, max_length: int = 50) -> str:
         if len(self.content) > max_length:

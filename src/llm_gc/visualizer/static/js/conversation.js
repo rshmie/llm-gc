@@ -22,6 +22,9 @@ const toolTip = () => hoverTip(GLOSSARY.tools[0], GLOSSARY.tools[1]);
 const who = (turn) => h("span", { class: "who", ...(turn.tool_results ? toolTip() : {}) }, speakerOf(turn));
 const toolTag = (label) => h("span", { class: "tag", ...toolTip() }, label);
 const callsTag = (turn) => turn.tool_calls ? toolTag("calls a tool") : null;
+// Instructions the client put inside the message: never condensed, so their size stands apart.
+const instructionsTag = (turn) => turn.instruction_tokens ? h("span", { class: "tag", ...hoverTip(GLOSSARY.instructions[0], GLOSSARY.instructions[1]) },
+  `+ client instructions · ${plural(turn.instruction_tokens, "token")}`) : null;
 const changes = (n) => n === 1 ? "1 message changes" : `${fmt(n)} messages change`;
 const changing = (k) => k.turns.filter((t) => t.becomes).length;
 export const messagesLabel = (turns) => turns.length === 1 ? `message ${turns[0]}` : `messages ${ranges(turns)}`;
@@ -503,7 +506,7 @@ export function turnRow(turn) {
     avatarOf(turn),
     h("div", { class: "msg-body" },
       h("div", { class: "msg-head" },
-        who(turn), callsTag(turn),
+        who(turn), callsTag(turn), instructionsTag(turn),
         turn.becomes ? nextTag(turn, turn.turn_index) : null,
         h("span", { class: "tok" }, plural(turn.tokens, "token"))),
       textBlock(turn.text, { key: `t-${turn.turn_index}` })));
@@ -512,7 +515,7 @@ export function turnRow(turn) {
 // The messages of an exchange as they were said, each still reachable from the map.
 function originals(turns, faded) {
   return turns.map((t) => h("div", { class: "orig", id: `turn-${t.turn_index}` },
-    h("div", { class: "msg-head" }, who(t), callsTag(t), h("span", { class: "num" }, `message ${t.turn_index}`),
+    h("div", { class: "msg-head" }, who(t), callsTag(t), instructionsTag(t), h("span", { class: "num" }, `message ${t.turn_index}`),
       h("span", { class: "tok" }, plural(t.tokens, "token"))),
     textBlock(t.text, { faded, key: `t-${t.turn_index}` })));
 }
@@ -632,10 +635,11 @@ export function renderPrompt(k) {
     h("div", { class: "prompt-head" }, h("div", { class: "note" }, "The conversation as LLM-GC forwards it, before your next message, newest first. ",
       "The model reads it from the bottom up, and Copy gives it in that order. ",
       tail.some((t) => t.tool_calls || t.tool_results) ? "Recent messages go exactly as your client sent them; tool calls and results are shown in the text form LLM-GC reads them in. " : null,
+      "Your client's own instructions are not shown – its system prompt, its tools, and what it puts inside messages – and go word for word with every request; those from collected messages open the recap. ",
       k.front_text ? "The recap stays byte for byte the same until the next collection, so the provider can keep it cached."
         : "Nothing has been collected, so your app's own request is forwarded untouched."), copy),
     [...tail].reverse().map((t) => h("div", { class: "prompt-msg" }, h("div", { class: "msg-head" }, h("span", { class: "who" }, t.role),
-      t.tool_results ? toolTag("tool results") : t.tool_calls ? toolTag("tool calls") : null,
+      t.tool_results ? toolTag("tool results") : t.tool_calls ? toolTag("tool calls") : null, instructionsTag(t),
       h("span", { class: "num" }, `message ${t.turn_index} · ${plural(t.tokens, "token")}`)), promptText(t.text || "(no text)", `prompt-${t.turn_index}`))),
     k.front_text ? h("div", { class: "prompt-msg front" }, h("div", { class: "msg-head" }, h("span", { class: "who" }, "user"),
       h("span", { class: "tag" }, h("span", { class: "key block" }), `the recap · ${plural(k.front_tokens, "token")}`), info("block")), promptText(k.front_text, "prompt-front")) : null);
@@ -706,14 +710,18 @@ export function setPromptView(on) {
 export function renderMemory(k) {
   const matches = (f) => !query() || has(f.content) || has(f.topic) || has(f.superseded_by);
   const active = k.facts.filter((f) => f.status === "active");
+  // Facts are read when a message is collected, so they reach only as far as the newest collected one.
+  const collected = k.turns.filter((t) => t.fidelity !== "verbatim").map((t) => t.turn_index);
+  const readTo = collected.length ? Math.max(...collected) : null;
   const groups = [
     { id: "unseen", title: "Not sent: out of view", icon: h("span", { class: "st warn" }, "⚠"),
       facts: active.filter((f) => !f.sent && f.span_level !== "kept"),
       note: "Their exchanges are folded to keep the recap within its budget, so the model can't see these." },
     { id: "replaced", title: "Replaced later", icon: h("span", { class: "st" }, "↺"), facts: k.facts.filter((f) => f.status === "superseded"),
       note: "The recap notes each replacement beside the exchange that said the old value, so the model reads that value as no longer current. Only your own messages replace a decision you made." },
-    { id: "all", title: "Every current fact", icon: null, facts: active,
-      note: "A compacted or archived exchange shows its facts on its line in the recap; a kept one has them in its words." },
+    { id: "all", title: readTo === null ? "Every fact on record" : `On record up to message ${readTo}`, icon: null, facts: active,
+      note: `${readTo === null ? "" : `Read from messages 0–${readTo} as they were collected. Newer messages reach the model word for word, so a change made in one is in its words, and is filed here once it is collected. `}`
+        + "A compacted or archived exchange shows its facts on its line in the recap; a kept one has them in its words." },
   ];
   if (!k.facts.length) {
     fill("memory", h("p", { class: "empty", style: "margin-top:10px" }, "Nothing yet. When a collection makes an exchange, the facts read from it appear here."));
@@ -721,7 +729,7 @@ export function renderMemory(k) {
   }
   const [unseen, replaced] = groups;
   fill("memory",
-    replaced.facts.length || unseen.facts.length ? h("div", { class: "memory-counts" }, h("span", {}, h("b", {}, fmt(active.length)), " current"),
+    replaced.facts.length || unseen.facts.length ? h("div", { class: "memory-counts" }, h("span", {}, h("b", {}, fmt(active.length)), " on record"),
       replaced.facts.length ? h("span", {}, h("b", {}, fmt(replaced.facts.length)), " replaced") : null,
       unseen.facts.length ? h("span", {}, h("b", {}, fmt(unseen.facts.length)), " out of view") : null) : null,
     groups.filter((g) => g.facts.some(matches)).map((g) => {
