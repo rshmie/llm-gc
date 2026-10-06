@@ -212,9 +212,9 @@ part's design doc under `design/` covers it in detail.
                               ▼                  │
  ┌ ENGINE (GcService) ─────────────────────┐   ┌─┴─ SESSION (one per conversation) ─┐
  │ is a collection worth making? if so:    │   │ young      recent turns, verbatim  │
- │  draft spans, read facts   (extractor)  │   │ old        spans, each at a level  │
+ │  draft spans                (grouping)  │   │ old        spans, each at a level  │
  │  score, plan levels  (scorer, planner)  │   │ permanent  facts, and what         │
- │  summarise new spans (compactor, model) │   │            replaced them           │
+ │  read facts, summarise   (model calls)  │   │            replaced them           │
  │  commit ────────────────────────────────┼──►│                                    │
  └───────────────┬─────────────────────────┘   └────────────────────────────────────┘
                  │ events, after the commit

@@ -12,7 +12,7 @@ being handed the whole message list every call.
 nowhere else.** That is all three generations — verbatim young turns, old-gen
 spans (each holding its turns, shown at a detail level), and permanent-gen facts —
 held together as one **snapshot**. The services that do the work (the span scorer,
-the compactor, the knowledge extractor, and `GenerationalMemory`) hold *how* to do
+the compactor, the fact reader, and `GenerationalMemory`) hold *how* to do
 things and no conversation data at all. They are shared across every session, which is safe precisely because they
 remember no one.
 
@@ -22,7 +22,7 @@ remember no one.
   │ GcService                        │     │ SessionState  ("alice")             │
   │  ├ SpanScorer                    │     │   snapshot ──▶ GenerationSnapshot    │
   │  ├ GenerationalMemory            │ ──▶ │                 young  (turns)      │
-  │  │   ├ KnowledgeExtractor        │     │                 old    (spans)      │
+  │  │   ├ FactReader (LLM)          │     │                 old    (spans)      │
   │  │   └ Compactor (LLM)           │     │                 knowledge (facts)   │
   │  │                               │     │                 version             │
   │  └ SessionManager ── store ──────┼──▶  │   timestamps, aging_in_flight       │

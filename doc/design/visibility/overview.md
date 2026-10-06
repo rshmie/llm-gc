@@ -46,9 +46,8 @@ The layer is two pieces, with a deliberately clean split:
   transitions and degradations. The knowledge-state projection answers *"what
   does the model know?"* from a read-only inspection of the session. Neither
   renders anything.
-- **The Visualizer (dashboard) — the view.** It renders what those report,
-  beside what the client said (a transcript the proxy hands it). It computes
-  nothing of its own, and its one action is the developer's Run GC now.
+- **The Visualizer (dashboard) — the view.** It renders what those report. It
+  computes nothing of its own, and its one action is the developer's Run GC now.
 
 This document covers the layer as a whole and the data sources in depth.
 
@@ -110,31 +109,34 @@ Its data sourcing is deliberately hybrid — *aggregator, not computer*:
      │ events, after each commit                  │ read-only, no model call
      ▼                                            ▼
  ┌ HEALTH MONITOR, per session ──┐          ┌ KNOWLEDGE STATE ──────────────┐
- │ the last pass's signals       │          │ every turn and its fidelity   │
- │ transitions (append-only)     │          │ every fact, sent or not       │
- │ recent degradations           │          │ the next collection, planned  │
+ │ the last pass's signals       │          │ every span, and exactly what  │
+ │ transitions (append-only)     │          │   the model reads for it      │
+ │ recent degradations           │          │ every turn, through its span  │
+ │                               │          │ every fact, and if it is sent │
+ │                               │          │ the next collection, planned  │
  └───────────────┬───────────────┘          └───────────────┬───────────────┘
                  └──────────────► DASHBOARD ◄───────────────┘
                      polls once a second · computes nothing
-                     beside it: the transcript, what the client said
 ```
 
 - **Current-state signals** (token budget, the latest pass's breakdown, each
   generation's contents) are **read** from the most recent pass's result and from
   the session's real storage, never re-derived from accumulated events. The
   components that computed those numbers are the authority on them.
-- **The transitions timeline** is the one genuinely event-accumulated piece,
-  because history has no other source: current state cannot show that a
-  supersession ever happened — superseded entries are excluded from every
-  active view by design — so an append-only log is the only place that
-  moment stays visible.
-- **Moves are recorded from the producer's own event**, not inferred. A
-  collection announces each span it made or lowered after it commits, and the
-  monitor writes one transition per turn. *Rejected: inferring moves by diffing
-  each pass's decisions.* A decision is not a move: diffing missed moves made in
-  the same pass a turn arrived, and invented moves for passes that committed
-  nothing. The rule: *only the component that performs a state change is the
-  authority that it happened.*
+- **What a collection moved is part of its own record**, not inferred. Its
+  outcome names every turn it took, at the level it gave each, and every turn
+  condensed earlier that it showed with less or more detail; the dashboard's
+  timeline is drawn from these records, one entry per collection, and a fact is
+  listed as replaced by the collection that took the turn replacing it. *Rejected:
+  a log of move events, grouped by time.* It recorded only spans made or lowered,
+  so a raised span never appeared; its groups merged collections that ran close
+  together; and a bounded log could hold part of a collection's moves as if they
+  were all of it. *Rejected: inferring moves by diffing each pass's decisions.* A
+  decision is not a move: diffing missed moves made in the same pass a turn
+  arrived, and invented moves for passes that committed nothing. The rule: *only
+  the component that performs a state change is the authority that it happened.*
+- **The monitor still logs each move and supersession as it is announced**, for a
+  subscriber that wants moves as they happen rather than per collection.
 - **Generation contents are read from storage**, for the same reason: the young
   generation is the turns a pass forwarded word for word, and the old generation
   is every span, with what the front spends on them at their levels.
@@ -164,7 +166,7 @@ are what the developer acts on.
 
 | Signal | What it measures | The question it answers |
 |---|---|---|
-| **Knowledge state** | every recorded turn with its current fidelity — verbatim, quoted, summarised, archived, out of view, or superseded — and every fact with whether the model is sent it, what replaced it, and the turns it came from | "What does the model still know, and how well?" |
+| **Knowledge state** | every span with its level, its score, and the exact text the model reads for it; every recorded turn with its words and how the model receives it — word for word, or through its span kept, compacted, archived or out of view; every fact with how it reaches the model and what replaced it | "What does the model still know, and how well?" |
 | **Generation lifecycle state and recent transitions** | current young / old / permanent contents (counts and token shares) plus the last *N* promote / archive / supersede transitions | "Where does my decision live now — and did anything supersede it?" |
 | **Token budget pressure** | current context tokens as a fraction of the configured budget | "How crowded is the context the model is reasoning over?" |
 
@@ -185,31 +187,38 @@ data from *"what did the collector do"* to *"what does the model know"*, keyed
 by turn and by fact:
 
 ```
- turn  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21
-       ░░ ░░ ░░ ░░ ▓▓ ╳╳ ▓▓ ▓▓ ▒▒ ▒▒ ▒▒ ▒▒ ▒▒ ▒▒ ▒▒ ▒▒ ▒▒ ██ ██ ██ ██ ██
-       └ out of view ┘ └ archived ┘ └── summarised / quoted ───┘ └── verbatim ──┘
-       ░░ stored, not sent                                         ▔▔ ▔▔ ▔▔ taken by
-       ╳╳ archived, and every fact since replaced                         the next collection
+ turn   0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21
+       ░░ ░░ ░░ ░░ ▓▓ ▓▓ ▓▓ ▓▓ ▒▒ ▒▒ ▒▒ ▒▒ ██ ██ ▒▒ ▒▒ ┄┄ ┄┄ ┄┄ ┄┄ ┄┄ ┄┄
+                                                       ▔▔ ▔▔ taken by the next collection
+
+       ░░ out of view   ▓▓ archived   ▒▒ compacted   ██ kept   ┄┄ verbatim, in the tail
 ```
 
-- **Per turn**, where it is now. A turn in the tail is verbatim; one in a kept or
-  summarised span is quoted or summarised; one in an archived span is shown by its
-  span's opening line and facts — and if every one of its facts was later
-  replaced, it is marked superseded; one in a folded span is out of view. Every
-  turn that leaves the young generation lands in a span, so these cases cover
-  every recorded turn.
-- **Per fact**, whether it is **sent**: a fact reaches the model on its span's line
-  when the span is summarised or archived; a kept span's words carry their own
-  facts; a folded span's facts are stored and not sent. *Stored, not sent* is the
-  signal that matters most: the conversation has not forgotten it, and the model
-  cannot see it.
-- **The next collection**: which verbatim turns it would take, what level each
-  would get, and the conditions it must meet, each with its state — a batch worth
+Here every span is one exchange of two turns.
+
+- **Per span**, its level, its score now, and the exact text the front carries for
+  it, read from the rendered front rather than rendered again, so it is byte for
+  byte what the model reads. A folded span carries its run's shared line.
+- **Per turn**, how the model receives it, and its words. A turn in the tail is
+  verbatim. Every other turn is in exactly one span and is received the way its
+  span is shown: quoted, under its summary, by its opening line and facts, or only
+  as a range on a folded run's line. A reply that yielded no fact of its own is no
+  less visible than the question it answered — the model reads their span's line
+  for both. The words come from the span, which keeps them.
+- **Per fact**, how it reaches the model: on its span's line when the span is
+  compacted or archived; inside the quoted words when it is kept; not at all when
+  it is folded out of view. *Stored, not sent* is the signal that matters most: the
+  conversation has not forgotten it, and the model cannot see it. A fact later
+  replaced names the turn that replaced it.
+- **The next collection**: which verbatim turns it would take, as which spans and
+  at what level; which spans already collected it would show at another level; and
+  the conditions it must meet, each with its state — a batch worth
   collecting, against `min_cut_tokens`, and a cut that pays for itself. The first
-  is planned exactly; the second is estimated before any summary is bought and
-  measured again once the summaries exist, so the dashboard shows the last
-  attempt's figures when one was refused. *Rejected: a progress meter
-  alone.* It reads as a promise, and on a conversation of short messages the
+  is planned exactly. The second is estimated at each summary's target size —
+  the very estimate a collection checks before paying for any summary, so a cut
+  the panel shows as not paying is one the collection skips — and measured again
+  on the real summaries; when that refuses a cut, the panel shows the attempt's
+  figures too. *Rejected: a progress meter alone.* It reads as a promise, and on a conversation of short messages the
   meter filled, Run GC now was pressed, and nothing happened, with nothing on the
   panel saying why.
 
@@ -274,8 +283,8 @@ views, one per question, and the transparency view opens first:
 
 | View | Answers | Shows |
 |---|---|---|
-| **The conversation** | What does the model know, at what fidelity, and what has it lost? | Every turn as it was said, with what the model still has of it — word for word, quoted, inside a summary, archived to an opening line and its facts, out of view, or contradicted — and the facts the model is and is not sent |
-| **LLM-GC at work** | What did LLM-GC do, and did it work? | What the next collection would take and the level each span would get, every pass and its outcome, degradations, transitions, the proxy's counters, and the settings in effect |
+| **The conversation** | What does the model know, at what fidelity, and what has it lost? | Every exchange with exactly what the model reads for it — quoted word for word, its summary, its opening line and facts, or one shared line when folded out of view — every message as it was said, and every fact with how it reaches the model |
+| **LLM-GC at work** | What did LLM-GC do, and did it work? | What the next collection would take; why every exchange is at its level, in the planner's own steps (the band its score earns, the margin, a level no cheaper than a richer one, the budget); every pass and its outcome, degradations, transitions, the proxy's counters, and the settings in effect |
 
 It polls once a second, and fetches a session's content again only when it has
 changed. Server-push (WebSocket) delivery is a planned upgrade of the transport,
@@ -284,21 +293,28 @@ not of the split.
 **One vocabulary, explained where it appears.** The interface uses the code's
 words for how much of a span the model sees, its *level* — *kept*, *compacted*,
 *archived*, *out of view* — and for where a message lives, the *young*, *old* and
-*permanent* generations. Three words are plainer on screen than in the code, and
+*permanent* generations. Four words are plainer on screen than in the code, and
 each one's explanation names the code's word: a *collection* is a cut (a check that
 moves messages out of the young generation), the *recap* is the front (the first
-message of every request), and a *check* is a pass. Every term carries a short
-explanation where it appears, and the guide maps each on-screen word to the code's.
+message of every request), a *check* is a pass, and a *recent* message is a verbatim
+one, still in the young generation. Every term carries a short explanation where it
+appears — hovering any category says what it means — and the guide maps each
+on-screen word to the code's.
 
 ```
-code      cut          front    pass    KEPT   COMPACTED   ARCHIVED   OUT_OF_VIEW   young generation
-screen    collection   recap    check   kept   compacted   archived   out of view   word for word
+code      cut          front    pass    KEPT   COMPACTED   ARCHIVED   OUT_OF_VIEW   VERBATIM (young)
+screen    collection   recap    check   kept   compacted   archived   out of view   recent
 model     —            —        —       [Quoted exactly]  [Summarised]  [Archived]  [Out of view]
 ```
 
 The last row is what the model reads in the front. Its markers say what each line
 *is* — a quote, a summary — because a model reading `[Compacted]` has to guess what
 was done; the dashboard explains *compacted* as summarised.
+
+*Rejected: "word for word" for the young generation.* A kept exchange is quoted word
+for word too, so the label could not tell a collected message from one no collection
+has taken — which is the difference that matters: a recent message is sent as its
+own message, and a kept one is quoted inside the recap and can lose detail later.
 
 *Rejected: a separate plain vocabulary* (clean-up, condensed block, quoted whole,
 kept as facts): read beside the code, two vocabularies for one system confuse more
@@ -308,10 +324,10 @@ and "front" means nothing on its own. *Rejected: the design vocabulary with a
 glossary page*: a reader who must leave the screen to decode it has been handed
 engine telemetry again. *Cost accepted:* cut and front differ between screen and
 code, and the guide maps them. Token
-figures compare like with like: the conversation as written counts only the
-messages the session has recorded, because the newest message reaches it with
-the next request, and comparing the whole transcript showed a saving equal to
-that message which never happened.
+figures compare like with like: the conversation as written is the session's
+recorded messages at their own sizes, counted as the engine counts them. The newest
+message reaches the session only with the next request, and counting it as written
+showed a saving equal to that message which never happened.
 
 **Run GC now explains its outcome, including when nothing changed.** When a
 collection would not have shrunk the prompt, the engine reports what it would have
@@ -323,9 +339,11 @@ on.
 **What was said is kept.** The engine keeps every turn it records, whole, for
 the life of its session: a span in the old generation holds the turns it
 condenses, so it can be shown at any level again. The dashboard shows a condensed
-turn's words beside what the model receives instead, taking them from a
-transcript recorder the proxy feeds while the dashboard runs: text only, bounded
-by session count, dropped with its session. *Accepted cost:* the engine holds
+turn's words beside what the model receives instead, read from its span. A
+transcript recorder the proxy feeds while the dashboard runs supplies only what
+the session has not recorded yet — the newest message, recorded with its reply —
+and each conversation's opening words for the picker: text only, bounded by
+session count, dropped with its session. *Accepted cost:* the engine holds
 every original in memory for every session, dashboard or not — the price of being
 able to restore one. *Rejected: no originals* — an archived turn could
 never be shown whole again, to the model or to a person.
@@ -475,10 +493,47 @@ to "context state plus model output", which is a real architectural change,
 not a new display. It is recorded here as a considered direction, not a
 commitment.
 
+### A turn is shown by its span's level
+
+How the model receives a turn is named after the detail levels — verbatim, kept,
+compacted, archived, out of view — and decided by the span the turn is in, never by
+the turn's own facts. *Rejected: one value for archived and out of view, told apart
+by whether the turn's own facts are sent.* A reply that yielded no fact of its own
+then read as "the model sees nothing of this message" while the model read its
+span's archived line: the screen overstated the loss, and a warning that is usually
+wrong teaches the reader to skip the one that is right. *Rejected: a "contradicted"
+level for a turn whose facts were all replaced.* Its span is still shown at its
+level, with a note naming the replacement, so the turn is no less visible than
+before; the replacement is a property of the fact, and the fact carries it.
+
+### The facts panel leads with what needs a look
+
+Facts are listed under what they are — short *topic: value* notes — rather than as
+"what the model remembers": the model reads far more than its facts, and a list of
+notes under that title passes a small annotation off as the whole memory. The
+panel opens with the facts the model cannot see and with each replacement, shown
+as the old value and the new one, so a false replacement is plain at a glance.
+Every fact sits folded below them; most are on the page already, on their
+exchange's line. *Rejected: every fact first, grouped by how it is sent.* The
+groups that needed a look sat under forty notes that did not.
+
+### A banner only for what needs a look
+
+The top of the conversation view carries a banner only for something the reader
+should act on or know about: messages the model can no longer see, and a collection
+that fell short — plus a passing line while a collection runs. Everything else is said
+in the panel it is about: that nothing is out of view, in the message counts; that a
+collection runs after the next reply, beside them; replaced facts, at the top of the
+facts panel. A warning can be dismissed, and returns only when there is more of what
+it warns about: the reader has seen this loss, not every future one. *Rejected:
+standing banners for good news and routine state.* Three of them sat above the
+page on every visit, and a warning among them was one more line to skim past.
+
 ### The next collection is previewed, not remembered
 
 The preview runs a collection's own first steps — find the cut point, draft the
-spans, score and plan every span — on the session as it stands, with no model call
+spans, score and plan every span, the ones already collected included — on the
+session as it stands, with no model call
 and nothing announced on the bus; a preview reported as a collection would have
 every subscriber record work that never happened. *Rejected: show the last real
 pass's plan.* It describes the conversation before that pass's own cut, so
@@ -512,10 +567,10 @@ something a consumer has to infer from counts that fail to add up.
 Failure is not the only gap between intent and outcome. The collection that takes
 new turns also re-plans every older span, lowering some and raising others (see
 `generational-memory/the-cut.md`). So a committed collection carries its
-**outcome**: where its new turns ended up, and how many turns condensed earlier
-were lowered to archived or out of view, or raised to more detail, in the same
-pass. The dashboard draws what a collection did from the outcome, and what it
-could not do from the degradations.
+**outcome**: which of its new turns went to which level, and which turns condensed
+earlier it showed with less or more detail in the same pass, each named by turn. The
+dashboard draws what a collection did from the outcome, and what it could not do
+from the degradations.
 
 Two decisions inside this that are easy to get wrong:
 
@@ -561,19 +616,3 @@ Two decisions inside this that are easy to get wrong:
   on a system-produced number. This is a deliberate choice, and a defensible
   product: the signals do the part that can be done honestly, and the human
   does the part that cannot yet be automated honestly.
-
-## Known gaps
-
-- **The dashboard labels an archived turn without facts "out of view".** The monitor
-  gives every turn of an archived or folded span the fidelity `facts_only`, and the
-  dashboard tells the two apart only by whether the turn's facts are sent. A turn of
-  an archived span with no facts of its own — usually the assistant's reply — is
-  therefore shown as "the model sees nothing of this message", when the model sees
-  its span's archived line. The screen overstates the loss rather than hiding it,
-  but it is still wrong.
-- **The dashboard still speaks partly in turns.** The rating view places single
-  turns against the level lines rather than spans. The data is right — every figure
-  comes from the spans — but the screen does not yet show a span as one thing with
-  one level.
-- **A span raised again is not in the timeline.** The outcome counts it, but the
-  transitions record only spans made or lowered.

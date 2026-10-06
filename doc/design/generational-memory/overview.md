@@ -331,19 +331,59 @@ sentence — and its facts, so the decision itself does not depend on the summar
 When the conversation returns to the span, it is raised to kept and the model
 reads the original words.
 
-### 2. Extraction errors
+### 2. Fact-reading errors
 
-If the extractor misreads "we decided NOT to use Redis" as "using Redis", a false
-fact is filed.
+A reader can file a false fact — "we decided NOT to use Redis" read as "Redis" — or,
+worse, mark a value replaced when it was not. Either is shown to the model as settled,
+beside its span.
 
-**Mitigation:** conservative extraction (high-confidence patterns only),
-supersession (a correction retires the bad entry), the original words beside it at
-higher levels, and the dashboard, which shows every stored fact. Refusing to label
-costs nothing — the turn itself is kept in its span — while a *mislabelled* entry
-is strictly worse than none: supersession matches on the topic label, so a label
-that is really a sentence fragment can never be contradicted.
+**How facts are read.** By the model that writes the summaries, once per collection:
+one call reads every span the collection makes, given the facts already on record as
+`topic: value`.
 
-The rules, each trading recall for precision deliberately:
+```
+ facts on record                     the collection's turns
+ cloud: Google Cloud                 [turn 8] user: Change of plan: we're moving to AWS.
+ payments: Stripe                    [turn 9] assistant: Done — the plan now assumes AWS.
+            └──────────────┬──────────────┘
+                           ▼  one call
+              {"facts": [{"turn": 8, "topic": "cloud", "value": "AWS"}]}
+                           ▼  filed under the topic on record
+ cloud: AWS        ↳ the span stating Google Cloud now carries "Replaced later (turn 8)"
+```
+
+- **A change is filed under the topic it changes**, so filing it marks the old value
+  replaced. A turn that only repeats or explains a fact on record is left out, and a
+  fact restating its topic's active value is never filed: it would read "MySQL 8, not
+  MySQL 8".
+- **The answer is untrusted output.** It must be JSON in the expected shape, or the
+  read fails and is reported; a fact naming a turn the reader was not shown, or that
+  is not a short topic and value, is dropped.
+- **A failed read** makes the collection's spans without facts, and is reported once.
+
+Without a model, patterns read the user's own turns only — see the rules below.
+
+**Why the model reads them.** Patterns over every turn were measured on the check:
+they captured the answer to 8 of 37 probes and missed four of five changes of plan
+("we're switching the index to OpenSearch", "payments go through Adyen now"). On one
+conversation they filed 47 of 50 facts from the assistant's explanations, mostly
+fragments ("costs: real but modest at this size"), and three of those "replaced" one
+another, each putting a false "Replaced later" note in the recap. A change of plan
+can be worded any number of ways; patterns chasing them never catch up.
+
+**Why one call per collection, not inside each summary.** A short exchange — "Change
+of plan: we're moving to AWS." "Done." — is never summarised, because a summary could
+not be shorter; yet it is exactly the one that must replace a value. One call over
+all the collection's spans reads it, and is shown the facts on record once. *Accepted
+cost:* one more model call per collection, reading its turns again; collections are
+infrequent and off the request path.
+
+**What still guards against a wrong fact:** every fact names its turn, and the turn
+is kept; the dashboard shows each replacement as the old value and the new one, so a
+wrong one is plain; and a later correction replaces it.
+
+The patterns, for a deployment without a model, each trading recall for precision
+deliberately:
 
 - **A subject is one to four words.** Without a bound, a topic grows until it
   happens to hit a full stop.
@@ -365,19 +405,18 @@ The rules, each trading recall for precision deliberately:
 Labels are normalised — lowercased, whitespace collapsed, a leading article or
 possessive dropped — because supersession compares them exactly.
 
-The extractor is the part of the design most clearly due for replacement: a
-model-written set of facts, made in the same call as the summary and validated
-against a schema, can replace it behind the same seam without changing anything
-else. Its weakness costs detail at the archived level, never information.
+Patterns read only the user's own words: there they measured right — a choice, a
+name, a date — while from the assistant's explanations they read mostly fragments.
 
 ### 3. Decontextualised knowledge
 
 "If we were building in Go, we'd use PostgreSQL" is hypothetical; stripped of
 context it becomes false certainty.
 
-**Mitigation:** extraction fires only on decision language ("let's use", "we'll go
-with", "decided to"), not on hypotheticals; every fact names the turn it came from,
-and the turn itself is kept.
+**Mitigation:** the reader is told that options only considered, hypotheticals and
+advice nobody took up are not facts, and patterns fire only on decision language
+("let's use", "decided to"); every fact names the turn it came from, and the turn
+itself is kept.
 
 ### The epistemic transparency defence
 
@@ -408,7 +447,7 @@ that held what it produced would hand one user's facts to the next.
 | Event | When | Data |
 |-------|------|------|
 | `MESSAGE_PROMOTED_TO_OLD_GEN` | A new span was made at the summarised level | session id, the span's turns, tokens before / after |
-| `MESSAGE_ARCHIVED` | A new span was made archived, or an older span was lowered to archived or out of view | session id, first turn, its facts, `young` or `old` |
+| `MESSAGE_ARCHIVED` | A new span was made archived, or an older span was lowered to archived or out of view | session id, the span's turns, its new facts, `young` or `old` |
 | `KNOWLEDGE_ENTRY_ADDED` | A fact was filed | session id, the entry |
 | `KNOWLEDGE_ENTRY_SUPERSEDED` | A new fact retired active ones on its topic | session id, new entry, retired entries |
 | `AGING_DEGRADED` | Part of a collection fell short | session id, the degradation |
@@ -463,8 +502,8 @@ returns the context from before it, which is complete.
 | The score decides the level, the budget caps the total | A score that also decided *when* to drop detail would drop it on a schedule, whether or not the front needed the room. |
 | Levels re-decided at every collection, both ways | A guess about what will matter later cannot be made reliably once; re-deciding corrects it. |
 | A margin around every level line | A score hovering at a line would otherwise show a span in full at one collection and as facts at the next. |
-| Facts read from the original turns, once | A fact read from a summary is read second-hand. Reading once, when the span is made, means choosing a level later never waits on a model. |
-| Heuristic extraction before model-based | Free, deterministic and testable; a model-written extractor fits behind the same seam. |
+| Facts read from the original turns, once per collection | A fact read from a summary is read second-hand. Reading when the spans are made means choosing a level later never waits on a model. |
+| Facts read by the model that summarises; patterns, on the user's words, without one | Measured: patterns captured 8 of 37 answers and invented replacements from sentence fragments; the model files a change of plan under the topic it changes. |
 | Supersede, don't delete | The decision chain is part of what transparency reports. |
 | Collections on the cold path, assembly on the hot path | Summaries are the expensive work; the hot path never waits for them. |
 
@@ -502,12 +541,20 @@ returns the context from before it, which is complete.
 - **Filling the budget with as much detail as fits.** Nothing would be condensed
   until the history outgrew the budget — a capacity trigger, which is not what
   LLM-GC is: savings come from the score.
+- **Facts matched by patterns over every turn.** Free and deterministic, but measured
+  on the check they captured 8 of 37 answers, missed four of five changes of plan, and
+  filed fragments of the assistant's explanations as facts that then replaced one
+  another. Replaced by facts the model reads, with patterns kept for the user's own
+  words when there is no model.
+- **Facts written in the same call as each summary.** No extra call, but an exchange
+  too short to summarise is never read, and a short "change of plan" exchange is the
+  one that must replace a value.
 - **Accumulating contradictions instead of superseding.** "We chose Postgres" and
   "we chose MySQL" with equal weight would leave the model to resolve the
   contradiction itself.
 
 Supersession carries an accepted cost: it treats the latest contradicting entry
 as current, which is right most of the time but not always — a user can misspeak
-in a way the extractor reads as a real change. The system accepts being
+in a way the reader takes for a real change. The system accepts being
 occasionally wrong about which fact is current rather than interrupting the user,
 and the original words remain one level up.

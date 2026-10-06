@@ -29,8 +29,8 @@ the next collection:     [FRONT′] t52 … t60       ← new spans added, every
  1  CUT POINT   the latest position that keeps at least `last_n_turns_to_keep` turns
                 verbatim and splits no tool round; everything before it is the batch
                       │
- 2  DRAFT       group the batch into spans (one exchange each) and read each span's
-                facts and opening line — no model call
+ 2  DRAFT       group the batch into spans (one exchange each) and take each span's
+                opening line — no model call
                       │
  3  PLAN        score every span, old and new, against what the user is discussing
                 now, and plan every level, with each new span's summary estimated
@@ -41,9 +41,10 @@ the next collection:     [FRONT′] t52 … t60       ← new spans added, every
                       ├── the cut would not save anything, at the estimated costs?
                       │                                ──► stop: no saving (nothing paid for)
                       ▼
- 4  CONDENSE    summarise each new span (model calls, one per span)
+ 4  CONDENSE    read the new spans' facts (one model call, given the facts on record),
+                then summarise each new span (one model call per span)
                       │
- 5  RE-PLAN     plan again with the real summaries
+ 5  RE-PLAN     plan again with the real facts and summaries
                       │
  6  MEASURE     do the new spans, as rendered, cost less than the turns they replace?
                       │  no ──► stop: no saving, and report the cut it would have made
@@ -52,7 +53,8 @@ the next collection:     [FRONT′] t52 … t60       ← new spans added, every
 ```
 
 **Steps 2 and 3 cost nothing**, which is why they come first: a collection decides
-whether it is worth making before it pays for a single summary. The same draft and
+whether it is worth making before it pays for any model call. Its estimate leaves out
+the new spans' facts, which are not read yet; the measure in step 6 includes them. The same draft and
 plan is the dashboard's preview of the next collection, so the preview cannot drift
 from what the pass does.
 
@@ -97,22 +99,22 @@ every other rule still holds.
 
 ### What a pass reports
 
-A completed pass reports its **outcome**: how many of the cut's turns were quoted,
-summarised or archived, and how many turns condensed earlier were lowered to
-archived or out of view, or raised to more detail. Its counts and token totals
-describe the cut's turns by the level the plan gave them. A pass that stopped for
+A completed pass reports its **outcome**, by turn: which of the cut's turns were
+kept, compacted, archived or folded out of view, and which turns condensed earlier
+it showed with less detail or with more. Its token totals describe the cut's turns
+by the level the plan gave them. A pass that stopped for
 "no saving" reports the outcome it *would* have had, and the context it would have
 produced.
 
-### When a summary or an extraction fails
+### When a summary or the facts fail
 
 The span is **still made**:
 
 ```
  summary refused or failed  ──► the span cannot be summarised: the plan keeps it whole
                                  (or archives it, if its score says so)
- extraction failed          ──► the span has no facts: archived, it shows its
-                                 opening line alone
+ facts could not be read    ──► the collection's spans have no facts: archived,
+                                 each shows its opening line alone
 ```
 
 Both are reported as degradations, and nothing is lost: the span holds its turns.
@@ -216,7 +218,8 @@ occasionally, is the one rewrite both accept.
 
 - **A collection resets the cache once.** That is what `min_cut_tokens` amortises.
 - **One summary call per new span**, including spans the plan will archive, so every
-  level's material exists before it is needed.
+  level's material exists before it is needed, **and one call to read the facts** of
+  all of them.
 - **A no-op compactor never summarises.** Its "summary" is the turns themselves, never
   cheaper than keeping them.
 

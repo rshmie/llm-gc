@@ -50,7 +50,8 @@ part of condensing that costs money and time, and the one that can fail.
   on a model, and a span's boundaries never change, so its summary never needs
   remaking. *Accepted cost:* a span is summarised even if the plan archives it
   straight away, because the material for every level must exist before it is
-  needed — and, once facts are written by a model, the same call will write them.
+  needed. Facts are read in a call of their own, once per collection: an exchange
+  too short to summarise can still change a fact (see `overview.md`).
 - **Ask whether a summary could be shorter before calling.** A run too small to
   beat the compactor's marker is never sent: refused before the call, it would be a
   paid answer thrown away. `worth_compacting` lets a collection skip it without a

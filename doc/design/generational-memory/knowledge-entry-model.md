@@ -45,7 +45,7 @@ for the dashboard.
 ```python
 @dataclass(frozen=True)
 class KnowledgeEntry:
-    message_turn: int              # which turn this was extracted from
+    message_turn: int              # which turn this was read from
     content: str                  # the knowledge itself (includes reasoning if relevant)
     topic_label: str              # grouping key for contradiction detection
     knowledge_type: KnowledgeType # FACT, DECISION, or PREFERENCE
@@ -55,7 +55,7 @@ class KnowledgeEntry:
 
 ### Why `frozen=True`?
 
-A KnowledgeEntry is a historical record. The message it was extracted from cannot change
+A KnowledgeEntry is a historical record. The message it was read from cannot change
 for that turn. If the user changes their mind later, that produces a *new* entry that
 supersedes the old one. The old entry remains frozen as history.
 
@@ -111,9 +111,11 @@ would retire every earlier topic-less decision, however unrelated.
 ### Limitation
 
 Contradiction detection relies on an exact `topic_label` match. "database" and "db-choice"
-are different topics, and a mislabelled entry ("we decided the database") can never be
-superseded by a correctly labelled one. The extractor is responsible for consistent labels;
-a model-written extractor, given the labels already in use, would improve on it.
+are different topics. The reader keeps labels consistent: the model is shown the facts on
+record and files a changed value under the topic it changes. An entry restating its
+topic's active value unchanged is not filed, so a repetition never reads as a change.
+Patterns, used without a model, label by the sentence's subject and cannot see the labels
+in use, so a change worded differently is missed.
 
 ---
 
@@ -122,9 +124,9 @@ a model-written extractor, given the labels already in use, would improve on it.
 | Decision | Reasoning |
 |----------|-----------|
 | Single class, no inheritance | The `KnowledgeType` enum differentiates semantics without separate classes. Reasoning is part of the `content` string. |
-| Read from the original turn, once | A fact read from a summary is read second-hand; reading once, when the span is made, means no level ever waits on extraction. Each entry names exactly one turn. |
+| Read from the original turns, once per collection | A fact read from a summary is read second-hand; reading when the spans are made means no level ever waits on a model. Each entry names exactly one turn. |
 | Facts on their span's line, not in a block of their own | Each turn is represented once in the front, in conversation order; a separate block of facts would repeat what summarised spans already say, under a second budget. |
 | `frozen=True` | Historical records must be immutable. Supersession creates new copies. Prevents bugs from shared mutable references. |
 | `@dataclass` over Pydantic | Internal value object — no validation boundary needed. Lighter weight. |
-| `reasoning` folded into `content` | Avoids a field that's empty for FACT and PREFERENCE types. Extractor formats content naturally. |
-| Named `KnowledgeEntry` not `Fact` | "Fact" implies objective, constant truth. These are extracted knowledge units that can be superseded. |
+| `reasoning` folded into `content` | Avoids a field that's empty for FACT and PREFERENCE types. The reader writes the value alone. |
+| Named `KnowledgeEntry` not `Fact` | "Fact" implies objective, constant truth. These are units of knowledge read from turns, and they can be superseded. |

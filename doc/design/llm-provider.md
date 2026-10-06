@@ -1,9 +1,10 @@
 # LLM Provider Layer
 
 
-LLM-GC sometimes needs a language model to do part of its own work. The main
-case is compaction: writing a short summary of a span of old conversation
-turns that keeps what mattered. Writing that summary takes a model. The
+LLM-GC sometimes needs a language model to do part of its own work. There are
+two cases, both at a collection: compaction, writing a short summary of a span of
+old conversation turns that keeps what mattered, and reading the facts a
+collection's turns settled, filed under the topics they change. Both take a model. The
 provider layer (`llm/`) is the only place in the engine that calls one. The rest
 of the engine asks it one thing, "here are some messages, give me text back",
 and never learns which vendor answered, what that vendor's API looks like, or
@@ -25,7 +26,7 @@ confuse:
 
 |                    | Conversation model                          | Compaction model                               |
 |--------------------|---------------------------------------------|------------------------------------------------|
-| What it does       | Answers the user                            | Writes summaries for the garbage collector     |
+| What it does       | Answers the user                            | Writes summaries and reads facts for the garbage collector |
 | Who picks it       | The user's app, on every request            | Whoever runs LLM-GC, once, at startup          |
 | Whose API key      | The user's, forwarded and then dropped      | The deployment's own                           |
 | When it runs       | During the request                          | After the response, in the background         |
@@ -134,7 +135,8 @@ context savings without quality loss. That claim has to rest on a benchmark, and
 a benchmark needs a fixed, known summariser.
 
 Cost matters too, though it isn't decisive by itself. Summarising a span means
-paying to read the whole span once. With a cheaper compaction model that cost is
+paying to read the whole span once, and reading a collection's facts means reading
+its turns once more. With a cheaper compaction model that cost is
 small next to the savings on every later request. With an expensive conversation
 model it eats into them.
 
