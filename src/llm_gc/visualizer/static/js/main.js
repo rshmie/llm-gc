@@ -5,7 +5,7 @@ import { $, clearMotionCaches, fill, h, plural, setChildren, storeGet, storeSet 
 import { collecting, getJSON, sessionPath, state, ui } from "./state.js";
 import { hideTooltip } from "./tooltip.js";
 import { THEMES, applyTheme, fillConfigValues, setGuide, setLive, showCleanupNotice, showTab } from "./shell.js";
-import { celebrateCleanup, clearMapCache, renderChips, renderFacts, renderHero, renderLastCollection, renderMap, renderMessages, renderPrompt, renderStatus, renderTimeline, setPromptView } from "./conversation.js";
+import { celebrateCleanup, clearMapCache, renderChips, renderFacts, renderFactsGuide, renderHero, renderLastCollection, renderMap, renderMessages, renderPrompt, renderStatus, renderTimeline, setPromptView } from "./conversation.js";
 import { initCards, renderChart, renderChecks, renderEngineStatus, renderGenerations, renderHistory, renderNext, renderProblems, renderProxy, renderRelevance, renderSettings } from "./engine.js";
 import { renderRunGcButton, runGcNow } from "./run-gc.js";
 
@@ -136,6 +136,7 @@ new ResizeObserver(() => {
   if (state.knowledge && width && Math.abs(width - mapWidth) > 2) { mapWidth = width; renderMap(state.knowledge); }
 }).observe($("an-bars"));
 initCards();
+renderFactsGuide();
 
 applyTheme(storeGet("llmgc.theme") || "system");
 $("intro").hidden = storeGet("llmgc.intro") === "dismissed";

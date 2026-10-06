@@ -70,6 +70,14 @@ export function describeOutcome(o) {
     lowered: "collected earlier, now shown with less detail", raised: "collected earlier, now shown in more detail" };
   return OUTCOME_LINES.map(([key]) => o[key].length ? `${o[key].length} ${words[key]}` : null).filter(Boolean).join(" · ");
 }
+// What each status on a fact means: shown when it is hovered, and listed in "How fact collection works".
+export const FACT_STATUS = {
+  line: ["✓", "good", "on its line", "The recap shows this fact on its exchange's line, beside the exchange's summary or opening line."],
+  words: ["✓", "good", "in its words", "Its exchange is kept, quoted word for word in the recap, so the model reads the words that state it."],
+  unsent: ["⚠", "warn", "not sent", "Its exchange is out of view: the recap says only that the exchange exists, so the model can't see this fact."],
+  noted: ["✓", "good", "noted on its line", "The recap marks the old value as replaced, on the line of the exchange that said it, so the model reads it as no longer current."],
+  oldUnsent: ["", "", "old value not sent", "The exchange that said the old value is out of view, so neither the old value nor the note about it is sent."],
+};
 // What fell short in a collection, and what the model gets instead.
 export const NOT_MOVED = {
   compaction_refused: ["Summary rejected by the safeguard", "Its exchange has no summary, so it is kept word for word or archived instead. Nothing is lost."],
@@ -81,7 +89,7 @@ export const NOT_MOVED = {
 export const HEIGHT = { verbatim: 100, kept: 100, compacted: 52, archived: 24, out_of_view: 10 };
 // The ⓘ beside each card: the explanation its one-line subtitle leaves out.
 export const CARD_INFO = {
-  facts: ["What the model is told, fact by fact", "What the conversation settled — choices, names, numbers, dates — as topic: value notes, and how each one reaches the model. When a collection makes exchanges, the model that writes their summaries also reads what they settled, once, shown the facts already on record; without a model, simple patterns read your own messages instead. ✓ on its line: the recap shows the fact on its exchange's line. ✓ in its words: the exchange is kept, quoted whole. ⚠ not sent: its exchange is out of view, so the model can't see it. When a later message changes a value, the new fact is filed under the same topic and the old one moves to Replaced; the recap notes the change on the old value's line. Only you change a decision you made: when the assistant recommends something else, your decision stays, and the recommendation stays in its exchange's summary. Facts are a small part of what the model is told: summaries and recent messages carry the rest."],
+  facts: ["What the model is told, fact by fact", "What the conversation settled, as topic: value notes, and how each one reaches the model. “How fact collection works”, below the facts, says how they are read and what each status means. Hover a status for its meaning."],
   generations: ["Generations", "Where each message lives, as in a generational garbage collector. New messages enter the young generation and are sent word for word. A collection moves older ones into the old generation as exchanges, each shown kept, compacted or archived by how much it matters now, and decided again at every collection. The facts read from every exchange are filed in the permanent generation, which also records what replaced what. The old generation is sent as the recap, at the start of the prompt, within its budget."],
   next: ["Next collection", "GC checks after every reply, and a check collects when two things hold. First, enough older messages to condense: only those to be compacted or archived count, not ones kept word for word or the newest few, since those save nothing. Second, the result must be smaller than the prompt is now. That is estimated here from each summary's target size, the same estimate the collection checks before paying for any summary, and checked again on the real summaries before anything changes. Run GC now skips the first condition, never the second."],
   rate: ["How each exchange is scored", "Each dot is an exchange's score, from 0 to 1, against your two lines: kept from the upper one, archived below the lower one, compacted in between. Every exchange is scored again at every collection, so one the conversation returns to can rise. A score must clear a line by the margin to move, so an exchange near a line doesn't flip back and forth. When the recap is over its budget, the coldest exchanges lose detail first."],

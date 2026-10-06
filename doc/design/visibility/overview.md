@@ -537,14 +537,17 @@ with how it reaches the model, and every value replaced beside them:
 
 ```
 What the model is told, fact by fact
-13 facts on record up to message 21 · 12 sent · ⚠ 1 not sent · 1 replaced
+13 facts on record · 12 sent · ⚠ 1 not sent · 1 replaced
+Facts are collected from messages 0–21. Messages 22–29 are sent word for word, so a
+change there reaches the model directly and is filed here once collected.
 
-YOU SAID                     THE ASSISTANT SAID           REPLACED
-index shards                 master nodes                 search index
-9 primaries, 2 replicas      recommended 3 dedicated      Elasticsearch
-message 6 · ✓ on its line    message 1 · ⚠ not sent       → OpenSearch
-                                                          message 0 → message 16
-                                                          ✓ noted on its line
+┌ YOU SAID ──────────────┐ ┌ THE ASSISTANT SAID ────┐ ┌╌ ↺ ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┐
+│ index shards           │ │ master nodes           │ ╎ No replacements on     ╎
+│ 9 primaries, 2 replicas│ │ recommended 3 dedicated│ ╎ record. When a later   ╎
+│ message 6 ✓ on its     │ │ message 1 ⚠ not sent → │ ╎ message changes a      ╎
+│ line                 → │ │                        │ ╎ value, both appear here╎
+└────────────────────────┘ └────────────────────────┘ └╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┘
+› How fact collection works
 ```
 
 The section is meant to answer four questions in seconds:
@@ -567,8 +570,17 @@ The section is meant to answer four questions in seconds:
 What needs a look still comes first. The headline counts the facts not sent, they
 sort above the rest of their column, and replacements have a column of their own.
 None of them sits under forty notes that need nothing. The section folds, as the
-Engine tab's cards do, but its headline and the warning for facts that couldn't be
-read stay in view. Folding hides detail, never a fact the model cannot see.
+Engine tab's cards do, but its headline, how far the record reaches and the warning
+for facts that couldn't be read stay in view. Folding hides detail, never a fact the
+model cannot see.
+
+The value is what each fact card shows largest, with its topic as a label above it:
+a value without its topic ("9 primaries") says nothing. An empty column is a dashed
+card saying why it is empty, not a blank, so it never reads as content that failed to
+load; when the assistant's turns are not read, its card says so rather than promising
+facts that will never come. What each status means is said once, in one place, and
+shown twice: on hover over the status, and under "How fact collection works", folded
+below the columns.
 
 *Rejected: a model-written digest (goal, key decisions, implementation, open
 questions).* It would be one model's account of what another was told, paid for at
