@@ -16,7 +16,7 @@ from llm_gc.engine.inspection import SessionInspection
 from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.generation_snapshot import DetailLevel, Span
 from llm_gc.models.knowledge_entry import KnowledgeStatus
-from llm_gc.models.message import tool_result_ids
+from llm_gc.models.message import tool_result_ids, tool_use_ids
 from llm_gc.utils import count_tokens
 
 
@@ -49,6 +49,7 @@ class TurnState(BaseModel):
     span: int | None = None                # index into `spans`, once the turn has left the tail
     score: float | None = None             # its span's score now; a tail turn has one only if the next collection takes it
     becomes: TurnFidelity | None = None    # set when the next collection would change how the model receives it
+    tool_calls: bool = False               # an assistant turn asking the client to run a tool
     tool_results: bool = False             # a user turn carrying what the client's tools returned, not words the user wrote
 
 
@@ -178,7 +179,7 @@ def _turn_state(message: Message, fidelity: TurnFidelity, *, span: int | None = 
                 becomes: TurnFidelity | None = None) -> TurnState:
     return TurnState(turn_index=message.turn_index, role=message.role, tokens=message.token_count,
                      text=message.content, fidelity=fidelity, span=span, score=score, becomes=becomes,
-                     tool_results=bool(tool_result_ids(message)))
+                     tool_calls=bool(tool_use_ids(message)), tool_results=bool(tool_result_ids(message)))
 
 
 def _fact_states(knowledge: tuple[KnowledgeEntry, ...], inspection: SessionInspection,

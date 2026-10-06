@@ -294,7 +294,10 @@ def serve(args: argparse.Namespace, api_key: str | None) -> None:
     # Localhost only, no auth. Binding wider needs authentication first
     # (CLAUDE.md §10): the client's provider key passes through this process, and
     # the dashboard shows every conversation it holds.
-    servers = [uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="info"))
+    # No access log: the dashboard polls, and a line per poll buried the proxy's own
+    # lines, which already record each request. uvicorn's access logger is shared by
+    # the process, so it cannot be kept for the proxy alone.
+    servers = [uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="info", access_log=False))
                for app, port in apps]
 
     async def run_all() -> None:

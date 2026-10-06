@@ -17,6 +17,11 @@ const avatar = (role) => h("div", { class: `av ${role === "user" ? "user" : "ass
 // A turn of tool results is the client reporting what its tools returned, under the user role.
 const speakerOf = (turn) => turn.tool_results ? "Tool results" : speakerName(turn.role);
 const avatarOf = (turn) => turn.tool_results ? h("div", { class: "av user", "aria-hidden": "true" }, "Tool") : avatar(turn.role);
+const toolTip = () => hoverTip(GLOSSARY.tools[0], GLOSSARY.tools[1]);
+// The speaker, explained when it is the client reporting tool output; a tag when the assistant calls a tool.
+const who = (turn) => h("span", { class: "who", ...(turn.tool_results ? toolTip() : {}) }, speakerOf(turn));
+const toolTag = (label) => h("span", { class: "tag", ...toolTip() }, label);
+const callsTag = (turn) => turn.tool_calls ? toolTag("calls a tool") : null;
 const changes = (n) => n === 1 ? "1 message changes" : `${fmt(n)} messages change`;
 const changing = (k) => k.turns.filter((t) => t.becomes).length;
 export const messagesLabel = (turns) => turns.length === 1 ? `message ${turns[0]}` : `messages ${ranges(turns)}`;
@@ -498,7 +503,7 @@ export function turnRow(turn) {
     avatarOf(turn),
     h("div", { class: "msg-body" },
       h("div", { class: "msg-head" },
-        h("span", { class: "who" }, speakerOf(turn)),
+        who(turn), callsTag(turn),
         turn.becomes ? nextTag(turn, turn.turn_index) : null,
         h("span", { class: "tok" }, plural(turn.tokens, "token"))),
       textBlock(turn.text, { key: `t-${turn.turn_index}` })));
@@ -507,7 +512,7 @@ export function turnRow(turn) {
 // The messages of an exchange as they were said, each still reachable from the map.
 function originals(turns, faded) {
   return turns.map((t) => h("div", { class: "orig", id: `turn-${t.turn_index}` },
-    h("div", { class: "msg-head" }, h("span", { class: "who" }, speakerOf(t)), h("span", { class: "num" }, `message ${t.turn_index}`),
+    h("div", { class: "msg-head" }, who(t), callsTag(t), h("span", { class: "num" }, `message ${t.turn_index}`),
       h("span", { class: "tok" }, plural(t.tokens, "token"))),
     textBlock(t.text, { faded, key: `t-${t.turn_index}` })));
 }
@@ -626,9 +631,11 @@ export function renderPrompt(k) {
   setChildren($("prompt"),
     h("div", { class: "prompt-head" }, h("div", { class: "note" }, "The conversation as LLM-GC forwards it, before your next message, newest first. ",
       "The model reads it from the bottom up, and Copy gives it in that order. ",
+      tail.some((t) => t.tool_calls || t.tool_results) ? "Recent messages go exactly as your client sent them; tool calls and results are shown in the text form LLM-GC reads them in. " : null,
       k.front_text ? "The recap stays byte for byte the same until the next collection, so the provider can keep it cached."
         : "Nothing has been collected, so your app's own request is forwarded untouched."), copy),
     [...tail].reverse().map((t) => h("div", { class: "prompt-msg" }, h("div", { class: "msg-head" }, h("span", { class: "who" }, t.role),
+      t.tool_results ? toolTag("tool results") : t.tool_calls ? toolTag("tool calls") : null,
       h("span", { class: "num" }, `message ${t.turn_index} · ${plural(t.tokens, "token")}`)), promptText(t.text || "(no text)", `prompt-${t.turn_index}`))),
     k.front_text ? h("div", { class: "prompt-msg front" }, h("div", { class: "msg-head" }, h("span", { class: "who" }, "user"),
       h("span", { class: "tag" }, h("span", { class: "key block" }), `the recap · ${plural(k.front_tokens, "token")}`), info("block")), promptText(k.front_text, "prompt-front")) : null);
