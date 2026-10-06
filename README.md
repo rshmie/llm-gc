@@ -32,7 +32,7 @@ ANTHROPIC_BASE_URL=http://127.0.0.1:9900 claude   # or run Claude Code through i
 > and Claude Code runs through the proxy. A
 > [decision-survival check](evals/decision_survival/README.md) measures what the model can
 > still answer once LLM-GC has condensed a conversation: on its latest run all 37 answers
-> survived, with prompts 12–15% smaller on the short conversations and 44–45% smaller on
+> survived, with prompts 12–17% smaller on the short conversations and 42–43% smaller on
 > the long ones — one run, on scripted conversations. Not done yet: an `llm-gc` command
 > with layered configuration, benchmarks on real sessions with a post-session report,
 > recall (restoring a condensed exchange on the request that asks about it), and the
@@ -364,12 +364,15 @@ whole conversation sent, and graded. Its latest committed run:
 
 | | Short conversations (18 questions) | Long conversations (19 questions) |
 |---|---|---|
-| Through LLM-GC | 18/18, prompts 12–15% smaller | 19/19, prompts 44–45% smaller |
+| Through LLM-GC | 18/18, prompts 12–17% smaller | 19/19, prompts 42–43% smaller |
 | Whole conversation | 18/18 | 19/19 |
 
 One run, on scripted conversations, with `claude-sonnet-5-5` answering; the
-[evidence file](evals/decision_survival/evidence/aligned-cuts-2026-10-06.json) holds every
-answer. The check's README lists the earlier runs and what each change won back.
+[evidence file](evals/decision_survival/evidence/facts-room-2026-10-06.json) holds every
+answer. It grades one of them wrong: asked for the shard count, the model answered
+"9 primaries", the user's value in words the grader did not accept until then. The
+stored answers regrade to 37/37. The check's README lists the earlier runs and what each
+change won back.
 
 Savings will also be judged against **cached-token pricing**, not raw token counts:
 rewriting the start of the prompt invalidates the provider's prompt cache, so a real

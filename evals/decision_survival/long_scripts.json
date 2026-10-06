@@ -65,7 +65,7 @@
         {"id": "catalogue-size", "question": "How many products are in the catalogue?", "accept": ["3 million", "three million", "3,000,000", "3m"], "established_at": 2},
         {"id": "relevance-lead", "question": "Who is the search relevance lead?", "accept": ["watanabe", "kenji"], "established_at": 4},
         {"id": "stock-boost", "question": "By what factor are in-stock products boosted?", "accept": ["1.8"], "established_at": 5},
-        {"id": "shard-count", "question": "How many shards does the index use?", "accept": ["9 shards", "nine shards", "9 primary shards"], "established_at": 6},
+        {"id": "shard-count", "question": "How many shards does the index use?", "accept": ["9 shards", "nine shards", "9 primary shards", "9 primaries", "nine primaries"], "established_at": 6, "also_in": [7]},
         {"id": "launch-date", "question": "When does the new search launch?", "accept": ["september 22", "22 september", "september 22nd", "22nd september", "22nd of september", "sept 22", "sep 22"], "established_at": 8},
         {"id": "query-cache", "question": "How many of the most frequent queries should have their results cached?", "accept": ["10,000", "10000", "10k", "ten thousand"], "established_at": 9},
         {"id": "ab-duration", "question": "How long should each ranking A/B test run at a minimum?", "accept": ["14 days", "fourteen days", "two weeks", "2 weeks"], "established_at": 13}
