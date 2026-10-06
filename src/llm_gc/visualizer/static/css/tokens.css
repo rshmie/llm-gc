@@ -22,10 +22,10 @@
      tell apart in a narrow bar. Once only facts remain it turns neutral; out of view is the warning
      colour. The map also encodes fidelity as bar height, so colour is never the only cue. */
   --fid-verbatim: #1c5cab;
-  --fid-quoted: #3987e5;
-  --fid-summarised: #86b6ef;
-  --fid-facts: #a9a89f;
-  --fid-gone: #cfcec7;
+  --fid-kept: #3987e5;
+  --fid-compacted: #86b6ef;
+  --fid-archived: #a9a89f;
+ 
   --written: #898781;
   --meter-track: #e1ecfa;
   --good: #0ca30c;
@@ -57,7 +57,7 @@
     --shadow: none;
     --accent: #3987e5; --accent-wash: rgba(57, 135, 229, 0.16);
     /* On a dark surface the ramp flips its anchor: brightest is most faithful. */
-    --fid-verbatim: #9ec5f4; --fid-quoted: #5598e7; --fid-summarised: #256abf; --fid-facts: #6f6e68; --fid-gone: #4a4a46;
+    --fid-verbatim: #9ec5f4; --fid-kept: #5598e7; --fid-compacted: #256abf; --fid-archived: #6f6e68;
     --good-ink: #3fc23f; --warn-ink: #fab219; --hatch: rgba(255, 255, 255, 0.16);
     --surface-hi: #222220; --edge-hi: rgba(255, 255, 255, 0.07); --lift: rgba(0, 0, 0, 0.6); --gloss: rgba(255, 255, 255, 0.2); --shade: rgba(0, 0, 0, 0.28);
     --meter-track: rgba(57, 135, 229, 0.17);
@@ -73,7 +73,7 @@
   --hairline: #2c2c2a; --baseline: #3d3d3a; --border: rgba(255, 255, 255, 0.09);
   --shadow: none;
   --accent: #3987e5; --accent-wash: rgba(57, 135, 229, 0.16);
-  --fid-verbatim: #9ec5f4; --fid-quoted: #5598e7; --fid-summarised: #256abf; --fid-facts: #6f6e68; --fid-gone: #4a4a46;
+  --fid-verbatim: #9ec5f4; --fid-kept: #5598e7; --fid-compacted: #256abf; --fid-archived: #6f6e68;
   --good-ink: #3fc23f; --warn-ink: #fab219; --hatch: rgba(255, 255, 255, 0.16);
   --surface-hi: #222220; --edge-hi: rgba(255, 255, 255, 0.07); --lift: rgba(0, 0, 0, 0.6); --gloss: rgba(255, 255, 255, 0.2); --shade: rgba(0, 0, 0, 0.28);
   --meter-track: rgba(57, 135, 229, 0.17);

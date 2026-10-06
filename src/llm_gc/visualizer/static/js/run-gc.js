@@ -8,25 +8,24 @@ import { showTab } from "./shell.js";
 export function explainResult(r, before) {
   const figures = (after) => [["before", `${fmt(r.tokens_before)} tokens`], ["after", `${fmt(after)} tokens`]];
   const problems = r.degradations.length
-    ? `⚠ ${plural(r.degradations.length, "planned move")} didn't happen, so those messages stayed word for word: see What didn't move, on the Engine tab.` : null;
-  if (r.status === "completed" && r.tokens_after < r.tokens_before) {
+    ? `⚠ ${plural(r.degradations.length, "part")} of the collection fell short; each says what the model gets instead: see What fell short, on the Engine tab.` : null;
+  if (r.status === "completed") {
     const o = r.outcome;
-    const moved = o.quoted + o.summarised + o.archived;
-    return { tone: "good", title: `✓ Collected: the model now gets ${fmt(r.tokens_before - r.tokens_after)} fewer tokens`,
-      body: [`${plural(moved, "older message")} moved into the recap: ${describeOutcome({ ...o, front_archived: 0 })}. The newest ones are untouched.`,
-        o.front_archived ? `${plural(o.front_archived, "message")} collected earlier ${o.front_archived === 1 ? "was" : "were"} archived too, to keep the old generation within its budget.` : null,
-        "From now on every request carries this smaller version. Below, collected messages show what the model reads instead of them."].filter(Boolean),
+    const moved = o.kept.length + o.compacted.length + o.archived.length + o.folded.length;
+    const smaller = r.tokens_after < r.tokens_before;
+    return { tone: "good", title: smaller ? `✓ Collected: the model now gets ${fmt(r.tokens_before - r.tokens_after)} fewer tokens` : "✓ Collected",
+      body: [`${plural(moved, "older message")} moved into the recap: ${describeOutcome({ ...o, lowered: [], raised: [] })}. The newest ones are untouched.`,
+        o.lowered.length ? `${plural(o.lowered.length, "message")} collected earlier ${o.lowered.length === 1 ? "is" : "are"} now shown with less detail: the conversation moved on from them, or the recap needed the room.` : null,
+        o.raised.length ? `${plural(o.raised.length, "message")} collected earlier ${o.raised.length === 1 ? "is" : "are"} shown in more detail again, because the conversation came back to them${smaller ? "" : ", so the prompt is larger than before"}.` : null,
+        "From now on every request carries this version. Below, collected messages show what the model reads instead of them."].filter(Boolean),
       figures: figures(r.tokens_after), extra: problems, show: true };
   }
-  if (r.status === "completed") {
-    return { tone: "muted", title: "– Nothing changed", body: ["Some of the messages could not be summarised, and what was left was too little to be worth a collection. They stay word for word and will be tried again later."], extra: problems };
-  }
   if (r.status === "bypassed_no_saving" && r.abandoned_cut) {
-    const a = { ...r.abandoned_cut, ...r.abandoned_cut.outcome };
+    const a = r.abandoned_cut, o = a.outcome;
     const why = [
-      a.quoted ? `${plural(a.quoted, "message")} would be kept, quoted whole (short or important messages are never compacted), and each quote carries a small label, so it grows a little` : null,
-      a.archived ? `${plural(a.archived, "message")} would be archived, reduced to facts, but a message with nothing specific to pull out is kept as a full excerpt, no smaller than before` : null,
-      a.summarised ? `${plural(a.summarised, "message")} would be compacted, summarised` : null,
+      o.kept.length ? `${plural(o.kept.length, "message")} would be kept, quoted word for word (they are short, or matter now), and each quote carries a small marker, so it grows a little` : null,
+      o.archived.length ? `${plural(o.archived.length, "message")} would be archived, to their exchange's opening line and facts` : null,
+      o.compacted.length ? `${plural(o.compacted.length, "message")} would be compacted, summarised` : null,
     ].filter(Boolean);
     return { tone: "muted", title: "– Nothing changed: collecting now would have made the prompt bigger",
       body: [`Collecting the ${plural(a.turns.length, "older message")} (${fmt(a.tokens_taken)} tokens now) would have left the model with ${fmt(a.context_tokens_after)} tokens instead of ${fmt(r.tokens_before)}. A collection is only made when it shrinks what the model gets, so LLM-GC left them word for word.`],
@@ -38,7 +37,7 @@ export function explainResult(r, before) {
     const cut = before ? before.next_cut : null;
     if (!cut || cut.turns.length === 0) return nothingWaiting(before);
     return { tone: "muted", title: "– Nothing to collect yet",
-      body: [`The ${plural(cut.turns.length, "older message")} are all being kept whole (they are short, or rated important), so collecting them would save nothing.`] };
+      body: [`The ${plural(cut.turns.length, "older message")} would all be kept word for word (they are short, or matter now), so collecting them would save nothing.`] };
   }
   if (r.status === "bypassed_aging_in_flight") return { tone: "muted", title: "– A collection is already running", body: ["LLM-GC is already collecting this conversation. Try again in a moment."] };
   if (r.status === "bypassed_on_error") return { tone: "critical", title: "✕ The collection failed, and nothing changed", body: ["The conversation is exactly as it was. The error is in the proxy's log."] };
@@ -55,7 +54,7 @@ function nothingWaiting(k) {
         `Run GC now skips only the ${minimum} minimum, so it helps when older messages are waiting below it: short messages, or early in a conversation. None are waiting now.`] };
   }
   return { tone: "muted", title: "– Nothing to collect yet",
-    body: [`The conversation is still within its newest ${keepLast()} messages, which always stay word for word. Once older ones build up, Run GC now can collect them without waiting for the ${minimum} minimum.`] };
+    body: [`The conversation is still within its newest ${keepLast()} messages, which always stay recent, sent as written. Once older ones build up, Run GC now can collect them without waiting for the ${minimum} minimum.`] };
 }
 
 // The button says what it would do before it is pressed; it stays clickable to explain itself.

@@ -1,7 +1,7 @@
 // The page around the views: tabs, the guide, the theme, the live indicator.
 
 import { $, fmt, h, storeSet } from "./dom.js";
-import { recapLimit, state, ui } from "./state.js";
+import { state, ui } from "./state.js";
 import { renderChart } from "./engine.js";
 
 export function showTab(name) {
@@ -66,5 +66,4 @@ export function fillConfigValues(config) {
     const value = config[el.dataset.config];
     if (typeof value === "number") el.textContent = Number.isInteger(value) ? fmt(value) : value.toFixed(2);
   }
-  for (const el of document.querySelectorAll("[data-recap-limit]")) el.textContent = recapLimit();
 }

@@ -1,11 +1,11 @@
-// The conversation view: what the model knows, and message by message.
+// The conversation view: what the model knows, exchange by exchange and message by message.
 //
 // Every value comes from an endpoint; this view formats and explains, and derives
 // nothing beyond grouping, counting, and sums and differences of numbers it was given.
 
-import { BECOMES, BECOMES_CAT, CATS, CLAMP_CHARS, EARLIER_SHOWN, FACTS_SHOWN, GLOSSARY, GONE, HEIGHT, MIN_BAR_PX, ORDER, RUN_MIN, categoryOf, describeOutcome, swatch } from "./vocabulary.js";
-import { $, agoTs, countEl, fill, fmt, h, meterBar, percent, plural, ranges, reducedMotion, setChildren, storeSet, svg } from "./dom.js";
-import { captured, countCats, factsByTurn, has, marked, pendingTurns, recapLimit, preview, query, saidByTurn, state, turnMatches, ui } from "./state.js";
+import { BECOMES, CATS, CLAMP_CHARS, EARLIER_SHOWN, FACTS_SHOWN, GLOSSARY, HEIGHT, MIN_BAR_PX, ORDER, RUN_MIN, categoryOf, describeOutcome, swatch } from "./vocabulary.js";
+import { $, agoTs, countEl, fill, fmt, h, meterBar, percent, plural, ranges, reducedMotion, setChildren, storeGet, storeSet, svg } from "./dom.js";
+import { countCats, factsByTurn, has, marked, pendingTurns, preview, query, recapLimit, state, turnMatches, ui, writtenTokens } from "./state.js";
 import { hideTooltip, info, showTooltip, tipQuote, hoverTip } from "./tooltip.js";
 import { offerReturn, showTab } from "./shell.js";
 import { openCard, showWhy, whyText } from "./engine.js";
@@ -14,7 +14,11 @@ const smooth = () => (reducedMotion() ? "auto" : "smooth");
 export const speakerName = (role) => role === "user" ? "You" : role ? role[0].toUpperCase() + role.slice(1) : "—";
 const avatarText = (role) => role === "user" ? "You" : role === "assistant" ? "AI" : (role || "?").slice(0, 2).toUpperCase();
 const avatar = (role) => h("div", { class: `av ${role === "user" ? "user" : "assistant"}`, "aria-hidden": "true" }, avatarText(role));
-const changeForm = (n) => `${n === 1 ? "1 message changes" : `${fmt(n)} messages change`} form at the next collection.`;
+const changes = (n) => n === 1 ? "1 message changes" : `${fmt(n)} messages change`;
+const changing = (k) => k.turns.filter((t) => t.becomes).length;
+export const messagesLabel = (turns) => turns.length === 1 ? `message ${turns[0]}` : `messages ${ranges(turns)}`;
+// The colour of a level; out of view is drawn as a warning outline rather than a fill.
+const levelColour = (cat) => cat === "out_of_view" ? "var(--warn)" : `var(--fid-${cat})`;
 
 export function renderHero(k) {
   renderSize(k);
@@ -25,74 +29,74 @@ export function renderHero(k) {
 
 // ----------------------------------------------------------------- what needs attention
 
-// Good news is one quiet line; each warning is its own amber line saying what to do about it.
+// Only what needs a look gets a banner: what the model can no longer see, and a collection that fell
+// short. Everything else is said in the panel it is about. A warning can be dismissed, and comes
+// back only when there is more of what it warns about.
+const dismissedKey = () => `llmgc.dismissed.${state.selected}`;
+function dismissed() {
+  try { return JSON.parse(storeGet(dismissedKey()) || "{}"); } catch { return {}; }
+}
+function dismiss(kind, upTo) {
+  storeSet(dismissedKey(), JSON.stringify({ ...dismissed(), [kind]: upTo }));
+  renderStatus();
+}
+
 export function renderStatus() {
   const k = state.knowledge;
   if (!k) return;
-  const counts = countCats(k);
-  const unsent = k.facts.filter((f) => f.status === "active" && !f.sent).length;
-  const contradicted = k.facts.filter((f) => f.status === "superseded").length;
-  const problems = state.activity ? state.activity.recent_degradations.length : 0;
-  const next = k.turns.filter((t) => t.becomes).length;
+  const unseen = countCats(k).out_of_view;
+  const folded = k.spans.filter((s) => s.level === "out_of_view").length;
+  const shortfalls = state.activity ? state.activity.recent_degradations : [];
+  const latestShortfall = shortfalls.length ? shortfalls.at(-1).occurred_at : 0;
+  const hidden = dismissed();
   const toMessages = (filter) => () => { setFilter(filter); $("messages").scrollIntoView({ behavior: smooth(), block: "start" }); };
-  const line = (tone, icon, title, text, action, then) => h("div", { class: `status-line tone-${tone}` },
+  const line = (tone, icon, title, text, action, dismissal) => h("div", { class: `status-line tone-${tone}` },
     h("span", { class: "badge", "aria-hidden": "true" }, icon),
     h("span", { class: "msg-text" }, h("b", {}, title), text ? ` ${text}` : null),
-    then || null,
-    action ? h("button", { class: "link-btn", type: "button", onclick: action[1] }, `${action[0]} →`) : null);
+    action ? h("button", { class: "link-btn", type: "button", onclick: action[1] }, `${action[0]} →`) : null,
+    dismissal ? h("button", { class: "x", type: "button", "aria-label": "Dismiss", title: "Hide until there is more of this",
+      onclick: () => dismiss(...dismissal) }, "×") : null);
   const items = [];
-  if (counts.unseen) items.push(line("warn", "!", `The model sees nothing of ${plural(counts.unseen, "message")}.`,
-    `Their facts were stored, but the recap carries at most ${recapLimit()} and theirs didn't make it.`, ["Show them", toMessages("unseen")]));
-  if (unsent) items.push(line("warn", "!", `${plural(unsent, "fact")} stored but not sent.`,
-    "Ranked below the facts the recap has room for, so the model can't see them.",
-    ["Show the facts", () => $("memory-unsent")?.scrollIntoView({ behavior: smooth(), block: "start" })]));
-  if (problems) items.push(line("warn", "!", `${plural(problems, "planned move")} didn't happen.`,
-    "Those messages stayed word for word: nothing is lost, the prompt is just bigger than planned.",
-    ["See why", () => { showTab("engine"); openCard("notmoved", true); }]));
-  if (!items.length) {
-    items.push(line("good", "✓", k.cuts ? "Nothing is out of view." : "The model sees the whole conversation.",
-      k.cuts ? "Every collected message still reaches the model kept, compacted, or as a sent fact." : "Nothing has been collected yet.", null,
-      next && !k.next_cut.batch_ready ? h("span", { class: "then" }, `→ ${changeForm(next)}`,
-        h("button", { class: "link-btn", type: "button", onclick: () => { showTab("engine"); openCard("rate", true); } }, "Why these?")) : null));
-  }
-  if (k.aging_in_flight) items.push(line("", "…", "LLM-GC is collecting this conversation.", "The map updates when it finishes."));
-  if (k.next_cut.batch_ready) items.push(line("", "→", "A collection runs after the next reply.", `Messages ${ranges(k.next_cut.turns)} will change form.`, ["Show them", toMessages("next")]));
-  if (contradicted) items.push(line("", "↺", `${plural(contradicted, "fact")} contradicted later.`,
-    "The newer fact is sent and the old one isn't. Check the replacement is the one you meant.", ["Show them", toMessages("superseded")]));
-  if (!captured()) items.push(line("", "i", "What was said wasn't captured.",
-    "The dashboard started after this conversation, so it shows what the model receives but not the original words."));
+  if (unseen > (hidden.out_of_view ?? 0)) items.push(line("warn", "!", `The model can no longer see ${plural(unseen, "message")}.`,
+    `The recap reached its budget of ${recapLimit()} with every exchange at its least detail, so the oldest ${plural(folded, "exchange")} were folded into one line saying they exist. Their words are stored, not lost.`,
+    ["Show them", toMessages("out_of_view")], ["out_of_view", unseen]));
+  if (latestShortfall > (hidden.shortfalls ?? 0)) items.push(line("warn", "!", `${plural(shortfalls.length, "part")} of a collection fell short.`,
+    "Each says what the model gets instead. Nothing is lost: an exchange always keeps its words.",
+    ["See why", () => { showTab("engine"); openCard("notmoved", true); }], ["shortfalls", latestShortfall]));
+  if (k.aging_in_flight) items.push(line("", "…", "Collecting this conversation.", "The page updates when it finishes."));
   fill("status", items);
 }
 
 // ----------------------------------------------------------------- the prompt: cost, holdings, window
 
 export function renderSize(k) {
-  const written = captured() ? state.transcript.recorded_tokens : null;
+  const written = writtenTokens(k);
   const sent = k.context_tokens;
-  const saved = written === null ? null : written - sent;
-  const [tone, text] = written === null ? ["", "The words weren't captured, so there's nothing to compare with"]
-    : k.cuts === 0 ? ["", "Same as written: nothing collected yet"]
+  const saved = written - sent;
+  const [tone, text] = k.cuts === 0 ? ["", "Same as written: nothing collected yet"]
     : saved >= 0 ? ["good", `↓ ${fmt(saved)} saved · ${percent(saved, written)}% less than as written`]
     : ["", `↑ ${fmt(-saved)} more than as written: the recap outgrew what it replaced`];
   fill("panel-size",
-    h("div", { class: "label" }, "Each request carries, now", info("size")),
+    h("div", { class: "label" }, "Sent with each request", info("size")),
     h("div", { class: "hero-row" }, h("span", { class: "hero" }, countEl("size-sent", sent)), h("span", { class: "hero-unit" }, "tokens"),
       h("span", { class: `delta${tone ? ` ${tone}` : ""}` }, text)),
-    h("p", { class: "hero-sub" }, "The size of one request today: the conversation as the model gets it, the recap first. Your new message comes on top of this. The running total is on the Engine tab."));
+    h("p", { class: "hero-sub" }, "The recap, then the recent messages as written. Your next message is added on top."));
 }
 
 export function renderHolds(k) {
   const counts = countCats(k);
-  const next = k.turns.filter((t) => t.becomes).length;
-  const rows = ORDER.filter((key) => key !== "superseded" || counts.superseded).map((key) => h("li",
-    { class: key === "unseen" && counts.unseen ? "alert" : counts[key] ? "" : "zero" },
+  const next = changing(k);
+  const why = h("button", { class: "link-btn", type: "button", onclick: () => { showTab("engine"); openCard("rate", true); } }, "Why?");
+  const sofar = `${plural(k.turns.length, "message")} so far, ${!k.cuts ? "all sent as written." : counts.out_of_view ? "some out of view." : "none out of view."}`;
+  const rows = ORDER.filter((key) => key !== "out_of_view" || counts.out_of_view).map((key) => h("li",
+    { class: key === "out_of_view" ? "alert" : counts[key] ? "" : "zero", ...hoverTip(GLOSSARY[key][0], GLOSSARY[key][1]) },
     h("i", { class: `hb f-${key}`, style: `height:${Math.max(3, Math.round(HEIGHT[key] * 0.13))}px` }),
     h("span", {}, CATS[key].label), h("b", {}, countEl(`holds-${key}`, counts[key]))));
   fill("panel-holds",
-    h("div", { class: "label" }, "What the model holds"),
+    h("div", { class: "label" }, "How each message is sent", info("holds")),
     h("ul", { class: "holds" }, rows),
-    h("div", { class: "note" }, `Of ${plural(k.turns.length, "recorded message")}; your newest is counted once its reply arrives.`,
-      next ? [` ${changeForm(next)} `, h("button", { class: "link-btn", type: "button", onclick: () => { showTab("engine"); openCard("rate", true); } }, "Why?")] : null));
+    h("div", { class: "note" }, sofar,
+      next ? h("div", {}, k.next_cut.batch_ready ? `A collection runs after your next reply: ${changes(next)}. ` : `${changes(next)} at the next collection. `, why) : null));
 }
 
 export function renderWindow(k) {
@@ -133,11 +137,9 @@ function ledger() {
 }
 
 export function renderMap(k) {
-  const said = saidByTurn();
   const facts = factsByTurn(k);
   const items = [
-    ...k.turns.map((t) => ({ turn: t, i: t.turn_index, cat: categoryOf(t), tok: said.get(t.turn_index)?.tokens ?? t.tokens ?? null,
-      role: said.get(t.turn_index)?.role ?? t.role, text: said.get(t.turn_index)?.text ?? t.text })),
+    ...k.turns.map((t) => ({ turn: t, i: t.turn_index, cat: categoryOf(t), tok: t.tokens, role: t.role, text: t.text })),
     ...pendingTurns(k).map((p) => ({ pending: true, i: p.turn_index, cat: "pending", tok: p.tokens, role: p.role, text: p.text })),
   ];
   const barsHost = $("an-bars");
@@ -149,15 +151,16 @@ export function renderMap(k) {
   barsHost.classList.toggle("searching", !!query());
   $("map").setAttribute("aria-label", `Every message in order, oldest first: ${items.length} in all`);
 
-  const groupOf = (x) => x.pending ? "newest" : x.cat !== "verbatim" ? "condensed" : x.turn.becomes ? "next" : "kept";
+  const groupOf = (x) => x.pending ? "newest" : x.cat !== "verbatim" ? "condensed" : x.turn.becomes ? "next" : "tail";
   const runs = [];
   for (const x of items) {
     const g = groupOf(x), r = runs.at(-1);
     if (r && r.g === g) { r.n++; r.w += width(x); } else runs.push({ g, n: 1, w: width(x) });
   }
-  const GROUP = { condensed: "Collected", next: "Next collection", kept: "Word for word", newest: "" };
+  const GROUP = { condensed: "Collected", next: "Next", tail: "Recent", newest: "" };
   setChildren($("an-labels"), runs.map((r) => h("div", { class: "an-l", style: `flex-grow:${r.w}` },
-    h("span", { title: r.g === "newest" ? "Your newest message" : null }, r.g === "newest" ? " " : [h("b", {}, GROUP[r.g]), ` · ${r.n}`]))));
+    h("span", { title: r.g === "newest" ? "Your newest message" : `${GROUP[r.g]} · ${plural(r.n, "message")}` },
+      r.g === "newest" ? " " : [h("b", {}, GROUP[r.g]), ` · ${r.n}`]))));
 
   let changed = 0;
   const cells = items.map((x) => {
@@ -176,21 +179,21 @@ export function renderMap(k) {
     el._i = x.i;
     el._cell.style.flexGrow = String(width(x));
     const t = x.turn;
-    const hit = query() ? (x.pending ? has(x.text) : turnMatches(t, said, facts)) : null;
+    const span = t && t.span !== null ? k.spans[t.span] : null;
+    const hit = query() ? (x.pending ? has(x.text) : turnMatches(t, facts)) : null;
     el.className = `bar${x.pending ? " pending" : ` f-${x.cat}`}${hit === null ? "" : hit ? " hit" : " miss"}`;
     const before = lastCats.get(x.i);
     el.style.setProperty("--d", before !== undefined && before !== x.cat ? `${(changed++ * 0.03).toFixed(2)}s` : "0s");
     lastCats.set(x.i, x.cat);
     el.style.setProperty("--h", `${x.pending ? 100 : HEIGHT[x.cat]}%`);
-    setChildren(el, t && t.becomes ? h("span", { class: "q", style: `--qb:var(--fid-${BECOMES_CAT[t.becomes]})` }) : null);
-    const size = x.tok === null ? "size not captured" : plural(x.tok, "token");
-    const keeps = (facts.get(x.i) || []).filter((f) => f.status === "active");
+    setChildren(el, t && t.becomes ? h("span", { class: "q", style: `--qb:${levelColour(t.becomes)}` }) : null);
+    const size = plural(x.tok, "token");
     el.setAttribute("aria-label", `Message ${x.i}, ${speakerName(x.role)}, ${size}: ${x.pending ? "newest, not recorded yet" : CATS[x.cat].label}`);
     el._tip = x.pending
       ? [`Message ${x.i} · ${speakerName(x.role)} · ${size}`, "Your newest message: recorded, with its reply, once the next request arrives.", tipQuote(preview(x.text))]
       : [[swatch(x.cat), `Message ${x.i} · ${speakerName(x.role)} · ${size}`], `${CATS[x.cat].label}: ${CATS[x.cat].desc}`,
-        t.becomes ? `Next collection: ${BECOMES[t.becomes]}. ${whyText(t)}` : null,
-        GONE.has(x.cat) && keeps.length ? `Keeps ${plural(keeps.length, "fact")}, ${keeps.filter((f) => f.sent).length} sent` : null,
+        span ? `Its exchange: ${messagesLabel(span.turns)}` : null,
+        t.becomes ? `Next collection: ${BECOMES[t.becomes]}. ${whyText(span || t)}` : null,
         tipQuote(preview(x.text)), h("div", { class: "tip-row muted" }, "Click to open it")];
     return el._cell;
   });
@@ -203,16 +206,15 @@ export function renderMap(k) {
   const verb = items.filter((x) => !x.pending && x.cat === "verbatim");
   const pend = items.filter((x) => x.pending);
   const sum = (list) => list.reduce((n, x) => n + width(x), 0);
-  const written = captured() ? state.transcript.recorded_tokens : null;
-  const saved = written === null ? null : written - k.context_tokens;
+  const saved = writtenTokens(k) - k.context_tokens;
   const condW = sum(cond);
   const blockW = condW && saved > 0 ? (condW * k.front_tokens) / (k.front_tokens + saved) : condW;
   const recent = k.context_tokens - k.front_tokens;
   const pendTok = pend.reduce((n, x) => n + (x.tok ?? 0), 0);
   const parts = {
     block: [blockW, `The recap · ${plural(k.front_tokens, "token")}`, "Stands in for the collected messages above it.", cond],
-    saved: [condW - blockW, `Saved · ${plural(saved ?? 0, "token")}`, "What collections took out of every request.", cond],
-    recent: [sum(verb), `Recent messages · ${plural(recent, "token")}`, "Sent word for word.", verb],
+    saved: [condW - blockW, `Saved · ${plural(Math.max(0, saved), "token")}`, "What collections took out of every request.", cond],
+    recent: [sum(verb), `Recent messages · ${plural(recent, "token")}`, "Not collected yet: each sent as its own message, as written.", verb],
     pending: [sum(pend), `Your newest · ${plural(pendTok, "token")}`, "Sent with your next request, on top of the rest.", pend],
   };
   for (const [key, [grow, title, text, list]] of Object.entries(parts)) {
@@ -231,11 +233,12 @@ function renderKey(k, items, { saved, recent, pendTok }) {
   const queued = k.turns.some((t) => t.becomes);
   const pending = items.some((x) => x.pending);
   const item = (mark, ...text) => h("span", {}, mark, h("span", {}, ...text));
+  const explained = (key, mark, ...text) => h("span", hoverTip(GLOSSARY[key][0], GLOSSARY[key][1]), mark, h("span", {}, ...text));
   fill("an-key",
     h("div", { class: "an-rowlab" }, "Bars"),
     h("div", { class: "items" },
-      ORDER.filter((key) => counts[key]).map((key) => item(h("i", { class: `lg f-${key}`, style: `height:${Math.max(3, Math.round(HEIGHT[key] * 0.14))}px` }), CATS[key].label)),
-      queued ? item(h("i", { class: "qdot" }), "Dot: queued for the next collection, in the colour it will become") : null,
+      ORDER.filter((key) => counts[key]).map((key) => explained(key, h("i", { class: `lg f-${key}`, style: `height:${Math.max(3, Math.round(HEIGHT[key] * 0.14))}px` }), CATS[key].label)),
+      queued ? explained("next", h("i", { class: "qdot" }), "Dot: changes at the next collection, in the colour it will become") : null,
       pending ? item(h("i", { class: "key pending" }), "Outline: your newest message") : null),
     h("div", { class: "an-rowlab" }, "Sent"),
     h("div", { class: "items" },
@@ -246,7 +249,7 @@ function renderKey(k, items, { saved, recent, pendTok }) {
       pending ? item(h("i", { class: "key pending" }), "Your newest ", h("b", {}, fmt(pendTok)), ", sent next") : null));
 }
 
-// Hovering a message anywhere traces it: its bar, its Sent segment, its row, and its rating.
+// Hovering a message anywhere traces it: its bar, its Sent segment, its row, and its score.
 export function trace(ids, seg = null) {
   for (const el of document.querySelectorAll(".linked")) el.classList.remove("linked");
   $("an-bars").classList.toggle("tracing", !!ids);
@@ -254,13 +257,12 @@ export function trace(ids, seg = null) {
   if (!ids) return;
   const k = state.knowledge;
   const segs = ledger();
-  // Summary rows and quotes stand for several messages; they carry them in data-turns.
-  for (const row of document.querySelectorAll("#timeline [data-turns]")) {
+  // Exchange rows and score rows stand for several messages; they carry them in data-turns.
+  for (const row of document.querySelectorAll("#timeline [data-turns], #relevance [data-turns]")) {
     if (row.dataset.turns.split(",").map(Number).some((n) => ids.includes(n))) row.classList.add("linked");
   }
   for (const i of ids) {
     barCache.get(i)?.classList.add("linked");
-    $(`r-${i}`)?.classList.add("linked");
     const t = k && k.turns.find((x) => x.turn_index === i);
     const key = !t ? "pending" : t.fidelity !== "verbatim" ? "block" : "recent";
     segs[key].classList.add("linked");
@@ -277,7 +279,7 @@ export function celebrateCleanup() {
   setTimeout(() => { block.classList.add("landed"); setTimeout(() => block.classList.remove("landed"), 1100); }, 900);
 }
 
-// ----------------------------------------------------------------- message by message
+// ----------------------------------------------------------------- exchange by exchange
 
 export function setFilter(key) {
   ui.filter = key;
@@ -298,8 +300,9 @@ export function renderMessages() {
 export function renderChips(k) {
   const counts = countCats(k);
   const pending = pendingTurns(k).length;
-  const nextCount = k.turns.filter((t) => t.becomes).length;
+  const nextCount = changing(k);
   const chip = (key, label, count, mark) => h("button", { class: "chip-btn", type: "button", "aria-pressed": String(ui.filter === key),
+    ...(GLOSSARY[key] ? hoverTip(GLOSSARY[key][0], GLOSSARY[key][1]) : {}),
     onclick: () => setFilter(ui.filter === key && key !== "all" ? "all" : key) }, mark, label, h("span", { class: "count" }, countEl(`chip-${key}`, count)));
   const toggle = h("button", { class: "list-toggle", type: "button", "aria-controls": "timeline", "aria-expanded": String(ui.listOpen),
     "aria-label": ui.listOpen ? "Hide the messages" : "Show the messages", title: ui.listOpen ? "Hide the messages" : "Show the messages",
@@ -308,85 +311,87 @@ export function renderChips(k) {
       svg("path", { d: "M4 6l4 4 4-4", fill: "none", stroke: "currentColor", "stroke-width": 1.8, "stroke-linecap": "round", "stroke-linejoin": "round" })));
   fill("chips", chip("all", "All", k.turns.length + pending),
     ORDER.filter((key) => counts[key]).map((key) => chip(key, CATS[key].label, counts[key], swatch(key))),
-    nextCount ? chip("next", "Next collection", nextCount, h("span", { class: "qdot" })) : null, toggle);
+    nextCount ? chip("next", "Changes next", nextCount, h("span", { class: "qdot" })) : null, toggle);
 }
 
+// One row per exchange the old generation holds, one per run of folded exchanges (they share a
+// line in the recap), then one per recent message, then your newest.
 export function buildRows(k) {
+  const byIndex = new Map(k.turns.map((t) => [t.turn_index, t]));
   const rows = [];
-  for (let i = 0; i < k.turns.length; i++) {
-    const turn = k.turns[i];
-    if (turn.fidelity === "summarised") {
-      // One row per summary: what the model reads, then what was said in its place.
-      const group = [turn];
-      while (i + 1 < k.turns.length && k.turns[i + 1].fidelity === "summarised" && k.turns[i + 1].front_entry === turn.front_entry) group.push(k.turns[++i]);
-      rows.push({ kind: "summary", cat: "summarised", turns: group, entry: k.front_entries[turn.front_entry] });
-    } else rows.push({ kind: "turn", cat: categoryOf(turn), turn });
+  for (const span of k.spans) {
+    const turns = span.turns.map((n) => byIndex.get(n));
+    const last = rows.at(-1);
+    if (span.level === "out_of_view" && last && last.kind === "folded") { last.spans.push(span); last.turns.push(...turns); }
+    else if (span.level === "out_of_view") rows.push({ kind: "folded", cat: "out_of_view", spans: [span], turns });
+    else rows.push({ kind: "span", cat: span.level, span, turns });
   }
-  for (const pending of pendingTurns(k)) rows.push({ kind: "pending", cat: "verbatim", pending });
+  for (const turn of k.turns) if (turn.fidelity === "verbatim") rows.push({ kind: "turn", cat: "verbatim", turn, turns: [turn] });
+  for (const pending of pendingTurns(k)) rows.push({ kind: "pending", cat: "verbatim", pending, turns: [] });
   return rows;
 }
 
-export function rowVisible(row, said, facts) {
+export function rowVisible(row, facts) {
   const f = ui.filter;
   // The newest message is not recorded yet, so it belongs to no category but "all".
-  const passes = f === "all" || (f === "next" ? row.kind === "turn" && !!row.turn.becomes : row.kind !== "pending" && row.cat === f);
+  const passes = f === "all" || (f === "next" ? row.turns.some((t) => t.becomes) : row.kind !== "pending" && row.cat === f);
   if (!passes) return false;
   if (!query()) return true;
-  if (row.kind === "summary") return has(row.entry.stated_text) || row.turns.some((t) => has(said.get(t.turn_index)?.text));
   if (row.kind === "pending") return has(row.pending.text);
-  return turnMatches(row.turn, said, facts);
+  const line = row.kind === "span" ? row.span.text : row.kind === "folded" ? row.spans[0].text : null;
+  return has(line) || row.turns.some((t) => turnMatches(t, facts));
 }
 
-// Long stretches of condensed-away messages fold into one row, so the page leads
-// with what the model still reads. Filtering or searching shows every match.
+// Long stretches of archived exchanges fold into one row, so the page leads with what the model
+// reads in detail. Filtering or searching shows every match.
 export function foldRuns(rows) {
   if (ui.filter !== "all" || query()) return rows;
   const out = [];
   let run = [];
-  const flush = () => { if (run.length >= RUN_MIN) out.push({ kind: "run", rows: run }); else out.push(...run); run = []; };
+  const flush = () => { if (run.length >= RUN_MIN) out.push({ kind: "run", rows: run, turns: run.flatMap((r) => r.turns) }); else out.push(...run); run = []; };
   for (const row of rows) {
-    if (row.kind === "turn" && GONE.has(row.cat)) run.push(row);
+    if (row.kind === "span" && row.cat === "archived") run.push(row);
     else { flush(); out.push(row); }
   }
   flush();
   return out;
 }
 
-// How many original messages a row stands for: a run or a summary speaks for several at once.
-export function rowMessageCount(row) {
-  return row.kind === "run" ? row.rows.length : row.kind === "summary" ? row.turns.length : 1;
-}
+// How many original messages a row stands for.
+export const rowMessageCount = (row) => row.kind === "pending" ? 1 : row.turns.length;
 
-const isQueued = (row) => row.kind === "turn" && row.cat === "verbatim" && !!row.turn.becomes;
-const isCondensed = (row) => row.kind === "run" || row.kind === "summary" || (row.kind === "turn" && row.cat !== "verbatim");
+const isQueued = (row) => row.kind === "turn" && !!row.turn.becomes;
+const RECAP_ROWS_SHOWN = 3;   // recap rows shown before "Show N older messages"
+const isCondensed = (row) => row.kind === "run" || row.kind === "span" || row.kind === "folded";
 
 export function renderTimeline(k) {
-  const said = saidByTurn();
   const facts = factsByTurn(k);
-  const all = buildRows(k);
-  const visible = all.filter((row) => rowVisible(row, said, facts));
+  const visible = buildRows(k).filter((row) => rowVisible(row, facts));
   // Newest first: what the model sees now leads, and older history reads on below it.
   const folded = foldRuns(visible).reverse();
   const filtered = ui.filter !== "all" || query();
-  // Unfiltered, a long conversation shows only its newest messages; the rest sit behind a button at
+  // Unfiltered, a long conversation shows only its newest rows; the rest sit behind a button at
   // the foot. Filtering, searching or jumping to a message shows everything that matches.
-  const canFold = !filtered && folded.length - EARLIER_SHOWN >= RUN_MIN;
+  // Unfolded, the list shows at least the first few rows of the recap: what the model reads in
+  // place of everything older is the part a reader most wants to see.
+  const firstCondensed = folded.findIndex(isCondensed);
+  const keep = Math.max(EARLIER_SHOWN, firstCondensed === -1 ? 0 : firstCondensed + RECAP_ROWS_SHOWN);
+  const canFold = !filtered && folded.length - keep >= RUN_MIN;
   const foldOlder = canFold && !ui.earlierOpen;
-  const shown = foldOlder ? folded.slice(0, EARLIER_SHOWN) : folded;
+  const shown = foldOlder ? folded.slice(0, keep) : folded;
   // One line marks where the next collection's queue starts, and one where the recap starts.
   const items = [];
   let pastQueued = false, pastCondensed = false;
   for (const row of shown) {
     if (!filtered && !pastQueued && !pastCondensed && isQueued(row)) {
       pastQueued = true;
-      items.push(h("div", { class: "boundary" }, h("span", {}, "↑ Stays word for word · ↓ Queued for the next collection")));
+      items.push(h("div", { class: "boundary" }, h("span", {}, "↑ Stays recent · ↓ Taken by the next collection")));
     }
     if (!filtered && !pastCondensed && isCondensed(row)) {
       pastCondensed = true;
-      items.push(h("div", { class: "boundary" }, h("span", {}, "↑ Sent word for word · ↓ In the recap, ", h("b", {}, fmt(k.front_tokens)), " tokens")));
+      items.push(h("div", { class: "boundary" }, h("span", {}, "↑ Recent, sent as written · ↓ In the recap, ", h("b", {}, fmt(k.front_tokens)), " tokens")));
     }
-    items.push(row.kind === "run" ? runRow(row, said, facts) : row.kind === "summary" ? summaryRow(row, said)
-      : row.kind === "pending" ? pendingRow(row.pending) : turnRow(row.turn, said, facts));
+    items.push(rowElement(row, facts));
   }
   const timeline = $("timeline");
   timeline.hidden = !ui.listOpen;
@@ -394,11 +399,11 @@ export function renderTimeline(k) {
   const note = $("filter-note");
   note.hidden = !filtered || !ui.listOpen;
   if (filtered) {
-    const shownCount = visible.reduce((n, row) => n + (row.kind === "summary" ? row.turns.length : 1), 0);
-    setChildren(note, `Showing ${plural(shownCount, "message")}${query() ? ` matching “${ui.query.trim()}”` : ""}${ui.filter !== "all" ? ` · ${ui.filter === "next" ? "next collection" : CATS[ui.filter].tag}` : ""}`,
+    const shownCount = visible.reduce((n, row) => n + rowMessageCount(row), 0);
+    setChildren(note, `Showing ${plural(shownCount, "message")}${query() ? ` matching “${ui.query.trim()}”` : ""}${ui.filter !== "all" ? ` · ${ui.filter === "next" ? "changing at the next collection" : CATS[ui.filter].tag}` : ""}`,
       h("button", { class: "link-btn", type: "button", onclick: () => { ui.query = ""; $("search").value = ""; setFilter("all"); } }, "Show all"));
   }
-  const olderCount = folded.slice(EARLIER_SHOWN).reduce((n, row) => n + rowMessageCount(row), 0);
+  const olderCount = folded.slice(keep).reduce((n, row) => n + rowMessageCount(row), 0);
   const setOlder = (open) => {
     ui.earlierOpen = open;
     renderTimeline(state.knowledge);
@@ -417,8 +422,12 @@ export function renderTimeline(k) {
   }
 }
 
+function rowElement(row, facts) {
+  return row.kind === "run" ? runRow(row) : row.kind === "span" ? spanRow(row) : row.kind === "folded" ? foldedRow(row, facts)
+    : row.kind === "pending" ? pendingRow(row.pending) : turnRow(row.turn);
+}
+
 export function textBlock(text, { faded = false, key = null } = {}) {
-  if (text === null || text === undefined) return h("div", { class: "lost" }, "the original words were not captured (the dashboard started after this message)");
   if (!text) return h("div", { class: "lost" }, "no text: tool calls or attachments only");
   const long = text.length > CLAMP_CHARS || text.split("\n").length > 6 || (faded && text.length > 160);
   const open = !long || (key && ui.open.has(key)) || (query() && has(text));
@@ -438,116 +447,107 @@ export function fidTag(cat) {
   return h("span", { class: "tag", ...hoverTip(CATS[cat].label, GLOSSARY[cat][1]) }, swatch(cat), CATS[cat].tag);
 }
 
+// How a fact reaches the model: on its exchange's line, inside quoted words, or not at all.
 const factStatus = (fact) => fact.status === "superseded"
-  ? h("span", { class: "fact-status" }, h("span", { class: "st" }, "↺ "), fact.superseded_by_turn !== null ? `replaced by #${fact.superseded_by_turn}` : "replaced")
-  : fact.sent ? h("span", { class: "fact-status" }, h("span", { class: "st good" }, "✓ "), "sent")
+  ? h("span", { class: "fact-status" }, h("span", { class: "st" }, "↺ "), "replaced")
+  : fact.sent ? h("span", { class: "fact-status" }, h("span", { class: "st good" }, "✓ "), "on its line")
+  : fact.span_level === "kept" ? h("span", { class: "fact-status" }, h("span", { class: "st good" }, "✓ "), "in its words")
   : h("span", { class: "fact-status" }, h("span", { class: "st warn" }, "⚠ "), "not sent");
+// A fact read from a statement that names no topic, like "we decided to ship on Friday".
+const topicOf = (fact) => fact.topic === "general" ? "no topic" : fact.topic;
 
-// A fact in the sidebar: its topic above what it says, and whether the model is sent it.
-// A fact as the model reads it: cut where the recap cuts it, and saying so.
-function sentContent(fact) {
-  return [marked(fact.sent_content ?? fact.content), fact.shortened
-    ? h("span", { class: "cut-note" }, ` ✂ the model gets only the start: ${fmt(fact.sent_content.length)} of ${fmt(fact.content.length)} characters`)
-    : null];
-}
-
-function excerptLabel(fact) {
-  return fact.from_summary ? "excerpt of its summary" : "excerpt";
-}
-
-function excerptTitle(fact) {
-  return fact.from_summary
-    ? "LLM-GC's summary of this message, kept as an excerpt when the summary was archived: not the message's own words"
-    : "an excerpt: the words extraction could not turn into a fact";
-}
-
-export function factRow(fact, { withFrom = true, onclick = null } = {}) {
-  const raw = fact.knowledge_type === "raw";
+export function factRow(fact, { onclick = null } = {}) {
+  const replaced = fact.status === "superseded";
   return h(onclick ? "button" : "div", { class: `fact s-${fact.status}`, type: onclick ? "button" : null, onclick,
     title: onclick ? "Show the message it came from" : null },
-    h("span", { class: "fact-topic", title: raw ? excerptTitle(fact) : fact.topic }, raw ? excerptLabel(fact) : fact.topic),
-    h("span", { class: "fact-what" }, sentContent(fact)),
-    h("span", { class: "fact-meta" }, withFrom ? h("span", { class: "num" }, `#${ranges(fact.source_turns)}`) : null, factStatus(fact)));
+    h("span", { class: "fact-topic", title: topicOf(fact) }, topicOf(fact)),
+    h("span", { class: "fact-what" }, replaced
+      ? [h("div", { class: "was" }, marked(fact.content)), h("div", { class: "now" }, h("span", { class: "now-label" }, "now: "), marked(fact.superseded_by ?? ""))]
+      : marked(fact.content)),
+    h("span", { class: "fact-meta" }, h("span", { class: "num" }, replaced && fact.superseded_by_turn !== null
+      ? `message ${fact.turn} → ${fact.superseded_by_turn}` : `message ${fact.turn}`), replaced ? null : factStatus(fact)));
 }
 
-// A fact beside the message it came from, as a compact topic-and-value chip.
 function factChip(fact) {
-  const raw = fact.knowledge_type === "raw";
-  // A cut excerpt opens to everything stored, so what the model never gets is visible too.
-  const key = `fact-${fact.turn}-${fact.topic}-${fact.content.length}`;
-  const open = fact.shortened && ui.open.has(key);
-  const toggle = fact.shortened ? h("button", { class: "more", type: "button", "aria-expanded": String(open),
-    onclick: () => { if (ui.open.has(key)) ui.open.delete(key); else ui.open.add(key); renderTimeline(state.knowledge); } },
-    open ? "Hide what is stored" : "Show what is stored") : null;
-  return h("span", { class: `fact-chip s-${fact.status}${fact.shortened ? " long" : ""}`, title: raw ? excerptTitle(fact) : null },
-    h("b", {}, raw ? excerptLabel(fact) : fact.topic),
-    h("span", { class: "fact-text" }, sentContent(fact),
-      open ? h("span", { class: "stored-full" }, h("span", { class: "stored-label" }, "Stored in full, not sent beyond the start:"), marked(fact.content)) : null,
-      toggle),
-    factStatus(fact));
+  return h("span", { class: `fact-chip s-${fact.status}` }, h("b", {}, topicOf(fact)),
+    h("span", { class: "fact-text" }, marked(fact.content)), factStatus(fact));
 }
 
-// "next: summarised" explains itself: hover for the reason, click for its rating on the Engine tab.
-export function nextTag(turn) {
-  return h("button", { class: "tag next why", type: "button", "aria-label": `Next collection: ${BECOMES[turn.becomes]}. Show why on the Engine tab`,
-    onpointerenter: (e) => showTooltip(e, `Why ${BECOMES[turn.becomes]}?`, whyText(turn), h("div", { class: "tip-row muted" }, "Click to see its rating on the Engine tab")),
-    onpointerleave: hideTooltip, onclick: () => { hideTooltip(); showWhy(turn.turn_index); } },
-    h("span", { class: `swatch f-${BECOMES_CAT[turn.becomes]}` }), `next: ${BECOMES[turn.becomes]}`);
+// "next: archived" explains itself: hover for the reason, click for its score on the Engine tab.
+// `item` is a recent message, or an exchange already collected.
+export function nextTag(item, turnIndex) {
+  return h("button", { class: "tag next why", type: "button", "aria-label": `Next collection: ${BECOMES[item.becomes]}. Show why on the Engine tab`,
+    onpointerenter: (e) => showTooltip(e, `Why ${BECOMES[item.becomes]}?`, whyText(item), h("div", { class: "tip-row muted" }, "Click to see its score on the Engine tab")),
+    onpointerleave: hideTooltip, onclick: () => { hideTooltip(); showWhy(turnIndex); } },
+    h("span", { class: `swatch f-${item.becomes}` }), `next: ${BECOMES[item.becomes]}`);
 }
 
-export function turnRow(turn, said, facts) {
-  const cat = categoryOf(turn);
-  const words = said.get(turn.turn_index);
-  const role = words ? words.role : turn.role;
-  const kept = facts.get(turn.turn_index) || [];
-  const key = `t-${turn.turn_index}`;
-  const tokens = words?.tokens ?? turn.tokens;
-  let body;
-  if (cat === "verbatim") body = textBlock(turn.text, { key });
-  else if (cat === "quoted") body = textBlock(words ? words.text : state.knowledge.front_entries[turn.front_entry].stated_text, { key });
-  else {
-    const viaSummary = kept.some((f) => f.from_summary);
-    const intro = cat === "unseen" ? [h("span", { class: "st warn" }, "⚠ "), "The model sees nothing of this message. Stored, but not sent:"]
-      : cat === "superseded" ? "Contradicted later, so no longer sent:"
-      : viaSummary ? "Compacted first; later the old generation needed room, so its summary was archived. Extraction read the summary and kept:"
-      : "Archived: the message left the prompt, and extraction kept:";
-    body = [textBlock(words?.text, { faded: true, key }), h("div", { class: "keeps" }, h("div", { class: "keeps-intro" }, intro),
-      kept.length ? kept.map(factChip) : h("span", { class: "lost" }, "nothing"))];
-  }
-  // The common case carries no badge: only a message that changed, or is about to, is tagged.
-  return h("article", { class: `msg${GONE.has(cat) ? " gone" : ""}`, id: `turn-${turn.turn_index}`, "data-turns": String(turn.turn_index) },
+export function turnRow(turn) {
+  return h("article", { class: "msg", id: `turn-${turn.turn_index}`, "data-turns": String(turn.turn_index) },
     h("div", { class: "msg-no" }, turn.turn_index),
-    avatar(role),
+    avatar(turn.role),
     h("div", { class: "msg-body" },
       h("div", { class: "msg-head" },
-        h("span", { class: "who" }, speakerName(role)),
-        cat !== "verbatim" ? fidTag(cat) : null,
-        turn.becomes ? nextTag(turn) : null,
-        tokens && (cat === "verbatim" || cat === "quoted") ? h("span", { class: "tok" }, plural(tokens, "token")) : null),
-      body));
+        h("span", { class: "who" }, speakerName(turn.role)),
+        turn.becomes ? nextTag(turn, turn.turn_index) : null,
+        h("span", { class: "tok" }, plural(turn.tokens, "token"))),
+      textBlock(turn.text, { key: `t-${turn.turn_index}` })));
 }
 
-export function summaryRow(row, said) {
-  const { turns, entry } = row;
-  const first = turns[0].turn_index, last = turns.at(-1).turn_index;
+// The messages of an exchange as they were said, each still reachable from the map.
+function originals(turns, faded) {
+  return turns.map((t) => h("div", { class: "orig", id: `turn-${t.turn_index}` },
+    h("div", { class: "msg-head" }, h("span", { class: "who" }, speakerName(t.role)), h("span", { class: "num" }, `message ${t.turn_index}`),
+      h("span", { class: "tok" }, plural(t.tokens, "token"))),
+    textBlock(t.text, { faded, key: `t-${t.turn_index}` })));
+}
+
+function originalsToggle(key, turns, open) {
+  return h("button", { class: "more orig-toggle", type: "button", "aria-expanded": String(open),
+    onclick: () => { if (ui.open.has(key)) ui.open.delete(key); else ui.open.add(key); renderTimeline(state.knowledge); } },
+    `${open ? "Hide" : "Show"} what was said in ${messagesLabel(turns.map((t) => t.turn_index))}`);
+}
+
+const rangeNo = (turns) => turns.length === 1 ? turns[0].turn_index : `${turns[0].turn_index}–${turns.at(-1).turn_index}`;
+
+// An exchange in the old generation: what the model reads for it, then what was said.
+export function spanRow(row) {
+  const { span, turns } = row;
+  const first = turns[0].turn_index;
+  const written = turns.reduce((n, t) => n + t.tokens, 0);
+  const head = h("div", { class: "msg-head" }, h("span", { class: "who" }, plural(turns.length, "message")), fidTag(span.level),
+    span.becomes ? nextTag(span, first) : null);
+  const article = (...body) => h("article", { class: "msg", id: `span-${first}`, "data-turns": span.turns.join(",") },
+    h("div", { class: "msg-no" }, rangeNo(turns)), h("div", { "aria-hidden": "true" }), h("div", { class: "msg-body" }, head, ...body));
+  if (span.level === "kept") {
+    return article(h("div", { class: "keeps-intro" }, `Quoted word for word in the recap · ${plural(span.tokens, "token")} with its markers, for ${plural(written, "token")} as written`),
+      originals(turns, false));
+  }
   const key = `orig-${first}`;
-  const open = ui.open.has(key) || (query() && turns.some((t) => has(said.get(t.turn_index)?.text)));
-  // A message's size as written lives in the transcript: the session stops counting it once it moves.
-  const sizes = turns.map((t) => said.get(t.turn_index)?.tokens);
-  const written = sizes.every((n) => typeof n === "number") ? sizes.reduce((sum, n) => sum + n, 0) : null;
-  return h("article", { class: "msg", id: `entry-${first}`, "data-turns": turns.map((t) => t.turn_index).join(",") },
-    h("div", { class: "msg-no" }, first === last ? first : `${first}–${last}`),
-    h("div", { "aria-hidden": "true" }),
+  const open = ui.open.has(key) || (query() && turns.some((t) => has(t.text)));
+  return article(
+    h("div", { class: "summary-box" }, h("div", { class: "label" }, `The model reads this instead · ${plural(span.tokens, "token")}, in place of ${plural(written, "token")} as written`),
+      textBlock(span.text, { key: `line-${first}` })),
+    originalsToggle(key, turns, open),
+    open ? originals(turns, true) : null);
+}
+
+// A run of exchanges folded out of view: the one line the model reads for all of them.
+export function foldedRow(row, facts) {
+  const { spans, turns } = row;
+  const first = turns[0].turn_index;
+  const key = `orig-${first}`;
+  const open = ui.open.has(key) || (query() && turns.some((t) => has(t.text)));
+  const stored = turns.flatMap((t) => facts.get(t.turn_index) || []).filter((f) => f.status === "active");
+  return h("article", { class: "msg gone", id: `span-${first}`, "data-turns": turns.map((t) => t.turn_index).join(",") },
+    h("div", { class: "msg-no" }, rangeNo(turns)), h("div", { "aria-hidden": "true" }),
     h("div", { class: "msg-body" },
-      h("div", { class: "msg-head" }, h("span", { class: "who" }, plural(turns.length, "message")), fidTag("summarised")),
-      h("div", { class: "summary-box" }, h("div", { class: "label" }, `The model reads this instead · ${plural(entry.tokens, "token")}${written === null ? "" : `, in place of ${plural(written, "token")} as written`}`), h("div", { class: "text" }, marked(entry.stated_text))),
-      h("button", { class: "more orig-toggle", type: "button", "aria-expanded": String(!!open),
-        onclick: () => { if (ui.open.has(key)) ui.open.delete(key); else ui.open.add(key); renderTimeline(state.knowledge); } },
-        `${open ? "Hide" : "Show"} what was said in ${turns.length > 1 ? `messages ${first}–${last}` : `message ${first}`}`),
-      open ? turns.map((t) => h("div", { class: "orig", id: `turn-${t.turn_index}` },
-        h("div", { class: "msg-head" }, h("span", { class: "who" }, speakerName(said.get(t.turn_index)?.role)), h("span", { class: "num" }, `message ${t.turn_index}`),
-          typeof said.get(t.turn_index)?.tokens === "number" ? h("span", { class: "tok" }, plural(said.get(t.turn_index).tokens, "token")) : null),
-        textBlock(said.get(t.turn_index)?.text, { faded: true, key: `t-${t.turn_index}` }))) : null));
+      h("div", { class: "msg-head" }, h("span", { class: "who" }, `${plural(spans.length, "exchange")} · ${plural(turns.length, "message")}`), fidTag("out_of_view")),
+      h("div", { class: "summary-box warn" }, h("div", { class: "label" }, h("span", { class: "st warn" }, "⚠ "), "The model reads only this line for all of them"),
+        h("div", { class: "text" }, marked(spans[0].text))),
+      stored.length ? h("div", { class: "keeps" }, h("div", { class: "keeps-intro" }, "Facts read from them, stored but not sent:"), stored.map(factChip)) : null,
+      originalsToggle(key, turns, open),
+      open ? originals(turns, true) : null));
 }
 
 export function pendingRow(p) {
@@ -555,27 +555,25 @@ export function pendingRow(p) {
     h("div", { class: "msg-no" }, p.turn_index), avatar(p.role),
     h("div", { class: "msg-body" },
       h("div", { class: "msg-head" }, h("span", { class: "who" }, speakerName(p.role)), h("span", { class: "tag" }, "newest"),
-        h("span", {}, "recorded, with its reply, once the next request arrives")),
+        h("span", { class: "muted" }, "recorded with its reply, so not counted yet")),
       textBlock(p.text, { key: `t-${p.turn_index}` })));
 }
 
-export function runRow(run, said, facts) {
-  const first = run.rows[0].turn.turn_index, last = run.rows.at(-1).turn.turn_index;
+export function runRow(run) {
+  const first = run.turns[0].turn_index, last = run.turns.at(-1).turn_index;
   const key = `run-${first}`;
   const open = ui.open.has(key);
-  const counts = {};
-  for (const row of run.rows) counts[row.cat] = (counts[row.cat] || 0) + 1;
   return h("div", { class: `run${open ? " open" : ""}` },
     h("button", { class: "run-head", type: "button", "aria-expanded": String(open),
       onclick: () => { if (open) ui.open.delete(key); else ui.open.add(key); renderTimeline(state.knowledge); } },
       h("span", { class: "run-range" }, `${first}–${last}`),
       h("span", { class: "run-rail" }),
       h("span", {},
-        h("span", { class: "run-title" }, `${plural(run.rows.length, "message")} the model no longer reads word for word`),
-        h("span", { class: "run-sub" }, h("span", { class: "minis" }, run.rows.map((row) => h("span", { class: `mini f-${row.cat}` }))),
-          ORDER.filter((c) => counts[c]).map((c) => `${counts[c]} ${CATS[c].tag}`).join(" · "))),
+        h("span", { class: "run-title" }, `${plural(run.rows.length, "exchange")} archived: the model reads one line for each`),
+        h("span", { class: "run-sub" }, h("span", { class: "minis" }, run.rows.map(() => h("span", { class: "mini f-archived" }))),
+          plural(run.turns.length, "message"))),
       h("span", { class: "run-toggle" }, open ? "Hide" : "Show")),
-    open ? [...run.rows].reverse().map((row) => turnRow(row.turn, said, facts)) : null);
+    open ? [...run.rows].reverse().map(spanRow) : null);
 }
 
 export function jumpTo(turnIndex) {
@@ -583,22 +581,18 @@ export function jumpTo(turnIndex) {
   showTab("conversation");
   setPromptView(false);
   const k = state.knowledge;
-  const turn = k && k.turns.find((t) => t.turn_index === turnIndex);
-  // Make sure the message is on the page: clear a filter that hides it, open what folds it.
-  const said = saidByTurn();
+  if (!k) return;
   const facts = factsByTurn(k);
-  const row = turn ? buildRows(k).find((r) => r.kind === "turn" ? r.turn === turn : r.kind === "summary" && r.turns.includes(turn)) : null;
-  if (row && !rowVisible(row, said, facts)) { ui.filter = "all"; ui.query = ""; $("search").value = ""; }
-  // A message folded away, or in a hidden list, still needs to be reachable from the map.
+  // Make sure the message is on the page: clear a filter that hides it, open what folds it.
+  const row = buildRows(k).find((r) => r.turns.some((t) => t.turn_index === turnIndex) || (r.kind === "pending" && r.pending.turn_index === turnIndex));
+  if (row && !rowVisible(row, facts)) { ui.filter = "all"; ui.query = ""; $("search").value = ""; }
   ui.earlierOpen = true;
   ui.listOpen = true;
-  if (turn && turn.fidelity === "summarised") {
-    const entryRow = buildRows(k).find((r) => r.kind === "summary" && r.turns.includes(turn));
-    ui.open.add(`orig-${entryRow.turns[0].turn_index}`);
-  }
-  if (turn && GONE.has(categoryOf(turn))) {
-    const run = foldRuns(buildRows(k).filter((r) => rowVisible(r, said, facts))).find((r) => r.kind === "run" && r.rows.some((x) => x.turn === turn));
-    if (run) ui.open.add(`run-${run.rows[0].turn.turn_index}`);
+  if (row && (row.kind === "span" || row.kind === "folded")) ui.open.add(`orig-${row.turns[0].turn_index}`);
+  if (row && row.cat === "archived") {
+    const run = foldRuns(buildRows(k).filter((r) => rowVisible(r, facts)))
+      .find((r) => r.kind === "run" && r.turns.some((t) => t.turn_index === turnIndex));
+    if (run) ui.open.add(`run-${run.turns[0].turn_index}`);
   }
   renderMessages();
   const target = $(`turn-${turnIndex}`);
@@ -640,35 +634,38 @@ function promptText(text, key) {
   return [body, more];
 }
 
+// What the model reads of a message said in an exchange shown at each level below kept.
+const BELOW_KEPT = {
+  compacted: "now compacted: the model reads its exchange's summary, which may word it differently",
+  archived: "now archived: the model reads only its exchange's opening line and facts",
+  out_of_view: "now out of view: the model knows its exchange exists, not what was said",
+};
+
 // A search answers the question it is usually asked: does the model still receive these words?
 // Matching is literal, as the search is, so the answer is about these exact words.
 function renderSearchVerdict(k) {
   const box = $("search-verdict");
   const words = ui.query.trim();
-  const said = [...saidByTurn().values()].filter((t) => has(t.text)).map((t) => t.turn_index);
   const verbatim = k.turns.filter((t) => t.fidelity === "verbatim" && has(t.text)).map((t) => t.turn_index);
+  const newest = pendingTurns(k).filter((p) => has(p.text));
   const inRecap = has(k.front_text);
-  const stored = k.facts.filter((f) => has(f.content));
-  box.hidden = !words || (!said.length && !verbatim.length && !inRecap && !stored.length);
+  const condensed = k.turns.filter((t) => t.fidelity !== "verbatim" && has(t.text));
+  box.hidden = !words || (!verbatim.length && !newest.length && !inRecap && !condensed.length);
   if (box.hidden) return;
-  const where = (turns) => `message${turns.length > 1 ? "s" : ""} ${ranges(turns)}`;
-  const saidAt = said.length ? `Said in ${where(said)}. ` : "";
-  if (verbatim.length || inRecap) {
-    const how = [verbatim.length ? `word for word in ${where(verbatim)}` : null, inRecap ? "in the recap" : null].filter(Boolean).join(", and ");
+  if (verbatim.length || inRecap || newest.length) {
+    const how = [verbatim.length ? `as written, in recent ${messagesLabel(verbatim)}` : null, inRecap ? "in the recap" : null,
+      newest.length ? "in your newest message, sent with your next request" : null].filter(Boolean).join(", and ");
     box.className = "search-verdict good";
-    setChildren(box, h("b", {}, `“${words}”: the model receives it`), ` ${how}. ${saidAt}`);
+    setChildren(box, h("b", {}, `“${words}”: the model receives it`), ` ${how}.`);
     return;
   }
-  const kept = stored.map((f) => {
-    const what = f.knowledge_type === "raw" ? (f.from_summary ? "an excerpt of its summary" : "an excerpt") : `the fact “${f.topic}”`;
-    const why = f.status === "superseded" ? "contradicted later, so not sent"
-      : !f.sent ? "not among what the recap sends" : "past the part of it the recap sends";
-    return `${what} from ${where(f.source_turns)}, ${why}`;
-  });
+  const said = Object.entries(BELOW_KEPT).map(([level, how]) => {
+    const turns = condensed.filter((t) => t.fidelity === level).map((t) => t.turn_index);
+    return turns.length ? `Said in ${messagesLabel(turns)}, ${how}.` : null;
+  }).filter(Boolean);
   box.className = "search-verdict warn";
-  setChildren(box, h("b", {}, `“${words}”: the model does not receive it.`), ` ${saidAt}`,
-    kept.length ? `LLM-GC stores it in ${kept.join("; and in ")}.`
-      : "LLM-GC kept nothing with these exact words. A summary may word it differently: try fewer words.");
+  setChildren(box, h("b", {}, `“${words}”: the model does not receive these exact words.`), ` ${said.join(" ")}`,
+    " The words are stored, so a later collection shows them again if the conversation comes back to them.");
 }
 
 export function setPromptView(on) {
@@ -682,31 +679,43 @@ export function setPromptView(on) {
   if (state.knowledge) { if (on) renderPrompt(state.knowledge); else renderTimeline(state.knowledge); }
 }
 
+// The facts read from the conversation: what needs a look first - facts the model cannot see,
+// and replacements to check - then every fact, folded, since most are already on the page.
 export function renderMemory(k) {
-  const matches = (f) => !query() || has(f.content) || has(f.topic);
+  const matches = (f) => !query() || has(f.content) || has(f.topic) || has(f.superseded_by);
   const active = k.facts.filter((f) => f.status === "active");
   const groups = [
-    { id: "sent", title: "Sent to the model", icon: h("span", { class: "st good" }, "✓"), facts: active.filter((f) => f.sent) },
-    { id: "unsent", title: "Stored, not sent", icon: h("span", { class: "st warn" }, "⚠"), facts: active.filter((f) => !f.sent),
-      note: `The recap carries at most ${recapLimit()}, most important first. The model cannot see these.` },
-    { id: "superseded", title: "Contradicted later", icon: h("span", { class: "st" }, "↺"), facts: k.facts.filter((f) => f.status === "superseded") },
+    { id: "unseen", title: "Not sent: out of view", icon: h("span", { class: "st warn" }, "⚠"),
+      facts: active.filter((f) => !f.sent && f.span_level !== "kept"),
+      note: "Their exchanges are folded to keep the recap within its budget, so the model can't see these." },
+    { id: "replaced", title: "Replaced later", icon: h("span", { class: "st" }, "↺"), facts: k.facts.filter((f) => f.status === "superseded"),
+      note: "The recap notes each replacement beside the exchange that said the old value, so the model reads that value as no longer current. Check each against what was said." },
+    { id: "all", title: "Every current fact", icon: null, facts: active, folds: true,
+      note: "A compacted or archived exchange shows its facts on its line in the recap; a kept one has them in its words." },
   ];
   if (!k.facts.length) {
-    fill("memory", h("p", { class: "empty", style: "margin-top:10px" }, "Nothing yet. When a collection archives a message, the facts it established appear here."));
+    fill("memory", h("p", { class: "empty", style: "margin-top:10px" }, "Nothing yet. When a collection makes an exchange, the facts read from it appear here."));
     return;
   }
+  const [unseen, replaced] = groups;
   fill("memory",
-    h("div", { class: "memory-counts" }, groups.map((g) => h("span", {}, h("b", {}, fmt(g.facts.length)), ` ${g.id === "sent" ? "sent" : g.id === "unsent" ? "not sent" : "contradicted"}`))),
+    replaced.facts.length || unseen.facts.length ? h("div", { class: "memory-counts" }, h("span", {}, h("b", {}, fmt(active.length)), " current"),
+      replaced.facts.length ? h("span", {}, h("b", {}, fmt(replaced.facts.length)), " replaced") : null,
+      unseen.facts.length ? h("span", {}, h("b", {}, fmt(unseen.facts.length)), " out of view") : null) : null,
     groups.filter((g) => g.facts.some(matches)).map((g) => {
       const shown = g.facts.filter(matches);
-      const all = ui.open.has(`facts-${g.id}`) || query();
+      const open = ui.open.has(`facts-${g.id}`) || !!query();
+      const toggle = (label) => h("button", { class: "link-btn show-all", type: "button",
+        onclick: () => { if (open) ui.open.delete(`facts-${g.id}`); else ui.open.add(`facts-${g.id}`); renderMemory(k); } }, label);
+      // A short list is shown whole; "Every fact" folds only when it is long, since most are on the page already.
+      const folds = g.folds && shown.length > FACTS_SHOWN;
+      const list = folds && !open ? [] : open ? shown : shown.slice(0, FACTS_SHOWN);
       return h("section", { id: `memory-${g.id}` },
         h("h3", {}, g.icon, g.title, h("span", { class: "count" }, `· ${shown.length}`)),
         g.note ? h("div", { class: "group-note" }, g.note) : null,
-        h("div", { class: "list" }, (all ? shown : shown.slice(0, FACTS_SHOWN)).map((f) => factRow(f, { onclick: () => jumpTo(f.source_turns[0]) }))),
-        shown.length > FACTS_SHOWN && !query() ? h("button", { class: "link-btn show-all", type: "button",
-          onclick: () => { if (all) ui.open.delete(`facts-${g.id}`); else ui.open.add(`facts-${g.id}`); renderMemory(k); } },
-          all ? "Show fewer" : `Show all ${shown.length}`) : null);
+        list.length ? h("div", { class: "list" }, list.map((f) => factRow(f, { onclick: () => jumpTo(f.turn) }))) : null,
+        folds && !open ? toggle(`Show all ${shown.length}`)
+          : shown.length > FACTS_SHOWN && !query() ? toggle(open ? "Show fewer" : `Show all ${shown.length}`) : null);
     }),
     query() && !k.facts.some(matches) ? h("p", { class: "empty" }, "No fact matches.") : null);
 }
@@ -716,8 +725,8 @@ export function renderCleanupLog() {
   const k = state.knowledge;
   if (!k) return;
   const passes = state.activity ? state.activity.recent_passes : [];
-  const cuts = passes.filter((p) => p.gc_status === "completed" && p.tokens_saved > 0).reverse().slice(0, 3);
-  const next = k.turns.filter((t) => t.becomes).length;
+  const cuts = passes.filter((p) => p.gc_status === "completed").reverse().slice(0, 3);
+  const next = changing(k);
   const whenWhy = h("button", { class: "link-btn", type: "button", onclick: () => { showTab("engine"); openCard("next", true); } }, "When and why");
   fill("cleanup-log",
     cuts.length ? cuts.map((p) => h("li", {}, h("div", {},

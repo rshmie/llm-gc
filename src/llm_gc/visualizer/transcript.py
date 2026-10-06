@@ -1,9 +1,10 @@
 """Each conversation as its client last sent it, kept for the dashboard.
 
-The dashboard shows every turn's words beside what the model receives instead.
-The client sends the whole conversation on every request, so the proxy hands each
-request's history to this recorder. The engine's spans hold the same words for
-every condensed turn; this copy goes once the dashboard reads them from the spans.
+The engine's spans hold the words of every turn the session has recorded. This
+copy covers what the session does not have yet: the newest message, recorded only
+with its reply, and a conversation's opening words for the session picker. The
+client sends the whole conversation on every request, so the proxy hands each
+request's history to this recorder.
 
 Held only while the dashboard runs, in memory, as text, bounded by session count,
 and dropped when its session closes.

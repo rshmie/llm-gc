@@ -2,11 +2,11 @@
 // runs and why each message gets what it gets, what collections did and couldn't do, every check,
 // and last the proxy's totals and settings, which apply to every conversation.
 
-import { BECOMES, BECOMES_CAT, CARD_INFO, CHART_HEIGHT, CHECKS_SHOWN, MOVES_SHOWN, MOVE_CAT, MOVE_KIND, NOT_MOVED, STATUS, TRANSITION, describeOutcome, swatch } from "./vocabulary.js";
+import { BECOMES, CARD_INFO, CATS, CHART_HEIGHT, CHECKS_SHOWN, MOVES_SHOWN, NOT_MOVED, OUTCOME_LINES, STATUS, describeOutcome, swatch } from "./vocabulary.js";
 import { $, agoTs, compact, countEl, fill, fmt, h, meterBar, plural, reducedMotion, setChildren, storeGet, storeSet, svg } from "./dom.js";
-import { captured, keepLast, preview, state, ui } from "./state.js";
+import { keepLast, preview, state, ui } from "./state.js";
 import { hideTooltip, info, placeTooltip, showTooltip, tipQuote, tooltipContent, hoverTip } from "./tooltip.js";
-import { jumpTo, speakerName, trace } from "./conversation.js";
+import { jumpTo, messagesLabel, trace } from "./conversation.js";
 import { showTab } from "./shell.js";
 
 const smooth = () => (reducedMotion() ? "auto" : "smooth");
@@ -118,10 +118,10 @@ export function renderEngineStatus() {
     : "No checks yet. LLM-GC checks after every reply.";
   fill("eng-status", h("div", { class: `status-line tone-${tone}` },
     h("span", { class: "badge", "aria-hidden": "true" }, failed ? "✕" : problems ? "!" : "✓"),
-    h("span", { class: "msg-text" }, h("b", {}, failed ? "The last check failed, and nothing changed." : problems ? `${plural(problems, "planned move")} didn't happen.` : "LLM-GC is working normally."),
+    h("span", { class: "msg-text" }, h("b", {}, failed ? "The last check failed, and nothing changed." : problems ? `${plural(problems, "part")} of a collection fell short.` : "LLM-GC is working normally."),
       ` ${lastText}`, failed && last.failure_reason ? ` ${last.failure_stage}: ${last.failure_reason}` : null),
     problems ? h("button", { class: "link-btn", type: "button", onclick: () => openCard("notmoved", true) }, "See why →")
-      : h("span", { class: "then" }, "Every move a collection planned was made.")));
+      : h("span", { class: "then" }, "Every collection did all it planned.")));
 }
 
 // ----------------------------------------------------------------- what happens next, and why
@@ -136,28 +136,32 @@ function lastAttempt() {
 // beside what the collection would do to which messages - and which of those count toward the first.
 export function renderNext(k) {
   const cut = k.next_cut;
-  const taking = k.turns.filter((t) => t.becomes);
-  const tokensOf = (turns) => turns.reduce((sum, t) => sum + (t.tokens || 0), 0);
+  const taking = k.turns.filter((t) => t.fidelity === "verbatim" && t.becomes);
+  const moving = k.spans.filter((s) => s.becomes);
+  const tokensOf = (turns) => turns.reduce((sum, t) => sum + t.tokens, 0);
   const refused = lastAttempt()?.abandoned_cut ? lastAttempt() : null;
   const share = cut.min_cut_tokens > 0 ? Math.min(1, cut.compactable_tokens / cut.min_cut_tokens) : (cut.compactable_tokens > 0 ? 1 : 0);
   const newest = k.turns.filter((t) => t.fidelity === "verbatim" && !t.becomes).length;
 
+  const saving = cut.estimated_saving;
   const lede = !taking.length ? "Nothing to collect yet."
-    : cut.batch_ready ? "Ready: it runs after the next reply, if the result is smaller."
-    : `Waiting for ${fmt(cut.min_cut_tokens - cut.compactable_tokens)} more tokens of messages to compact or archive.`;
+    : !cut.batch_ready ? `Waiting for ${fmt(cut.min_cut_tokens - cut.compactable_tokens)} more tokens of messages to compact or archive.`
+    : saving > 0 ? "Ready: it runs after the next reply."
+    : "Enough to collect, but collecting now would make the prompt bigger, so it waits.";
   const check = (tone, icon, title, figure, ...body) => h("li", { class: `ck tone-${tone}` },
     h("span", { class: "ck-badge", "aria-hidden": "true" }, icon),
     h("div", {}, h("div", { class: "ck-head" }, h("b", {}, title), figure), body));
 
   const row = (key, label, note) => {
     const turns = taking.filter((t) => t.becomes === key);
-    return turns.length ? h("li", {}, swatch(BECOMES_CAT[key]),
+    return turns.length ? h("li", {}, swatch(key),
       h("span", {}, h("b", {}, plural(turns.length, "message")), ` ${label}`, note ? h("span", { class: "would-note" }, ` (${note})`) : null),
       h("span", { class: "num" }, `${fmt(tokensOf(turns))} tokens`)) : null;
   };
-  const counted = [row("summarised", "compacted"), row("facts_only", "archived")].filter(Boolean);
-  const notCounted = [row("quoted", "kept whole", "short or rated important"),
-    newest ? h("li", {}, swatch("verbatim"), h("span", {}, h("b", {}, `The newest ${plural(newest, "message")}`), " stay word for word"), h("span")) : null].filter(Boolean);
+  const counted = [row("compacted", "compacted"), row("archived", "archived"), row("out_of_view", "folded out of view")].filter(Boolean);
+  const notCounted = [row("kept", "kept word for word", "short, or it matters now"),
+    newest ? h("li", {}, swatch("verbatim"), h("span", {}, h("b", {}, `The newest ${plural(newest, "message")}`), " stay recent, sent as written"), h("span")) : null,
+    moving.length ? h("li", {}, h("span", { class: "qdot" }), h("span", {}, h("b", {}, plural(moving.length, "earlier exchange")), " shown at another level"), h("span")) : null].filter(Boolean);
 
   fill("panel-next",
     h("p", { class: "next-lede" }, lede),
@@ -166,91 +170,112 @@ export function renderNext(k) {
         h("div", { class: "label" }, "It runs when both hold"),
         h("ul", { class: "ck-list" },
           check(cut.batch_ready ? "good" : "wait", cut.batch_ready ? "✓" : "…", "Enough to collect",
-            h("span", { class: "num" }, countEl("next-ready", cut.compactable_tokens), ` of ${fmt(cut.min_cut_tokens)} tokens`),
+            h("span", { class: "num" }, countEl("next-ready", cut.compactable_tokens), ` tokens · ${fmt(cut.min_cut_tokens)} needed`),
             h("div", { class: `meter${cut.batch_ready ? " ready" : ""}`, role: "meter", "aria-valuemin": "0", "aria-valuemax": String(cut.min_cut_tokens),
               "aria-valuenow": String(cut.compactable_tokens), "aria-label": "Tokens of messages to compact or archive" }, meterBar("next-ready", share * 100)),
-            h("p", {}, "Only messages to be compacted or archived count. Keeping a message whole saves nothing.")),
-          refused
-            ? check("warn", "!", "Makes the prompt smaller", h("span", { class: "num" }, `${fmt(refused.tokens_before)} → ${fmt(refused.abandoned_cut.context_tokens_after)}`),
-              h("p", {}, `The last try, ${agoTs(refused.gc_completed_at)}, would have made it bigger, so nothing changed. Each message in the recap carries a short label, so collecting a few short messages costs more than it saves.`))
-            : check("wait", "…", "Makes the prompt smaller", null,
-              h("p", {}, "Checked as it runs, because the summaries aren't written until then. If the result would be bigger, nothing changes.")))),
+            h("p", {}, "Only messages to be compacted or archived count. Keeping a message word for word saves nothing.")),
+          !taking.length
+            ? check("wait", "…", "Makes the prompt smaller", null, h("p", {}, "Nothing to estimate: no older messages are waiting."))
+            : saving > 0
+              ? check("good", "✓", "Makes the prompt smaller", h("span", { class: "num" }, `about ${fmt(saving)} tokens smaller`),
+                h("p", {}, "An estimate, made before any summary is paid for. The collection checks again with the real summaries, and changes nothing if the result would be bigger."),
+                refused ? h("p", {}, `The last try, ${agoTs(refused.gc_completed_at)}, was skipped on its real summaries: ${fmt(refused.tokens_before)} → ${fmt(refused.abandoned_cut.context_tokens_after)} tokens.`) : null)
+              : check("warn", "!", "Makes the prompt smaller", h("span", { class: "num" }, `about ${fmt(-saving)} tokens bigger`),
+                h("p", {}, "Every exchange in the recap carries a marker and its opening line, so collecting these few, short messages would cost more than it saves. It waits until there is more to condense.")))),
       h("div", {},
         h("div", { class: "label" }, "What it would do now"),
         counted.length ? [h("div", { class: "would-head" }, `Counts toward the ${fmt(cut.min_cut_tokens)}`), h("ul", { class: "would" }, counted)] : null,
         notCounted.length ? [h("div", { class: "would-head" }, "Doesn't count"), h("ul", { class: "would" }, notCounted)] : null,
         !counted.length && !notCounted.length ? h("p", { class: "note" }, "Nothing yet.") : null,
-        taking.length ? h("button", { class: "link-btn", type: "button", onclick: () => openCard("rate", true) }, "Why each message gets this ↓") : null)));
+        taking.length || moving.length ? h("button", { class: "link-btn", type: "button", onclick: () => openCard("rate", true) }, "Why each exchange gets this ↓") : null)));
 }
 
-// Why a message gets what it gets: the engine's own classification, worded with your thresholds.
-export function whyText(t) {
+const RANK = { out_of_view: 0, archived: 1, compacted: 2, kept: 3 };
+
+// Why an exchange is shown at its level, in the planner's own steps: the band its score earns,
+// the margin that holds it near a line, a level no cheaper than a richer one, and the budget.
+// `item` is a span, or a message the next collection would take (scored as its exchange).
+export function whyText(item) {
   const c = state.config;
-  const low = c ? c.archive_threshold : 0.3, high = c ? c.keep_threshold : 0.7;
-  if (t.score === null || t.score === undefined) return "Not rated.";
-  const s = t.score.toFixed(2);
-  if (t.forced_keep) {
-    if (t.forced_keep.includes("too short")) return `Kept whole: too short to compact (${c ? `${c.min_compactable_tokens} tokens or fewer` : "very short"}), whatever its relevance of ${s}.`;
-    if (t.forced_keep.includes("last_n")) {
-      const later = t.score >= high ? "kept (quoted whole)" : t.score < low ? "archived (reduced to facts)" : "compacted (summarised)";
-      return `Kept word for word: among the newest ${keepLast()}, whatever its relevance. At ${s} it would be ${later} once older.`;
-    }
-    return `Kept whole by a rule (relevance ${s}).`;
+  const low = c ? c.archive_threshold : 0.3, high = c ? c.keep_threshold : 0.7, margin = c ? c.level_margin : 0.05;
+  if (item.score === null || item.score === undefined) return `Not scored: among the newest ${keepLast()} messages, which always stay recent, sent as written.`;
+  const s = item.score.toFixed(2);
+  const band = item.score >= high ? "kept" : item.score >= low ? "compacted" : "archived";
+  const earned = `Score ${s}: ${band === "kept" ? `at or above ${high.toFixed(2)}, so kept` : band === "compacted"
+    ? `between ${low.toFixed(2)} and ${high.toFixed(2)}, so compacted` : `below ${low.toFixed(2)}, so archived`}.`;
+  const to = item.becomes ?? item.level;
+  if (!to || to === band) return earned;
+  if (to === "out_of_view") return `${earned} Folded out of view instead: the recap is over its budget with every exchange at its least detail, so the oldest are folded.`;
+  const lineOf = { kept: high, compacted: low };
+  if (RANK[to] < RANK[band]) {
+    const held = item.level === to && item.score < lineOf[band] + margin;
+    return held ? `${earned} It stays ${to} until its score reaches ${(lineOf[band] + margin).toFixed(2)}: the margin keeps an exchange near a line from flipping.`
+      : `${earned} Shown ${to} instead: the recap is over its budget, and the coldest exchanges lose detail first.`;
   }
-  if (t.classification === "keep") return `Relevance ${s}: at or above ${high.toFixed(2)}, so kept (quoted whole).`;
-  if (t.classification === "archive") return `Relevance ${s}: below ${low.toFixed(2)}, so archived (reduced to facts).`;
-  return `Relevance ${s}: between ${low.toFixed(2)} and ${high.toFixed(2)}, so compacted (summarised).`;
+  const held = item.level === to && item.score >= lineOf[to] - margin;
+  if (held) return `${earned} It stays ${to} until its score falls below ${(lineOf[to] - margin).toFixed(2)}: the margin keeps an exchange near a line from flipping.`;
+  return `${earned} ${to === "kept" ? "Kept" : "Compacted"} instead: ${band === "compacted" && to === "kept"
+    ? "it has no summary (too short to summarise, or the summary failed), so its words are quoted"
+    : "the cheaper level would be no smaller than this one"}.`;
 }
-const DOT = { keep: "quoted", compact: "summarised", archive: "facts" };
 
-// The ratings lead with the messages the next collection takes; the rest fold under one line, and a
-// long list scrolls inside the card with the threshold labels pinned.
+// The scores lead with what the next collection takes, then every exchange already collected:
+// the ones it would move first, the rest folded under one line.
 export function renderRelevance(k) {
   const c = state.config;
   const low = c ? c.archive_threshold : 0.3, high = c ? c.keep_threshold : 0.7;
   const plot = $("relevance");
   plot.style.setProperty("--a", `${low * 100}%`);
   plot.style.setProperty("--k", `${high * 100}%`);
-  const rated = k.turns.filter((t) => t.fidelity === "verbatim" && t.score !== null);
-  const condensed = k.turns.filter((t) => t.fidelity !== "verbatim");
-  if (!rated.length && !condensed.length) { setChildren(plot, h("p", { class: "empty" }, "No messages to rate yet.")); return; }
-  const taking = rated.filter((t) => t.becomes), staying = rated.filter((t) => !t.becomes);
-  const stayOpen = ui.stayOpen || !taking.length;
-  const row = (t) => h("div", { class: "rate-row", id: `r-${t.turn_index}`, onpointerenter: () => trace([t.turn_index]), onpointerleave: () => trace(null) },
-    h("div", { class: "rate-lab" }, `#${t.turn_index} · ${t.role === "user" ? "You" : "AI"}`),
-    h("div", { class: "rate-track" }, h("span", { class: `rate-dot${t.forced_keep ? " forced" : ` f-${DOT[t.classification]}`}`, style: `left:${t.score * 100}%`,
-      ...hoverTip(`Message ${t.turn_index} · ${speakerName(t.role)}`, whyText(t), tipQuote(preview(t.text, 120))) })),
-    h("div", { class: "rate-why" }, whyText(t), t.becomes ? h("div", { class: "then" }, `→ next collection: ${BECOMES[t.becomes]}`) : null));
+  const byIndex = new Map(k.turns.map((t) => [t.turn_index, t]));
+  // A message the next collection takes carries its exchange's score and level, so its first stands for it.
+  const drafts = k.next_cut.spans.map((turns) => ({ ...byIndex.get(turns[0]), turns, level: null }));
+  const collected = [...k.spans].reverse();
+  if (!drafts.length && !collected.length) { setChildren(plot, h("p", { class: "empty" }, "Nothing to score yet: the conversation is within its newest messages.")); return; }
+  const moving = collected.filter((s) => s.becomes), still = collected.filter((s) => !s.becomes);
+  const stillOpen = ui.stayOpen || (!drafts.length && !moving.length);
+  const row = (item) => {
+    const to = item.becomes ?? item.level;
+    const opening = byIndex.get(item.turns[0])?.text;
+    return h("div", { class: "rate-row", id: `r-${item.turns[0]}`, "data-turns": item.turns.join(","),
+      onpointerenter: () => trace(item.turns), onpointerleave: () => trace(null) },
+      h("div", { class: "rate-lab" }, `#${item.turns.length > 1 ? `${item.turns[0]}–${item.turns.at(-1)}` : item.turns[0]}`),
+      h("div", { class: "rate-track" }, h("span", { class: `rate-dot f-${to}`, style: `left:${item.score * 100}%`,
+        ...hoverTip(`Exchange of ${messagesLabel(item.turns)}`, whyText(item), tipQuote(preview(opening, 120))) })),
+      h("div", { class: "rate-why" }, whyText(item),
+        item.becomes ? h("div", { class: "then" }, `→ next collection: ${BECOMES[item.becomes]}`)
+          : item.level ? h("div", { class: "then muted" }, `now ${CATS[item.level].tag}`) : null));
+  };
   const head = (label, n, open, toggles) => toggles
     ? h("button", { class: "rate-group", type: "button", "aria-expanded": String(open), onclick: () => { ui.stayOpen = !ui.stayOpen; renderRelevance(state.knowledge); } },
       chevron(), label, h("span", { class: "n" }, `· ${n}`))
     : h("div", { class: "rate-group" }, label, h("span", { class: "n" }, `· ${n}`));
+  const unscored = k.turns.filter((t) => t.fidelity === "verbatim" && t.score === null).length;
   setChildren(plot,
     h("div", { class: "rate-list" },
       h("div", { class: "rate-row rate-axis", "aria-hidden": "true" }, h("div"),
         h("div", { class: "rate-track" },
-          h("span", { class: "zone", style: `left:${(low / 2) * 100}%` }, `archive · below ${low}`),
-          h("span", { class: "zone", style: `left:${((low + high) / 2) * 100}%` }, "compact"),
-          h("span", { class: "zone", style: `left:${((high + 1) / 2) * 100}%` }, `keep · ${high}+`)), h("div")),
-      taking.length ? [head("In the next collection", taking.length, true, false), taking.map(row)] : null,
-      staying.length ? [head("Staying word for word", staying.length, stayOpen, taking.length > 0), stayOpen ? staying.map(row) : null] : null,
-      condensed.length ? h("div", { class: "rate-gone" },
-        condensed.length === 1 ? `Message ${condensed[0].turn_index} left the young generation in an earlier collection, so it is no longer rated. `
-          : `${plural(condensed.length, "message")} left the young generation in earlier collections, so they are no longer rated. `,
-        h("button", { class: "link-btn", type: "button", onclick: () => openCard("moves", true) }, "See what moved")) : null),
+          h("span", { class: "zone", style: `left:${(low / 2) * 100}%` }, `archived · below ${low}`),
+          h("span", { class: "zone", style: `left:${((low + high) / 2) * 100}%` }, "compacted"),
+          h("span", { class: "zone", style: `left:${((high + 1) / 2) * 100}%` }, `kept · ${high}+`)), h("div")),
+      drafts.length ? [head("In the next collection", drafts.length, true, false), drafts.map(row)] : null,
+      moving.length ? [head("Collected, moving at the next collection", moving.length, true, false), moving.map(row)] : null,
+      still.length ? [head("Collected, staying where they are", still.length, stillOpen, !!(drafts.length || moving.length)), stillOpen ? still.map(row) : null] : null,
+      unscored ? h("div", { class: "rate-gone" }, `The newest ${plural(unscored, "message")} stay recent, sent as written, and are scored once a collection takes them.`) : null),
     h("div", { class: "rate-legend" },
-      h("span", {}, h("span", { class: "rate-dot f-facts" }), "archive"),
-      h("span", {}, h("span", { class: "rate-dot f-summarised" }), "compact"),
-      h("span", {}, h("span", { class: "rate-dot f-quoted" }), "keep"),
-      h("span", {}, h("span", { class: "rate-dot forced" }), "kept whole by a rule")));
+      h("span", {}, h("span", { class: "rate-dot f-archived" }), "archived"),
+      h("span", {}, h("span", { class: "rate-dot f-compacted" }), "compacted"),
+      h("span", {}, h("span", { class: "rate-dot f-kept" }), "kept"),
+      k.spans.some((s) => s.level === "out_of_view") ? h("span", {}, h("span", { class: "rate-dot f-out_of_view" }), "out of view") : null));
 }
 
-// A "next:" tag in the conversation lands here, on its message's rating.
+// A "next:" tag in the conversation lands here, on its exchange's score.
 export function showWhy(turnIndex) {
   showTab("engine");
   openCard("rate");
-  if (!$(`r-${turnIndex}`)) { ui.stayOpen = true; renderRelevance(state.knowledge); }
-  const row = $(`r-${turnIndex}`);
+  const find = () => [...document.querySelectorAll("#relevance [data-turns]")].find((row) => row.dataset.turns.split(",").map(Number).includes(turnIndex));
+  if (!find()) { ui.stayOpen = true; renderRelevance(state.knowledge); }
+  const row = find();
   if (!row) return;
   row.scrollIntoView({ behavior: smooth(), block: "center" });
   row.classList.add("flash");
@@ -259,41 +284,31 @@ export function showWhy(turnIndex) {
 
 // ----------------------------------------------------------------- what has happened
 
+// Every collection in the recent checks, newest first, from its own record of what it moved. A
+// replaced fact is listed with the collection that took the message replacing it.
 export function renderHistory() {
-  const transitions = state.activity ? state.activity.generation_lifecycle.recent_transitions : [];
-  // Moves made by one collection arrive together; group them by time.
-  const groups = [];
-  for (const t of transitions) {
-    const lastGroup = groups.at(-1);
-    if (lastGroup && t.occurred_at - lastGroup.at < 2) lastGroup.items.push(t);
-    else groups.push({ at: t.occurred_at, items: [t] });
-  }
-  groups.reverse();
-  const shown = ui.allMoves ? groups : groups.slice(0, MOVES_SHOWN);
-  fill("history", groups.length ? [
-    h("ul", { class: "events" }, shown.map((g) => {
-      const byType = {};
-      for (const t of g.items) (byType[t.transition_type] ||= []).push(t);
-      const archived = new Set((byType.archived || []).map((t) => t.turn_index));
-      const twice = (byType.promoted || []).filter((t) => archived.has(t.turn_index));
-      if (twice.length) {
-        const turns = new Set(twice.map((t) => t.turn_index));
-        byType.promoted = byType.promoted.filter((t) => !turns.has(t.turn_index));
-        byType.archived = byType.archived.filter((t) => !turns.has(t.turn_index));
-        byType.promoted_then_archived = twice;
-        for (const type of ["promoted", "archived"]) if (!byType[type].length) delete byType[type];
-      }
+  const facts = state.knowledge ? state.knowledge.facts : [];
+  const collections = (state.activity ? state.activity.recent_passes : [])
+    .filter((p) => p.gc_status === "completed" && p.outcome).reverse();
+  const shown = ui.allMoves ? collections : collections.slice(0, MOVES_SHOWN);
+  const link = (turn) => h("button", { class: "link-btn", type: "button", onclick: () => jumpTo(turn) }, `#${turn}`);
+  fill("history", collections.length ? [
+    h("ul", { class: "events" }, shown.map((p) => {
+      const o = p.outcome;
+      const taken = new Set([...o.kept, ...o.compacted, ...o.archived, ...o.folded]);
+      const replaced = facts.filter((f) => f.status === "superseded" && taken.has(f.superseded_by_turn));
       return h("li", {},
-        h("div", { class: "event-head" }, h("b", {}, "Collection"), h("span", { class: "when" }, agoTs(g.at))),
-        h("div", { class: "event-lines" }, Object.entries(byType).map(([type, items]) => h("div", {},
-          h("span", { class: "k" }, swatch(MOVE_CAT[type] || "verbatim"), TRANSITION[type] || type, MOVE_KIND[type] ? h("span", { class: "kind" }, MOVE_KIND[type]) : null),
-          h("span", {}, type === "superseded"
-            ? items.map((t, n) => [n ? ", " : "", `“${t.topic_label}” from `, h("button", { class: "link-btn", type: "button", onclick: () => jumpTo(t.turn_index) }, `#${t.turn_index}`)])
-            : messageLinks(items.map((t) => t.turn_index)))))));
+        h("div", { class: "event-head" }, h("b", {}, "Collection"),
+          h("span", { class: "when" }, `${agoTs(p.gc_completed_at)} · ${fmt(p.tokens_before)} → ${fmt(p.tokens_before - p.tokens_saved)} tokens`)),
+        h("div", { class: "event-lines" },
+          OUTCOME_LINES.filter(([key]) => o[key].length).map(([key, label, colour]) => h("div", {},
+            h("span", { class: "k" }, colour ? swatch(colour) : null, label), h("span", {}, messageLinks(o[key])))),
+          replaced.length ? h("div", {}, h("span", { class: "k" }, "↺ Fact replaced"),
+            h("span", {}, replaced.map((f, n) => [n ? ", " : "", `“${f.topic}” `, link(f.turn), " → ", link(f.superseded_by_turn)]))) : null));
     })),
-    groups.length > MOVES_SHOWN ? h("button", { class: "link-btn show-all", type: "button", onclick: () => { ui.allMoves = !ui.allMoves; renderHistory(); } },
-      ui.allMoves ? "Show fewer" : `Show all ${groups.length} collections`) : null,
-  ] : h("p", { class: "empty" }, "Nothing has moved yet."));
+    collections.length > MOVES_SHOWN ? h("button", { class: "link-btn show-all", type: "button", onclick: () => { ui.allMoves = !ui.allMoves; renderHistory(); } },
+      ui.allMoves ? "Show fewer" : `Show all ${collections.length} collections`) : null,
+  ] : h("p", { class: "empty" }, "No collections in the recent checks yet."));
 }
 
 export function renderProblems() {
@@ -301,11 +316,12 @@ export function renderProblems() {
   const shown = ui.allProblems ? problems : problems.slice(0, MOVES_SHOWN);
   fill("problems", problems.length ? [
     h("ul", { class: "events" }, shown.map((r) => {
-      const [label, kind] = NOT_MOVED[r.degradation.reason] || [r.degradation.reason.replaceAll("_", " "), null];
+      const [label, instead] = NOT_MOVED[r.degradation.reason] || [r.degradation.reason.replaceAll("_", " "), null];
       return h("li", {},
-        h("div", { class: "event-head" }, h("span", { class: "st warn" }, "⚠"), h("b", {}, label), kind ? h("span", { class: "muted" }, kind) : null, h("span", { class: "when" }, agoTs(r.occurred_at))),
+        h("div", { class: "event-head" }, h("span", { class: "st warn" }, "⚠"), h("b", {}, label), h("span", { class: "when" }, agoTs(r.occurred_at))),
         h("div", { class: "event-lines" },
-          h("div", {}, h("span", { class: "k" }, "Stayed word for word"), h("span", {}, messageLinks(r.degradation.turn_indices))),
+          h("div", {}, h("span", { class: "k" }, "Exchange"), h("span", {}, messageLinks(r.degradation.turn_indices))),
+          instead ? h("div", {}, h("span", { class: "k" }, "Instead"), h("span", {}, instead)) : null,
           r.degradation.detail ? h("div", {}, h("span", { class: "k" }, "Detail"), h("span", {}, r.degradation.detail)) : null));
     })),
     problems.length > MOVES_SHOWN ? h("button", { class: "link-btn show-all", type: "button", onclick: () => { ui.allProblems = !ui.allProblems; renderProblems(); } },
@@ -313,10 +329,10 @@ export function renderProblems() {
   ] : h("p", { class: "ok-line" }, h("span", { class: "st good" }, "✓ "), "None so far."));
 }
 
-// The conversation as written up to a turn: a running sum of the transcript's own counts.
+// The conversation as written up to a turn: a running sum of each message's own size.
 export function writtenUpTo() {
-  if (!captured()) return null;
-  const turns = [...state.transcript.turns].sort((a, b) => a.turn_index - b.turn_index);
+  if (!state.knowledge) return null;
+  const turns = state.knowledge.turns;
   const sums = new Map();
   let total = 0;
   for (const t of turns) { total += t.tokens; sums.set(t.turn_index, total); }
@@ -333,7 +349,9 @@ export function niceStep(max, count) {
 export function renderChart() {
   const host = $("chart");
   const passes = state.activity ? state.activity.recent_passes : [];
-  const cutsDone = passes.filter((p) => p.gc_status === "completed" && p.tokens_saved > 0);
+  // A collection is a completed pass, whatever it did to the size: one that raised exchanges the
+  // conversation came back to can leave the prompt larger.
+  const cutsDone = passes.filter((p) => p.gc_status === "completed");
   const lastCut = cutsDone.at(-1);
   fill("cuts-stat", h("span", { class: "label", style: "justify-content:flex-end" }, "Collections"),
     h("span", { class: "n" }, state.knowledge ? fmt(state.knowledge.cuts) : "—"),
@@ -352,7 +370,7 @@ export function renderChart() {
     after: p.gc_status === "completed" ? p.tokens_before - p.tokens_saved : p.tokens_before,
     written: writtenAt && p.newest_turn_index !== null && p.newest_turn_index !== undefined ? writtenAt(p.newest_turn_index) : null }));
   const withWritten = pts.some((d) => d.written !== null);
-  const cuts = pts.filter((d) => d.after < d.before);
+  const cuts = pts.filter((d) => d.p.gc_status === "completed");
   const skipped = pts.filter((d) => d.p.abandoned_cut);
   const failed = pts.filter((d) => d.p.gc_status === "bypassed_on_error");
 
@@ -380,7 +398,7 @@ export function renderChart() {
   }
   // Stepped: the prompt holds its size until the next message arrives, then jumps; a collection drops it.
   let sentPath = `M${x(0)},${y(pts[0].before)}`;
-  pts.forEach((d, n) => { if (n) sentPath += `H${x(d.i)}V${y(d.before)}`; if (d.after < d.before) sentPath += `V${y(d.after)}`; });
+  pts.forEach((d, n) => { if (n) sentPath += `H${x(d.i)}V${y(d.before)}`; if (d.after !== d.before) sentPath += `V${y(d.after)}`; });
   const areaPath = `${sentPath}H${x(pts.at(-1).i)}V${y(0)}H${x(0)}Z`;
   const writtenPts = pts.filter((d) => d.written !== null);
   const writtenPath = writtenPts.map((d, n) => n ? `H${x(d.i)}V${y(d.written)}` : `M${x(d.i)},${y(d.written)}`).join("");
@@ -406,10 +424,11 @@ export function renderChart() {
     svg("path", { class: "a-sent", d: areaPath }),
     writtenPath ? svg("path", { class: "l-written", d: writtenPath }) : null,
     svg("path", { class: "l-sent", d: sentPath }),
-    pts.length <= 40 ? pts.filter((d) => !(d.after < d.before) && !d.p.abandoned_cut && d.p.gc_status !== "bypassed_on_error")
+    pts.length <= 40 ? pts.filter((d) => d.p.gc_status !== "completed" && !d.p.abandoned_cut && d.p.gc_status !== "bypassed_on_error")
       .map((d) => svg("circle", { class: "mk-check", cx: x(d.i), cy: y(d.before), r: 3.5 })) : null,
     cuts.map((d) => [svg("circle", { class: "mk-cut", cx: x(d.i), cy: y(d.after), r: 5 }),
-      cuts.length <= 8 ? svg("text", { class: "cut-label", x: x(d.i) - 8, y: y(d.after) + 16, "text-anchor": "end" }, `−${fmt(d.before - d.after)}`) : null]),
+      cuts.length <= 8 ? svg("text", { class: "cut-label", x: x(d.i) - 8, y: y(d.after) + 16, "text-anchor": "end" },
+        d.after <= d.before ? `−${fmt(d.before - d.after)}` : `+${fmt(d.after - d.before)}`) : null]),
     skipped.map((d) => svg("circle", { class: "mk-skip", cx: x(d.i), cy: y(d.before), r: 4.5 })),
     failed.map((d) => svg("circle", { class: "mk-error", cx: x(d.i), cy: y(d.before), r: 5 })),
     ends,
@@ -428,10 +447,10 @@ export function renderChart() {
     const figure = (label, value) => h("div", { class: "tip-figure" }, h("span", {}, label), h("b", {}, value));
     tooltipContent(`Check ${i + 1} of ${pts.length} · ${agoTs(d.p.gc_completed_at)}`, [
       statusChip(d.p.gc_status),
-      figure("sent to the model", d.after < d.before ? `${fmt(d.before)} → ${fmt(d.after)}` : fmt(d.before)),
+      figure("sent to the model", d.p.gc_status === "completed" ? `${fmt(d.before)} → ${fmt(d.after)}` : fmt(d.before)),
       d.written !== null ? figure("as written", fmt(d.written)) : null,
       d.p.abandoned_cut ? figure("a collection would have made it", fmt(d.p.abandoned_cut.context_tokens_after)) : null,
-      d.after < d.before && d.p.outcome ? figure("messages", describeOutcome(d.p.outcome)) : null,
+      d.p.gc_status === "completed" && d.p.outcome ? figure("messages", describeOutcome(d.p.outcome)) : null,
       d.p.degradations.length ? h("div", { class: "tip-row" }, h("span", { class: "st warn" }, "⚠ "), plural(d.p.degradations.length, "move"), " didn't happen") : null,
     ]);
     const cx = box.left + x(i) * scaleX;
@@ -457,7 +476,7 @@ export function renderChecks() {
     h("thead", {}, h("tr", {}, ["When", "Result", "Prompt, tokens", "Took"].map((title) => h("th", {}, title)))),
     h("tbody", {}, groups.length ? shown.map((g) => {
       const p = g.items[0], oldest = g.items.at(-1);
-      const cut = p.gc_status === "completed" && p.tokens_saved > 0;
+      const cut = p.gc_status === "completed";
       const durations = g.items.map((x) => x.duration_ms);
       const span = (a, b) => a === b ? a : `${a} – ${b}`;
       const took = span(`${Math.min(...durations).toFixed(0)}`, `${Math.max(...durations).toFixed(0)}`);
@@ -484,11 +503,11 @@ export function renderSettings() {
   // The flag is how to change a setting while watching here; the rest are GCConfig fields.
   const rows = [
     ["Collection size", "min_cut_tokens", c.min_cut_tokens, "tokens of messages to compact or archive before a collection runs", "--min-cut-tokens"],
-    ["Always word for word", "last_n_turns_to_keep", c.last_n_turns_to_keep, "newest messages never collected", "--keep-last"],
-    ["Keep from", "keep_threshold", c.keep_threshold, "relevance at or above this is kept, quoted whole"],
-    ["Archive below", "archive_threshold", c.archive_threshold, "relevance below this is archived, reduced to facts"],
+    ["Always recent", "last_n_turns_to_keep", c.last_n_turns_to_keep, "newest messages never collected: each sent as its own message, as written", "--keep-last"],
+    ["Keep from", "keep_threshold", c.keep_threshold, "an exchange scoring at or above this is kept, quoted word for word"],
+    ["Archive below", "archive_threshold", c.archive_threshold, "an exchange scoring below this is archived, to its opening line and facts"],
     ["Level margin", "level_margin", c.level_margin, "how far past a line a score must move before a span changes level"],
-    ["Recap budget", "max_recap_tokens", c.max_recap_tokens, "most tokens the recap spends on older messages; above it, the coldest lose detail first"],
+    ["Recap budget", "max_recap_tokens", c.max_recap_tokens, "most tokens the recap spends on older exchanges; above it, the coldest lose detail first"],
     ["The model's window", "context_window", c.context_window, "its capacity, in tokens", "--context-window"],
   ];
   fill("settings", rows.map(([label, name, value, desc, flag]) => h("div", { class: "setting" },
@@ -501,12 +520,11 @@ export function renderSettings() {
 // Young, old, permanent: where each message lives, from the session's own state.
 export function renderGenerations(k) {
   const young = k.turns.filter((t) => t.fidelity === "verbatim");
-  const quotes = k.front_entries.filter((e) => e.kind === "kept");
-  const summaries = k.front_entries.filter((e) => e.kind === "compacted");
+  const at = (level) => k.spans.filter((span) => span.level === level);
   const active = k.facts.filter((f) => f.status === "active");
   const sent = active.filter((f) => f.sent).length;
+  const inWords = active.filter((f) => !f.sent && f.span_level === "kept").length;
   const replaced = k.facts.length - active.length;
-  const sum = (items) => items.reduce((total, item) => total + item.tokens, 0);
   const box = (key, title, gloss, count, detail, which) => h("div", { class: `gen-box gen-${key}` },
     h("div", { class: "gen-title" }, title), h("div", { class: "gen-gloss" }, gloss),
     h("div", { class: "gen-count" }, count), h("div", { class: "gen-detail" }, detail),
@@ -515,18 +533,20 @@ export function renderGenerations(k) {
     h("span", { class: "gen-verb" }, verb), h("span", { class: "gen-line" }), h("span", { class: "gen-how" }, how));
   // Which messages each generation holds, each a link to the message.
   const links = (label, numbers) => numbers.length ? h("div", {}, `${label}: `, messageLinks(numbers)[1]) : null;
-  const covered = (items, turnsOf) => items.flatMap(turnsOf);
+  const levels = ["kept", "compacted", "archived", "out_of_view"].filter((level) => at(level).length);
   fill("generations", h("div", { class: "gen-flow" },
-    box("young", "Young generation", "sent word for word", plural(young.length, "message"),
-      `${plural(sum(young), "token")} · the newest ${keepLast()} always stay`,
+    box("young", "Young generation", "recent: each sent as written", plural(young.length, "message"),
+      `${plural(young.reduce((n, t) => n + t.tokens, 0), "token")} · the newest ${keepLast()} always stay`,
       links("messages", young.map((t) => t.turn_index))),
-    arrow(`collection${k.cuts ? ` ×${fmt(k.cuts)}` : ""}`, "keep → quote · compact → summary"),
-    box("old", "Old generation", "in the recap: kept or compacted", plural(k.front_entries.length, "entry", "entries"),
-      `${plural(quotes.length, "quote")} · ${plural(summaries.length, "summary", "summaries")} · ${fmt(sum(k.front_entries))} of ${fmt(state.config ? state.config.max_recap_tokens : 0)} tokens`,
-      [links("kept", covered(quotes, (e) => e.source_turns)), links("compacted", covered(summaries, (e) => e.source_turns))]),
-    arrow("over budget", "archive coldest → facts"),
-    box("permanent", "Permanent generation", "archived facts and excerpts, sent in the recap", plural(active.length, "entry", "entries"),
-      `${fmt(sent)} sent · ${fmt(active.length - sent)} stored only${replaced ? ` · ${fmt(replaced)} contradicted` : ""}`,
-      links("from", covered(active, (f) => f.source_turns)))),
-    h("p", { class: "gen-note" }, "Archive inside a collection goes straight from young to permanent. Messages are counted once their reply arrives."));
+    arrow(`collection${k.cuts ? ` ×${fmt(k.cuts)}` : ""}`, "in exchanges, each by its score"),
+    box("old", "Old generation", "the recap: every exchange at its level", plural(k.spans.length, "exchange"),
+      `${levels.map((level) => `${at(level).length} ${CATS[level].tag}`).join(" · ") || "none yet"} · ${fmt(k.front_tokens)} of its ${fmt(state.config ? state.config.max_recap_tokens : 0)}-token budget`,
+      levels.map((level) => links(CATS[level].tag, at(level).flatMap((span) => span.turns)))),
+    arrow("facts read once", "as each exchange is made"),
+    box("permanent", "Permanent generation", "facts, and what replaced what", plural(active.length, "current fact"),
+      [sent ? `${fmt(sent)} on their exchange's line` : null, inWords ? `${fmt(inWords)} in quoted words` : null,
+        active.length - sent - inWords ? `${fmt(active.length - sent - inWords)} out of view` : null,
+        replaced ? `${fmt(replaced)} replaced` : null].filter(Boolean).join(" · ") || "none yet",
+      links("from", [...new Set(active.map((f) => f.turn))]))),
+    h("p", { class: "gen-note" }, "An exchange keeps its words at every level, so a later collection can show it in more detail again."));
 }

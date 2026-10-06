@@ -34,8 +34,9 @@
 
 <main class="wrap">
   <section class="intro" id="intro" hidden>
-    <p><b>LLM-GC keeps a long conversation's prompt from growing without limit.</b> It collects older
-      messages, keeping, compacting or archiving each, and this page shows exactly what the model can still see of them.</p>
+    <p><b>LLM-GC keeps a long conversation's prompt from growing without limit.</b> As the conversation grows, it
+      condenses older messages, more or less depending on how much each matters now. This page shows exactly what the
+      model still receives.</p>
     <button class="btn" id="intro-guide" type="button">How it works</button>
     <button class="x" id="intro-close" type="button" aria-label="Dismiss">×</button>
   </section>
@@ -49,7 +50,7 @@
     <ol>
       <li>Start the proxy with the dashboard: <code>python scripts/run_proxy.py --serve --dashboard</code></li>
       <li>Talk through it: <code>python scripts/chat.py</code>, or point any Anthropic client at <code>http://127.0.0.1:9900</code></li>
-      <li>Watch each message move from word for word into the recap as the conversation grows.</li>
+      <li>Watch each message move from recent into the recap as the conversation grows.</li>
     </ol>
   </section>
 
@@ -82,8 +83,8 @@
       <section class="card" id="messages" aria-labelledby="messages-title">
         <div class="card-head">
           <div>
-            <h2 id="messages-title">Message by message</h2>
-            <div class="sub">Newest first, with what the model still has of each.</div>
+            <h2 id="messages-title">Exchange by exchange</h2>
+            <div class="sub">Newest first: what the model reads for each, and what was said.</div>
           </div>
           <div class="toggle" role="group" aria-label="View">
             <button id="view-timeline" aria-pressed="true">As it happened</button>
@@ -104,8 +105,8 @@
       </section>
       <aside class="side">
         <section class="card memory" aria-labelledby="memory-title">
-          <h2 id="memory-title">What the model remembers<button class="info" type="button" data-info="remembers" aria-label="About What the model remembers">i</button></h2>
-          <div class="sub">What extraction kept from archived messages; the recap sends up to <b class="cfg" data-recap-limit>…</b>. Click one to see where it came from.</div>
+          <h2 id="memory-title">Facts read from the conversation<button class="info" type="button" data-info="remembers" aria-label="About the facts read from the conversation">i</button></h2>
+          <div class="sub">Short <i>topic: value</i> notes, read from each exchange when it was collected. Click one to see where it came from.</div>
           <div id="memory"></div>
         </section>
         <section class="card" aria-labelledby="cleanups-title">
@@ -141,8 +142,8 @@
       </section>
       <section class="card eng-card" data-card="rate" aria-labelledby="rate-title">
         <div class="card-head">
-          <div><h2 id="rate-title">How each message is rated<button class="info" type="button" data-info="rate" aria-label="About How each message is rated">i</button></h2><div class="sub">Relevance from 0 to 1, against your thresholds.</div></div>
-          <button class="collapse card-toggle" type="button" aria-expanded="true" aria-controls="rate-body" aria-label="Collapse How each message is rated" title="Collapse"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <div><h2 id="rate-title">How each exchange is scored<button class="info" type="button" data-info="rate" aria-label="About How each exchange is scored">i</button></h2><div class="sub">A score from 0 to 1, against your two lines, decided again at every collection.</div></div>
+          <button class="collapse card-toggle" type="button" aria-expanded="true" aria-controls="rate-body" aria-label="Collapse How each exchange is scored" title="Collapse"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         </div>
         <div class="card-body" id="rate-body">
           <div class="rate" id="relevance"></div>
@@ -162,8 +163,8 @@
       </section>
       <section class="card eng-card" data-card="notmoved" aria-labelledby="notmoved-title">
         <div class="card-head">
-          <div><h2 id="notmoved-title">What didn't move, and why<button class="info" type="button" data-info="notmoved" aria-label="About What didn't move, and why">i</button></h2><div class="sub">Planned moves a collection couldn't make.</div></div>
-          <button class="collapse card-toggle" type="button" aria-expanded="true" aria-controls="notmoved-body" aria-label="Collapse What didn't move, and why" title="Collapse"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <div><h2 id="notmoved-title">What fell short, and why<button class="info" type="button" data-info="notmoved" aria-label="About What fell short, and why">i</button></h2><div class="sub">Parts of a collection that couldn't be done, and what the model gets instead.</div></div>
+          <button class="collapse card-toggle" type="button" aria-expanded="true" aria-controls="notmoved-body" aria-label="Collapse What fell short, and why" title="Collapse"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         </div>
         <div class="card-body" id="notmoved-body">
           <div id="problems"></div>
@@ -220,42 +221,46 @@
     exactly what the model can still see. Numbers in <b class="cfg">this colour</b> are your proxy's settings.</p>
 
   <h3>What one request carries</h3>
-  <div class="anatomy" aria-hidden="true"><div class="blk">recap</div><div class="msgx">young generation</div><div class="newx">your new message</div></div>
-  <div class="anatomy-caption" aria-hidden="true"><div style="flex:1.5">old and permanent generations (the front)</div><div style="flex:1">the newest <b class="cfg" data-config="last_n_turns_to_keep">…</b>, word for word</div><div style="flex:1">&nbsp;</div></div>
+  <div class="anatomy" aria-hidden="true"><div class="blk">recap</div><div class="msgx">recent</div><div class="newx">your new message</div></div>
+  <div class="anatomy-caption" aria-hidden="true"><div style="flex:1.5">the old generation: every exchange at its level (the front)</div><div style="flex:1">the young generation: at least the newest <b class="cfg" data-config="last_n_turns_to_keep">…</b>, as written</div><div style="flex:1">&nbsp;</div></div>
 
   <h3>How a message moves through the generations</h3>
-  <div class="gflow" role="img" aria-label="Every message starts in the young generation. A collection moves older messages out by relevance: keep quotes them and compact summarises them into the old generation, archive reduces them to facts in the permanent generation. When the old generation outgrows its budget, its coldest entries are archived into the permanent generation.">
-    <div class="gnode g-young"><b>Young generation</b><span>Every message starts here and is sent word for word.</span></div>
-    <div class="gcut">↓ <b>a collection</b> takes the older messages, each by its relevance</div>
+  <div class="gflow" role="img" aria-label="Every message starts in the young generation. A collection moves older messages into the old generation as exchanges, each shown kept, compacted or archived by its score and decided again at every collection. The facts read from each exchange are filed in the permanent generation, and shown on its line.">
+    <div class="gnode g-young"><b>Young generation</b><span>Every message starts here, recent: sent as its own message, exactly as written.</span></div>
+    <div class="gcut">↓ <b>a collection</b> takes the older messages as exchanges, each shown by its score</div>
     <div class="grows">
-      <div class="grow"><span class="band">≥ <b class="cfg" data-config="keep_threshold">…</b></span><b class="verb">keep</b><span class="to t-old">quoted whole</span></div>
-      <div class="grow"><span class="band">between</span><b class="verb">compact</b><span class="to t-old">summarised</span></div>
-      <div class="grow"><span class="band">&lt; <b class="cfg" data-config="archive_threshold">…</b></span><b class="verb">archive</b><span class="to t-perm">reduced to facts</span></div>
+      <div class="grow"><span class="band">≥ <b class="cfg" data-config="keep_threshold">…</b></span><b class="verb">kept</b><span class="to t-old">quoted word for word</span></div>
+      <div class="grow"><span class="band">between</span><b class="verb">compacted</b><span class="to t-old">opening line, facts and summary</span></div>
+      <div class="grow"><span class="band">&lt; <b class="cfg" data-config="archive_threshold">…</b></span><b class="verb">archived</b><span class="to t-old">opening line and facts</span></div>
     </div>
     <div class="gdest">
-      <div class="gnode g-old"><b>Old generation</b><span>Spans of older messages, each sent quoted, summarised or archived; the recap spends up to <b class="cfg" data-config="max_recap_tokens">…</b> tokens on them.</span></div>
-      <div class="gcold">over budget →<br>archive coldest</div>
-      <div class="gnode g-perm"><b>Permanent generation</b><span>Facts and excerpts; the recap sends up to <b class="cfg" data-recap-limit>…</b>.</span></div>
+      <div class="gnode g-old"><b>Old generation</b><span>Every exchange at its level, decided again at every collection. The recap spends up to <b class="cfg" data-config="max_recap_tokens">…</b> tokens on them; over that, the coldest lose detail first.</span></div>
+      <div class="gcold">facts read<br>once →</div>
+      <div class="gnode g-perm"><b>Permanent generation</b><span>The facts read from every exchange, and what replaced what. A compacted or archived exchange shows its facts on its line; a kept one has them in its words.</span></div>
     </div>
   </div>
 
-  <h3>When a cut happens</h3>
+  <h3>When a collection happens</h3>
   <ol>
     <li>After every reply, LLM-GC runs a <b>pass</b> (on screen, a <i>check</i>). Most passes change nothing.</li>
-    <li>The newest <b class="cfg" data-config="last_n_turns_to_keep">…</b> messages always stay in the young generation. A message
-      shorter than its own summary or index line is kept whole: a level is used only when it is cheaper.</li>
-    <li>Once the older messages to be summarised or archived reach <b class="cfg" data-config="min_cut_tokens">…</b> tokens,
+    <li>The newest <b class="cfg" data-config="last_n_turns_to_keep">…</b> messages always stay in the young generation. An exchange
+      too short for its summary or opening line to be any smaller is kept word for word: a level is used only when it is cheaper.</li>
+    <li>Once the older messages to be compacted or archived reach <b class="cfg" data-config="min_cut_tokens">…</b> tokens,
       the check makes a <b>collection</b> (a <i>cut</i> in the code) and moves them all at once. Changing the recap rarely keeps the
       provider's prompt cache working.</li>
-    <li>A cut that would make the prompt bigger is skipped. <b>Run GC now</b> cuts at once, ignoring the token minimum but never that rule.</li>
+    <li>A collection that would make the prompt bigger is skipped. <b>Run GC now</b> collects at once, ignoring the token minimum but never that rule.</li>
   </ol>
 
   <h3>What to watch</h3>
   <ol>
-    <li><b>Out of view</b>: a message's facts were stored, but none made it into the recap, so the model sees nothing of it.</li>
-    <li><b>An excerpt marked ✂</b>: the recap carries only its start.</li>
-    <li><b>Search</b> says whether the model still receives the words you type, and if not, where LLM-GC keeps them.</li>
-    <li><b>A yellow banner</b>: a move a collection planned did not happen, for example a summary request that failed. Nothing is lost; the prompt is just bigger than planned.</li>
+    <li><b>Out of view</b>: the recap reached its budget with every exchange already at its least detail, so the oldest were
+      folded behind one line. The model knows they exist, not what was said. An ordinary conversation never gets there.</li>
+    <li><b>A dot on a message</b>: it changes form at the next collection, in the colour it will become. Earlier exchanges move
+      too: up when the conversation comes back to them, down when it has moved on.</li>
+    <li><b>Search</b> says whether the model still receives the words you type, and if not, what it reads instead.</li>
+    <li><b>A yellow banner</b>: something to look at, such as exchanges out of view, or part of a collection that fell short
+      (a summary request that failed, say). Each says what the model gets instead; nothing is lost. Dismiss one with ×
+      and it stays hidden until there is more of it.</li>
   </ol>
 
   <h3>The words, in the code and on screen</h3>
@@ -264,11 +269,13 @@
     <tbody>
       <tr><td>pass</td><td>check</td><td>runs after every reply</td></tr>
       <tr><td>cut</td><td>collection</td><td>a check that moved messages out of the young generation</td></tr>
-      <tr><td>front</td><td>recap</td><td>the first message of every request: the old and permanent generations</td></tr>
-      <tr><td>young generation</td><td>word for word</td><td>recent messages, sent as written</td></tr>
-      <tr><td>keep</td><td>kept</td><td>quoted whole into the old generation</td></tr>
-      <tr><td>compact</td><td>compacted</td><td>replaced by a summary in the old generation</td></tr>
-      <tr><td>archive</td><td>archived</td><td>reduced to facts in the permanent generation</td></tr>
+      <tr><td>front</td><td>recap</td><td>the first message of every request: every exchange at its level</td></tr>
+      <tr><td>span</td><td>exchange</td><td>a message of yours and everything up to your next one</td></tr>
+      <tr><td>young generation (verbatim)</td><td>recent</td><td>not collected yet: each sent as its own message, exactly as written</td></tr>
+      <tr><td>kept</td><td>kept</td><td>its exchange quoted word for word</td></tr>
+      <tr><td>compacted</td><td>compacted</td><td>its exchange's opening line, facts and summary</td></tr>
+      <tr><td>archived</td><td>archived</td><td>its exchange's opening line and facts</td></tr>
+      <tr><td>out_of_view</td><td>out of view</td><td>folded with its neighbours behind one line</td></tr>
     </tbody>
   </table>
 
