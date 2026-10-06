@@ -361,6 +361,25 @@ class TestFindingTheConversation:
 
         assert len(_sent(seen)["messages"]) == len(history)
 
+    def test_instructions_rewritten_in_an_earlier_turn_keep_the_conversation_in_its_session(self):
+        """Claude Code rewrites the instructions in its first message between requests;
+        hashed with them, one conversation was seeded as a second session, which
+        collected and read facts again from nothing."""
+        client, service, _, seen = _proxy()
+
+        def opening(notes: str) -> dict:
+            return {"role": "user", "content": [{"type": "text", "text": f"<system-reminder>{notes}</system-reminder>"},
+                                                {"type": "text", "text": "we chose postgres"}]}
+
+        later = [{"role": "assistant", "content": "Noted."}, {"role": "user", "content": "and retention?"}]
+        _post(client, _body(messages=[opening("date"), *later]))
+        _post(client, _body(messages=[opening("CLAUDE.md, memory, date"), *later,
+                                      {"role": "assistant", "content": "90 days."}, {"role": "user", "content": "thanks"}]))
+
+        assert service.session_manager.store.count() == 1
+        assert client.get("/stats").json()["sessions_seeded"] == 1
+        assert "CLAUDE.md, memory, date" in _sent(seen)["messages"][0]["content"][0]["text"]
+
     def test_regenerate_does_not_send_the_answer_being_replaced(self):
         """Regenerate re-sends the conversation without its last reply. Recording
         the reply from the response made the proxy forward it anyway, as if the user

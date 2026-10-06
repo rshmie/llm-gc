@@ -38,7 +38,9 @@ class Span:
 
     `summary` is the compactor's message, marker included, as the front carries
     it; `summary_text` is what it says without the marker. `index_line` names what
-    the span is about, for the archived level.
+    the span is about, for the archived level. `facts_unread` marks a span whose
+    facts could not be read when it was made: it has none on record, though its
+    turns may state some.
 
     Raises:
         ValueError: The turns are empty or not consecutive, or the span is
@@ -50,6 +52,7 @@ class Span:
     summary: Message | None = None
     summary_text: str | None = None
     index_line: str = ""
+    facts_unread: bool = False
 
     def __post_init__(self) -> None:
         indices = [turn.turn_index for turn in self.turns]

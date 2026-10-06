@@ -87,7 +87,7 @@ def extract_messages(payload: dict[str, Any]) -> list[Message]:
         if role not in _ROLES:
             raise ConfigError(f"messages[{index}] has unsupported role {role!r}")
 
-        content, lifted = _lift_instructions(_content_as_text(raw.get("content"), index), role)
+        content, lifted = lift_instructions(_content_as_text(raw.get("content"), index), role)
         messages.append(
             Message(
                 role=role,
@@ -123,7 +123,7 @@ def instruction_tokens(messages: Iterable[Message]) -> int:
     return sum(count_tokens(text) for message in messages for text in message.instructions)
 
 
-def _lift_instructions(text: str, role: str) -> tuple[str, tuple[str, ...]]:
+def lift_instructions(text: str, role: str) -> tuple[str, tuple[str, ...]]:
     """A turn's text without the client's instruction elements, and those elements in order.
 
     Only the user's side: that is where a client writes, and an assistant reply that

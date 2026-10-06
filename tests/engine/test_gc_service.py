@@ -284,6 +284,8 @@ class TestFailuresAreReportedAndLoseNothing:
         assert _levels(service) == {0: ARCHIVED}
         assert [d.reason for d in result.degradations] == [DegradationReason.ARCHIVE_FAILED]
         assert "[Archived] (turn 0) Turn 0 is about storage." in asyncio.run(service.gc_collect("s"))[0].content
+        # Kept on the span, so the dashboard can say why it has no facts after the warning has scrolled away.
+        assert [span.facts_unread for span in service.session_manager.store.get("s").snapshot.old] == [True]
 
     def test_a_failing_scorer_changes_nothing_and_never_escapes(self):
         """gc_age runs fire-and-forget: an exception that escaped it would vanish unseen."""

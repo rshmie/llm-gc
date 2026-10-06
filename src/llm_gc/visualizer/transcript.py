@@ -2,7 +2,9 @@
 
 The engine's spans hold the words of every turn the session has recorded. This
 copy covers what the session does not have yet: the newest message, recorded only
-with its reply, and a conversation's opening words for the session picker. The
+with its reply, a conversation's opening words for the session picker, and the
+instructions the client puts inside each message now - a client can rewrite them
+after the turn was recorded, and they are sent as it sends them. The
 client sends the whole conversation on every request, so the proxy hands each
 request's history to this recorder.
 
@@ -15,6 +17,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from llm_gc.models import Message
+from llm_gc.utils import count_tokens
 
 # Sessions whose transcript is kept. Above this, the least recently active is
 # dropped; a transcript is the whole conversation, so the bound is deliberately low.
@@ -27,6 +30,7 @@ class TranscriptTurn:
     role: str
     text: str     # the turn's text; empty for a turn that is only tool calls or attachments
     tokens: int
+    instruction_tokens: int = 0   # the client's instructions inside the turn as it sends them now
 
 
 class TranscriptRecorder:
@@ -45,7 +49,8 @@ class TranscriptRecorder:
         """
         self._transcripts[session_id] = tuple(
             TranscriptTurn(turn_index=message.turn_index, role=message.role, text=message.content,
-                           tokens=message.token_count)
+                           tokens=message.token_count,
+                           instruction_tokens=sum(count_tokens(text) for text in message.instructions))
             for message in messages
         )
         self._transcripts.move_to_end(session_id)

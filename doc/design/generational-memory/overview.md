@@ -376,7 +376,22 @@ one call reads every span the collection makes, given the facts already on recor
   is not a short topic and value, is dropped. Facts are filed in the order they were
   said, whatever order the model lists them in: filing is sequential, and a later
   statement is what replaces an earlier one.
-- **A failed read** makes the collection's spans without facts, and is reported once.
+- **The read has room to think.** Its output cap is the list's room plus a large
+  allowance for the thinking the model does before it, and its timeout lets the cap
+  be reached. An agent's turns carry whole files and command output: on a Claude
+  Code session, a 5,000-token collection spent all of a 3,500-token cap thinking and
+  returned no list. A cap is billed only as used, while an answer cut off before it
+  starts is paid for in full and returns nothing. Turns are read in calls of at most
+  one span's size, because the thinking grows with what is read. *Accepted cost:* a
+  collection can take a couple of minutes; it runs off the request path, and
+  requests meanwhile go whole, never worse than without LLM-GC.
+- **A failed read** makes the collection's spans without facts, marks them, and is
+  reported once; the dashboard names the messages that have no facts for that
+  reason, instead of showing an empty list as if they settled nothing. They are not
+  read again by a later collection: filing follows the order facts are read in, so
+  an old exchange read after a newer one would replace the newer value. *Revisit if*
+  unread spans show up once reads have room to think; reading them again needs
+  filing by turn order.
 
 Without a model, patterns read the user's own turns only — see the rules below.
 

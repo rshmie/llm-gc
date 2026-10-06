@@ -5,7 +5,7 @@
 
 import { BECOMES, CATS, CLAMP_CHARS, EARLIER_SHOWN, FACTS_SHOWN, GLOSSARY, HEIGHT, MIN_BAR_PX, ORDER, RUN_MIN, categoryOf, describeOutcome, swatch } from "./vocabulary.js";
 import { $, agoTs, countEl, fill, fmt, h, meterBar, percent, plural, ranges, reducedMotion, setChildren, storeGet, storeSet, svg } from "./dom.js";
-import { countCats, factsByTurn, has, marked, pendingTurns, preview, query, recapLimit, state, turnMatches, ui, writtenTokens } from "./state.js";
+import { countCats, factsByTurn, has, instructionTokens, marked, pendingTurns, preview, query, recapLimit, state, turnMatches, ui, writtenTokens } from "./state.js";
 import { hideTooltip, info, showTooltip, tipQuote, hoverTip } from "./tooltip.js";
 import { offerReturn, showTab } from "./shell.js";
 import { openCard, showWhy, whyText } from "./engine.js";
@@ -22,9 +22,12 @@ const toolTip = () => hoverTip(GLOSSARY.tools[0], GLOSSARY.tools[1]);
 const who = (turn) => h("span", { class: "who", ...(turn.tool_results ? toolTip() : {}) }, speakerOf(turn));
 const toolTag = (label) => h("span", { class: "tag", ...toolTip() }, label);
 const callsTag = (turn) => turn.tool_calls ? toolTag("calls a tool") : null;
-// Instructions the client put inside the message: never condensed, so their size stands apart.
-const instructionsTag = (turn) => turn.instruction_tokens ? h("span", { class: "tag", ...hoverTip(GLOSSARY.instructions[0], GLOSSARY.instructions[1]) },
-  `+ client instructions · ${plural(turn.instruction_tokens, "token")}`) : null;
+// Instructions the client puts inside the message: never condensed, so their size stands apart.
+function instructionsTag(turn) {
+  const tokens = instructionTokens(turn.turn_index);
+  return tokens ? h("span", { class: "tag", ...hoverTip(GLOSSARY.instructions[0], GLOSSARY.instructions[1]) },
+    `+ client instructions · ${plural(tokens, "token")}`) : null;
+}
 const changes = (n) => n === 1 ? "1 message changes" : `${fmt(n)} messages change`;
 const changing = (k) => k.turns.filter((t) => t.becomes).length;
 export const messagesLabel = (turns) => turns.length === 1 ? `message ${turns[0]}` : `messages ${ranges(turns)}`;
@@ -575,7 +578,7 @@ export function pendingRow(p) {
     h("div", { class: "msg-no" }, p.turn_index), h("div", { class: "av user", "aria-hidden": "true" }, "New"),
     h("div", { class: "msg-body" },
       h("div", { class: "msg-head" }, h("span", { class: "who" }, "Newest request"),
-        h("span", { class: "muted" }, "not in the conversation yet"), info("newest")),
+        h("span", { class: "muted" }, "not in the conversation yet"), info("newest"), instructionsTag(p)),
       textBlock(p.text, { key: `t-${p.turn_index}` })));
 }
 
@@ -723,8 +726,14 @@ export function renderMemory(k) {
       note: `${readTo === null ? "" : `Read from messages 0–${readTo} as they were collected. Newer messages reach the model word for word, so a change made in one is in its words, and is filed here once it is collected. `}`
         + "A compacted or archived exchange shows its facts on its line in the recap; a kept one has them in its words." },
   ];
+  // An exchange made while its facts couldn't be read holds none, whatever its messages settled.
+  const unreadTurns = k.spans.filter((s) => s.facts_unread).flatMap((s) => s.turns);
+  const unread = unreadTurns.length ? h("section", { id: "memory-unread" },
+    h("h3", {}, h("span", { class: "st warn" }, "⚠"), `Not read from ${messagesLabel(unreadTurns)}`),
+    h("div", { class: "group-note" }, "Their facts couldn't be read when they were collected, so none are on record, and a later collection doesn't read them again. ",
+      "The model still reads these messages at their level in the recap: word for word, as a summary, or by their opening line alone.")) : null;
   if (!k.facts.length) {
-    fill("memory", h("p", { class: "empty", style: "margin-top:10px" }, "Nothing yet. When a collection makes an exchange, the facts read from it appear here."));
+    fill("memory", unread || h("p", { class: "empty", style: "margin-top:10px" }, "Nothing yet. When a collection makes an exchange, the facts read from it appear here."));
     return;
   }
   const [unseen, replaced] = groups;
@@ -732,6 +741,7 @@ export function renderMemory(k) {
     replaced.facts.length || unseen.facts.length ? h("div", { class: "memory-counts" }, h("span", {}, h("b", {}, fmt(active.length)), " on record"),
       replaced.facts.length ? h("span", {}, h("b", {}, fmt(replaced.facts.length)), " replaced") : null,
       unseen.facts.length ? h("span", {}, h("b", {}, fmt(unseen.facts.length)), " out of view") : null) : null,
+    unread,
     groups.filter((g) => g.facts.some(matches)).map((g) => {
       const shown = g.facts.filter(matches);
       const open = ui.open.has(`facts-${g.id}`) || !!query();

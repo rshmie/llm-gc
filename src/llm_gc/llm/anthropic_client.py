@@ -238,7 +238,8 @@ class AnthropicClient:
             # A filtered response legitimately has no text. Anything else with none
             # means we asked for a completion and did not get one.
             raise LLMResponseError(
-                f"anthropic returned no text content (stop_reason={parsed.stop_reason!r})",
+                f"anthropic returned no text content (stop_reason={parsed.stop_reason!r}, "
+                f"{parsed.usage.output_tokens} output tokens)",
                 provider=self.name,
                 status_code=200,
                 retryable=True,

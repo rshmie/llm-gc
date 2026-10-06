@@ -371,7 +371,8 @@ class GcService:
         paid for yet.
         """
         new = [Span(turns=draft.turns, level=DetailLevel.KEPT, summary=draft.summary,
-                    summary_text=draft.summary_text, index_line=draft.index_line) for draft in condensed]
+                    summary_text=draft.summary_text, index_line=draft.index_line,
+                    facts_unread=draft.facts_error is not None) for draft in condensed]
         spans = list(base.old) + new
         new_facts = tuple(fact for draft in condensed for fact in draft.facts)
         knowledge, _ = file_knowledge(base.knowledge, new_facts)

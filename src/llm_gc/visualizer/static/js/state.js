@@ -58,6 +58,12 @@ export function countCats(k) {
 // Messages the client has sent that the conversation records only with the next request: the one
 // thing the dashboard's own copy of what was said is still needed for.
 export const pendingTurns = (k) => captured() ? state.transcript.turns.filter((t) => t.turn_index >= k.recorded_turns) : [];
+// The instructions the client puts inside a message as it sends them now: it can rewrite them after
+// the message was recorded, so the dashboard's copy of the latest request is the one to read.
+export function instructionTokens(turnIndex) {
+  const turn = captured() ? state.transcript.turns[turnIndex] : null;
+  return turn && turn.turn_index === turnIndex ? turn.instruction_tokens : 0;
+}
 export function turnMatches(turn, facts) {
   if (!query()) return true;
   return has(turn.text) || (facts.get(turn.turn_index) || []).some((f) => has(f.content) || has(f.topic));

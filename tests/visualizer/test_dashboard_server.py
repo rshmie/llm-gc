@@ -225,6 +225,20 @@ class TestTranscript:
             (0, "user", "the database is postgres"), (1, "assistant", "noted")]
         assert transcript["total_tokens"] == 6
 
+    def test_instructions_are_sized_as_the_client_sends_them_now(self):
+        """The record keeps a turn as first seen; Claude Code rewrites the instructions in
+        earlier turns, and the tag showed 263 tokens while 4,303 went with each request."""
+        service, monitor = _engine()
+        _converse(service, "s", 2)
+        recorder = TranscriptRecorder()
+        rewritten = "<system-reminder>CLAUDE.md, memory, date</system-reminder>"
+        recorder.record("s", [Message(role="user", content="hello", token_count=1, turn_index=0, instructions=(rewritten,)),
+                              Message(role="assistant", content="hi", token_count=1, turn_index=1)])
+
+        transcript = _client(service, monitor, transcripts=recorder).get("/api/sessions/s/transcript").json()
+
+        assert [t["instruction_tokens"] for t in transcript["turns"]] == [count_tokens(rewritten), 0]
+
     def test_tokens_are_compared_over_the_same_turns(self):
         """The client's latest message reaches the session only with the next request.
         Comparing the whole transcript with the context the model is sent showed a

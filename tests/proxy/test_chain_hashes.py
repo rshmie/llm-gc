@@ -65,6 +65,27 @@ class TestWhatCountsAsTheSameTurn:
         other = [{"text": "hi", "type": "text"}]
         assert chain_hashes([_turn("hi", raw=one)]) == chain_hashes([_turn("hi", raw=other)])
 
+    def test_instructions_rewritten_inside_an_earlier_turn_are_not_an_edit(self):
+        """Claude Code rewrites the <system-reminder> elements in earlier turns between
+        requests; counted as an edit, one conversation was seeded as a second session."""
+        small = "<system-reminder>date</system-reminder>"
+        large = "<system-reminder>CLAUDE.md, memory, date</system-reminder>"
+        said = {"type": "text", "text": "Help me design a URL shortener."}
+        before = [{"type": "text", "text": small}, said]
+        after = [{"type": "text", "text": large}, said]
+        inline = [{"type": "text", "text": f"{large}\n\nHelp me design a URL shortener."}]
+        result = [{"type": "tool_result", "tool_use_id": "t1", "content": f"compiled\n{small}"}]
+        bare_result = [{"type": "tool_result", "tool_use_id": "t1", "content": "compiled"}]
+
+        assert chain_hashes([_turn("x", raw=before)]) == chain_hashes([_turn("x", raw=after)])
+        assert chain_hashes([_turn("x", raw=before)]) == chain_hashes([_turn("x", raw=inline)])
+        assert chain_hashes([_turn("x", raw=result)]) == chain_hashes([_turn("x", raw=bare_result)])
+
+    def test_an_assistant_quoting_the_element_has_still_said_it(self):
+        quoted = "<system-reminder>a</system-reminder> is how Claude Code marks its notes"
+        other = "<system-reminder>b</system-reminder> is how Claude Code marks its notes"
+        assert chain_hashes([_turn("x", "assistant", quoted)]) != chain_hashes([_turn("x", "assistant", other)])
+
     def test_non_text_content_is_part_of_the_identity(self):
         """Two turns with the same text but different attached images are not the
         same turn."""

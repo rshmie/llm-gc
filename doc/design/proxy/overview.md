@@ -46,10 +46,16 @@ Every turn gets a **chain hash**: a hash of the previous turn's hash plus this
 turn's role and its content, in canonical form. The hash at turn *k* therefore
 identifies the whole conversation up to *k*, and two histories share it only if
 they say the same thing that far. The canonical form leaves out what is not said:
-key order, a plain string against one text block, and delivery hints such as
-`cache_control`. Claude Code marks its newest turns for caching and moves the
-markers on with every request; a hash that counted them saw every request as a new
-conversation, so nothing was ever collected.
+key order, a plain string against one text block, delivery hints such as
+`cache_control`, and the client's instructions inside a turn (below). Claude Code
+marks its newest turns for caching and moves the markers on with every request; a
+hash that counted them saw every request as a new conversation, so nothing was ever
+collected. It also rewrites the instructions inside earlier turns — the first
+message's grew from 263 tokens to 4,303 mid-conversation — and a hash that counted
+them seeded the same conversation as a second session, which collected again and
+read its facts again from nothing. Leaving them out merges nothing that was said
+differently: the engine never reads them, and every forwarded request carries them
+as the client sends them in that request.
 
 ```
 client sends:  t0 t1 t2 t3 t4 │ t5 (new)        chain hashes: h0 h1 h2 h3 h4

@@ -1,6 +1,7 @@
 """The knowledge-state projection: where every turn is now, and what the model sees of it."""
 
 import asyncio
+from dataclasses import replace
 
 from llm_gc.config import GCConfig
 from llm_gc.engine import GCResult, GCStatus, build_gc_service
@@ -102,7 +103,7 @@ class TestWhereEachTurnIs:
     def test_tool_turns_are_marked_so_tool_results_are_not_shown_as_the_users_words(self):
         call = [{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}}]
         result = [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "README.md"}]
-        turns = [Message(role="user", content="list the files", token_count=3, turn_index=0, instructions=("<x>rule</x>",)),
+        turns = [Message(role="user", content="list the files", token_count=3, turn_index=0),
                  Message(role="assistant", content="[tool call: Bash]", token_count=5, turn_index=1, raw_content=call),
                  Message(role="user", content="[tool result] README.md", token_count=6, turn_index=2,
                          raw_content=result)]
@@ -112,7 +113,6 @@ class TestWhereEachTurnIs:
         state = project_knowledge_state(service.inspect(SESSION))
 
         assert [t.tool_calls for t in state.turns] == [False, True, False]
-        assert [t.instruction_tokens for t in state.turns] == [count_tokens("<x>rule</x>"), 0, 0]
         assert [t.tool_results for t in state.turns] == [False, False, True]
 
 class TestThePassOutcome:
@@ -164,6 +164,14 @@ class TestWhatTheModelSees:
         assert [t.fidelity for t in state.turns] == [TurnFidelity.ARCHIVED] * 2
         assert state.spans[0].text == "[Archived] (turns 0–1) Let's use Stripe for payments, with a 4% fee. · fee: 4%"
         assert state.spans[0].text in (state.front_text or ""), "exactly what the model receives"
+
+    def test_a_span_whose_facts_could_not_be_read_says_so(self):
+        """An empty facts panel read as "nothing settled" when the read had failed."""
+        unread = replace(_span(DetailLevel.ARCHIVED, (0, "user", "Let's use Stripe."), (1, "assistant", "Done.")),
+                         facts_unread=True)
+        state = _seed(_service(), GenerationSnapshot(old=(unread,)))
+
+        assert [span.facts_unread for span in state.spans] == [True]
 
     def test_a_folded_span_shares_its_runs_line_and_its_facts_are_not_sent(self):
         """The signal that matters most: kept, and still invisible to the model,

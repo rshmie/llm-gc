@@ -358,7 +358,9 @@ as the user's words: the client sends what its tools returned under the user's
 role. Instructions the client wrote into a message — Claude Code's
 `<system-reminder>` blocks — show as a tag with their size, not among its words:
 they are not conversation, are never condensed, and are not counted in the
-request's size, which covers what LLM-GC can change. *Accepted cost:* the engine holds
+request's size, which covers what LLM-GC can change. Their size is read from the
+client's latest request, not from the record: a client can rewrite them after the
+message was recorded, and they are sent as it sends them now. *Accepted cost:* the engine holds
 every original in memory for every session, dashboard or not — the price of being
 able to restore one. *Rejected: no originals* — an archived turn could
 never be shown whole again, to the model or to a person.

@@ -61,10 +61,13 @@ DEFAULT_MIN_COMPACTION_OUTPUT_TOKENS = 64 # floor, so a short run still has room
 DEFAULT_COMPACTION_THINKING_ALLOWANCE_TOKENS = 2_000
 
 # Facts read by a model (rationale in doc/design/generational-memory/overview.md).
-DEFAULT_FACTS_TIMEOUT_S = 60.0            # one call reads a whole collection; off the request path, so it can take time
 DEFAULT_FACTS_OUTPUT_TOKENS = 1_500       # room for the list itself; a collection settles a handful of facts
-DEFAULT_FACTS_THINKING_ALLOWANCE_TOKENS = 2_000   # the same reason as compaction's allowance
-DEFAULT_FACTS_MAX_BATCH_TOKENS = 24_000   # turns read per call; a larger collection is read in several
+# Room to think before the list. An agent's turns carry files and command output, and
+# a 5,000-token Claude Code collection spent all of a 2,000-token allowance thinking.
+# Billed only as used, while an answer cut off before it starts is paid for in full.
+DEFAULT_FACTS_THINKING_ALLOWANCE_TOKENS = 12_000
+DEFAULT_FACTS_TIMEOUT_S = 150.0           # long enough to reach the cap; off the request path
+DEFAULT_FACTS_MAX_BATCH_TOKENS = 8_000    # turns read per call, one span at most: thinking grows with what is read
 DEFAULT_FACTS_ON_RECORD_MAX = 200         # facts on record shown to the reader, the newest kept
 FACT_TOPIC_MAX_WORDS = 5                  # "seat hold", "checkout latency at p99"; longer is a sentence
 FACT_TOPIC_MAX_CHARS = 60

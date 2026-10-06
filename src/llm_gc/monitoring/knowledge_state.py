@@ -51,7 +51,6 @@ class TurnState(BaseModel):
     becomes: TurnFidelity | None = None    # set when the next collection would change how the model receives it
     tool_calls: bool = False               # an assistant turn asking the client to run a tool
     tool_results: bool = False             # a user turn carrying what the client's tools returned, not words the user wrote
-    instruction_tokens: int = 0            # the client's instructions inside the turn: sent word for word, never condensed
 
 
 class SpanState(BaseModel):
@@ -64,6 +63,7 @@ class SpanState(BaseModel):
     summary: str | None           # its summary without the marker, when it has one
     score: float                  # how much it matters to what is discussed now
     becomes: DetailLevel | None   # set when the next collection would show it at another level
+    facts_unread: bool = False    # its facts could not be read when it was made, so none are on record
 
 
 class FactState(BaseModel):
@@ -151,7 +151,7 @@ def _span_states(inspection: SessionInspection) -> list[tuple[Span, SpanState]]:
             turns=list(span.turn_indices), level=span.level, text=lines[id(span)],
             tokens=None if folded else count_tokens(lines[id(span)]),
             summary=_summary(span),
-            score=score, becomes=level if level is not span.level else None)))
+            score=score, becomes=level if level is not span.level else None, facts_unread=span.facts_unread)))
     return sorted(states, key=lambda pair: pair[0].first_turn)
 
 
@@ -180,8 +180,7 @@ def _turn_state(message: Message, fidelity: TurnFidelity, *, span: int | None = 
                 becomes: TurnFidelity | None = None) -> TurnState:
     return TurnState(turn_index=message.turn_index, role=message.role, tokens=message.token_count,
                      text=message.content, fidelity=fidelity, span=span, score=score, becomes=becomes,
-                     tool_calls=bool(tool_use_ids(message)), tool_results=bool(tool_result_ids(message)),
-                     instruction_tokens=sum(count_tokens(text) for text in message.instructions))
+                     tool_calls=bool(tool_use_ids(message)), tool_results=bool(tool_result_ids(message)))
 
 
 def _fact_states(knowledge: tuple[KnowledgeEntry, ...], inspection: SessionInspection,
