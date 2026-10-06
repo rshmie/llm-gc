@@ -37,6 +37,7 @@ import argparse
 from collections import Counter
 import asyncio
 import json
+import logging
 import os
 import sys
 from pathlib import Path
@@ -366,6 +367,11 @@ def main() -> None:
     serving.add_argument("--context-window", type=int, default=200_000,
                          help="the proxied model's window; sets the recap budget")
     args = parser.parse_args()
+    # The application chooses how the library's logs are shown: what each request was
+    # and why one was passed on untouched. They name sessions and counts, never content.
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+                        datefmt="%H:%M:%S")
+    logging.getLogger("httpx2").setLevel(logging.WARNING)
 
     # From the environment, never a flag, so a key never lands in shell history.
     api_key = os.environ.get("ANTHROPIC_API_KEY")

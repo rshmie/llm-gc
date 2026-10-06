@@ -30,7 +30,13 @@ from llm_gc.engine.gc_service import GcService
 from llm_gc.exceptions import ConfigError
 from llm_gc.models import Message
 from llm_gc.models.generation_snapshot import GenerationSnapshot
-from llm_gc.proxy.anthropic_translation import extract_messages, forwardable_headers, rewrite_messages
+from llm_gc.proxy.anthropic_translation import (
+    Instruction,
+    extract_instructions,
+    extract_messages,
+    forwardable_headers,
+    rewrite_messages,
+)
 from llm_gc.proxy.session_identity import SESSION_HEADER, chain_hashes
 
 logger = logging.getLogger(__name__)
@@ -204,16 +210,20 @@ async def _handle(app: FastAPI, request: Request) -> Response:
     try:
         payload = _parse_json(body)
         client_messages = extract_messages(payload)
+        instructions = extract_instructions(payload)
     except (ConfigError, ValueError) as err:
         # The provider is the authority on its own API and may accept something we
         # cannot parse, so forward untouched rather than reject.
-        logger.info("forwarding unprocessable request untouched", extra={"reason": str(err)})
+        # The reason names the request's structure - a role, a missing field - never its content.
+        logger.info("forwarding a request LLM-GC cannot read, untouched: %s", err, extra={"reason": str(err)})
         metrics.gc_bypassed += 1
         return await _forward(app, body, headers, target)
 
     streaming = payload.get("stream") is True
     history, new_turn = client_messages[:-1], client_messages[-1]
-    client_history_tokens = sum(message.token_count for message in client_messages)
+    # Instructions count on both sides of the ratio: they are sent, whole, either way.
+    client_history_tokens = (sum(message.token_count for message in client_messages)
+                             + sum(instruction.token_count for instruction in instructions))
     metrics.tokens_in_client_history += client_history_tokens
 
     # Everything LLM-GC does before forwarding sits inside this one guard, so no
@@ -223,7 +233,8 @@ async def _handle(app: FastAPI, request: Request) -> Response:
         session_id = _record_client_history(app, history, request.headers.get(SESSION_HEADER))
         if session_id is not None:
             _observe_history(app, session_id, client_messages)
-        forward_body, forwarded_tokens = await _apply_gc(app, session_id, history, new_turn, payload, body)
+        forward_body, forwarded_tokens = await _apply_gc(app, session_id, history, new_turn, payload, body,
+                                                         instructions)
         logger.info("proxying", extra={"session_id": session_id, "turns_from_client": len(client_messages),
                                        "tokens_from_client": client_history_tokens,
                                        "tokens_forwarded": forwarded_tokens})
@@ -327,14 +338,17 @@ async def _apply_gc(
     new_turn: Message,
     payload: dict[str, Any],
     original_body: bytes,
+    instructions: Sequence[Instruction] = (),
 ) -> tuple[bytes, int]:
     """The body to forward, and its conversation's token count.
 
     When the collected context is exactly the client's history - nothing has been
     aged yet - the client's own bytes are forwarded untouched, so images, tool
-    calls, thinking blocks and the provider's prompt cache are all preserved.
+    calls, thinking blocks and the provider's prompt cache are all preserved. The
+    client's instructions are never condensed: each goes back in place.
     """
-    client_tokens = sum(message.token_count for message in history) + new_turn.token_count
+    instruction_tokens = sum(instruction.token_count for instruction in instructions)
+    client_tokens = sum(message.token_count for message in history) + new_turn.token_count + instruction_tokens
     if session_id is None:
         return original_body, client_tokens
 
@@ -345,9 +359,13 @@ async def _apply_gc(
 
     # No await since the collect, so this describes the front being forwarded.
     valid_from = gc_service.mark_front_sent(session_id, len(history))
-    forwarded = collected + [new_turn]
-    body = rewrite_messages(payload, forwarded, strip_thinking_before=valid_from)
-    return _dump_json(body), sum(m.token_count for m in forwarded)
+    # Recent turns go as the client sent them in this request, not as recorded when
+    # they arrived: the client moves its cache markers onto the newest turns, and
+    # markers kept from earlier requests would pile up past the provider's limit.
+    sent_now = {message.turn_index: message for message in history}
+    forwarded = [sent_now.get(message.turn_index, message) for message in collected] + [new_turn]
+    body = rewrite_messages(payload, forwarded, strip_thinking_before=valid_from, instructions=instructions)
+    return _dump_json(body), sum(m.token_count for m in forwarded) + instruction_tokens
 
 
 async def _age(app: FastAPI, session_id: str) -> None:

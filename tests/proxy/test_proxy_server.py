@@ -246,6 +246,47 @@ class TestTheClientsHistoryIsReplaced:
         sent_by_client = len(conversation) - 1
         assert forwarded < sent_by_client, f"forwarded {forwarded} of {sent_by_client}"
 
+    def test_a_conversation_carrying_instructions_is_collected_and_keeps_every_instruction(self):
+        """Claude Code puts its own instructions inside the conversation, as system
+        messages. Unreadable, every request was forwarded untouched and nothing was
+        ever collected; read, the conversation is collected and every instruction is
+        still sent, word for word, exactly once."""
+        client, _, _, seen = _proxy()
+        messages: list[dict] = []
+        for index in range(10):
+            messages.append({"role": "user", "content": f"turn {index}: we discussed the storage layer at length today"})
+            messages.append({"role": "system", "content": f"instruction {index}"})
+            _post(client, {"model": "claude-sonnet-5", "max_tokens": 512, "messages": messages})
+            messages.append({"role": "assistant", "content": UPSTREAM_OK["content"][0]["text"]})
+
+        sent = _sent(seen)["messages"]
+        assert client.get("/stats").json()["gc_bypassed"] == 0
+        assert any(_is_front(message) for message in sent), "the conversation was collected"
+        instructions = [m["content"] for m in sent if m["role"] == "system"]
+        assert instructions == [f"instruction {index}" for index in range(10)], "each once, in order"
+
+    def test_a_client_moving_its_cache_markers_stays_one_conversation_within_the_limit(self):
+        """Claude Code marks the newest turns for caching on every request. The
+        conversation must stay one session, and after a cut the forwarded turns must
+        carry the markers where this request put them - recorded ones would pile up
+        past the provider's limit of four."""
+        client, service, _, seen = _proxy()
+        conversation: list[tuple[str, str]] = []
+        for index in range(10):
+            conversation.append(("user", f"turn {index}: we discussed the storage layer at length today"))
+            messages = [{"role": role, "content": [{"type": "text", "text": text}]} for role, text in conversation]
+            for message in messages[-2:]:
+                message["content"][-1]["cache_control"] = {"type": "ephemeral"}
+            _post(client, {"model": "claude-sonnet-5", "max_tokens": 512, "messages": messages})
+            conversation.append(("assistant", UPSTREAM_OK["content"][0]["text"]))
+
+        stats = client.get("/stats").json()
+        assert service.session_manager.store.count() == 1 and stats["history_restarts"] == 0
+        sent = _sent(seen)["messages"]
+        assert any(_is_front(message) for message in sent), "the conversation was collected"
+        marked = [m for m in sent if isinstance(m["content"], list) and any("cache_control" in b for b in m["content"])]
+        assert len(marked) == 2, "exactly the markers this request carried"
+
     def test_the_newest_turn_is_always_forwarded(self):
         """Whatever GC decides about history, the question being asked now has to
         reach the model."""

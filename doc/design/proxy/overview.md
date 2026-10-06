@@ -43,9 +43,13 @@ Several cases fall out of that one rule without code of their own:
 ### Finding the conversation
 
 Every turn gets a **chain hash**: a hash of the previous turn's hash plus this
-turn's role and its content exactly as sent, in canonical JSON. The hash at turn
-*k* therefore identifies the whole conversation up to *k*, and two histories share
-it only if they are byte-identical that far.
+turn's role and its content, in canonical form. The hash at turn *k* therefore
+identifies the whole conversation up to *k*, and two histories share it only if
+they say the same thing that far. The canonical form leaves out what is not said:
+key order, a plain string against one text block, and delivery hints such as
+`cache_control`. Claude Code marks its newest turns for caching and moves the
+markers on with every request; a hash that counted them saw every request as a new
+conversation, so nothing was ever collected.
 
 ```
 client sends:  t0 t1 t2 t3 t4 │ t5 (new)        chain hashes: h0 h1 h2 h3 h4
@@ -58,9 +62,9 @@ session S has recorded up to t2   → S.tip == h2  → continue: record t3, t4 i
 - **Without it**, the proxy looks for the session whose last recorded hash (its
   *tip*) matches the longest prefix of the client's history.
 
-Two conversations can share a session only while their histories are
-byte-identical, so everything the session holds was derived from content both of
-them contain. The moment one differs, its hashes stop matching and it continues in
+Two conversations can share a session only while their histories say the same
+thing, so everything the session holds was derived from content both of them
+contain. The moment one differs, its hashes stop matching and it continues in
 its own session.
 
 **Rewinding.** When a header session's history diverges at turn *k*, the session
@@ -82,6 +86,17 @@ that no longer exists.
   observer.
 - **The provider's answer and errors pass through verbatim**, status codes
   included: the client's error handling was written against the provider's format.
+- **Recent turns go as the client sent them in this request**, not as recorded
+  when they arrived. The client moves its cache markers onto its newest turns, and
+  markers kept from earlier requests would pile up past the provider's limit of
+  four.
+- **Instructions inside the conversation are never condensed.** A client can put
+  system messages among its turns: Claude Code adds its environment and its tools'
+  instructions after a user turn. They are set aside, word for word, each with its
+  place; the engine sees only the conversation, and every forwarded request puts
+  each instruction back — after the turn it followed, or right after the front when
+  that turn was collected. Condensed, Claude Code's own instructions could be
+  summarised away; passed over, every Claude Code request went untouched.
 - **Every other Anthropic endpoint passes through untouched.** A client such as
   Claude Code also counts tokens and lists models through the same base URL; those
   requests are forwarded with their method, path, query, headers and body, and
