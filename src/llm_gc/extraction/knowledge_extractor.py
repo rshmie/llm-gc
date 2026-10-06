@@ -1,13 +1,13 @@
-"""Pull reusable facts out of a turn that is about to be archived.
+"""Pull reusable facts out of a turn when its span is made.
 
 Regex patterns keyed by `KnowledgeType`, so a new phrasing is a new row rather
 than a new branch.
 
-Refusing to label beats labelling wrongly: when nothing matches, the caller stores
-the turn verbatim as a `RAW` entry, so a rejected match loses nothing. A
-mislabelled one is filed as a confident fact under a topic that is really a
-sentence fragment, and since supersession matches on the label it can never be
-contradicted. See doc/design/generational-memory/overview.md.
+Refusing to label beats labelling wrongly: the turn itself is kept in its span,
+so a rejected match loses nothing. A mislabelled one is filed as a confident fact
+under a topic that is really a sentence fragment, and since supersession matches
+on the label it can never be contradicted. See
+doc/design/generational-memory/overview.md.
 """
 
 import re
@@ -21,7 +21,7 @@ from llm_gc.models.knowledge_entry import GENERAL_TOPIC, KnowledgeType
 #
 # Deliberately naive: "e.g." and "Dr. Smith" split wrongly, and no regex fixes
 # that without a model or an abbreviation list. The cost of a wrong split is one
-# missed or truncated fact, which falls back to a RAW archive. The cost of *not*
+# missed or truncated fact; the turn itself is kept either way. The cost of *not*
 # splitting is what this replaces — matching across unrelated clauses and storing
 # the result as a fact.
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
@@ -34,8 +34,8 @@ _TOPIC = r"(?P<topic>\w+(?:[\s-]+\w+){0,3})"
 
 # Words that cannot be a topic on their own. A "fact" whose subject is `what`, `it`
 # or `that` names nothing retrievable later, and its label can never be matched for
-# supersession. Rejecting the match sends the turn to a RAW archive instead, which
-# keeps the text and claims nothing about it.
+# supersession. Rejecting the match files nothing, and the turn itself is kept in
+# its span.
 _TOPIC_STOPWORDS = frozenset({
     "a", "an", "the", "this", "that", "these", "those", "it", "its", "they", "them", "their",
     "we", "our", "ours", "you", "your", "i", "my", "me", "he", "she", "him", "her", "his",
@@ -105,9 +105,9 @@ class KnowledgeExtractor:
     def extract_knowledge(self, message: Message, message_turn: int) -> list[KnowledgeEntry]:
         """Extract whatever facts, decisions and preferences the turn states.
 
-        Returns an empty list when nothing matches cleanly, which the archiving
-        caller treats as "store the turn verbatim". That is the intended outcome for
-        an ordinary conversational turn, not a failure.
+        Returns an empty list when nothing matches cleanly. That is the intended
+        outcome for an ordinary conversational turn, not a failure: the turn itself
+        is kept in its span.
         """
         return self.read(message, message_turn).entries
 

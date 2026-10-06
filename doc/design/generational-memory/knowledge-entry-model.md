@@ -2,9 +2,33 @@
 
 ## What It Is
 
-A `KnowledgeEntry` is an extracted unit of knowledge from a conversation turn. It represents
-a piece of information that must reach the model even after the turn it came from is
-archived: the turn itself is still kept in its span, but the front shows only its facts.
+A `KnowledgeEntry` is one unit of knowledge read from a conversation turn — a fact, a
+decision or a preference. Every turn is read once, from its own words, when a collection
+makes its span; the entries are filed in the session's permanent generation and kept for
+the session's life. They are what an archived span shows beside its opening line, and the
+record of what the conversation later changed its mind about.
+
+## How an entry reaches the model
+
+```
+ turn 5: "Let's use PostgreSQL for the database."
+            │ read once, when its span is made
+            ▼
+ KnowledgeEntry(topic="database", content="postgresql", message_turn=5, ACTIVE)
+            │
+            ├─ span archived or summarised ──► on its line:
+            │     [Archived] (turns 5–6) Let's use PostgreSQL for the database. · database: postgresql
+            │
+            └─ turn 15 says "switch to MySQL" ──► a new entry supersedes it, and turn 5's span,
+                  at whatever level it is shown, carries:
+                  ↳ Replaced later (turn 15): database: mysql, not postgresql.
+```
+
+A kept span shows its own words, which already state its facts, so its entries are not
+listed beside it. A folded span shows nothing of its own. A superseded entry is never shown
+as a fact — only named in the note on its span.
+
+---
 
 The word "Knowledge" is deliberate — these are not necessarily objective facts. They include:
 - Project state ("Database is MySQL")
@@ -12,7 +36,7 @@ The word "Knowledge" is deliberate — these are not necessarily objective facts
 - User preferences ("Prefers concise responses")
 
 All are stored identically. The `KnowledgeType` enum differentiates their semantic meaning
-for the visualizer and retrieval logic.
+for the dashboard.
 
 ---
 
@@ -51,9 +75,8 @@ internal value objects where the data is already trusted.
 | `DECISION` | A choice made (content includes reasoning) | "Database is MySQL — chose over PostgreSQL for cheaper hosting" |
 | `PREFERENCE` | A behavioral preference | "User prefers concise responses" |
 
-The type does NOT affect storage or contradiction logic. It's a semantic label for:
-- The visualizer's Decision Survival Map (filters by `DECISION`)
-- Future retrieval heuristics (preferences might be weighted differently)
+The type does not affect storage, rendering or contradiction logic. It is a semantic label
+the dashboard uses, for example to list decisions on their own.
 
 ---
 
@@ -61,8 +84,8 @@ The type does NOT affect storage or contradiction logic. It's a semantic label f
 
 | Value | Meaning |
 |-------|---------|
-| `ACTIVE` | Current, valid knowledge — injected into context on retrieval |
-| `SUPERSEDED` | Replaced by a newer entry — preserved for history, never injected |
+| `ACTIVE` | Current knowledge — shown on its span's line when the span is summarised or archived |
+| `SUPERSEDED` | Replaced by a newer entry — kept for history; shown only as the "replaced later" note on its span |
 
 ---
 
@@ -81,11 +104,16 @@ Because entries are frozen (immutable), supersession creates a *new copy* of the
 with `knowledge_status=SUPERSEDED` using `dataclasses.replace()`. The original object is
 never mutated.
 
+An entry whose topic is `general` — a decision that names no topic, like "we decided to ship
+on Friday" — supersedes nothing (`KnowledgeEntry.can_supersede`). Matched as a topic, it
+would retire every earlier topic-less decision, however unrelated.
+
 ### Limitation
 
-Contradiction detection relies on exact `topic_label` match. "database" and "db-choice"
-would be treated as different topics. The FactExtractor is responsible for
-consistent labeling; semantic matching would improve on it.
+Contradiction detection relies on an exact `topic_label` match. "database" and "db-choice"
+are different topics, and a mislabelled entry ("we decided the database") can never be
+superseded by a correctly labelled one. The extractor is responsible for consistent labels;
+a model-written extractor, given the labels already in use, would improve on it.
 
 ---
 
@@ -93,7 +121,9 @@ consistent labeling; semantic matching would improve on it.
 
 | Decision | Reasoning |
 |----------|-----------|
-| Single class, no inheritance | `DecisionFact` subclass was removed — the `KnowledgeType` enum differentiates semantics without needing separate classes. Reasoning is part of `content` string. |
+| Single class, no inheritance | The `KnowledgeType` enum differentiates semantics without separate classes. Reasoning is part of the `content` string. |
+| Read from the original turn, once | A fact read from a summary is read second-hand; reading once, when the span is made, means no level ever waits on extraction. Each entry names exactly one turn. |
+| Facts on their span's line, not in a block of their own | Each turn is represented once in the front, in conversation order; a separate block of facts would repeat what summarised spans already say, under a second budget. |
 | `frozen=True` | Historical records must be immutable. Supersession creates new copies. Prevents bugs from shared mutable references. |
 | `@dataclass` over Pydantic | Internal value object — no validation boundary needed. Lighter weight. |
 | `reasoning` folded into `content` | Avoids a field that's empty for FACT and PREFERENCE types. Extractor formats content naturally. |

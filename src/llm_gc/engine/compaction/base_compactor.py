@@ -12,7 +12,7 @@ class BaseCompactor(ABC):
 
     An ABC rather than a Protocol because `_format_summary_marker` is shared
     behaviour every compactor must use. See
-    doc/design/sweeper-and-composition/compaction-mechanism.md.
+    doc/design/generational-memory/compaction.md.
     """
 
     COMPACTION_STRATEGY: CompactionStrategy
@@ -22,17 +22,15 @@ class BaseCompactor(ABC):
 
     @abstractmethod
     async def compact(self, messages: list[Message]) -> CompactionResult:
-        """Summarise a contiguous run of messages.
+        """Summarise a span's turns.
 
         Args:
-            messages: A non-empty, adjacent run in turn-index order, every entry
-                COMPACT-classified by the sweeper.
+            messages: A span's turns: non-empty, consecutive, in turn-index order.
 
         Returns:
             A `CompactionResult` whose `summary` has role `"assistant"`, content
             opening with `_format_summary_marker`, `token_count` of the summary
-            (not the originals), and `turn_index` of the run's *first* message so
-            the composer can re-interleave it chronologically.
+            (not the originals), and `turn_index` of the span's *first* turn.
 
         Raises:
             CompactionRefused: The summary is unusable and must not replace the

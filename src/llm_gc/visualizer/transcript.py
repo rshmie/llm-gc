@@ -1,9 +1,9 @@
 """Each conversation as its client last sent it, kept for the dashboard.
 
-The engine keeps only what the model is sent: once a turn is summarised or
-reduced to facts, its words are gone, by design. Showing what was lost needs the
-original beside what remains, and the client sends the whole conversation on
-every request. So the proxy hands each request's history to this recorder.
+The dashboard shows every turn's words beside what the model receives instead.
+The client sends the whole conversation on every request, so the proxy hands each
+request's history to this recorder. The engine's spans hold the same words for
+every condensed turn; this copy goes once the dashboard reads them from the spans.
 
 Held only while the dashboard runs, in memory, as text, bounded by session count,
 and dropped when its session closes.

@@ -1,665 +1,513 @@
 # Generational Memory Model
 
-## The Problem
+## The problem
 
-LLM conversations accumulate context linearly. A 100-turn conversation at 300 tokens/turn is
-30,000 tokens. Context windows have hard limits. When they fill up, existing approaches either:
+LLM conversations grow linearly. A 100-turn conversation at 300 tokens a turn is
+30,000 tokens, and every request sends all of it again. Context windows have hard
+limits, every token costs money and time, and long prompts dilute the model's
+attention. When a conversation gets long, the usual answers are:
 
-- **Truncate from the top** — knowledge from early turns is permanently lost
-- **Sliding window (keep last N)** — same loss, just predictable timing
-- **Compress everything into summaries** — smaller, but summaries grow linearly with
-  conversation length and become lossy-on-lossy as they compound
+- **Truncate from the top** — early turns are lost for good.
+- **A sliding window (keep the last N)** — the same loss, at a predictable moment.
+- **Summarise everything** — smaller, but the detail inside each summary is gone,
+  and summaries of summaries lose more each time.
 
-All three approaches share the same failure mode: **information loss is inevitable and
-uncontrolled.** The system cannot guarantee that a critical decision from turn 5 survives
-to turn 500.
+All three share one failure: **information is destroyed, and nothing can bring it
+back** when the conversation returns to it. The system cannot promise that a
+decision from turn 5 still reaches the model at turn 500.
 
-Generational memory solves this: turns age through tiers of decreasing token cost, and no
-turn is ever destroyed. Every turn is kept whole in the **span** that condenses it, even once
-the front shows it only as facts, and its **information** is preserved permanently as well —
-extracted into a durable knowledge entry where the extractor recognises one, or kept
-**verbatim** where it does not. Nothing leaves active context without a trace.
-
----
-
-## How Turns Get Classified (Score-Driven, Not Position-Driven)
-
-Classification into generations is driven by the **weighted relevance score** from the
-RelevanceScorer (recency + similarity + density + decision + reference signals). The sweeper
-uses these scores to classify each turn:
-
-```
-  score >= keep_threshold (default 0.7)     → KEEP      → Young Generation
-  archive_threshold <= score < keep_threshold → COMPACT   → Old Generation (after summarization)
-  score < archive_threshold (default 0.3)   → ARCHIVE   → Permanent Generation (after extraction)
-```
-
-**Override rules (applied regardless of score):**
-- Last N turns → always KEEP (configurable via `last_n_turns_to_keep`)
-- System prompt → always KEEP
-
-**Score-boosting signals (not overrides — contribute to higher score):**
-- Turns referenced by later messages → higher reference score component
-- Turns semantically similar to current query → higher similarity score component
-
-This means: a turn from 30 turns ago with a high relevance score (e.g., a key decision that's
-still referenced) stays in young generation. A recent turn with low information density could
-theoretically score below keep_threshold. **Position is ONE input (recency scorer), not the
-sole determinant.**
+LLM-GC's answer is to **never destroy anything**, and instead decide, again and
+again, **how much detail of each part of the conversation the model is sent**.
 
 ---
 
-## The Three Generations
+## The idea in one picture
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        YOUNG GENERATION                              │
-│                                                                     │
-│  Contains:   Turns classified KEEP — either by score (>= keep_     │
-│              threshold) or by override (last N, system prompt)      │
-│  Kept as:    Full verbatim text, no modification                   │
-│  Storage:    In the messages array itself (no external storage)     │
-│  Token cost: HIGH (full verbatim text)                              │
-│  Analogy:    Working memory - crystal clear, immediate recall       │
-│                                                                     │
-│  ┌────────────────────────────────────────────────────────┐         │
-│  │ Turn 18: "Let's add rate limiting to API" [score 0.85] │         │
-│  │ Turn 19: "Use Redis for token bucket" [score 0.79]     │         │
-│  │ Turn 20: "Here's the middleware code" [override: lastN]│         │
-│  │ Turn 3:  "Project uses microservices" [score 0.72]     │  ← old  │
-│  │          turn, but still high score (referenced often)  │         │
-│  └────────────────────────────────────────────────────────┘         │
-│                                                                     │
-├─────────────────────────────────────────────────────────────────────┤
-│                        OLD GENERATION                                │
-│                                                                     │
-│  Contains:   Summaries of COMPACT runs (score between archive_      │
-│              threshold and keep_threshold), and KEEP turns quoted   │
-│              word for word when a cut takes them. Each entry records│
-│              the turns it stands in for.                            │
-│  Size:       Bounded by its own token budget (20% of the window)    │
-│  Storage:    Session store                                          │
-│  Token cost: MEDIUM (~80 tokens per 5-turn summary block)           │
-│  Analogy:    Short-term memory — "we talked about auth, something   │
-│              about JWT..." You remember the gist, not every word.   │
-│                                                                     │
-│  ┌────────────────────────────────────────────────────────┐         │
-│  │ [Summary of turns 1-5: Set up project, chose           │         │
-│  │  PostgreSQL for DB, discussed schema options.] [80 tok] │         │
-│  │                                                        │         │
-│  │ [Summary of turns 6-12: Implemented JWT auth with      │         │
-│  │  7-day refresh. Redis for session storage.] [100 tok]   │         │
-│  └────────────────────────────────────────────────────────┘         │
-│                                                                     │
-├─────────────────────────────────────────────────────────────────────┤
-│                     PERMANENT GENERATION                             │
-│                                                                     │
-│  Contains:   Extracted knowledge entries (facts, decisions,         │
-│              preferences) from turns classified ARCHIVE              │
-│  Size:       Grows sublinearly (deduplicated - one entry per topic) │
-│  Storage:    In-memory, session-scoped (persistence not yet built)  │
-│  Token cost: LOW (~10 tokens per entry)                             │
-│  Analogy:    Long-term memory — "the project uses PostgreSQL."      │
-│              A knowledge entry, detached from the conversation.     │
-│                                                                     │
-│  ┌────────────────────────────────────────────────────────┐         │
-│  │ fact: "Database is PostgreSQL"         [source: turn 5] │         │
-│  │   -> SUPERSEDED by: "Database is MySQL" [source: turn 15]│         │
-│  │ fact: "Auth method is JWT"             [source: turn 8] │         │
-│  │ fact: "Token expiry: 7 days"           [source: turn 8] │         │
-│  │ pref: "Prefers explicit error handling" [source: turn 12]│        │
-│  └────────────────────────────────────────────────────────┘         │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
+ THE CONVERSATION — every turn, kept whole (the source of truth)
+ ┌─────────────────────────────────────────────────────────────────────────────┐
+ │ t0 t1 │ t2 t3 │ t4 t5 │ t6 t7 │ t8 t9 │ … │ t40 t41 t42 t43 t44               │
+ └─────────────────────────────────────────────────────────────────────────────┘
+  span A  span B  span C  span D  span E          the tail
+ ◄──────────── old generation: spans ─────────────►  ◄── young generation ──►
+
+ WHAT THE MODEL RECEIVES ON EACH REQUEST
+ ┌ the FRONT — one message, rebuilt only when a collection commits ───────────────┐
+ │ span A   ·  out of view   (folded with its neighbours into one line)           │
+ │ span B   ·  archived      opening line + the facts read from it                │
+ │ span C   ▤  summarised    opening line + facts + a summary                     │
+ │ span D   █  kept          every word, quoted exactly                           │
+ │ span E   ▤  summarised    … + "↳ Replaced later (turn 22): cloud: AWS"         │
+ └───────────────────────────────────────────────────────────────────────────────┘
+   t40 t41 t42 t43 t44   ← the tail, exactly as the client sent it
+
+ PERMANENT GENERATION — facts read from every turn, with what replaced what
 ```
 
-### Growth Characteristics
-
-| Generation | Placement Criteria | Token Cost | Growth Pattern | Bounded? |
-|-----------|-------------------|-----------|---------------|----------|
-| Young | score >= keep_threshold OR override | High | Variable (depends on score distribution) | Soft — more high-scoring turns = larger young gen |
-| Old | archive_threshold <= score < keep_threshold | Medium | Linear until its token budget, then flat | Yes — by its own token budget |
-| Permanent | score < archive_threshold (after extraction) | Low | Sublinear (deduplicated facts) | Effectively yes — unique decisions are finite |
-
-The key insight: **summaries grow linearly, but knowledge entries grow sublinearly.** Whether you
-discussed PostgreSQL across turns 5, 15, and 45 — the permanent gen holds ONE entry. This is
-what prevents unbounded context growth.
-
-One caveat to that bound: what the extractor cannot read is preserved **verbatim** as a `RAW`
-entry — the whole turn when it reads nothing, or the sentences no fact came from when it reads
-part of one. That is the no-information-loss guarantee. Those are full-size and not deduplicated, so the
-sublinear bound holds for *recognised* knowledge, plus a verbatim term that scales with how often
-extraction finds nothing. The project accepts that storage cost in exchange for never dropping a
-turn without a trace.
-
-Note: young gen is NOT purely "last N turns." Last N is an override guarantee (those turns are
-ALWAYS kept). But other turns can also be in young gen if their relevance score is high enough.
-A critical decision from turn 3 that's still referenced by turn 20 may score 0.72 and stay KEEP.
+- Every turn is kept, word for word, for the life of the session.
+- The newest turns are sent exactly as written.
+- Older turns are grouped into **spans** — one exchange each — and every span is
+  shown at one of four **detail levels**.
+- At every collection, LLM-GC re-scores every span by how much it matters **now**
+  and re-picks its level. A span the conversation returns to is shown in full
+  again, from its own words.
 
 ---
 
-## Turn Lifecycle — How Classification Determines Fate
+## The three generations
 
-The lifecycle is **not** purely linear (young → old → permanent in order). It's **score-driven
-on every GC pass**. A turn's generation can change as its relevance score changes over time.
+| Generation | Holds | Sent to the model as |
+|---|---|---|
+| **Young** (the tail) | The newest turns — at least `last_n_turns_to_keep` | Exactly as the client sent them |
+| **Old** | Every older turn, grouped into spans, each with its original words | The front: each span at its detail level |
+| **Permanent** | The facts, decisions and preferences read from every turn, active or replaced | On their span's line, and as "replaced later" notes |
+
+Turns move from young to old once, when a collection takes them. They never move
+into the permanent generation: **the permanent generation holds knowledge about
+turns, not turns.** A span never leaves the old generation either; it is only
+shown with more or less detail.
 
 ```
-Turn arrives in conversation
-  │
-  ▼
-SCORING ──── RelevanceScorer computes weighted score:
-  │           recency + similarity + density + decision + reference
-  │
-  ▼
-SWEEPER ──── Classifies based on score + overrides:
-  │
-  ├─── score >= keep_threshold OR override (lastN, system) ──→ KEEP
-  │                                                              │
-  │                                                              ▼
-  │                                                         YOUNG GEN
-  │                                                         (full verbatim)
-  │
-  ├─── archive_threshold <= score < keep_threshold ──────→ COMPACT
-  │                                                              │
-  │                                                              ▼
-  │                                                         PROMOTION
-  │                                                         (summarize with adjacent turns)
-  │                                                              │
-  │                                                              ▼
-  │                                                         OLD GEN
-  │                                                         (compressed summary)
-  │
-  └─── score < archive_threshold ────────────────────────→ ARCHIVE
-                                                               │
-                                                               ▼
-                                                          EXTRACTION
-                                                          (FactExtractor pulls facts/decisions)
-                                                               │
-                                                               ▼
-                                                          PERMANENT GEN
-                                                          (facts stored, turn kept in its span)
+   young generation                old generation                   permanent generation
+ ┌─────────────────┐  collection  ┌──────────────────────────┐      ┌──────────────────────┐
+ │ newest turns,   │ ───────────► │ spans, each holding its  │ ───► │ facts read from each │
+ │ word for word   │  (once)      │ turns, shown at a level  │ read │ turn when its span   │
+ └─────────────────┘              │ that can rise or fall    │ once │ is made              │
+                                  └──────────────────────────┘      └──────────────────────┘
 ```
-
-### Score Changes Over Time (Why Turns Move Between Generations)
-
-A turn's relevance score is **not static**. It changes every GC pass because:
-- **Recency decays** — as new turns arrive, older turns score lower on recency
-- **Reference changes** — if later turns stop referencing an old turn, its reference score drops
-- **Similarity shifts** — as the conversation topic changes, old turns may become less similar
-  to the current query
-
-This means a turn classified as KEEP today could become COMPACT on a future GC pass
-(its score dropped below keep_threshold). And a COMPACT turn could become ARCHIVE later
-(score dropped below archive_threshold). This is the natural aging process — driven by
-relevance, not just position.
-
-Classification says what a turn *would* become; a **cut** is when it happens, for
-the oldest turns in one batch (see [the-cut.md](the-cut.md)). A KEEP turn that a
-cut takes is not lost: it is quoted word for word in the front.
 
 ---
 
-## How Context Is Assembled (on gc.collect)
+## Spans: what a collection makes
 
-The context sent to the model is **a front, then the verbatim tail**:
+A **span** is one exchange: something the user said or asked, and everything that
+came back before they spoke again.
+
+Think of the minutes of a meeting. Each agenda item — a question raised, and the
+discussion that settled it — is one entry. Minutes can record an item in full, as a
+short paragraph, or as a one-line decision, but they never record half an item.
+LLM-GC treats a conversation the same way: the span is the item, and its detail
+level is how fully it is recorded.
+
+```
+ turn  who         what was said                                     span
+ ────  ─────────   ───────────────────────────────────────────────   ──────────────────
+   4   user        What should the seat hold be?                     ┐ turns 4–5
+   5   assistant   Seven minutes: long enough to pay, short enough…  ┘
+   6   user        Let's use Stripe for payments, with a 4% fee.     ┐ turns 6–7
+   7   assistant   Agreed. Stripe takes the fee before the payout…   ┘
+   8   user        Check the current fee table, please.              ┐
+   9   assistant   [tool call] read fees.csv                         │ turns 8–11
+  10   user        [tool result] the file's contents                 │ a tool result is
+  11   assistant   The table already lists 4% for…                   ┘ not a new question
+```
+
+### What a span carries
+
+When a collection makes span 6–7, it stores everything any level will ever need,
+once:
+
+```
+ span 6–7
+ ├ its turns          turns 6 and 7, word for word        kept for the life of the session
+ ├ its opening line   "Let's use Stripe for payments,     the user's first sentence:
+ │                     with a 4% fee."                    what was asked or decided
+ ├ its facts          fee: 4%                             read from the turns
+ └ its summary        "The user chose Stripe with a 4%    one model call
+                       fee; the assistant agreed, noting
+                       Stripe takes it before the payout."
+```
+
+The [four detail levels](#the-four-detail-levels) are four ways of showing this one
+span, so choosing between them later costs no model call.
+
+- **No summary is made** when the span is too short for any summary to be shorter
+  than its words; such a span is kept or archived, never summarised.
+- **Facts are read from the original turns**, never from the summary, so a mistake
+  in a summary cannot become a fact.
+
+### Why the unit is an exchange, not a single message
+
+- **A question and its answer only mean something together.** "Seven minutes" on its
+  own answers nothing; "What should the seat hold be?" on its own has no answer.
+  Condensed apart, the answer's summary loses what it answered, and the question
+  cannot be shortened at all. Together, the opening line names the subject in the
+  user's own words and the summary says what was settled.
+- **It is how a conversation is returned to.** A user comes back to "the seat-hold
+  question", not to turn 5. Relevance compares what they ask now with whole
+  exchanges, and raises a whole exchange: question, answer and all.
+- **It is always safe to quote back.** The provider requires every tool result to
+  follow its tool call immediately. A span never separates them, so any span can be
+  shown word for word without breaking the request.
+- **Fewer, better summaries.** One per exchange rather than one per message: fewer
+  model calls, and each summary reads as one story.
+- **Fixed boundaries make every later choice free.** A span's boundaries never
+  change, so its summary, facts and opening line are made once. Raising or lowering
+  it later only changes how it is rendered.
+
+*Known gap:* a collection can still cut between a question and its answer, which
+makes each a span of its own; see [the-cut.md](the-cut.md#known-gaps).
+
+### The precise rule
+
+```
+ user ─ assistant ─ (tool call ─ tool result)* ─ assistant │ user ─ assistant │ …
+ └──────────────────── one span ──────────────────────────┘ └── next span ───┘
+```
+
+A tool result arrives as a user-role message, but it continues the exchange; it
+does not start a new one. An exchange larger than 8,000 tokens (a long agentic
+run) is divided between tool rounds, never between a tool call and its result,
+and never between a question and its first answer. See [the-cut.md](the-cut.md)
+for when a collection makes spans.
+
+---
+
+## The four detail levels
+
+Each level shows everything the level below it shows, so **showing a span with
+more detail never takes anything away**.
+
+```
+ kept         [Quoted exactly] (turn 6, user) Let's use Stripe for payments, with a 4% fee…
+              [Quoted exactly] (turn 7, assistant) Agreed. Stripe takes the fee…
+                                                                          ▲ more detail
+ summarised   [Summarised] (turns 6–7) Let's use Stripe for payments, with a 4% fee. · fee: 4%
+              The user chose Stripe with a 4% fee; the assistant agreed, noting…
+                                                                          │
+ archived     [Archived] (turns 6–7) Let's use Stripe for payments, with a 4% fee. · fee: 4%
+                                                                          │
+ out of view  [Out of view] (turns 0–3) 2 earlier exchanges, folded…      ▼ fewer tokens
+```
+
+Kept, summarised and archived are chosen by the score. **Out of view is not:** it
+is the floor that keeps the front bounded in a conversation so long that even one
+archived line per span no longer fits the budget. The oldest spans are then folded
+behind a single line that says they exist; each still keeps its turns. Ordinary
+sessions never reach it. How a level is chosen, what each costs, and why folding
+works this way are in [detail-levels.md](detail-levels.md#out-of-view-the-floor-under-every-other-level).
+
+---
+
+## How a span's level is chosen
+
+**The score decides the level; the budget caps the total.**
+
+```
+ every span ──► SCORE: how much does it matter now?
+                  liveness   = the larger of  recency (slow decay)
+                                              relevance to what the user is discussing
+                + importance = decisions and specifics it states
+                     │
+                     ▼
+               PLAN:  score ≥ 0.7 → kept · ≥ 0.3 → summarised · below → archived
+                      (a span moves only once its score clears a line by 0.05)
+                     │
+                     ▼
+               over the recap budget?  lower the coldest span one level, repeat;
+                                       when nothing can go lower, fold the oldest
+```
+
+- **Liveness** is the larger of recency and relevance, not their sum: a span is
+  part of the conversation as it stands if it is recent **or** if what the user is
+  discussing reaches it. This is what lets an old span come back. See
+  [scoring/overview.md](../scoring/overview.md).
+- **The recap budget** is one share of the model's window (30% by default). The
+  score is deliberately conservative — it archives only what has gone quiet — and
+  the budget is what bounds the front.
+- **Levels are re-decided at every collection, both ways.** A span drops as it
+  goes quiet and rises when the conversation returns to it:
+
+```
+                    collection 3   collection 6   collection 9   collection 12
+ span D relevance       0.55           0.25           0.20       0.80  ← the user asks about it
+ span D level         summarised     archived       archived     kept  ← restored from its own words
+```
+
+---
+
+## How the context is assembled
+
+The context sent to the model is **the front, then the verbatim tail**:
 
 ```
 ┌──────────────────────────────────────────────────────┐
 │ System prompt (the client's, unchanged)              │
 │                                                      │
 │ FRONT — one user-role message, present after a cut   │
-│   facts recovered from archived turns                │
-│   "[Memory: (turn 15) database: mysql]"              │
-│   summaries and quoted turns, in conversation order  │
-│   "[Compacted turns 6-12] Implemented JWT auth..."   │
-│   "[Quoted exactly] (turn 5, user) We chose ..."     │
+│   a header naming the levels                         │
+│   every span, in conversation order, at its level    │
 │                                                      │
 │ TAIL — every later turn, exactly as the client sent  │
-│   Turn 18, Turn 19, Turn 20                          │
 │                                                      │
 │ The new turn (unchanged)                             │
 └──────────────────────────────────────────────────────┘
 ```
 
-The front changes only when a cut is made, which is the subject of
-[the-cut.md](the-cut.md): when a cut happens, what it contains, and why the prompt
-may be changed only there.
+The front changes only when a collection commits; between collections its bytes
+are identical on every request, which lets the provider cache it and keeps the
+model's thinking blocks valid. It opens the conversation as a user turn, which the
+provider requires.
 
-**Facts are retrieved, not dumped, and the budget keeps the system stable.**
-Permanent generation accumulates for the life of a session, so the front carries a
-budgeted selection of it, chosen when the front is made: decisions first, then
-facts, then preferences, with raw excerpts only in the room left over. The facts
-are real tokens in the real prompt and count against the context like any other
-message. Setting either memory budget to zero leaves facts out, which is how a
-deployment opts out and how a benchmark measures what they are worth. Ranking sits
-behind an interface, so a deployment with its own ranking supplies one without
-changing the engine.
-
-**The budget is a size, not a count.** The front carries facts up to a share of the
-model's window (10% by default), so memory grows with the conversation only until
-that share is spent and can never crowd the window. *Rejected: a count limit.* Facts
-are chosen once per cut, with no question to rank them against, so a count can only
-leave out facts the budget has room for; cost and the window are both measured in
-tokens, which the size budget measures directly. *Rejected: sending everything*,
-which lets memory grow without bound until it costs more than the turns it
-replaced. When the budget is reached, what does not fit is shown as out of view;
-condensing the permanent generation further is the answer to that.
-
-**Selection and presentation use different orderings.** Importance decides what
-survives the budget; the surviving facts are shown in conversation order, because
-the front is read top to bottom and a fact from turn 2 belongs before one from
-turn 40.
-
-**The front says what it is.** It carries a header naming it as condensed history,
-each fact carries its origin turn, each summary its provenance marker, and each
-quote is marked as quoted. Distilled content presented as original conversation
-would be the dishonesty the provenance markers exist to prevent. A `RAW` entry is
-labelled an excerpt rather than a parsed fact, because extraction found nothing in
-that turn.
-
-**Superseded facts never reach the prompt.** Only active entries are candidates.
-This is the step that makes contradiction tracking worth anything: without the
-filter the model would read an old value and its correction as two equal claims.
-
-### How old gen is swept, and why it is the bound that matters
-
-The old generation has a token budget of its own: a share of the model's window
-(`max_old_gen_ratio`, 20% by default), beside the share the facts get. Each cut
-checks it. When the spans the front shows — summarised and quoted, including the
-ones the same cut has just made — add up to more than the budget, the coldest are
-archived until the rest fit: their facts are filed in the permanent generation, and
-the span stays in the old generation at the archived level, holding its turns. Under
-the budget nothing is archived, however cold. Without this, a turn's journey would end
-at old gen: old gen would only ever grow, the assembled context would gain one
-summary per aged run forever, and old gen would become the leak that aging the
-young generation exists to prevent.
-
-```
-each cut, after its batch is planned
-
-  old-gen entries: earlier cuts' + this cut's
-        │
-        ▼
-  total tokens within the budget? ── yes ──► nothing archived, however cold
-        │ no
-        ▼
-  score each one against the context the cut will leave
-        │
-        ▼
-  archive coldest first (the older first, on equal scores) until the rest fit
-        │
-        └── an archive that fails: the entry stays, a degradation is
-            reported, and the next-coldest entry makes the room
-```
-
-**The budget decides when an entry is archived; the score decides which.** An
-archived entry reaches the model only as facts and as lines shortened to one memory
-line each (180 characters), so a detail past that point in a summary is no longer
-sent. Archiving an entry the front had room for therefore loses detail and saves
-nothing the prompt needed. *Rejected: the score deciding when as well.* Recency
-decay takes every summary below `archive_threshold` within a few cuts, so the old
-generation would be archived on a schedule rather than when it needed room, on a
-conversation that never comes near the window just as on one that fills it.
-*Rejected: a longer memory line*, because every fact pays for it on every request
-and it still cuts somewhere. *Rejected: never archiving an old-gen entry*, because
-the recap would grow without bound. *Rejected: an absolute token count*, for the
-same reason as the fact budget: a number sane for a large window is ruinous for a
-small one. The accepted cost: the recap is larger until the old generation reaches
-its budget, and a summary that states a decision the conversation later replaced
-stays in front of the model for longer, since summaries are not superseded the way
-facts are. Worth revisiting if ordinary sessions reach the budget; reversing it is
-one setting and one branch.
-
-A span that a cut produces and that is already over the budget enters old gen
-archived. A span whose archive fails stays at its level — a span is archived only
-once its facts are filed — and the budget is met by the next-coldest span instead;
-the failure is reported.
-
-**Archiving reads what an entry says, not how it is shown.** An entry opens with a
-marker telling the model what it is — "[Quoted exactly] (turn 2, user)",
-"[Compacted … turns 13–16]" — and extraction parses the entry's text without it.
-Parsed with the marker, extraction would read the marker as the first words of the
-turn, lose the fact in that sentence, and file a short stated decision as a raw
-excerpt. The facts an archived entry yields carry every turn it covered, so a
-reader can still trace turn 15 after its summary has left the front.
-
-**Two bands, not three.** A summary is kept or archived. The *re-compact into a
-longer-horizon summary* band described under Alternatives Considered is
-deliberately not built: summarising a summary compounds loss, because each pass
-through a model drops detail and a second pass drops detail about detail that can
-no longer be inspected. It also costs a model call per eviction where extraction
-costs none. Deferred rather than rejected — a benchmark showing that re-compaction
-retains more than extraction does would reopen it.
-
-**What eviction buys is prompt position, not storage.** An old-generation summary
-is in every prompt; its extracted facts are in a prompt only if they win a place in
-the front's fact budget at the next cut. So even a summary whose extraction finds
-nothing — kept verbatim as a `RAW` entry, at the same size it was — stops
-occupying the context unconditionally, at the cost that a `RAW` entry ranks last
-for that budget.
-
-**Scored against the assembled context, not against old gen alone.** Recency is
-positional, so a summary's age is its distance from the newest real turn. Scored
-only among themselves, the oldest surviving summary would always look recent, so
-the entries archived to make room would be chosen by the wrong measure.
-
-Sweeping old gen is only worth doing because injection exists: the two are one
-idea, since moving a summary into the permanent generation is an improvement only
-if the permanent generation reaches the prompt.
+**The front says what it is.** Its header reads: *"Earlier turns, condensed by
+LLM-GC: quoted exactly, summarised, archived to an opening line and its facts, or
+out of view. If a detail you need is not shown, say so rather than guess."* Every
+span's line carries its marker and the turns it stands for. Condensed content
+presented as original conversation would be the dishonesty the markers exist to
+prevent, and the closing instruction turns a missing detail into an honest "I don't
+have that" instead of a confident guess.
 
 ---
 
-## Why Permanent Generation Exists (Why Summaries Alone Aren't Enough)
+## Why nothing is lost
 
-### The Unbounded Growth Problem
+```
+ a detail stated at turn 7
+        │
+        ├─ the span holding turn 7 keeps turn 7's words, always
+        ├─ its facts are read from turn 7's words, once
+        └─ its level can rise again: kept shows the words themselves
+```
 
-Summaries compress ~5x but still grow linearly with conversation length:
-- 100 turns → 20 summary blocks × 80 tokens = 1,600 tokens of summaries
-- 500 turns → 100 summary blocks × 80 tokens = 8,000 tokens of summaries
-- 1000 turns → 200 summary blocks × 80 tokens = 16,000 tokens of summaries
+Three properties together make the no-loss promise hold:
 
-Eventually summaries themselves overflow the context window. The only option then is to
-summarize the summaries — lossy compression of lossy compression. Quality degrades rapidly.
+1. **Originals are kept.** A turn leaves the young generation only into a span that
+   holds it as it was recorded; committing a collection refuses any plan in which a
+   departing turn would not land in exactly one span.
+2. **Levels are nested.** Raising a span never shows less than before.
+3. **Levels are reversible.** Moving up restores from the original turns or the
+   cached summary, never from anything derived from a lower level.
 
-### The Permanent Gen Solution
-
-Permanent gen stores **deduplicated facts**. Growth is bounded by the number of unique
-decisions in the conversation — not by the number of turns.
-
-500 turns about a tech stack might produce **50 unique facts** × ~10 tokens = 500 tokens.
-That's constant relative to conversation length.
-
-### The Compression Analogy
-
-| Layer | Analogy | Growth |
-|-------|---------|--------|
-| Young gen (verbatim) | Raw 4K footage | Fixed (last N) |
-| Old gen (summaries) | Compressed MP4 | Linear (unbounded) |
-| Permanent gen (facts) | The script of the movie | Sublinear (bounded by unique knowledge) |
-
-You can't keep accumulating MP4s forever. But the script stays small.
+What a level below *kept* loses is **detail in the prompt**, not information: the
+span can always be shown in full again. On the decision-survival check, every
+probe answer reached the model on all five conversations, 37 of 37, matching the
+whole conversation sent unchanged ([evidence](../../../evals/decision_survival/evidence/detail-levels-2026-10-06.json)).
 
 ---
 
-## Knowledge Contradiction Handling
+## The permanent generation: what was decided, and what replaced it
 
-When the user changes their mind, the system must update — not accumulate conflicting entries.
+Every turn's facts are read when its span is made. They are filed in the
+permanent generation, where a newer fact on the same topic **supersedes** the
+older one instead of sitting beside it:
 
 ```
 Turn 5:  "Let's use PostgreSQL"
-         → KnowledgeEntry(content="Database is PostgreSQL", message_turn=5, status=ACTIVE)
+         → KnowledgeEntry(topic="database", content="postgresql", message_turn=5, ACTIVE)
 
 Turn 15: "Actually, switch to MySQL"
-         → KnowledgeEntry(content="Database is MySQL", message_turn=15, status=ACTIVE)
-         → Turn 5 entry replaced with copy: status=SUPERSEDED
+         → KnowledgeEntry(topic="database", content="mysql", message_turn=15, ACTIVE)
+         → turn 5's entry is replaced by a copy marked SUPERSEDED
 ```
 
-Rules:
-- Superseded entries are NOT deleted — history is preserved
-- Only ACTIVE entries are injected into context on retrieval
-- The supersession chain is queryable (for the visualizer's Decision Survival Map)
-- Contradiction detection uses topic_label matching, not just string equality
+- Superseded entries are kept: the record of what a conversation contradicted is
+  part of what the transparency layer reports.
+- An archived or summarised span shows its **active** facts on its line.
+- A span whose fact was later replaced carries a note at every level it is shown —
+  `↳ Replaced later (turn 15): database: mysql, not postgresql.` — because its own
+  words, or its opening line, may still state the old decision.
+- An entry whose topic is "general" (a decision that names no topic) supersedes
+  nothing: matched as a topic, "we decided to ship on Friday" would retire every
+  earlier topic-less decision, however unrelated.
+
+The entry model is in [knowledge-entry-model.md](knowledge-entry-model.md).
 
 ---
 
-## Hallucination Risk Assessment
+## Hallucination risk assessment
 
-Generational memory introduces three hallucination vectors:
+Condensing a conversation introduces three ways for the model to be told something
+false or incomplete.
 
-### 1. Lossy Summarization
-Compressing "We compared PostgreSQL and MySQL for 3 turns, considering ACID compliance, hosting
-costs, and team familiarity — chose PostgreSQL because the team knows it" into a short summary
-can lose the *reasoning*. The LLM might hallucinate a different justification later.
+### 1. Lossy summarisation
 
-**Mitigation:** Summaries preserve key decisions AND reasoning. Permanent gen stores decision +
-justification as separate fields.
+A summary of "we compared PostgreSQL and MySQL across three turns, weighing ACID
+guarantees, hosting cost and team familiarity, and chose PostgreSQL because the
+team knows it" can lose the *reasoning*, and the model may later invent a
+different one.
 
-### 2. Knowledge Extraction Errors
-If the extractor misparses "we decided NOT to use Redis" as KnowledgeEntry("Using Redis"),
-the permanent gen injects a false entry forever.
+**Mitigation:** a summarised span also shows its opening line — the user's own
+sentence — and its facts, so the decision itself does not depend on the summary.
+When the conversation returns to the span, it is raised to kept and the model
+reads the original words.
 
-**Mitigation:** Conservative extraction (high-confidence patterns only), contradiction detection
-(user corrections supersede bad extractions), and the Context Visualizer lets humans see and
-correct stored entries.
+### 2. Extraction errors
 
-**What "conservative" means concretely, because it is the load-bearing word.** The
-extractor refuses rather than guesses, and refusing costs nothing: a turn it
-declines to parse is archived verbatim as a `RAW` entry, so the text survives and
-nothing is claimed about it. A *mislabelled* entry is strictly worse than no entry,
-and for a reason that is easy to miss — contradiction detection matches on the
-topic label, so a label that is really a sentence fragment can never be
-contradicted by anything and stays active permanently. A bad label does not just
-look untidy; it disables the mechanism that was supposed to correct it.
+If the extractor misreads "we decided NOT to use Redis" as "using Redis", a false
+fact is filed.
 
-The rules follow, and each one trades recall for precision deliberately:
+**Mitigation:** conservative extraction (high-confidence patterns only),
+supersession (a correction retires the bad entry), the original words beside it at
+higher levels, and the dashboard, which shows every stored fact. Refusing to label
+costs nothing — the turn itself is kept in its span — while a *mislabelled* entry
+is strictly worse than none: supersession matches on the topic label, so a label
+that is really a sentence fragment can never be contradicted.
 
-- **A subject is one to four words.** Counting words, not characters and not
-  "whatever precedes the verb". Without a bound, a topic grows until it happens to
-  hit a full stop.
+The rules, each trading recall for precision deliberately:
+
+- **A subject is one to four words.** Without a bound, a topic grows until it
+  happens to hit a full stop.
 - **A declarative subject sits at the start of its sentence.** A matching verb
-  further in belongs to a subordinate clause, and what precedes it is a fragment
-  rather than a subject. This is the rule that does the most work.
-- **Matching is per sentence, not per turn.** Otherwise a verb anywhere in a long
-  turn matches, and a capture anchored to "the start" reaches back to the start of
-  the whole turn. It also makes the end-of-input anchors mean end-of-*sentence*,
-  which is what they were always written for.
+  further in belongs to a subordinate clause.
+- **Matching is per sentence, not per turn.**
 - **A subject made only of pronouns, articles or interrogatives is rejected.** "it
-  is fine" and "what are the constraints" state nothing retrievable later. The
-  rejection is what sends the turn to a verbatim archive instead.
+  is fine" states nothing retrievable later.
 - **Openers and labels are not part of the sentence.** "OK,", "So," and a short
-  label before a colon ("Decision:", "Change of plan:") are removed before the
-  start-of-sentence rule applies; otherwise "OK, decision: the database is
-  postgres" states nothing the extractor can read. The openers are a fixed list
-  rather than "any leading clause", because a qualifier is not an opener: "In
-  production, the database is postgres" is refused rather than filed without its
-  qualifier.
-- **Closing punctuation is removed before matching.** A topic slot at the end of a
-  pattern ("…for the database") must meet the end of the sentence; with the full
-  stop still there it never did, and every such decision was filed as general.
+  label before a colon ("Decision:") are removed first; a qualifier is not an
+  opener: "In production, the database is postgres" is refused rather than filed
+  without its qualifier.
+- **Closing punctuation is removed before matching.**
 - **A question claims nothing.** "The database is postgres, right?" asks for
-  confirmation; filed as a fact, it would supersede the answer. It is kept as text.
-- **A trailing topic names one thing.** In "use Postgres for the database, and
-  Redis for the cache" the slot catches "cache" for a decision mostly about the
-  database, and a later cache decision would retire it. When the content before
-  the slot lists several things, the decision is filed as general instead.
+  confirmation; filed as a fact, it would supersede the answer.
+- **A trailing topic names one thing.** When the content before "for the …" lists
+  several things, the decision is filed as general.
 
-**What extraction cannot read is kept beside what it can.** A turn is rarely one
-statement. Archived as only its facts, "the database is postgres; the API must
-answer p99 under 200 ms" kept the database and lost the requirement — the loss the
-verbatim fallback exists to prevent, hidden because the turn still showed a fact.
-The sentences no entry came from are kept as a `RAW` entry beside the facts;
-content-free ones ("OK.", "Thanks!") are not.
+Labels are normalised — lowercased, whitespace collapsed, a leading article or
+possessive dropped — because supersession compares them exactly.
 
-Labels are also normalised — lowercased, internal whitespace collapsed, a leading
-article or possessive dropped — because contradiction detection compares them
-exactly: "the Database is X" followed by "the database is Y", or "we decided to use
-X for the database" followed by "the database is Y", has to be one topic with two
-values rather than two unrelated facts.
+The extractor is the part of the design most clearly due for replacement: a
+model-written set of facts, made in the same call as the summary and validated
+against a schema, can replace it behind the same seam without changing anything
+else. Its weakness costs detail at the archived level, never information.
 
-The known remaining weakness is a subject that is a quantity or a long noun
-phrase: "forty thousand a second is above what a single writer handles" yields a
-real fact under an odd label. That is where a learned extractor earns its place;
-pattern matching cannot tell a subject from a measurement.
+### 3. Decontextualised knowledge
 
-### 3. Decontextualized Knowledge
-"If we were building in Go, we'd use PostgreSQL" is hypothetical. Stripped of context, it
-becomes false certainty: KnowledgeEntry("Database is PostgreSQL").
+"If we were building in Go, we'd use PostgreSQL" is hypothetical; stripped of
+context it becomes false certainty.
 
-**Mitigation:** Extraction patterns only fire on decision-indicating language ("let's use",
-"we'll go with", "I decided") — not hypotheticals ("if we", "we could", "maybe").
-Source turn number always preserved for human traceability.
+**Mitigation:** extraction fires only on decision language ("let's use", "we'll go
+with", "decided to"), not on hypotheticals; every fact names the turn it came from,
+and the turn itself is kept.
 
-### The Epistemic Transparency Defense
+### The epistemic transparency defence
 
-All three risks are why the Context Visualizer exists. The system cannot guarantee zero
-hallucination from compression — but it can make its internal state **visible** so the
-human can exercise judgment. This is the project's core philosophy: the AI provides
-transparency, the human provides judgment.
+All three risks are why the dashboard exists, and why the front's header asks the
+model to say when a detail is not shown. The system cannot guarantee that
+condensing never misleads — but it can make its own state **visible**, to the
+person and to the model. The AI provides transparency; the human provides
+judgement.
 
 ---
 
-## Design Decisions
+## Who owns the generations
 
-| Decision | Rationale |
-|----------|-----------|
-| Score-driven classification, not position-driven | Generations are assigned by relevance score, not by turn index. A high-value old turn stays in young gen. Last N is an override safety net, not the primary mechanism. This prevents the sliding-window failure mode. |
-| Three generations (not two, not four) | Maps naturally to: full detail / compressed / extracted knowledge. Fewer = information loss. More = unnecessary complexity for the same guarantees. |
-| Heuristic extraction before LLM-based | Free, deterministic, testable. LLM-based extraction is more accurate and can be added behind the same interface. |
-| Supersede entries, don't delete | Deletion destroys history. Supersession preserves the decision chain for audit and visualization. |
-| Choose facts for the front at the cut, by type then recency | Injecting everything wastes tokens and grows with the session. Choosing per question would change the prompt on every request, breaking the provider's cache and the model's thinking blocks, so facts are chosen when a cut makes the front: decisions, then facts, then preferences, raw excerpts last. Accepted cost: a stored fact can miss the budget and not be sent, which the dashboard reports. |
-| Old gen archived by its own token budget, coldest first | The budget decides when and the score decides which. Archived, an entry is sent only as facts and lines of at most 180 characters, so archiving one the front had room for loses detail for nothing; recency decay alone would archive every summary within a few cuts. A share of the window (20%), not an absolute, so it scales with the model. Accepted cost: a larger recap until the budget is reached, and a summary stating a replaced decision stays visible for longer. |
-| ARCHIVE always leaves a trace | A turn is run through the extractor before it leaves active context; what extraction does not read — the whole turn, or the sentences of it no entry came from — is preserved **verbatim** as a `RAW` knowledge entry. Extraction recall is imperfect, so the verbatim fallback is what makes the no-information-loss guarantee actually hold. |
-| Young gen is NOT purely "last N" | Last N is a floor guarantee (those are always KEEP). But any turn scoring above keep_threshold also stays in young gen regardless of age. |
-| Aging happens in `gc.update` (cold path), not `gc.collect` | Compaction and extraction are the expensive work; doing them per request would add latency to every forwarded call. The ager runs after the response; the hot-path collect only assembles what the ager already produced. |
-| State-based aging (act on current classification), not a transition diff | Once an aged-out turn is removed from the young generation it can never be re-swept, so remembering its prior classification buys nothing. The observer (health monitor) needs the across-pass diff; the actor (`gc.update`) does not. |
-| One-directional aging (no revival to verbatim) | Reviving a cooled turn would revive its lossy summary, not the original, and re-introduce the memory bloat compression exists to avoid. Relevance-on-return is served by the summary staying in context plus fact injection. |
+**Each session owns its three generations; nothing else holds them.** A session's
+tail, spans and facts live together in one immutable snapshot on its
+`SessionState` (see [session/overview.md](../session/overview.md)).
+`GenerationalMemory` is a stateless producer shared by every session: it groups,
+summarises and reads turns, and stores nothing. A collection gathers what it
+produced into a delta and commits it to the session's snapshot.
+
+This is what keeps one conversation's memory out of another's prompt: a producer
+that held what it produced would hand one user's facts to the next.
 
 ---
 
-## Alternatives Considered
-
-The three-generation model was chosen against several simpler designs, each
-rejected for a specific reason:
-
-- **A single store ("one bucket of kept content").** Rejected. Recent verbose
-  turns, compacted summaries, and durable facts have different shelf lives. One
-  store either over-retains (keeping verbose turns forever) or over-compresses
-  (losing facts to summaries). Separate generations let each have its own rules.
-- **Two generations — young and permanent only, no old.** Rejected. Without the
-  old generation, every aging turn faces a binary choice: stay verbatim or be
-  reduced to a fact. Real conversations have material that is no longer fresh but
-  still useful in summary form (background, partial threads); the old generation
-  is where that lives.
-- **Accumulating contradictions instead of superseding.** Rejected. An
-  accumulating store would surface both "we chose Postgres" and "we chose MySQL"
-  with equal weight, forcing the model to resolve the contradiction itself — the
-  opposite of the retention commitment, which is to hand the model a *coherent*
-  record of current decisions.
-- **Unbounded permanent-gen injection.** Rejected. A long session's permanent
-  generation accumulates; injecting every weakly-relevant entry would re-bloat the
-  very context the cleanup just trimmed. Injection is bounded — entries below a
-  minimum relevance are dropped and at most a capped number are injected, ranked
-  by relevance — which is the contract that makes *never make things worse*
-  implementable.
-- **Old gen with no eviction.** Rejected. Without a token budget, old gen grows
-  with the session, eventually making every collect slower and the cleaned
-  context larger than the original. Old gen is itself swept: low-relevance
-  summaries are archived (facts extracted first), borderline ones re-compacted
-  into longer-horizon summaries.
-- **Extract knowledge only on ARCHIVE.** Rejected. A decision made early may sit
-  in a turn still classified KEEP. If that turn later ages out, the decision must
-  already be in permanent gen — waiting for an explicit ARCHIVE risks losing it if
-  the turn is summarised into old gen first. Extraction also fires as a turn ages
-  out of young gen, closing that gap.
-
-Supersession itself carries an accepted cost: it treats the *latest* contradicting
-entry as current, which is right most of the time but not always — a user can
-misspeak in a way the extractor reads as a real change. The system accepts being
-occasionally wrong about which fact is current rather than interrupting the user
-to disambiguate.
-
-## Who Owns the Generations
-
-**Each session owns its three generations; nothing else holds them.** A
-session's young turns, old-gen summaries, and permanent-gen facts live together
-in one immutable snapshot on its `SessionState` (see
-[session/overview.md](../session/overview.md)). `GenerationalMemory` is a
-stateless producer shared by every session: it *summarises* a run of turns and
-*extracts* the facts from a turn, and stores neither result. The aging pass
-collects what it produced into a delta and commits it to the session's snapshot.
-
-This is what keeps one conversation's memory out of another's prompt. When the
-generations were held inside one shared `GenerationalMemory`, a proxy serving two
-users injected the first user's facts into the second user's prompt, presented
-as the second user's own memory.
-
-Supersession is part of filing, not of storage: when a fact is filed, every
-active fact on the same topic in *that session* is marked superseded. Two labels
-are shared rather than topics, and entries under them neither supersede nor get
-superseded: `RAW` excerpts, which claim nothing, and "general", the label of every
-decision that names no topic. Matched as a topic, "we decided to ship on Friday"
-retired every earlier topic-less decision, however unrelated. Superseded
-facts are kept, because the record of what a conversation contradicted is part
-of what the transparency layer reports; only active facts reach the prompt.
-
-## Events Emitted (for Context Visualizer)
+## Events emitted
 
 | Event | When | Data |
 |-------|------|------|
-| `MESSAGE_PROMOTED_TO_OLD_GEN` | A run of cooled turns was summarised into old gen | session id, source turn indices, tokens before/after |
-| `KNOWLEDGE_ENTRY_ADDED` | A fact was filed in permanent gen | session id, the entry |
-| `KNOWLEDGE_ENTRY_SUPERSEDED` | A newly filed fact contradicted active ones on its topic | session id, new entry, superseded entries |
-| `MESSAGE_ARCHIVED` | A turn or summary was archived after its facts were extracted | session id, message, extracted entries, source generation |
+| `MESSAGE_PROMOTED_TO_OLD_GEN` | A new span was made at the summarised level | session id, the span's turns, tokens before / after |
+| `MESSAGE_ARCHIVED` | A new span was made archived, or an older span was lowered to archived or out of view | session id, first turn, its facts, `young` or `old` |
+| `KNOWLEDGE_ENTRY_ADDED` | A fact was filed | session id, the entry |
+| `KNOWLEDGE_ENTRY_SUPERSEDED` | A new fact retired active ones on its topic | session id, new entry, retired entries |
+| `AGING_DEGRADED` | Part of a collection fell short | session id, the degradation |
+| `GC_FINISHED` | Every pass, whatever it did | session id, the result |
 
-All four are emitted **after** the aging pass commits, so each describes a change
-that is now in the session's state, and a pass that is discarded announces
-nothing. Joining the young generation needs no event: young-generation membership
-is just the turns in the session's snapshot.
-
-These events feed the health monitor's transitions timeline. Where each turn and
-fact stands *now* is read from the session's state rather than from events — see
-the knowledge state in [visibility/overview.md](../visibility/overview.md).
+All but `AGING_DEGRADED` and `GC_FINISHED` are emitted **after** the commit, so
+each describes a change now in the session's state. Where each turn and fact
+stands *now* is read from the session's state, not from events — see
+[visibility/overview.md](../visibility/overview.md).
 
 ---
 
-## Where It Fits in the Pipeline (hot path vs cold path)
-
-Aging and assembly are split across the two engine entry points, so the
-per-request hot path stays cheap and never waits for aging.
+## Where it fits: hot path and cold path
 
 ```
-COLD PATH · gc.age(session_id)                        runs after the response
+COLD PATH · gc_age(session)                                after the response
 ═════════════════════════════════════════════════════════════════════════════
-  the session's verbatim turns
-                    │
-                    ▼  (one pass per session at a time)
-             RelevanceScorer ──► Sweeper      score + classify each verbatim turn
-                    │
-                    ▼  find the latest cut point: keeps the newest turns, splits no tool round
-          batch = the turns before it          worth a cut? (compactable tokens ≥ min_cut_tokens)
-                    │
-       ┌────────────┼─────────────────────────────┐
-       ▼            ▼                              ▼
-     KEEP        COMPACT                        ARCHIVE
-     quoted      runs summarised                facts extracted
-     verbatim    (a model call)                 (KnowledgeExtractor)
-                    │
-                    └──► delta ──► smaller than before? ──► commit onto the CURRENT snapshot
+  turns older than the tail
+          │
+          ▼  draft spans (grouping, facts, opening lines — no model call)
+          ▼  score every span, plan every level, estimate the saving
+          │      not worth a collection? stop here, having paid for nothing
+          ▼  summarise the new spans (model calls)
+          ▼  plan again with the real summaries
+          ▼  the cut pays for itself? commit, onto the CURRENT snapshot
 
-
-HOT PATH · gc.collect(session_id)                     runs before forwarding
+HOT PATH · gc_collect(session)                             before forwarding
 ═════════════════════════════════════════════════════════════════════════════
-  read the session's snapshot once — no lock, no scoring, no compaction:
-
-        [ FRONT: facts + summaries + quotes ]   (only after a cut; frozen between cuts)
-      + [ TAIL: later turns, verbatim ]
-                                      │
-                                      ▼
-                          context ──► LLM
+  read the session's snapshot once — no lock, no scoring, no model call
+        [ FRONT ]  +  [ TAIL ]  ──►  LLM
 ```
 
-**`gc.age` (cold path) — the ager.** Runs after a response, off the request's
-critical path, on the turns recorded so far. It decides whether a cut is worth
-making and, if so, plans it against the current snapshot and commits it in one
-step onto whatever the snapshot is by then, so turns recorded during a slow
-compaction are kept. When a summary or an extraction fails, the cut retreats to
-just before it.
+**The cold path** runs after a response, off the request's critical path. It
+decides whether a collection is worth making, plans it against the snapshot it
+started from, and commits in one synchronous step onto whatever the snapshot is by
+then, so turns recorded during a slow summary are kept. At most one pass runs per
+session.
 
-**`gc.collect` (hot path) — the assembler.** Runs before the request is
-forwarded. It reads the session's current snapshot and returns the front and the
-tail. It never waits for an aging pass: if one is in flight, it returns the
-context from before that pass, which is complete and only less compressed.
+**The hot path** runs before the request is forwarded. It returns the front and the
+tail from the current snapshot and never waits for a pass: if one is in flight, it
+returns the context from before it, which is complete.
 
-Two properties matter here:
+---
 
-- **State-based aging, not a transition diff.** `gc.update` acts on each turn's
-  *current* classification and removes the acted-on turn. Because a turn that
-  leaves the young generation can never be re-swept, there is nothing to guard
-  against by remembering its previous classification. The health monitor, which
-  *observes* aging without moving anything, is the component that needs the
-  across-pass diff.
-- **One-directional aging.** Turns age down the tiers (young → old → permanent)
-  and never revive to verbatim. A topic that stays relevant keeps its turns
-  scoring high, so they never leave the young generation; a topic that cooled and
-  returns is served by its old-gen summary (always assembled in) plus fresh young
-  turns. Nothing is lost — it is progressively compressed.
+## Design decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| Keep every original turn | Nothing can be restored that was not kept. The proxy receives the originals with every request anyway; the session keeps them so the library has them too. Accepted cost: the originals are held in memory for the session's life. |
+| Spans are exchanges | A question and its answer belong together: the question names what the answer is about, and is the span's opening line. Tool rounds are never split. |
+| Four nested levels | Each level shows everything the level below shows, so raising a span never loses information. Measured: when the summarised level showed only the summary, the check's no-summary rehearsal kept 9 of 37 answers; nested, 24 of 37. |
+| The score decides the level, the budget caps the total | A score that also decided *when* to drop detail would drop it on a schedule, whether or not the front needed the room. |
+| Levels re-decided at every collection, both ways | A guess about what will matter later cannot be made reliably once; re-deciding corrects it. |
+| A margin around every level line | A score hovering at a line would otherwise show a span in full at one collection and as facts at the next. |
+| Facts read from the original turns, once | A fact read from a summary is read second-hand. Reading once, when the span is made, means choosing a level later never waits on a model. |
+| Heuristic extraction before model-based | Free, deterministic and testable; a model-written extractor fits behind the same seam. |
+| Supersede, don't delete | The decision chain is part of what transparency reports. |
+| Collections on the cold path, assembly on the hot path | Summaries are the expensive work; the hot path never waits for them. |
+
+---
+
+## Alternatives considered
+
+- **Moving turns one way down fixed tiers** (verbatim → summary → facts, never
+  back). This was the earlier design. A turn's tier was decided once, by a score
+  that was mostly its age at the moment of the cut, and a summary was archived into
+  facts when that score decayed. Measured on the decision-survival check, it lost 7
+  of 37 answers: each was a detail inside a summary that had been archived and then
+  sent cut to 180 characters. Nothing could bring the detail back, because the
+  original had not been kept. Replaced by kept originals and reversible, nested
+  levels.
+- **Deciding the form of a turn once, by score bands on each turn.** Measured on
+  the check's conversations, no collected turn could ever score into the top band
+  (recency, weighted on its own, capped the score at 0.68), and whether a turn was
+  summarised or reduced to facts depended about as much on *when* the collection
+  ran as on what the turn said. Replaced by span scoring against what is being
+  discussed now, re-decided at every collection.
+- **Separate budgets for facts and for summaries, with facts in their own block.**
+  Two limits on one resource: the tighter one silently decides, and nobody tunes
+  the one they forgot. Replaced by one recap budget, with facts on their span's line.
+- **Keeping text extraction could not read as a raw entry.** It existed so archiving
+  lost nothing, but it was sent cut to a fixed length, ranked last, and duplicated
+  what the span now holds whole. Removed: the span keeps the turn itself.
+- **Re-summarising old summaries into longer-horizon ones.** Summarising a summary
+  compounds loss, and each pass costs a model call. Folding the oldest spans behind
+  one line keeps the front bounded without rewriting anything.
+- **A model that fetches old turns itself, through a recall tool.** It would need
+  model round-trips inside the user's request, beside the client's own tools.
+- **Retrieving old turns into every request.** The prompt would change on every
+  request, resetting the provider's cache and the model's thinking blocks each time.
+- **Filling the budget with as much detail as fits.** Nothing would be condensed
+  until the history outgrew the budget — a capacity trigger, which is not what
+  LLM-GC is: savings come from the score.
+- **Accumulating contradictions instead of superseding.** "We chose Postgres" and
+  "we chose MySQL" with equal weight would leave the model to resolve the
+  contradiction itself.
+
+Supersession carries an accepted cost: it treats the latest contradicting entry
+as current, which is right most of the time but not always — a user can misspeak
+in a way the extractor reads as a real change. The system accepts being
+occasionally wrong about which fact is current rather than interrupting the user,
+and the original words remain one level up.

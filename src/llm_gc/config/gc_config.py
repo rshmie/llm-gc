@@ -3,7 +3,7 @@ from typing import Self
 
 from llm_gc.config.constants import (
     DEFAULT_ARCHIVE_THRESHOLD, DEFAULT_CONTEXT_WINDOW, DEFAULT_KEEP_THRESHOLD, DEFAULT_LAST_N_TURNS_TO_KEEP,
-    DEFAULT_LEVEL_MARGIN, DEFAULT_MAX_RECAP_RATIO, DEFAULT_MIN_COMPACTABLE_TOKENS, DEFAULT_MIN_CUT_TOKENS,
+    DEFAULT_LEVEL_MARGIN, DEFAULT_MAX_RECAP_RATIO, DEFAULT_MIN_CUT_TOKENS,
 )
 
 class GCConfig(BaseModel):
@@ -25,7 +25,6 @@ class GCConfig(BaseModel):
     archive_threshold: float = Field(default=DEFAULT_ARCHIVE_THRESHOLD, ge=0.0, le = 1.0)
     # How far past a line a score must be to move a span across it, either way.
     level_margin: float = Field(default=DEFAULT_LEVEL_MARGIN, ge=0.0)
-    min_compactable_tokens: int = Field(default=DEFAULT_MIN_COMPACTABLE_TOKENS, ge=0)
     last_n_turns_to_keep: int = Field(default=DEFAULT_LAST_N_TURNS_TO_KEEP, ge=0)
     # A session is collected only once the turns it would condense add up to this many tokens.
     min_cut_tokens: int = Field(default=DEFAULT_MIN_CUT_TOKENS, ge=0)

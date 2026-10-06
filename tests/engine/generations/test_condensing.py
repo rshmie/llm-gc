@@ -14,7 +14,6 @@ from llm_gc.extraction import KnowledgeExtractor
 from llm_gc.llm import FakeProvider, LLMResponse, StopReason
 from llm_gc.exceptions import LLMTimeoutError
 from llm_gc.models import Message
-from llm_gc.models.knowledge_entry import KnowledgeType
 from llm_gc.utils import count_tokens
 
 
@@ -141,7 +140,6 @@ class TestCondensing:
                                               _said(1, "assistant", "Glad to hear it. " * 40)]))
 
         assert span.facts == ()
-        assert not [fact for fact in span.facts if fact.knowledge_type is KnowledgeType.RAW]
 
     def test_a_span_too_small_to_shorten_is_not_sent_to_the_model(self):
         memory, provider = _memory([])

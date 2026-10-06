@@ -437,12 +437,10 @@ class TestARunTooSmallToCompactIsRefusedBeforeTheCall:
             _compact(compactor, tiny)
         assert provider.calls == []
 
-    def test_the_floor_is_not_min_compactable_tokens(self):
-        """Different quantity, different granularity. `min_compactable_tokens` is a
-        sweep setting applied per *message*; this floor comes from the marker, which
-        is amortised over the whole *run*. Two turns that each clear the sweep floor
-        can still form a run that cannot win - which is how a live trace came to
-        make nine provider calls whose results were certain to be rejected."""
+    def test_the_floor_is_measured_over_the_whole_run(self):
+        """The marker is paid once per run, so the floor applies to the run, not to
+        each turn. Two turns that each read as worth summarising can still form a run
+        no summary can beat, and it is refused before the call rather than after."""
         two_small_turns = [
             Message(role="user", content="Yes, agreed on that.", token_count=6, turn_index=1),
             Message(role="assistant", content="Good, we will proceed.", token_count=6, turn_index=2),

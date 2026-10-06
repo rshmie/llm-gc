@@ -15,9 +15,9 @@ def test_subclass_without_score_raises_error():
         IncompleteScorer()
 
 def test_subclass_with_score_works():
-    class RelevanceScorer(BaseScorer):
+    class MinimalScorer(BaseScorer):
         def score(self, message, conversation):
             return None
 
-    scorer = RelevanceScorer(scorer_name=RelevanceType.RECENCY)
+    scorer = MinimalScorer(scorer_name=RelevanceType.RECENCY)
     assert scorer.scorer_name == RelevanceType.RECENCY

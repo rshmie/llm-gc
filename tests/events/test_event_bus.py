@@ -41,7 +41,7 @@ def test_wrong_event_type():
         received.append(event)
     bus.subscribe(EventType.GC_FINISHED, test_callback)
 
-    bus.emit(Event(event_type=EventType.SWEEP_COMPLETED, data={"gc_run_id": 2}))
+    bus.emit(Event(event_type=EventType.AGING_DEGRADED, data={"gc_run_id": 2}))
     assert len(received) == 0
 
 

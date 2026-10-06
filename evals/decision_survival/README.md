@@ -159,12 +159,12 @@ and its answer, both replies, and the prompt LLM-GC sent.
 
 **Evidence.** A run cited anywhere, in this file or a design document, is copied
 to `evidence/` under a descriptive name and committed with the change that cites
-it. Committing every run would bury the few that matter; committing none would
-leave claims pointing at nothing.
+it. 
 
 | Run | Short conversations | Long conversations | What it shows |
 |---|---|---|---|
 | [size-budget-2026-10-05](evidence/size-budget-2026-10-05.json) | 18/18, prompts 17–24% smaller | 12/19, prompts 64% smaller | The recap's facts limited by size alone. On the long conversations every fact the user stated survives (11/11), and 1 of 8 details stated only inside an assistant answer does: each of the seven was in an excerpt of an archived summary, sent only up to its first 180 characters. |
+| [detail-levels-2026-10-06](evidence/detail-levels-2026-10-06.json) | 18/18, prompts 11–15% smaller | 19/19, prompts 42% smaller | Every span kept with its original turns and shown at the level its score earns, levels nested. Every answer reaches the model; summaries are 95% of the front on the long conversations, so the saving is the summaries' size - tuning the summary target and how readily old spans are archived is what can win it back. |
 
 Questions asked by `claude-sonnet-5-5` at effort `medium`, `min_cut_tokens 300`,
 `keep_last 5`.

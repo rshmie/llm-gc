@@ -7,7 +7,6 @@ class KnowledgeType(Enum):
     FACT = "fact"
     DECISION = "decision"
     PREFERENCE = "preference"
-    RAW = "raw"
 
 # The label of an entry whose statement names no topic: "we decided to ship on Friday".
 GENERAL_TOPIC = "general"
@@ -19,16 +18,11 @@ class KnowledgeStatus(Enum):
 
 @dataclass(frozen=True)
 class KnowledgeEntry:
-    """An extracted unit of knowledge from a conversation turn.
+    """One fact, decision or preference read from a turn, filed in the permanent generation.
 
-    Stored in the permanent generation after a turn is archived.
-    Immutable - supersession creates a new copy via dataclasses.replace().
-
-    `message_turn` is the turn the entry is labelled with. `source_turns` names
-    every turn it was derived from when that is more than one - facts extracted
-    from a summary of turns 14-19 are labelled 14 and come from all six. Empty
-    means the entry comes from `message_turn` alone. `from_summary` marks content
-    taken from LLM-GC's summary of those turns, not from their own words.
+    Read from the turn's own words when its span is made, and kept for the life of
+    the session. Immutable - supersession creates a new copy via
+    dataclasses.replace(). `message_turn` is the turn it was read from.
     """
     message_turn: int
     content: str
@@ -36,21 +30,14 @@ class KnowledgeEntry:
     knowledge_type: KnowledgeType
     knowledge_status: KnowledgeStatus = KnowledgeStatus.ACTIVE
     created_at: datetime = field(default_factory=datetime.now)
-    source_turns: tuple[int, ...] = ()
-    from_summary: bool = False
-
-    @property
-    def covered_turns(self) -> tuple[int, ...]:
-        """Every turn this entry was derived from."""
-        return self.source_turns or (self.message_turn,)
 
     @property
     def can_supersede(self) -> bool:
         """Whether filing this entry retires the active entries on its topic.
 
-        A verbatim excerpt claims nothing, and an entry with no topic cannot be
-        matched to the claim it replaces: matched on "general", every topic-less
-        decision retired every earlier one, however unrelated.
+        An entry with no topic cannot be matched to the claim it replaces: matched
+        on "general", every topic-less decision would retire every earlier one,
+        however unrelated.
         """
-        return self.knowledge_type is not KnowledgeType.RAW and self.topic_label != GENERAL_TOPIC
+        return self.topic_label != GENERAL_TOPIC
 

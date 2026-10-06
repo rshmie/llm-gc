@@ -2,8 +2,8 @@
 
 
 LLM-GC sometimes needs a language model to do part of its own work. The main
-case is compaction: replacing a run of old conversation turns with a short
-summary that keeps what mattered. Writing that summary takes a model. The
+case is compaction: writing a short summary of a span of old conversation
+turns that keeps what mattered. Writing that summary takes a model. The
 provider layer (`llm/`) is the only place in the engine that calls one. The rest
 of the engine asks it one thing, "here are some messages, give me text back",
 and never learns which vendor answered, what that vendor's API looks like, or
@@ -68,9 +68,11 @@ same way.
 
 ## Why it exists
 
-Compaction is how LLM-GC saves context, and compaction needs a model. Without
-one, the only compactor is a placeholder that copies the turns under a marker.
-That adds tokens instead of saving them.
+A summary is the middle detail level of every condensed span, and writing one
+needs a model. Without one, the only compactor is a placeholder whose "summary" is
+the turns themselves, so a span can only be kept whole or archived to its opening
+line and facts: the context still shrinks, but nothing between those two levels
+exists.
 
 The engine still shouldn't know which model it's using. LLM-GC is a library as
 well as a proxy, and people who import it already have a provider and an API key
@@ -131,8 +133,8 @@ something LLM-GC neither chooses nor sees. One of LLM-GC's central claims is
 context savings without quality loss. That claim has to rest on a benchmark, and 
 a benchmark needs a fixed, known summariser.
 
-Cost matters too, though it isn't decisive by itself. Summarising a run means
-paying to read the whole run once. With a cheaper compaction model that cost is
+Cost matters too, though it isn't decisive by itself. Summarising a span means
+paying to read the whole span once. With a cheaper compaction model that cost is
 small next to the savings on every later request. With an expensive conversation
 model it eats into them.
 

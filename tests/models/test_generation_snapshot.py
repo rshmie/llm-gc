@@ -159,13 +159,6 @@ class TestKnowledgeFiling:
         knowledge, _ = file_knowledge((), (_fact("database", "postgres"), _fact("database", "mysql")))
         assert [e.content for e in knowledge if e.knowledge_status == KnowledgeStatus.ACTIVE] == ["mysql"]
 
-    def test_a_raw_entry_supersedes_nothing(self):
-        raw = KnowledgeEntry(message_turn=1, content="verbatim", topic_label="database",
-                             knowledge_type=KnowledgeType.RAW)
-        knowledge, supersessions = file_knowledge((_fact("database", "postgres"),), (raw,))
-        assert supersessions == ()
-        assert all(e.knowledge_status == KnowledgeStatus.ACTIVE for e in knowledge)
-
     def test_superseded_entries_are_kept_but_not_active(self):
         """The record of a contradiction is part of what transparency reports."""
         snapshot = apply_aging(GenerationSnapshot(knowledge=(_fact("db", "postgres"),)),
@@ -187,16 +180,6 @@ class TestSupersessionRules:
         assert [e.knowledge_status for e in knowledge] == [
             KnowledgeStatus.SUPERSEDED, KnowledgeStatus.SUPERSEDED, KnowledgeStatus.ACTIVE]
         assert [len(s.superseded) for s in supersessions] == [1, 1], "each supersedes only the one active entry"
-
-    def test_raw_entries_never_supersede_each_other(self):
-        """Verbatim fallbacks share one sentinel label and state no claim. If they
-        superseded each other, all but the latest would drop out of the active
-        view and the no-information-loss guarantee would leak."""
-        raw = [KnowledgeEntry(message_turn=i, content=text, topic_label="__raw__", knowledge_type=KnowledgeType.RAW)
-               for i, text in enumerate(["Thanks for the help", "Sounds good to me"])]
-        knowledge, supersessions = file_knowledge((), tuple(raw))
-        assert supersessions == ()
-        assert all(e.knowledge_status == KnowledgeStatus.ACTIVE for e in knowledge)
 
     def test_topic_less_entries_never_supersede_each_other(self):
         """"general" is a shared label too: every decision that names no topic gets it.

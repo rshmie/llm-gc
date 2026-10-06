@@ -163,7 +163,7 @@ class TestAClosedSessionStaysClosed:
         async def scenario():
             task = await _start_aging(service, compactor)
             service.session_manager.close_session(SESSION)
-            # A new conversation, same id. Turn 5 is one the sweeper keeps, so any
+            # A new conversation, same id. Its one turn is not collected, so any
             # summary that appears can only have come from the old pass.
             reopened = asyncio.create_task(service.gc_update(SESSION, _turn(5)))
             compactor.gate.set()

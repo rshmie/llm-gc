@@ -3,7 +3,7 @@
 Owns three things: how a run is presented to the model, how long its summary may
 be, and when a returned summary must be refused. The HTTP call, wire format and error taxonomy
 belong to the injected provider. See
-doc/design/sweeper-and-composition/compaction-mechanism.md.
+doc/design/generational-memory/compaction.md.
 """
 
 import logging
@@ -191,9 +191,7 @@ class LLMCompactor(BaseCompactor):
         """The smallest run this compactor could shrink.
 
         Best case is `summary = marker + target_ratio * run`, which beats the run
-        only when `run > marker / (1 - target_ratio)`. Not
-        `GCConfig.min_compactable_tokens`, which applies per message — the marker
-        is amortised over the whole run.
+        only when `run > marker / (1 - target_ratio)`.
         """
         marker_tokens = count_tokens(self._format_summary_marker(first_turn, last_turn))
         if self._target_ratio >= 1.0:

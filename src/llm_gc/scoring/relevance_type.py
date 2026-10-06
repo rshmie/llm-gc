@@ -1,13 +1,12 @@
 from enum import Enum
 
 class RelevanceType(Enum):
-    """The five dimensions of relevance measured by the scoring pipeline.
+    """The measures a span's score is combined from.
 
-    Each value corresponds to one scorer that evaluates a different
-    aspect of a message's importance to the conversation.
+    Recency and similarity (relevance to what is being discussed now) make up its
+    liveness; decision and density its importance.
     """
     RECENCY = "recency"
     SIMILARITY = "similarity"
     DENSITY = "density"
     DECISION = "decision"
-    REFERENCE = "reference"

@@ -7,7 +7,8 @@
 ## How it works
 
 Two kinds of LLM-GC data outlive the running process: `KnowledgeEntry` records
-in the permanent generation, and compacted summaries in the old generation.
+in the permanent generation, and the old generation's spans — each one's turns,
+summary, opening line and detail level.
 Every persisted record carries an explicit integer `schema_version`.
 
 The migration contract:

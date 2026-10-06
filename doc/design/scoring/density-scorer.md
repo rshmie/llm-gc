@@ -8,9 +8,9 @@ Not all messages carry the same amount of information. Compare:
 - **"thanks!"** — zero information, social signal
 - **"Check `Python` 3.12 at https://python.org — NASA uses it for 42% of their tooling"** — packed with specific, referenceable information
 
-If we only scored by recency, "ok" from 2 turns ago would score higher than a detailed technical decision from 8 turns ago. The density scorer prevents this by measuring **how much information a message actually carries** relative to its size.
+If spans were scored only by liveness, an exchange of pleasantries and one that settled the database schema would go quiet at the same rate. The density scorer is one half of a span's **importance**: it measures **how much information a span actually carries** relative to its size, over all its turns joined, and lifts the specific ones so they stay summarised longer as they go quiet.
 
-In garbage collection terms: filler messages are "garbage" almost immediately — they consume tokens but contribute nothing to the model's understanding. Dense messages are "live objects" that should survive longer.
+In garbage collection terms: filler is "garbage" almost immediately — it consumes tokens but contributes nothing to the model's understanding. Dense content behaves like a "live object" that should keep its detail longer.
 
 ## How It Works
 
@@ -83,7 +83,7 @@ Token count: **~7**
 Density ratio: 0 / 7 = **0.00**
 Score: **0.00**
 
-The contrast is exactly what we want — the first message is worth keeping, the second is safe to discard.
+The contrast is exactly what we want — the first keeps its detail longer, the second can drop to its opening line as soon as it goes quiet. Because the score is a ratio, it does not grow just because a span is long.
 
 ## Design Decisions
 

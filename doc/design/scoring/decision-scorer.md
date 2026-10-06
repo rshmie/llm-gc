@@ -8,15 +8,15 @@ Decisions are the single most dangerous type of information to lose from a conve
 >
 > **Turn 35**: User asks "Can you set up the authentication middleware?"
 
-If turn 8 was garbage collected because it was "old", the model has no memory that JWT was chosen. It might suggest session-based auth, or ask "what auth approach would you like?" — wasting the user's time and breaking trust.
+If turn 8 had been reduced to a line because it was "old", the model might not see that JWT was chosen. It might suggest session-based auth, or ask "what auth approach would you like?" — wasting the user's time and breaking trust.
 
-**Decisions are the highest-priority content to preserve.** They represent irreversible choices that downstream work depends on. The decision scorer exists to ensure these messages get a relevance boost so the sweeper never discards them before their facts are extracted to permanent memory.
+**Decisions are the highest-priority content to keep in view.** They represent choices that downstream work depends on. The decision scorer is one half of a span's **importance**: it lifts a span that states decisions, so that as the span goes quiet it stays summarised longer instead of dropping to its opening line and facts.
 
 This is directly tied to LLM-GC's core philosophy of **epistemic transparency** — the system must know what it knows, and decisions are the foundation of that knowledge.
 
 ## How It Works
 
-The decision scorer counts **decision-indicator phrases** in the message text using regex pattern matching, then normalizes against a configurable threshold.
+The decision scorer counts **decision-indicator phrases** in a span's text — all its turns, joined — using regex pattern matching, then normalizes against a configurable threshold.
 
 ### The Formula
 
@@ -86,28 +86,27 @@ Score: min(1 / 3, 1.0) = **0.33**
 Phrases found: **0**
 Score: **0.00**
 
-## How It Interacts With Other Scorers
+## How It Interacts With the Rest of the Score
 
-The decision scorer's weight (0.15) might seem low, but it works by **boosting** messages that other scorers might undervalue:
+A span's score is `0.6 × liveness + 0.2 × decision + 0.2 × density` (see
+[overview.md](overview.md)). The decision part works by **lifting** a span that
+liveness alone would let go:
 
 ```
-Example: An old decision message
+An old span stating a decision, which nobody is discussing now
 
-  Recency score:   0.15  (old → low recency)
-  Density score:   0.70  (contains specific terms)
-  Decision score:  1.00  (contains decisions!)
-  Reference score: 0.33  (referenced once later)
+  liveness  0.10   (recency 0.10, relevance 0.00 → the larger)
+  density   0.70   (names and numbers)
+  decision  1.00   (states decisions)
 
-  Combined: 0.30(0.15) + 0.15(0.70) + 0.15(1.00) + 0.10(0.33) = 0.33
-
-  Without decision scorer:
-  Combined: 0.30(0.15) + 0.15(0.70) + 0.10(0.33) = 0.18  → REMOVED
-
-  With decision scorer:
-  Combined: 0.33  → COMPRESSED (kept as summary, not deleted)
+  score = 0.6(0.10) + 0.2(1.00) + 0.2(0.70) = 0.40   → summarised
+  without its decisions:  0.6(0.10) + 0.2(0.70) = 0.20   → archived (opening line and facts)
 ```
 
-The decision scorer prevents old decision messages from falling into the "remove" zone. Decisions are extracted to permanent memory when a message is archived, but the scorer is what keeps them in full context until then.
+Importance alone tops out at 0.4, under the keep line (0.7): stating a decision
+keeps a span summarised longer, but never word for word unless the conversation is
+also discussing it. Whatever its level, the decision itself is also filed in the
+permanent generation when the span is made, and an archived span shows it on its line.
 
 ## Design Decisions
 
@@ -139,7 +138,8 @@ In the Context Visualizer, these signals will power the **decision survival map*
 - **Pattern matching misses implicit decisions**: "I'm going with B" → detected. "B seems right, let's do that" → partially detected ("let's" without "go with" / "use"). "Yeah, option B" → missed entirely. Natural language decisions are far more varied than any regex can capture.
 - **No decision extraction**: The scorer detects that a message *contains* decisions but doesn't extract *what* was decided. That is the fact extractor's job, on the path into permanent memory.
 - **No negative decision detection**: "Don't use MongoDB" is as important as "Use PostgreSQL" — negative decisions constrain future choices. The current pattern partially handles this ("delete") but misses most negations. Future improvement.
-- **No decision conflict detection**: If turn 5 says "use PostgreSQL" and turn 20 says "actually, switch to MongoDB", the scorer treats both as equally important decisions. Detecting that turn 20 supersedes turn 5 requires understanding decision relationships, which the scorer does not model.
+- **No decision conflict detection**: If turn 5 says "use PostgreSQL" and turn 20 says "actually, switch to MongoDB", the scorer treats both as equally important. Supersession in the permanent generation is what records that turn 20 replaced turn 5, and the front notes it on turn 5's span; the scorer does not model it.
+- **It saturates on long spans**: a span is a whole exchange, and a long assistant reply uses three decision phrases somewhere more often than not, so most long spans score 1.0. A learned detector, or a count per thousand tokens, would separate them.
 
 ## File Location
 

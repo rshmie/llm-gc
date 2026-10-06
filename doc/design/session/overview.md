@@ -10,21 +10,21 @@ being handed the whole message list every call.
 
 **Everything a conversation has produced lives on its `SessionState`, and
 nowhere else.** That is all three generations — verbatim young turns, old-gen
-summaries, and permanent-gen facts — held together as one **snapshot**. The
-services that do the work (the scorer, sweeper, compactor, knowledge extractor,
-and `GenerationalMemory`) hold *how* to do things and no conversation data at
-all. They are shared across every session, which is safe precisely because they
+spans (each holding its turns, shown at a detail level), and permanent-gen facts —
+held together as one **snapshot**. The services that do the work (the span scorer,
+the compactor, the knowledge extractor, and `GenerationalMemory`) hold *how* to do
+things and no conversation data at all. They are shared across every session, which is safe precisely because they
 remember no one.
 
 ```
              shared, stateless                       one per conversation
   ┌──────────────────────────────────┐     ┌─────────────────────────────────────┐
   │ GcService                        │     │ SessionState  ("alice")             │
-  │  ├ RelevanceScorer               │     │   snapshot ──▶ GenerationSnapshot    │
-  │  ├ Sweeper                       │ ──▶ │                 young  (turns)      │
-  │  ├ GenerationalMemory            │     │                 old    (summaries)  │
-  │  │   ├ KnowledgeExtractor        │     │                 knowledge (facts)   │
-  │  │   └ Compactor (LLM)           │     │                 version             │
+  │  ├ SpanScorer                    │     │   snapshot ──▶ GenerationSnapshot    │
+  │  ├ GenerationalMemory            │ ──▶ │                 young  (turns)      │
+  │  │   ├ KnowledgeExtractor        │     │                 old    (spans)      │
+  │  │   └ Compactor (LLM)           │     │                 knowledge (facts)   │
+  │  │                               │     │                 version             │
   │  └ SessionManager ── store ──────┼──▶  │   timestamps, aging_in_flight       │
   └──────────────────────────────────┘     └─────────────────────────────────────┘
                                            │ SessionState  ("bob")   ...         │
@@ -56,32 +56,33 @@ with its own guarantee, and one that only looks:
 |---|---|---|
 | **collect** (assemble the context) | the proxy, before forwarding a request | Never waits. Reads the current snapshot once. |
 | **record** turns | the proxy, from the client's history on each request | Immediate. The next collect sees them. |
-| **age** (score, sweep, cut) | after each response, in the background | At most one per session at a time; commits onto whatever the snapshot is *now*. |
+| **age** (a collection: draft, plan, summarise, commit) | after each response, in the background | At most one per session at a time; commits onto whatever the snapshot is *now*. |
 | **inspect** | the dashboard | Read-only. Never creates a session, never resets its idle clock, announces nothing. |
 
 Besides the three generations, a snapshot records how many cuts the session has
 had and, after a cut, the first turn whose thinking blocks were produced against
 the current front (see [the cut](../generational-memory/the-cut.md)).
 
-Aging is the slow one: compaction is a model call that can take seconds. It is
+Aging is the slow one: a summary is a model call that can take seconds. It is
 split so that the slow part holds nothing:
 
 ```
-time ─────────────────────────────────────────────────────────────────────▶
+time ──────────────────────────────────────────────────────────────────────────▶
 
- aging:    read v7 ──── plan: score, sweep, ask the LLM to summarise ──── commit
-           young 3,4,5,10   (seconds, nothing held)                         │
-                                                                            ▼
- record:              turn 11 ─▶ v8                                   v9 = v8 + delta
-                                young 3,4,5,10,11                     young 10,11
-                                                                      old   summary(3)
- collect:                         reads v8 ─▶ turns 3,4,5 verbatim, plus 11
-                                  (returns at once; complete, only less compressed)
+ aging:    read v7 ──── draft, plan, ask the LLM to summarise ──── commit
+           young 0–9        (seconds, nothing held)                  │
+                                                                     ▼
+ record:              turn 10 ─▶ v8                            v9 = v8 + delta
+                                young 0–10                     young 6–10
+                                                               old   spans 0–1, 2–3, 4–5
+ collect:                         reads v8 ─▶ turns 0–10 verbatim
+                                  (returns at once; complete, only less condensed)
 ```
 
 1. **Plan.** The pass reads the current snapshot (the *base*) and works out what
-   to change: which turns leave the young generation, which summaries and facts
-   are added, which spans are archived. Nothing reaches session state.
+   to change: which turns leave the young generation, the spans they become, the
+   facts read from them, and which older spans change level. Nothing reaches
+   session state.
 2. **Delta.** The plan is expressed as a **delta** — things to remove and values
    to add — never as replacement lists. A replacement list built from the base
    would erase any turn recorded while the pass was waiting.
@@ -94,23 +95,25 @@ Two checks guard the commit:
 
 - **One aging pass per session at a time.** A second trigger while a pass is in
   flight is reported (`bypassed_aging_in_flight`) and skipped, not queued.
-  Pressure that persists triggers aging again on the next turn. Without this, two
-  passes reading the same base would compact the same turns twice — two model
-  calls, two summaries of one run, and two deltas each removing the same turns.
+  The next response triggers aging again. Without this, two passes reading the
+  same base would summarise the same turns twice — two model calls per span, two
+  spans for one exchange, and two deltas each removing the same turns.
 - **The session must still be live.** If the session was closed while the pass
   was running — including when a new conversation has since reopened the same
   id — the result is discarded (`discarded_session_closed`) and nothing is
   announced. A closed session stays closed, and a reopened id never inherits the
   previous conversation's work.
 
-A delta that names a turn or summary the snapshot no longer holds is a
-programmer error and raises: only one pass ages a session, so it means that rule
-broke, and merging anyway would silently drop or duplicate content.
+A delta that names a turn or span the snapshot no longer holds is a programmer
+error and raises: only one pass ages a session, so it means that rule broke, and
+merging anyway would silently drop or duplicate content. So is a delta in which a
+departing turn does not land in exactly one new span: a turn would be lost or
+shown twice.
 
 ### Events describe committed changes
 
-The ager is the pass that reports. Events for promotions, archives, added facts,
-and supersessions are emitted **after the commit**, each carrying the
+The ager is the pass that reports. Events for spans summarised, spans archived or
+lowered, added facts, and supersessions are emitted **after the commit**, each carrying the
 `session_id`, so a subscriber that reads state on hearing an event sees the
 change it was told about, and a discarded pass announces nothing. The terminal
 GC event is emitted exactly once per update, whatever the outcome. The assembler
@@ -121,22 +124,27 @@ single assembly step, so the number a dashboard shows and the payload a caller
 forwards cannot drift apart. That context is measured whole — the front
 included — because it is real tokens in the real prompt.
 
-### Aging cuts the conversation in batches
+### Aging collects the conversation in batches
 
-An aging pass changes the prompt only by a **cut**: the oldest turns are replaced
-with one front message holding their summaries, quotes and facts, and every later
-turn stays verbatim. Classification decides what a cut compacts; a cut is made only
-when the turns classified for compaction add up to a batch worth it, because each
-cut resets the provider's prompt cache once. Below that, the pass reports itself
-bypassed and changes nothing. The mechanism, its rules, and the rejected
-alternatives are in [the-cut.md](../generational-memory/the-cut.md).
+An aging pass changes the prompt only by a **collection** (a *cut*, in the code):
+the oldest turns become spans in one front message, every later turn stays
+verbatim, and every span's level is planned again. The plan decides how each span
+is shown; a collection is made only when the batch's turns the plan would not keep
+word for word add up to `min_cut_tokens`, because each collection resets the
+provider's prompt cache once, and only when it pays for itself. Otherwise the pass
+reports itself bypassed and changes nothing. The mechanism, its rules, and the
+rejected alternatives are in [the-cut.md](../generational-memory/the-cut.md).
 
 ### Failures are contained
 
-A run that fails to compact, or a turn that fails to archive, stops the cut just
-before it: those turns stay verbatim for a later pass, and the failure is reported
-as a degradation. A failure anywhere else in planning leaves the session exactly as
-it was, and is reported as a bypassed run rather than raised: the ager is called
+```
+ a summary fails     ──► the span is made without one: kept whole rather than summarised
+ reading facts fails ──► the span is made without facts: archived, it shows its opening line
+ anything else fails ──► the session is left exactly as it was; the pass is reported bypassed
+```
+
+The first two are reported as degradations, and nothing is lost: the span holds
+its turns. The third is reported rather than raised: the ager is called
 fire-and-forget, so an exception escaping it would be invisible.
 
 ## Why it exists
@@ -186,9 +194,9 @@ LLM-GC's background work directly into the user's latency.
 - **A delta, not a recomputed result.** Describing *changes* rather than
   *outcomes* is what makes a slow computation safe to merge onto newer state, in
   the way a patch applies on top of commits made after branching where an
-  overwrite discards them. Young turns are named by turn index; summaries by
-  value, because a regenerated turn re-sends its index and two summaries can share
-  one.
+  overwrite discards them. Departing turns are named by turn index; a span whose
+  level changes is named by value, so a delta can only change the span it was
+  planned against.
 - **Skip a second aging trigger rather than queue it.** Queuing would let aging
   fall arbitrarily far behind and spend model calls on plans computed against
   stale state. Skipping costs, at most, a context slightly above target for a
@@ -204,16 +212,19 @@ LLM-GC's background work directly into the user's latency.
   touching the session, so a dashboard left open on a conversation does not keep
   it alive, and an inspection of a closed session reports it absent rather than
   creating an empty one.
-- **`GenerationSnapshot` and `SweepClassification` live in `models/`.** Session
-  state and the engine both depend on them, so they sit in the shared leaf
+- **`GenerationSnapshot` and `Span` live in `models/`.** Session state and the
+  engine both depend on them, so they sit in the shared leaf
   package both can import without a cycle.
 
 ### Accepted costs
 
 - **Copying on every change.** A commit copies the young, old, and knowledge
-  tuples: O(turns + summaries + facts). Young and old are bounded by aging; facts
-  grow over a session but are small. Revisit at around ten thousand facts per
-  session, with a persistent data structure or an index by topic.
+  tuples: O(turns + spans + facts) references, never the text. Young is bounded by
+  aging; spans and facts grow over a session, because every span keeps its turns.
+  Revisit at around ten thousand facts per session, with a persistent data
+  structure or an index by topic.
+- **Every turn is held for the session's life.** The price of being able to show
+  any span in more detail again; dropped with the session.
 - **A context can be one pass behind.** While aging is in flight, collect returns
   the pre-pass context: complete and correct, only less compressed.
 - **Single event loop.** "No `await` inside the commit" is atomic only on one

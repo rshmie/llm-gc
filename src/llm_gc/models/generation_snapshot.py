@@ -104,7 +104,7 @@ class GenerationSnapshot:
             return len(self.lineage)
         seen = [message.turn_index for message in self.young]
         seen += [turn for span in self.old for turn in span.turn_indices]
-        seen += [turn for entry in self.knowledge for turn in entry.covered_turns]
+        seen += [entry.message_turn for entry in self.knowledge]
         return max(seen, default=-1) + 1
 
     @property
@@ -215,7 +215,7 @@ def file_knowledge(
 
     Sequential, so an entry filed earlier in the same batch can be superseded by a
     later one: the conversation changed its mind, and the later statement wins.
-    RAW and topic-less entries supersede nothing - see `KnowledgeEntry.can_supersede`.
+    Topic-less entries supersede nothing - see `KnowledgeEntry.can_supersede`.
     """
     filed = list(knowledge)
     supersessions: list[Supersession] = []

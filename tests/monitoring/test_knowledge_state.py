@@ -165,14 +165,6 @@ class TestWhatTheModelSees:
         assert fact.sent and not fact.shortened and fact.sent_content == long_content
         assert long_content in (state.front_text or ""), "exactly the words the front carries"
 
-    def test_a_raw_excerpt_supersedes_nothing(self):
-        knowledge, _ = file_knowledge((), (_fact(1, "database", "postgres"),
-                                           _fact(2, "__raw__", "chatter", KnowledgeType.RAW)))
-        state = _seed(_service(), GenerationSnapshot(young=(_turn(3),), knowledge=knowledge))
-
-        assert all(f.status is KnowledgeStatus.ACTIVE for f in state.facts)
-
-
 class TestTheNextCut:
     def test_only_turns_the_cut_would_take_say_what_they_become(self):
         service = _service(min_cut_tokens=100_000)   # never cut, so the preview has a full batch to show

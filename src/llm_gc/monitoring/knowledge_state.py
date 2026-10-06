@@ -63,7 +63,6 @@ class TurnState(BaseModel):
     facts_sent: int = 0                   # of those, how many the front carries
     score: float | None = None            # current relevance, while verbatim
     classification: SweepClassification | None = None
-    forced_keep: str | None = None        # why the sweeper overrode the score, if it did
     becomes: TurnFidelity | None = None   # set when the next cut would take this turn
 
 
@@ -85,7 +84,6 @@ class FactState(BaseModel):
     sent: bool                            # in the front, so the model sees it
     sent_content: str                     # the content as the front carries it, cut if over the line limit
     shortened: bool                       # the front carries only the start of `content`
-    from_summary: bool                    # the content is LLM-GC's summary of the turns, not their words
     superseded_by_turn: int | None = None
 
 
@@ -124,8 +122,7 @@ def project_knowledge_state(inspection: SessionInspection) -> KnowledgeState:
 
     facts_by_turn: dict[int, list[KnowledgeEntry]] = defaultdict(list)
     for fact in snapshot.knowledge:
-        for turn in fact.covered_turns:
-            facts_by_turn[turn].append(fact)
+        facts_by_turn[fact.message_turn].append(fact)
 
     return KnowledgeState(
         session_id=inspection.session_id,
@@ -189,19 +186,19 @@ def _turn_states(inspection: SessionInspection, entries: tuple[tuple[Span, str],
 def _fact_states(knowledge: tuple[KnowledgeEntry, ...], sent: set[KnowledgeEntry]) -> list[FactState]:
     """Every fact ever filed, superseded ones included, ordered by the turn it came from.
 
-    A superseded fact names the turn of the fact that replaced it: the next
-    non-RAW fact filed on the same topic, which is the rule supersession follows.
+    A superseded fact names the turn of the fact that replaced it: the next fact
+    filed on the same topic that could supersede, which is the rule supersession
+    follows.
     """
     states = []
     for position, fact in enumerate(knowledge):
         replacement = None
         if fact.knowledge_status is KnowledgeStatus.SUPERSEDED:
             replacement = next((later.message_turn for later in knowledge[position + 1:]
-                                if later.topic_label == fact.topic_label
-                                and later.knowledge_type is not KnowledgeType.RAW), None)
-        states.append(FactState(turn=fact.message_turn, source_turns=list(fact.covered_turns),
+                                if later.topic_label == fact.topic_label and later.can_supersede), None)
+        states.append(FactState(turn=fact.message_turn, source_turns=[fact.message_turn],
                                 topic=fact.topic_label, content=fact.content, knowledge_type=fact.knowledge_type,
                                 status=fact.knowledge_status, sent=fact in sent, sent_content=fact.content,
-                                shortened=False, from_summary=fact.from_summary,
+                                shortened=False,
                                 superseded_by_turn=replacement))
     return sorted(states, key=lambda state: state.turn)

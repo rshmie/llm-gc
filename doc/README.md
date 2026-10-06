@@ -20,9 +20,8 @@ yet, the doc says so at the top.
 
 ```
 design/
-  scoring/                    relevance scoring — overview + one doc per scorer
-  sweeper-and-composition/    classification and compaction
-  generational-memory/        young / old / permanent generations, and the cut
+  scoring/                    how much each span matters now — overview + one doc per importance scorer
+  generational-memory/        young / old / permanent, spans, detail levels, compaction, and the cut
   session/                    per-conversation state and its concurrency contract
   proxy/                      the HTTP proxy: finding a conversation, forwarding, never degrading
   events/                     the event bus components report through
@@ -31,10 +30,3 @@ design/
   storage.md                  schema versioning for persisted records
   failure-handling.md         the circuit breaker around engine failures
 ```
-
-## What is not here
-
-Working notes — the build log, the phase plan, the target spec, the pre-build
-research — live in `doc/internal/` and are not published. They are working
-material, not documentation: some of it describes the system as intended rather
-than as built, and publishing that would misrepresent what actually runs today.

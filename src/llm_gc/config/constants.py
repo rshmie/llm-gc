@@ -7,7 +7,6 @@ APP_VERSION = __version__
 DEFAULT_CONTEXT_WINDOW = 128_000
 DEFAULT_KEEP_THRESHOLD = 0.7
 DEFAULT_ARCHIVE_THRESHOLD = 0.3
-DEFAULT_MIN_COMPACTABLE_TOKENS = 30
 DEFAULT_LAST_N_TURNS_TO_KEEP = 5
 # Smallest batch of compactable turns worth a cut. Every cut resets the provider's
 # prompt cache once and strips thinking blocks from the turns it keeps, so cutting
@@ -52,11 +51,7 @@ DECISION_SCORER_PATTERN = (r'\b(?:keep|delete|summarize|uncertain|concluded|chos
                            r'the answer is|concluded that|settled on|final choice|in conclusion|to summarize|the solution is|'
                            r'I will use|we should use|stick with|switching to)\b')
 
-# A regex pattern to identify reference language in messages which includes common phrases indicating reference to previous points, reiteration, or emphasis on earlier statements
-REFERENCE_SCORER_PATTERN = (r'\b(?:as I mentioned|as you said|like you said|as we discussed|like we discussed|as I said|like I said|as mentioned|as noted|as we said|as we mentioned|as we noted|'
-                            r'earlier|previously|before|going back to|back to your point|back to what you said|referring back to|'
-                            r'to reiterate|to repeat|as noted|referring to|regarding what)\b')
-# LLM compaction (rationale in doc/design/sweeper-and-composition/compaction-mechanism.md).
+# LLM compaction (rationale in doc/design/generational-memory/compaction.md).
 DEFAULT_COMPACTION_TIMEOUT_S = 30.0       # wall-clock budget for one summarisation call
 DEFAULT_COMPACTION_TARGET_RATIO = 0.35    # output cap as a fraction of the run's own tokens
 DEFAULT_MIN_COMPACTION_OUTPUT_TOKENS = 64 # floor, so a short run still has room for one sentence

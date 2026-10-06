@@ -1,231 +1,224 @@
-# Scoring Pipeline — Overview
+# Scoring: How Much Each Span Matters Now
 
-## Why Does Scoring Exist?
+## Why scoring exists
 
-LLM context windows are finite. A 50-turn conversation can easily exceed 128K tokens — and when it does, older context gets silently dropped. The model doesn't tell you what it forgot. It just starts hallucinating or contradicting earlier decisions.
+Every span in the old generation is shown at a detail level, and the level comes
+from its score. The score answers one question, again at every collection: **how
+much does this part of the conversation matter to the conversation as it stands
+now?** Because it is asked again, the answer can change — a span the user returns to
+scores higher than it did when it was made.
 
-**Scoring solves this**: instead of blindly dropping the oldest messages, we score every message for relevance and make intelligent decisions about what to keep, compress, or remove. The goal isn't just saving tokens — it's preserving the information that matters most while being transparent about what's being lost.
+## How a span is scored
 
-This is the **Mark** phase of the Mark-Sweep-Compact pipeline (inspired by how garbage collectors work in programming language runtimes like Java's JVM or Go's GC).
+Four signals, in two groups:
 
-```
-                         ┌──────────────────────────────────────────┐
-                         │           SCORING PIPELINE               │
-                         │           (The "Mark" Phase)             │
-                         │                                          │
-  conversation ─────────►│  For each message:                       │
-  (list of messages)     │                                          │
-                         │    ┌─────────────┐                       │
-                         │    │  Recency     │──► How old is it?    │
-                         │    ├─────────────┤                       │
-                         │    │  Similarity  │──► Related to query? │
-                         │    ├─────────────┤                       │
-                         │    │  Density     │──► Info-rich or fluff?│
-                         │    ├─────────────┤                       │
-                         │    │  Decision    │──► Contains decisions?│
-                         │    ├─────────────┤                       │
-                         │    │  Reference   │──► Referenced later?  │
-                         │    └─────────────┘                       │
-                         │          │                               │
-                         │          ▼                               │
-                         │    weighted_sum ──► combined score [0,1] │
-                         │                                          │
-                         └──────────────────────────────────────────┘
-                                        │
-                                        ▼
-                              ┌──────────────────┐
-                              │  SWEEPER decides: │
-                              │  keep / compress  │
-                              │  / remove         │
-                              └──────────────────┘
-```
-
-## The Five Dimensions of Relevance
-
-A single "relevance score" is too blunt — a message can be old but contain a critical decision, or recent but completely empty ("ok", "thanks"). We decompose relevance into five independent signals, each measuring a different aspect. Four are wired into the default engine:
-
-| Scorer | Question It Answers | Default weight |
-|--------|-------------------|--------|
-| [Recency](recency-scorer.md) | How recent is this message? | 0.60 |
-| [Similarity](similarity-scorer.md) | How related is it to the current query? | not wired by default |
-| [Density](density-scorer.md) | How information-rich is it? | 0.20 |
-| [Decision](decision-scorer.md) | Does it contain decisions or preferences? | 0.10 |
-| [Reference](reference-scorer.md) | Is it referenced by later messages? | 0.10 |
-
-### The default engine, and why these weights
-
-The scorers, their weights and the rest of the engine are wired in one place,
-`build_gc_service`, which the proxy runs and the decision-survival check measures.
-One definition is the point: a check that built its own engine would report numbers
-about an engine nobody runs.
+| Signal | What it asks | Computed by | Weight |
+|---|---|---|---|
+| **Recency** | How recently was this span said? | `SpanScorer` | 0.6 to liveness: the larger of these two |
+| **Relevance now** | Does what the user is discussing now reach it? | the `Relevance` seam (`LexicalRelevance` by default) | (the same 0.6) |
+| **[Decision](decision-scorer.md)** | Does it state or settle a decision? | `DecisionScorer` | 0.2 |
+| **[Density](density-scorer.md)** | Does it carry names, numbers, code, links? | `DensityScorer` | 0.2 |
 
 ```
-                        build_gc_service(config, summary_provider)
-                                        │
-        ┌───────────────────────────────┼─────────────────────────────┐
-        ▼                               ▼                             ▼
-  RelevanceScorer                Sweeper (threshold)          GenerationalMemory
-  recency 0.6, density 0.2,                                   extractor + compactor
-  decision 0.1, reference 0.1                                 (LLMCompactor, or NoOp
-                                                               when no provider)
-        │                               │                             │
-        └──────────────► GcService ◄────┴─────────────────────────────┘
-                            ▲                      ▲
-                     proxy (run_proxy.py)    decision-survival check
+                 ┌───────────────────────────────────────────────────────────────┐
+  every span ───►│ LIVENESS  =  the larger of                                    │
+  (its turns)    │                recency      e^(−0.05 × turns since its last turn)
+                 │                relevance    how much of what the user is       │
+  "now" ────────►│                             discussing now this span talks about
+  (the user's    │                                                               │
+   turns in      │ IMPORTANCE  = decision      decision phrases it states        │
+   the tail)     │             + density       names, numbers, code it carries   │
+                 │                                                               │
+                 │ score = (0.6 × liveness + 0.2 × decision + 0.2 × density) / 1.0│
+                 └───────────────────────────────────────────────────────────────┘
+                                         │
+                                         ▼
+                        the planner: score → detail level
+                        (see generational-memory/detail-levels.md)
 ```
 
-- **Recency dominates (0.6).** Generational compaction already decides *when* a
-  turn leaves the verbatim tail by age; the score decides *how* it leaves (quoted,
-  summarised, archived). Age is the signal that is right most often for that call.
-- **The content signals lift what age would let go.** Density (0.2) keeps
-  information-rich turns quoted rather than summarised; decision and reference
-  (0.1 each) are narrower regex signals, so they nudge rather than decide.
-- **Similarity is not wired by default.** It needs a ~90 MB embedding model, a
-  cold start, and CPU-heavy encoding on the scoring path, for a gain nobody has
-  measured. It plugs in as a fifth scorer when a measurement says it pays.
-- **These are draft values**, chosen while tracing real conversations and not
-  yet tuned. The decision-survival check is how a change to them is judged: a
-  saving is only kept if no fact it protects is lost.
+### Liveness: recent, or reached by what is discussed now
 
-Weights are normalised at construction, so they need not sum exactly to one.
-Library users with different needs build their own `RelevanceScorer`; the
-default is a starting point, not a contract.
-
-### Combined Score Formula
+A span is **live** — part of the conversation as it stands — if it is recent **or**
+if what the user is discussing reaches it. Liveness is the larger of the two, not
+their sum.
 
 ```
-combined_score = Σ weight_i × score_i      (weights normalised to sum to 1)
+                         recency   relevance   liveness
+ just condensed, unrelated  0.78       0.00       0.78   ← recent: stays summarised
+ old, nobody mentions it    0.02       0.00       0.02   ← quiet: drifts to archived
+ old, the user asks about   0.02       0.80       0.80   ← reached: rises again
 ```
 
-Every scorer outputs a normalized score in **[0.0, 1.0]**, so the combined score is also in [0.0, 1.0].
+- **Recency** decays slowly: a span loses half its recency every fourteen turns,
+  measured from its last turn. Slow on purpose — the score should archive what has
+  gone quiet, and leave bounding the front to the budget.
+- **Relevance now** compares the span with **"now"**: the turns the user wrote in
+  the tail (at a collection), or the user's newest message (at a recall). Not the
+  assistant's replies — they restate and expand, and would make every span look
+  relevant; not tool results, which are output rather than a subject.
 
-## Score → Action Mapping
+### Importance: what a span states
 
-The combined score feeds into the Sweeper, which classifies each message:
+Two measures lift spans that carry decisions and specifics:
+
+- **[Decision](decision-scorer.md)** — phrases that state or settle a decision
+  ("we decided", "let's go with", "the plan is").
+- **[Density](density-scorer.md)** — the share of names, numbers, code and links in
+  the text.
+
+Importance alone tops out at 0.4, below the keep line (0.7): a span is never kept
+word for word just for stating a decision, unless it is also live.
+
+### Every level stays reachable, at any age
+
+Recency falls to zero with age; relevance does not. So the best score a span of
+any age can reach is 1.0, and every level — kept included — can be reached by a
+span the conversation returns to. A test computes this best score from the shipped
+weights and fails if a level is ever out of reach.
+
+### Relevance now, word for word
+
+Relevance is a seam (`Relevance`); the shipped implementation compares words:
 
 ```
-Score Range      Action           Generation
-─────────────    ──────────────   ──────────────────────────────
-0.7 – 1.0        KEEP             Young Gen — full detail preserved
-0.3 – 0.7        COMPRESS         Old Gen — summarized to save tokens
-0.0 – 0.3        REMOVE           Dead — facts extracted, then dropped
+ for each word the user said now (stopwords dropped):
+     weight  = how rare the word is across this conversation's spans
+               (a word every span uses — "service", "design" — says little)
+     credit  = how often this span uses it, with diminishing returns
+               1 mention → ½ · 2 → ⅔ · 10 → about 0.9
+
+ relevance(span) = Σ weight × credit  /  Σ weight          (between 0 and 1)
 ```
 
-Override rules exist regardless of score:
-- Last N turns are always kept (configurable, default 5)
-- System prompt is always kept
-- Messages with explicit decisions get a score boost
+The span that *discusses* a subject outranks one that *names* it in passing, and a
+weak match stays weak. Measured on the decision-survival check's ticketing
+conversation:
 
-## Architecture: How Scorers Are Composed
+| What the user asked | Best span | Next best | A generic span |
+|---|---|---|---|
+| "How long do we hold seats…?" | the seat-hold answer, 0.67 | 0.58 | 0.06 |
+| "What did we decide about the platform fee?" | the fee decision, 0.87 | 0.84 | 0.00 |
+| "How would you phase the rollout?" | none above 0.09 | — | — |
 
-All scorers inherit from `BaseScorer` (an abstract base class) and follow the **Strategy Pattern** — they share the same interface but implement different algorithms. This means:
-
-- New scorers can be added without changing existing code
-- Scorers can be swapped, composed, or disabled independently
-- Each scorer is testable in isolation
+### A message that refers back
 
 ```
-              BaseScorer (ABC)
-              ┌──────────────────────┐
-              │ scorer_name          │
-              │ score() → ScorerResult│ ◄── abstract method
-              └──────────┬───────────┘
-                         │ inherits
-     ┌───────────────┬───┼───────────┬────────────────┐
-     │               │   │           │                │
-RecencyScorer  SimilarityScorer  DensityScorer  DecisionScorer  ReferenceScorer
-(math-based)   (embedding-based) (regex-based)  (regex-based)   (regex-based)
+ "As we discussed, how long do we hold seats?"
+  └──────┬───────┘ └────────────┬─────────────┘
+   says THAT it refers    says WHAT: "hold", "seats"
+   back — any earlier     → reaches the span that discusses seat holds,
+   span could be meant      and raises it at the next collection
 ```
 
-Every scorer returns a `ScorerResult` — a Pydantic model with:
-- `score` — the normalized relevance score [0.0, 1.0]
-- `scorer_name` — which dimension this measures (a `RelevanceType` enum)
-- `reason` — human-readable explanation of the score
-- `signals` — raw data used to compute the score (for debugging and the visualizer)
+A back-reference reaches its span through the words that name the subject, not
+through "as we discussed", which fits every earlier span alike. Between collections
+the front does not change, so until the next one the model sees that span at its
+current level, and the front's header tells it to say so rather than guess.
 
-The `signals` dict is what makes the Context Visualizer possible — it gives the developer full transparency into *why* a message got its score.
+### Known misses
 
-## Signals, Risk, and a Critical Design Constraint
+- **Paraphrase.** "Datastore" does not find "database". An embedding implementation
+  of the same seam fixes it without changing anything else.
+- **A reference that names nothing.** "Do what I said earlier" reaches no span; no
+  word in it is about anything.
+- **Reference words dilute the match.** "Mentioned", "earlier" and "again" count as
+  words asked about and match nothing, so "as I mentioned earlier, what was the fee
+  again?" scores the fee span well below what "what was the fee?" would.
 
-Scorer signals feed into the Context Visualizer's risk indicators — hallucination risk, quality degradation warnings, decision survival maps. There is one non-negotiable constraint on how these risk signals are framed:
+## Where the score is used
 
-**Risk indicators must measure degradation that happens naturally — not degradation caused by GC.**
+```
+ at every collection        score every span against the user's turns in the tail
+                            → the planner re-picks every level
+ for the next-collection    the same scoring, drafted spans included, with no model
+ preview (dashboard)        call and no event
+```
 
-Context degradation is a fact of LLM conversations with or without LLM-GC:
+The default engine is wired in one place, `build_gc_service`, which the proxy runs
+and the decision-survival check measures — so the check reports on the engine people
+actually run.
 
-- **Without LLM-GC**: The context window fills up. The API silently truncates from the top. Decisions vanish. The model's attention to old turns weakens. The user has no visibility into any of this. Hallucination risk is invisible.
-- **With LLM-GC**: The same degradation is happening, but now the user can *see* it. And the GC is actively preserving what matters — decisions get score boosts, important context gets compressed instead of silently dropped, facts are extracted to permanent memory before messages are removed.
+```
+                    build_gc_service(config, summary_provider)
+                                      │
+        ┌─────────────────────────────┼───────────────────────────────┐
+        ▼                             ▼                               ▼
+   SpanScorer                    GenerationalMemory                GCConfig
+   liveness 0.6                  extractor + compactor             bands, margin,
+   decision 0.2, density 0.2     (LLMCompactor, or NoOp            recap budget,
+   word-overlap relevance        when no provider)                 batch size
+        └──────────────────────► GcService ◄────────────────────────┘
+```
 
-If the hallucination risk goes up *because* LLM-GC removed something, then we're not solving the problem — we are the problem. The risk heuristics must measure the natural degradation state: what percentage of known decisions are still in full context, how much of the conversation is filler vs. substance, how far back the model's effective attention reaches. LLM-GC's role is to make that degradation visible and to slow it down — not to cause it.
+## Signals, risk, and a design constraint
 
-This connects to the project's core philosophy of **epistemic transparency**: the system doesn't claim to eliminate hallucination risk. It makes the risk visible so the human can exercise judgment.
+Every score is returned with its parts — recency, relevance, decision, density, and
+the liveness taken from them — so a reader can see *why* a span is where it is.
 
-## Design Rationale & Alternatives Considered
+**Risk indicators must measure degradation that happens naturally, not degradation
+caused by GC.** Without LLM-GC, the window fills, the API truncates from the top,
+decisions vanish, and nobody sees it. With LLM-GC, the same pressure exists, but it
+is visible, and the score keeps what matters now in front of the model. If risk went
+up *because* LLM-GC condensed something, LLM-GC would be the problem it claims to
+solve. Its role is to make degradation visible and to slow it, never to cause it.
 
-The "how it works" above is one point in a space of choices. The decisions that
-shaped it, and the credible alternatives rejected:
+## Why this shape
 
-**Multi-signal composition, not a single opaque score.** Folding recency,
-similarity, density, decision, and reference into one black-box function would
-still produce a number — but a number nobody could explain. That defeats the
-project's visibility commitment: the developer could not see *why* a turn scored
-the way it did, and so could not judge whether to trust the classification.
-Decomposing relevance into five independently-published signals is what makes the
-score auditable.
+- **Spans scored in one batch, against a "now" the caller supplies.** Word rarity
+  needs every span at once, and in a flat list of messages a span of twenty turns
+  would count as one position.
+- **Recency and relevance inside the span scorer; decision and density as scorers
+  of their own.** Decision and density read one span's text and nothing else, so
+  each is a small class behind `BaseScorer`. Recency needs the newest turn, and
+  relevance needs how rare each word is across every span, so both are computed
+  where all the spans are seen at once.
+- **The larger of recency and relevance, not their sum.** Summed, recency weighted
+  enough to keep recent spans summarised capped what an old span could ever score;
+  weighted lightly, every unrelated span was archived the moment it was made.
+- **A slow decay.** At the turn-level rate (0.15 per turn), measured spans were
+  archived about seven turns after they were said, with the front nowhere near its
+  budget; the three short check conversations archived five or six of seven spans.
+  At 0.05 they keep their summaries while there is room.
+- **Several named signals, not one opaque number.** A single black-box score could
+  not be explained; separate signals let a person audit a span's level.
+- **Regex for the linguistic signals, for now.** No labelled data exists yet to train
+  a model honestly; the regex scorers are the baseline, and the interfaces let a
+  learned replacement swap in without touching the pipeline.
+- **Draft weights.** 0.6 / 0.2 / 0.2 and the 0.05 decay were set against the check's
+  conversations and will be tuned on it: a saving is kept only if no answer is lost.
 
-**Regex heuristics for the linguistic signals, not a learned model — yet.**
-Density, decision, and reference detection ask whether text *means* something
-specific; that can be regex, hand-written heuristics, or a learned model. A
-learned scorer was rejected for the initial build for a blunt reason: no labelled
-data exists yet, and producing it honestly requires running the system on real
-conversations first. A learned-but-untrained scorer would be either dishonest
-(not actually learning) or pointless (random scores). The regex scorers are the
-honest baseline, and the `BaseScorer` interface is what lets a learned
-replacement swap in later without touching the pipeline.
+## Alternatives rejected
 
-**Embeddings for similarity, not heuristics alone.** Pure recency and keyword
-heuristics miss semantic relevance — a turn about "the database" is still relevant
-when the conversation moves to "Postgres" with no shared keyword. Embedding-based
-cosine similarity captures that cheaply and runs locally with no provider
-dependency.
+- **Scoring each message on its own, with recency weighted at 0.6, then classifying
+  it once.** This was the earlier pipeline. Every message old enough to be
+  collected was 5–8 turns old, so recency barely varied between them, and it capped
+  the score of any collected message at 0.68 — under the 0.7 keep line, so quoting
+  an important old turn could never happen. Replaced by span scoring with liveness.
+- **A reference scorer counting later messages that say "earlier" or "as I
+  mentioned".** It never knew *which* message was meant, so every older message got
+  the same lift. Relevance to what is discussed now is the targeted version.
+- **Embedding similarity in the default engine.** It needs a large model download,
+  a cold start, and CPU-heavy work on the scoring path, for a gain not yet measured
+  against word overlap. It belongs behind the `Relevance` seam, as an optional extra.
+- **Plain word coverage.** Ties: four spans of the ticketing conversation scored
+  1.00 on the platform-fee question, because coverage ignores how often a span
+  repeats a word.
+- **BM25 scaled to the best-matching span.** Some span is always the best, so a
+  generic question ("how would you phase the rollout?") made one span a perfect
+  match off a single incidental word.
 
-**Conservative recall on the regex signals.** The detectors are deliberately
-tuned to prefer false positives (flagging a decision that isn't there) over false
-negatives (missing a real one). The cost asymmetry mirrors the quality-preservation
-principle: a wrongly-flagged turn costs a few tokens of extra retention; a missed
-decision costs a lost fact.
-
-**Weights normalised as ratios, not validated against a strict sum of 1.0.**
-Configured weights are normalised at construction (each divided by their sum),
-with a warning if the input sum is more than 1% from 1.0. This avoids two real
-problems: floating-point configs equal to 1.0 by intent but bit-different in
-practice (`0.1 + 0.2 = 0.30000000000000004`), and the common case of bumping one
-signal without re-tuning the rest. Any non-negative configuration is valid; none
-is silently rejected.
-
-## Current Limitations & Future Improvements
-
-**Today:** Recency uses math; density, decision, and reference use regex pattern matching. This is fast and predictable but misses nuance — regex can't understand "I think we should probably go with option B" as a decision.
-
-**Next:** Fact extraction feeding back into scoring — messages whose extracted facts are still relevant get a score boost.
-
-**Later, optionally:** Learned relevance scoring replaces the regex heuristics with trained models. The scorer interface stays the same — only the algorithm inside changes. This is why the Strategy pattern matters here: swapping regex for ML requires zero changes to the pipeline.
-
-## File Map
+## File map
 
 ```
 src/llm_gc/
   scoring/
-    __init__.py            # Public exports
-    base_scorer.py         # Abstract base class — Strategy Pattern contract
-    scorer_result.py       # Pydantic model for scorer output
-    relevance_type.py      # Enum: RECENCY, SIMILARITY, DENSITY, DECISION, REFERENCE
-    recency_scorer.py      # Exponential decay scorer
-    similarity_scorer.py   # Semantic similarity scorer (sentence-transformers)
-    density_scorer.py      # Information density scorer (regex)
-    decision_scorer.py     # Decision phrase scorer (regex)
-    reference_scorer.py    # Back-reference scorer (regex)
+    span_scorer.py         # SpanScorer, liveness, the Relevance seam, LexicalRelevance
+    base_scorer.py         # the abstract base the importance scorers implement
+    decision_scorer.py     # decision phrases (regex)
+    density_scorer.py      # names, numbers, code, links per token (regex)
+    scorer_result.py       # one measure's score, reason and signals
+    relevance_type.py      # the measures: recency, similarity, decision, density
   config/
-    constants.py           # Regex patterns and default configuration values
-    gc_config.py           # GCConfig Pydantic model (thresholds, weights)
+    constants.py           # the regex patterns
 ```

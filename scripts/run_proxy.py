@@ -63,7 +63,7 @@ SESSION = "demo"
 
 # A conversation with facts worth remembering and filler worth forgetting, so the
 # three generations all have something to do. The last turn deliberately asks about
-# something stated near the start, which is the question the memory block exists to
+# something stated near the start, which is the question the recap exists to
 # answer.
 CONVERSATION = [
     "We need to decide on the storage layer for the new ingest service before Friday.",
@@ -358,11 +358,11 @@ def main() -> None:
     serving.add_argument("--dashboard-port", type=int, default=DEFAULT_DASHBOARD_PORT)
     serving.add_argument("--stub-upstream", action="store_true", help="answer with canned replies; no network")
     serving.add_argument("--min-cut-tokens", type=int, default=DEFAULT_MIN_CUT_TOKENS,
-                         help="compactable tokens a cut needs (lower it to see cuts sooner)")
+                         help="tokens a collection must condense (lower it to see collections sooner)")
     serving.add_argument("--keep-last", type=int, default=DEFAULT_LAST_N_TURNS_TO_KEEP,
                          help="newest turns always kept verbatim")
     serving.add_argument("--context-window", type=int, default=200_000,
-                         help="the proxied model's window; sets the memory budget")
+                         help="the proxied model's window; sets the recap budget")
     args = parser.parse_args()
 
     # From the environment, never a flag, so a key never lands in shell history.

@@ -2,11 +2,11 @@ from enum import Enum
 
 
 class SweepClassification(Enum):
-    """Action classifications assigned to messages by the Sweeper.
+    """The detail level the next collection would give a verbatim turn, in the dashboard's words.
 
-    KEEP - message stays in context as-is, no modification.
-    COMPACT - message is passed to the Compactor for compression.
-    ARCHIVE - message is removed from context but stored in long-term storage for potential future retrieval.
+    KEEP - its span would be quoted word for word.
+    COMPACT - its span would be summarised.
+    ARCHIVE - its span would be archived to its opening line and facts, or folded out of view.
     """
     KEEP = "keep"
     COMPACT = "compact"
