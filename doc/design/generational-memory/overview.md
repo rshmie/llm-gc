@@ -363,12 +363,19 @@ one call reads every span the collection makes, given the facts already on recor
   recommended 3. Filed as a replacement, the recap's "Replaced later" note made the
   model answer 3. Filed beside the decision, "index shards: recommended 3" was the
   only labelled note — the user's 9 sat inside a quoted sentence — and the model
-  still led with 3. The rule is enforced when facts are filed, so it holds whatever
-  the model writes. Recommendations on topics the user never decided are filed, as
-  recommendations.
+  still led with 3. And when the user had asked "is that reasonable?", the reader
+  took their 9 for a question, filed nothing for it, and filed the recommendation
+  under another name, "shard layout", where the rule could not see it. The reader is
+  now told that a user who asks about their own choice has still made it, and to
+  file a recommendation that disagrees with a value the user stated under exactly
+  that value's topic. The rule is enforced when facts are filed, so it holds whatever
+  the model writes, as long as the topics match. Recommendations on topics the user
+  never decided are filed, as recommendations.
 - **The answer is untrusted output.** It must be JSON in the expected shape, or the
   read fails and is reported; a fact naming a turn the reader was not shown, or that
-  is not a short topic and value, is dropped.
+  is not a short topic and value, is dropped. Facts are filed in the order they were
+  said, whatever order the model lists them in: filing is sequential, and a later
+  statement is what replaces an earlier one.
 - **A failed read** makes the collection's spans without facts, and is reported once.
 
 Without a model, patterns read the user's own turns only — see the rules below.
@@ -394,6 +401,7 @@ never becomes a note on a topic you decided.
 | What happens | What the model is told |
 |---|---|
 | You decide 9; the AI suggests 3; you never reply | your 9 is the note; the suggestion is in that exchange's summary |
+| You ask "let's use 9 — is that reasonable?"; the AI suggests 3 | the same: asking about your choice does not undo it |
 | You decide 9; the AI suggests 3; you say "ok, go with 3" | your new decision replaces your 9: "Replaced later: index shards: 3, not 9" |
 | You decide 9; the AI disagrees; you say "no, keep 9" | your 9 stays; repeating it is not a change, so no note |
 | The AI proposes Postgres; you say nothing | "database: recommended Postgres" — a suggestion, and it reads as one |

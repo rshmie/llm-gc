@@ -141,7 +141,9 @@ class LLMFactReader:
         facts = [entry for fact in answer.facts if (entry := _entry(fact, turns)) is not None]
         if dropped := len(answer.facts) - len(facts):
             logger.info("facts dropped from a model's answer", extra={"dropped": dropped, "kept": len(facts)})
-        return facts
+        # Filed in the order they were said, whatever order the model listed them in:
+        # filing is sequential, and a later statement is what replaces an earlier one.
+        return sorted(facts, key=lambda fact: fact.message_turn)
 
 
 def _entry(fact: _Fact, turns: dict[int, Message]) -> KnowledgeEntry | None:

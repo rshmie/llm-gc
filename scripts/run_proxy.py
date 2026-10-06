@@ -53,6 +53,7 @@ from llm_gc.config.constants import (  # noqa: E402
     DEFAULT_MIN_CUT_TOKENS,
 )
 from llm_gc.engine import GcService, build_gc_service  # noqa: E402
+from llm_gc.extraction import PatternFactReader
 from llm_gc.llm import AnthropicClient, FakeProvider, LLMResponse, StopReason  # noqa: E402
 from llm_gc.monitoring import ContextHealthMonitor  # noqa: E402
 from llm_gc.proxy import DEFAULT_PROXY_PORT, SESSION_HEADER, create_app  # noqa: E402
@@ -146,7 +147,8 @@ def build_engine(config: GCConfig, *, api_key: str | None, compactor_kind: str) 
             for text in _SCRIPTED_SUMMARIES
         ]
     )
-    return (build_gc_service(config, summary_provider=provider),
+    # Canned summaries are not a model: facts are read by patterns, from the user's own words.
+    return (build_gc_service(config, summary_provider=provider, fact_reader=PatternFactReader()),
             "LLMCompactor -> scripted provider (no ANTHROPIC_API_KEY; wording canned, arithmetic real)")
 
 

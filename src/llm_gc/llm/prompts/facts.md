@@ -9,6 +9,8 @@ as settled.
 Something the conversation settled and may need later, said by either side:
 
 - **Decisions and choices, with their value**: "payments: Stripe", "launch date: April 18".
+  A user who asks about their own choice has still made it: "Let's use 9 shards —
+  is that reasonable?" is the decision "index shards: 9", until they change it.
 - **Requirements and limits**: "checkout latency: under 300 ms at p99".
 - **Names and roles**: "product owner: Lena Hoffmann".
 - **Numbers, settings and identifiers the conversation committed to**: "seat hold:
@@ -41,8 +43,9 @@ The facts settled so far are listed between `<<<FACTS` and `FACTS>>>`, as
   topic**. That is how the old value is marked as replaced, so do it only when the
   value really changed.
 - **A recommendation changes nothing.** When the assistant recommends something
-  other than a decision on record, write it as a recommendation; the decision stays
-  until the user changes it.
+  other than a value the user stated — on record, or earlier in these turns — write
+  it as a recommendation under **exactly the topic of the user's value**. The
+  decision stays until the user changes it.
 - **Agreeing is deciding.** When the user agrees to a recommendation — "sounds
   good", "go with that" — write the value as their decision, against the turn where
   they agreed.

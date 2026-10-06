@@ -82,6 +82,11 @@ that no longer exists.
   observer.
 - **The provider's answer and errors pass through verbatim**, status codes
   included: the client's error handling was written against the provider's format.
+- **Every other Anthropic endpoint passes through untouched.** A client such as
+  Claude Code also counts tokens and lists models through the same base URL; those
+  requests are forwarded with their method, path, query, headers and body, and
+  nothing is recorded. A 404 from the proxy would fail the client because of LLM-GC.
+  The query string is kept on Messages too.
 
 ### LLM-GC never makes a conversation worse
 

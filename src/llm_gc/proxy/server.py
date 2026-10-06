@@ -159,6 +159,20 @@ def create_app(
         """Anthropic Messages, with the conversation replaced."""
         return await _handle(app, request)
 
+    @app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+    async def pass_through(request: Request) -> Response:
+        """Any other Anthropic endpoint, forwarded untouched: token counting, model listing.
+
+        LLM-GC rewrites only the conversation sent to Messages. A client such as Claude
+        Code calls other endpoints through the same base URL, and a 404 from here would
+        fail it because of LLM-GC. Registered after Messages, which matches first.
+        """
+        body = await _read_body(request)
+        if body is None:
+            return _too_large()
+        return await _forward(app, body, forwardable_headers(dict(request.headers)), _target(request),
+                              method=request.method)
+
     return app
 
 
@@ -185,6 +199,7 @@ async def _handle(app: FastAPI, request: Request) -> Response:
     if body is None:
         return _too_large()
     headers = forwardable_headers(dict(request.headers))
+    target = _target(request)
 
     try:
         payload = _parse_json(body)
@@ -194,7 +209,7 @@ async def _handle(app: FastAPI, request: Request) -> Response:
         # cannot parse, so forward untouched rather than reject.
         logger.info("forwarding unprocessable request untouched", extra={"reason": str(err)})
         metrics.gc_bypassed += 1
-        return await _forward(app, body, headers)
+        return await _forward(app, body, headers, target)
 
     streaming = payload.get("stream") is True
     history, new_turn = client_messages[:-1], client_messages[-1]
@@ -218,11 +233,11 @@ async def _handle(app: FastAPI, request: Request) -> Response:
         metrics.gc_bypassed += 1
         # Counted as forwarded, so a bypass does not look free in /stats.
         metrics.tokens_forwarded += client_history_tokens
-        return await _send(app, body, headers, streaming)
+        return await _send(app, body, headers, streaming, target)
 
     metrics.gc_applied += 1
     metrics.tokens_forwarded += forwarded_tokens
-    response = await _send(app, forward_body, headers, streaming)
+    response = await _send(app, forward_body, headers, streaming, target)
 
     # Aging prepares the next request from the conversation recorded so far; it
     # never depends on this reply, which the next request will show us exactly.
@@ -356,13 +371,19 @@ def _never_blocking(action: Callable[..., None], *args: Any) -> None:
         logger.exception("post-response bookkeeping failed; the client's response is unaffected")
 
 
-async def _send(app: FastAPI, body: bytes, headers: dict[str, str], streaming: bool) -> Response:
+def _target(request: Request) -> str:
+    """The path and query the client asked for, to ask the provider for the same."""
+    return f"{request.url.path}?{request.url.query}" if request.url.query else request.url.path
+
+
+async def _send(app: FastAPI, body: bytes, headers: dict[str, str], streaming: bool, target: str) -> Response:
     if streaming:
-        return await _forward_stream(app, body, headers)
-    return await _forward(app, body, headers)
+        return await _forward_stream(app, body, headers, target)
+    return await _forward(app, body, headers, target)
 
 
-async def _forward(app: FastAPI, body: bytes, headers: dict[str, str]) -> Response:
+async def _forward(app: FastAPI, body: bytes, headers: dict[str, str], target: str, *,
+                   method: str = "POST") -> Response:
     """Send the request upstream and hand the answer back verbatim.
 
     Status codes and error bodies pass through unchanged: the client's error
@@ -370,17 +391,17 @@ async def _forward(app: FastAPI, body: bytes, headers: dict[str, str]) -> Respon
     """
     client: httpx2.AsyncClient = app.state.http_client
     try:
-        upstream = await client.send(_upstream_request(app, body, headers))
+        upstream = await client.send(_upstream_request(app, body, headers, target, method))
     except httpx2.RequestError as err:
         return _unreachable(err)
     return _verbatim(upstream, upstream.content)
 
 
-async def _forward_stream(app: FastAPI, body: bytes, headers: dict[str, str]) -> Response:
+async def _forward_stream(app: FastAPI, body: bytes, headers: dict[str, str], target: str) -> Response:
     """Relay a streamed reply chunk by chunk, as it arrives."""
     client: httpx2.AsyncClient = app.state.http_client
     try:
-        upstream = await client.send(_upstream_request(app, body, headers), stream=True)
+        upstream = await client.send(_upstream_request(app, body, headers, target, "POST"), stream=True)
     except httpx2.RequestError as err:
         return _unreachable(err)
 
@@ -413,13 +434,14 @@ async def _forward_stream(app: FastAPI, body: bytes, headers: dict[str, str]) ->
     )
 
 
-def _upstream_request(app: FastAPI, body: bytes, headers: dict[str, str]) -> httpx2.Request:
+def _upstream_request(app: FastAPI, body: bytes, headers: dict[str, str], target: str,
+                      method: str) -> httpx2.Request:
     client: httpx2.AsyncClient = app.state.http_client
     return client.build_request(
-        "POST",
-        f"{app.state.upstream_base_url}{MESSAGES_PATH}",
-        content=body,
-        headers={**headers, "content-type": "application/json"},
+        method,
+        f"{app.state.upstream_base_url}{target}",
+        content=body or None,
+        headers={**headers, "content-type": "application/json"} if body else headers,
         timeout=app.state.upstream_timeout_s,
     )
 

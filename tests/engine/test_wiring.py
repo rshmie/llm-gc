@@ -113,6 +113,41 @@ def test_a_recommendation_never_marks_the_users_decision_replaced():
     assert [(f.content, f.speaker) for f in snapshot.active_knowledge] == [("9, with 2 replicas each", "user")]
 
 
+def test_a_recommendation_in_the_same_exchange_never_outranks_the_users_decision():
+    """The check's lost answer, a second way: the user's decision and the assistant's
+    recommendation are read in one call, the model listing the recommendation first.
+    The user's value must be the one note on the topic."""
+
+    class _OutOfOrder(_Model):
+        async def generate(self, *, messages, system=None, max_output_tokens, timeout_s):
+            if system == load_prompt(FACTS_PROMPT) and "[turn 0]" in messages[0].content:
+                text = json.dumps({"facts": [{"turn": 1, "topic": "index shards", "value": "recommended 3"},
+                                             {"turn": 0, "topic": "index shards", "value": "9"}]})
+                return LLMResponse(text=text, stop_reason=StopReason.COMPLETE, input_tokens=0, output_tokens=5,
+                                   model="m", provider="fake")
+            return await super().generate(messages=messages, system=system, max_output_tokens=max_output_tokens,
+                                          timeout_s=timeout_s)
+
+    model = _OutOfOrder()
+    service = build_gc_service(GCConfig(min_cut_tokens=0, last_n_turns_to_keep=2, context_window=100_000),
+                               summary_provider=model)
+    said = ["Let's use 9 shards. Is that reasonable?", "I'd recommend 3 primaries instead. " * 40,
+            "How do we handle growth?", "Reindex through an alias. " * 40]
+
+    async def converse() -> None:
+        for turn, text in enumerate(said):
+            message = Message(role="user" if turn % 2 == 0 else "assistant", content=text,
+                              token_count=count_tokens(text), turn_index=turn)
+            service.gc_record("s", [message], [f"h{turn}"])
+            await service.gc_age("s")
+
+    asyncio.run(converse())
+
+    snapshot = service.session_manager.store.get("s").snapshot
+    assert [(f.content, f.speaker) for f in snapshot.knowledge] == [("9", "user")]
+    assert "Replaced later" not in asyncio.run(service.gc_collect("s"))[0].content
+
+
 def test_every_component_reports_on_the_one_bus():
     # A component on a private bus would be invisible to the dashboard and the monitor.
     service = build_gc_service(GCConfig(), summary_provider=None)

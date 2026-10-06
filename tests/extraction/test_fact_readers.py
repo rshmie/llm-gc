@@ -86,6 +86,14 @@ class TestReadingByModel:
 
         assert [(f.message_turn, f.speaker) for f in facts] == [(8, "user"), (9, "assistant"), (10, "assistant")]
 
+    def test_facts_come_back_in_the_order_they_were_said(self):
+        """Filing is sequential, so a model that lists turn 8 before turn 6 must not
+        make the earlier statement look like the replacement."""
+        provider = FakeProvider(responses=[_answer([{"turn": 8, "topic": "cloud", "value": "AWS"},
+                                                    {"turn": 6, "topic": "cloud", "value": "Google Cloud"}])])
+
+        assert [f.message_turn for f in _read(provider, SPANS)] == [6, 8]
+
     def test_an_unknown_kind_is_a_plain_fact(self):
         provider = FakeProvider(responses=[_answer([{"turn": 8, "topic": "cloud", "value": "AWS", "kind": "vibe"}])])
 

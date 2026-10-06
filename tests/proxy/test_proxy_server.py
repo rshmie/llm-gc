@@ -125,6 +125,42 @@ def _sent(seen) -> dict:
     return json.loads(seen[-1].content)
 
 
+class TestOtherEndpointsPassThrough:
+    """A client such as Claude Code calls more than Messages through the same base URL."""
+
+    def test_an_endpoint_llm_gc_does_not_rewrite_is_forwarded_untouched(self):
+        client, service, _, seen = _proxy(lambda request: httpx2.Response(200, json={"input_tokens": 42}))
+        body = _body(("user", "how many tokens is this?"))
+
+        response = client.post("/v1/messages/count_tokens?beta=true", json=body,
+                               headers={"x-api-key": API_KEY, "anthropic-beta": "token-counting"})
+
+        assert response.status_code == 200 and response.json() == {"input_tokens": 42}
+        [sent] = seen
+        assert (sent.method, sent.url.path, sent.url.params.get("beta")) == ("POST", "/v1/messages/count_tokens", "true")
+        assert json.loads(sent.content) == body, "the body is not rewritten"
+        assert (sent.headers["x-api-key"], sent.headers["anthropic-beta"]) == (API_KEY, "token-counting")
+        assert service.session_manager.store.count() == 0, "nothing is recorded as a conversation"
+
+    def test_a_get_is_forwarded_as_a_get_without_a_body(self):
+        client, _, _, seen = _proxy(lambda request: httpx2.Response(200, json={"data": []}))
+
+        assert client.get("/v1/models", headers={"x-api-key": API_KEY}).json() == {"data": []}
+        assert (seen[0].method, seen[0].content) == ("GET", b"")
+
+    def test_the_providers_error_passes_through_unchanged(self):
+        client, _, _, _ = _proxy(lambda request: httpx2.Response(404, json={"type": "error"}))
+
+        assert client.get("/v1/no-such-thing").status_code == 404
+
+    def test_messages_keeps_its_query_string(self):
+        client, _, _, seen = _proxy()
+
+        client.post("/v1/messages?beta=true", json=_body(("user", "hello")), headers={"x-api-key": API_KEY})
+
+        assert seen[0].url.path == "/v1/messages" and seen[0].url.params.get("beta") == "true"
+
+
 class TestItForwardsAndAnswers:
     def test_a_request_is_forwarded_upstream(self):
         client, _, _, seen = _proxy()
