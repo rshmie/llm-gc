@@ -229,6 +229,19 @@ and collection, and the proxy's counters. **Run GC now** collects the selected
 conversation without waiting for the minimum. `--min-cut-tokens 300` makes
 collections happen within a short conversation.
 
+To look around without an API key or a conversation of your own, rehearse the
+decision-survival check with its dashboard. It plays five scripted conversations
+through the same engine, offline, each as its own session:
+
+```bash
+python -m evals.decision_survival.run --rehearse --dashboard
+# open http://localhost:9911: it fills in as the check runs, and stays open after its report until Ctrl-C
+```
+
+Rehearsal shows the page's shape, not a real model's work: its stand-in summaries
+state nothing, and its facts are read by simple patterns from your messages only, so
+the assistant's column stays empty.
+
 ### Everyday commands
 
 ```bash
