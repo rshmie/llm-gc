@@ -563,7 +563,9 @@ The section is meant to answer four questions in seconds:
 
 What needs a look still comes first. The headline counts the facts not sent, they
 sort above the rest of their column, and replacements have a column of their own.
-None of them sits under forty notes that need nothing.
+None of them sits under forty notes that need nothing. The section folds, as the
+Engine tab's cards do, but its headline and the warning for facts that couldn't be
+read stay in view. Folding hides detail, never a fact the model cannot see.
 
 *Rejected: a model-written digest (goal, key decisions, implementation, open
 questions).* It would be one model's account of what another was told, paid for at

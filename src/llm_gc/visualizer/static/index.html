@@ -66,9 +66,15 @@
       </div>
     </section>
 
-    <section class="card facts-card" aria-labelledby="facts-title">
-      <h2 id="facts-title">What the model is told, fact by fact<button class="info" type="button" data-info="facts" aria-label="About the facts the model is told">i</button></h2>
-      <div id="facts"></div>
+    <section class="card facts-card" data-card="facts" aria-labelledby="facts-title">
+      <div class="card-head">
+        <div>
+          <h2 id="facts-title">What the model is told, fact by fact<button class="info" type="button" data-info="facts" aria-label="About the facts the model is told">i</button></h2>
+          <div id="facts-head"></div>
+        </div>
+        <button class="collapse card-toggle" type="button" aria-expanded="true" aria-controls="facts" aria-label="Collapse What the model is told, fact by fact" title="Collapse"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      </div>
+      <div class="card-body" id="facts"></div>
     </section>
 
     <section class="card prompt-card" aria-labelledby="hero-title">

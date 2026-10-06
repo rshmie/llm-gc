@@ -719,6 +719,7 @@ const changedAt = (fact) => fact.superseded_by_turn ?? fact.turn;
 // Every fact on record by who stated it, with how it reaches the model, then each value replaced.
 // Facts are read only when messages are collected, so the headline says how far the record reaches:
 // headed "current", a value a recent message had already changed would read as still in force.
+// The headline and any warning go in the card's head, so folding the card never hides them.
 export function renderFacts(k) {
   const matches = (f) => !query() || has(f.content) || has(f.topic) || has(f.superseded_by);
   const active = k.facts.filter((f) => f.status === "active");
@@ -733,7 +734,8 @@ export function renderFacts(k) {
     "Their facts couldn't be read when they were collected, so none are on record, and a later collection doesn't read them again. ",
     "The model still reads these messages at their level in the recap: word for word, as a summary, or by their opening line alone.") : null;
   if (!k.facts.length) {
-    fill("facts", unread || h("p", { class: "facts-note" }, collecting()
+    fill("facts");
+    fill("facts-head", unread || h("p", { class: "facts-note" }, collecting()
       ? "A collection is reading this conversation now; the facts it reads appear here when it finishes."
       : !k.cuts ? "Nothing has been collected yet, so the model is sent every message word for word. Facts are read from messages when a collection takes them."
       : "No facts were read from the collected messages. The model reads them in the recap, at their level."));
@@ -741,18 +743,19 @@ export function renderFacts(k) {
   }
   const readTo = collected.length ? ` up to message ${Math.max(...collected)}` : "";
   const recentLabel = messagesLabel(recent);
-  fill("facts",
+  fill("facts-head",
     h("div", { class: "facts-headline" },
       h("span", {}, h("b", {}, fmt(active.length)), ` ${active.length === 1 ? "fact" : "facts"} on record${readTo}`),
       h("span", {}, h("b", {}, fmt(active.length - unseen.length)), " sent"),
       unseen.length ? h("span", { class: "alert" }, h("span", { class: "st warn" }, "⚠ "), h("b", {}, fmt(unseen.length)), " not sent") : null,
       h("span", {}, h("b", {}, fmt(replaced.length)), " replaced")),
+    unread);
+  fill("facts",
     h("p", { class: "facts-note" },
       collected.length ? `Read from ${messagesLabel(collected)} as they were collected. ` : null,
       recent.length ? `${recentLabel[0].toUpperCase()}${recentLabel.slice(1)} ${recent.length === 1 ? "goes" : "go"} to the model word for word: `
         + "a change made there reaches it in those words, and is filed here once collected. " : null,
       "Click a fact to see the message it came from."),
-    unread,
     k.facts.some(matches) ? h("div", { class: "facts-cols" },
       factColumn(k, "user", "You said", active.filter((f) => f.speaker !== "assistant").sort(lookFirst), currentFact, "Nothing of yours on record yet.", matches),
       factColumn(k, "assistant", "The assistant said", active.filter((f) => f.speaker === "assistant").sort(lookFirst), currentFact,
