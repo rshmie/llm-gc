@@ -217,8 +217,6 @@ main > * + * , .view > * + * { margin-top: 16px; }
 .key.pending { box-shadow: inset 0 0 0 1.5px var(--baseline); }
 
 /* ================================================================ messages + facts */
-.conv { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; align-items: start; }
-@media (max-width: 1100px) { .conv { grid-template-columns: minmax(0, 1fr); } }
 .toggle { display: inline-flex; gap: 2px; background: var(--raised); padding: 3px; border-radius: 9px; flex: none; }
 .toggle button { border: 0; background: transparent; color: var(--ink-2); padding: 4px 11px; border-radius: 7px; font-size: 13px; white-space: nowrap; }
 .toggle button[aria-pressed="true"] { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1); }
@@ -271,6 +269,8 @@ button.tag.why:hover, button.tag.why:focus-visible { box-shadow: inset 0 0 0 1px
 .tag .swatch { width: 9px; height: 9px; }
 .tag.next { background: transparent; box-shadow: inset 0 0 0 1px var(--baseline); }
 .text { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* The exchanges run the page's full width; their words keep a readable line length. */
+#messages .text { max-width: 90ch; }
 .text.faded { color: var(--ink-3); }
 .text.clamped { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 .text.faded.clamped { -webkit-line-clamp: 2; }
@@ -327,15 +327,6 @@ button.fact:hover { border-color: var(--baseline); }
 .fact .was, .fact .now { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .fact .was { text-decoration: line-through; color: var(--ink-3); }
 
-.side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
-@media (min-width: 1101px) { .side { position: sticky; top: 76px; max-height: calc(100vh - 92px); overflow-y: auto; } }
-.log { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; }
-.log li { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 2px 10px; padding-bottom: 12px; position: relative; font-size: 13px; }
-.log li::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); margin-top: 5px; box-shadow: 0 0 0 3px var(--accent-wash); }
-.log li.future::before { background: var(--surface); box-shadow: inset 0 0 0 2px var(--baseline); }
-.log li:not(:last-child)::after { content: ""; position: absolute; left: 4.5px; top: 19px; bottom: 2px; width: 1px; background: var(--hairline); }
-.log .when { color: var(--ink-3); font-size: 12px; }
-.log .muted { font-size: 12.5px; }
 
 
 .prompt-head { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; margin: 6px 0 12px; }

@@ -558,7 +558,10 @@ The section is meant to answer four questions in seconds:
   value's line, unless that exchange is out of view, and then the old value isn't
   sent at all.
 - **Whose value is it?** Who said a fact is its column. That decides what a later
-  message may change: only the user replaces a decision the user made.
+  message may change: only the user replaces a decision the user made. When facts
+  are read from the user's turns only, as they are without a model, the
+  assistant's column says it was not read: empty, it would claim the assistant
+  settled nothing.
 - **Where did it come from?** Every fact names its message and jumps to it.
 
 What needs a look still comes first. The headline counts the facts not sent, they
@@ -596,6 +599,21 @@ facts panel. A warning can be dismissed, and returns only when there is more of 
 it warns about: the reader has seen this loss, not every future one. *Rejected:
 standing banners for good news and routine state.* Three of them sat above the
 page on every visit, and a warning among them was one more line to skim past.
+
+### The conversation view keeps no collection log
+
+Collections are what LLM-GC did, and the Engine view is where that is shown: what
+moved at each one, and the prompt's size check by check. The conversation view
+carries only what a reader of the conversation needs, beside the message counts a
+collection changes:
+- a collection running now;
+- when the last one ran, with a link to what it moved on the Engine view;
+- what the next one will change, which also shows on the map.
+
+The exchanges therefore run the full width of the page, with their words held to a
+readable line length. *Rejected: a column of recent collections beside the
+exchanges.* It repeated those lines in a narrow column that sat empty below them
+for the length of a long conversation.
 
 ### The next collection is previewed, not remembered
 

@@ -93,37 +93,29 @@
       </div>
     </section>
 
-    <div class="conv">
-      <section class="card" id="messages" aria-labelledby="messages-title">
-        <div class="card-head">
-          <div>
-            <h2 id="messages-title">Exchange by exchange</h2>
-            <div class="sub">Newest first: what the model reads for each, and what was said.</div>
-          </div>
-          <div class="toggle" role="group" aria-label="View">
-            <button id="view-timeline" aria-pressed="true">As it happened</button>
-            <button id="view-prompt" aria-pressed="false">Exactly what the model receives</button>
-          </div>
+    <section class="card" id="messages" aria-labelledby="messages-title">
+      <div class="card-head">
+        <div>
+          <h2 id="messages-title">Exchange by exchange</h2>
+          <div class="sub">Newest first: what the model reads for each, and what was said.</div>
         </div>
-        <div class="toolbar" id="toolbar">
-          <div class="search">
-            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="7" cy="7" r="4.8"/><path d="m10.6 10.6 3.6 3.6" stroke-linecap="round"/></svg>
-            <input type="search" id="search" placeholder="Does the model still have it? Search, for example “database”" aria-label="Search this conversation, and whether the model still receives it" autocomplete="off">
-          </div>
-          <div class="chips" id="chips" role="group" aria-label="Show"></div>
-          <div class="search-verdict" id="search-verdict" role="status" hidden></div>
-          <div class="filter-note" id="filter-note" hidden></div>
+        <div class="toggle" role="group" aria-label="View">
+          <button id="view-timeline" aria-pressed="true">As it happened</button>
+          <button id="view-prompt" aria-pressed="false">Exactly what the model receives</button>
         </div>
-        <div class="timeline" id="timeline"></div>
-        <div id="prompt" hidden></div>
-      </section>
-      <aside class="side">
-        <section class="card" aria-labelledby="cleanups-title">
-          <h2 id="cleanups-title">Collections</h2>
-          <ul class="log" id="cleanup-log"></ul>
-        </section>
-      </aside>
-    </div>
+      </div>
+      <div class="toolbar" id="toolbar">
+        <div class="search">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="7" cy="7" r="4.8"/><path d="m10.6 10.6 3.6 3.6" stroke-linecap="round"/></svg>
+          <input type="search" id="search" placeholder="Does the model still have it? Search, for example “database”" aria-label="Search this conversation, and whether the model still receives it" autocomplete="off">
+        </div>
+        <div class="chips" id="chips" role="group" aria-label="Show"></div>
+        <div class="search-verdict" id="search-verdict" role="status" hidden></div>
+        <div class="filter-note" id="filter-note" hidden></div>
+      </div>
+      <div class="timeline" id="timeline"></div>
+      <div id="prompt" hidden></div>
+    </section>
   </div>
 
   <!-- ===================================================== the engine: what LLM-GC is doing, and why -->

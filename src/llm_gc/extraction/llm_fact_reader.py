@@ -49,6 +49,8 @@ class _Answer(BaseModel):
 class LLMFactReader:
     """Reads a collection's facts by calling a language model. See `FactReader`."""
 
+    speakers: frozenset[Literal["user", "assistant"]] = frozenset({"user", "assistant"})
+
     def __init__(self, provider: LLMProvider, *, timeout_s: float = DEFAULT_FACTS_TIMEOUT_S,
                  output_tokens: int = DEFAULT_FACTS_OUTPUT_TOKENS,
                  thinking_allowance_tokens: int = DEFAULT_FACTS_THINKING_ALLOWANCE_TOKENS,

@@ -20,10 +20,10 @@ SUMMARY = LLMResponse(text="Earlier turns covered the storage decision and the r
                       model="scripted", provider="offline")
 
 
-def _engine() -> tuple[GcService, ContextHealthMonitor]:
+def _engine(*, model: bool = True) -> tuple[GcService, ContextHealthMonitor]:
     config = GCConfig(context_window=700, keep_threshold=0.55, archive_threshold=0.25, last_n_turns_to_keep=3,
                       min_cut_tokens=60)
-    service = build_gc_service(config, summary_provider=FakeProvider(responses=[SUMMARY] * 400))
+    service = build_gc_service(config, summary_provider=FakeProvider(responses=[SUMMARY] * 400) if model else None)
     bus = service.event_bus
     store = service.session_manager.store
     monitor = ContextHealthMonitor(
@@ -117,6 +117,12 @@ class TestOverview:
         config = _client(*_engine()).get("/api/overview").json()["config"]
         assert config["min_cut_tokens"] == 60
         assert config["last_n_turns_to_keep"] == 3
+
+    def test_says_whose_turns_facts_are_read_from(self):
+        # A model reads facts from both sides; the patterns used without one read only the user's,
+        # and the page says so rather than showing the assistant as having settled nothing.
+        assert _client(*_engine()).get("/api/overview").json()["config"]["facts_read_from"] == ["assistant", "user"]
+        assert _client(*_engine(model=False)).get("/api/overview").json()["config"]["facts_read_from"] == ["user"]
 
     def test_proxy_counters_appear_only_when_a_proxy_supplies_them(self):
         service, monitor = _engine()

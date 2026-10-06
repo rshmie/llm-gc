@@ -109,8 +109,22 @@ export function renderHolds(k) {
   fill("panel-holds",
     h("div", { class: "label" }, "How each message is sent", info("holds")),
     h("ul", { class: "holds" }, rows),
-    h("div", { class: "note" }, sofar,
+    h("div", { class: "note" }, sofar, h("div", { id: "last-collection" }),
       next ? h("div", {}, k.next_cut.batch_ready ? `A collection runs after your next reply: ${changes(next)}. ` : `${changes(next)} at the next collection. `, why) : null));
+  renderLastCollection();
+}
+
+// When the last collection ran, and a way to what it moved. Drawn on every refresh, as "ago" moves on;
+// a collection running now is said here too, beside the counts it will change.
+export function renderLastCollection() {
+  const box = $("last-collection");
+  if (!box) return;
+  const passes = state.activity ? state.activity.recent_passes : [];
+  const last = passes.filter((p) => p.gc_status === "completed").at(-1);
+  const moved = h("button", { class: "link-btn", type: "button",
+    onclick: () => { offerReturn("conversation", window.scrollY); showTab("engine"); openCard("moves", true); } }, "What moved");
+  setChildren(box, collecting() ? "Collecting now: these counts update when it finishes."
+    : last ? [`Last collection ${agoTs(last.gc_completed_at)}${last.outcome ? `: ${describeOutcome(last.outcome)}` : ""}. `, moved] : null);
 }
 
 export function renderWindow(k) {
@@ -715,6 +729,8 @@ const reaches = (fact) => fact.sent || fact.span_level === "kept";
 // Newest first, as the exchanges below are, with the facts the model can't see ahead of the rest.
 const lookFirst = (a, b) => reaches(a) - reaches(b) || b.turn - a.turn;
 const changedAt = (fact) => fact.superseded_by_turn ?? fact.turn;
+// Whether the engine reads facts from the assistant's turns; without a model it reads only the user's.
+const readsAssistant = () => !state.config || !state.config.facts_read_from || state.config.facts_read_from.includes("assistant");
 
 // Every fact on record by who stated it, with how it reaches the model, then each value replaced.
 // Facts are read only when messages are collected, so the headline says how far the record reaches:
@@ -758,20 +774,24 @@ export function renderFacts(k) {
       "Click a fact to see the message it came from."),
     k.facts.some(matches) ? h("div", { class: "facts-cols" },
       factColumn(k, "user", "You said", active.filter((f) => f.speaker !== "assistant").sort(lookFirst), currentFact, "Nothing of yours on record yet.", matches),
-      factColumn(k, "assistant", "The assistant said", active.filter((f) => f.speaker === "assistant").sort(lookFirst), currentFact,
-        "Nothing of the assistant's on record yet.", matches),
-      factColumn(k, "replaced", "Replaced", replaced.sort((a, b) => changedAt(b) - changedAt(a)), replacedFact, "No value has changed.", matches))
+      readsAssistant()
+        ? factColumn(k, "assistant", "The assistant said", active.filter((f) => f.speaker === "assistant").sort(lookFirst), currentFact,
+          "Nothing of the assistant's on record yet.", matches)
+        : factColumn(k, "assistant", "The assistant said", null, currentFact, "Not read: facts are read from your messages only here, as they are "
+          + "when LLM-GC runs without a model. The model still reads the assistant's replies, in the recap and as written.", matches),
+      factColumn(k, "replaced", "Replaced", replaced.sort((a, b) => changedAt(b) - changedAt(a)), replacedFact, "No replacement on record.", matches))
       : h("p", { class: "empty facts-note" }, "No fact matches."));
 }
 
+// A column of facts; `facts` is null for a side whose turns are not read, which `none` then explains.
 function factColumn(k, id, title, facts, row, none, matches) {
-  const shown = facts.filter(matches);
+  const shown = (facts ?? []).filter(matches);
   const key = `facts-${id}`;
   const open = ui.open.has(key) || !!query();
   const list = open ? shown : shown.slice(0, FACTS_SHOWN);
   return h("section", { class: "facts-col", "aria-labelledby": `${key}-title` },
-    h("h3", { id: `${key}-title` }, title, h("span", { class: "count" }, fmt(shown.length))),
-    list.length ? h("div", { class: "list" }, list.map(row)) : h("p", { class: "empty" }, query() ? "None match." : none),
+    h("h3", { id: `${key}-title` }, title, facts ? h("span", { class: "count" }, fmt(shown.length)) : null),
+    list.length ? h("div", { class: "list" }, list.map(row)) : h("p", { class: "empty" }, query() && facts ? "None match." : none),
     shown.length > FACTS_SHOWN && !query() ? h("button", { class: "link-btn show-all", type: "button",
       onclick: () => { if (open) ui.open.delete(key); else ui.open.add(key); renderFacts(k); } }, open ? "Show fewer" : `Show all ${shown.length}`) : null);
 }
@@ -797,24 +817,4 @@ function replacedFact(fact) {
     h("span", { class: "fact-meta" }, link(fact.turn, fact.speaker),
       fact.superseded_by_turn !== null ? ["→", link(fact.superseded_by_turn, fact.superseded_by_speaker)] : null,
       h("span", { class: "fact-status" }, noted ? [h("span", { class: "st good" }, "✓ "), "noted on its line"] : "old value not sent")));
-}
-
-// The collections: when each was made and what it did, then what comes next.
-export function renderCleanupLog() {
-  const k = state.knowledge;
-  if (!k) return;
-  const passes = state.activity ? state.activity.recent_passes : [];
-  const cuts = passes.filter((p) => p.gc_status === "completed").reverse().slice(0, 3);
-  const next = changing(k);
-  const whenWhy = h("button", { class: "link-btn", type: "button", onclick: () => { showTab("engine"); openCard("next", true); } }, "When and why");
-  fill("cleanup-log",
-    cuts.length ? cuts.map((p) => h("li", {}, h("div", {},
-      h("b", {}, "Collection"), h("span", { class: "when" }, ` · ${agoTs(p.gc_completed_at)}`),
-      h("div", { class: "muted" }, `${p.outcome ? `${describeOutcome(p.outcome)} · ` : ""}${fmt(p.tokens_before)} → ${fmt(p.tokens_before - p.tokens_saved)} tokens`))))
-      : k.cuts ? null : h("li", { class: "future" }, h("div", { class: "muted" }, "No collections yet.")),
-    // A collection waits on model calls and can take minutes; until it commits, the panels show the one before it.
-    collecting() ? h("li", { class: "future" }, h("div", {}, h("b", {}, "Collecting now"),
-      h("div", { class: "muted" }, "Summarising and reading facts in the background. This panel and the facts update when it finishes.")))
-      : h("li", { class: "future" }, h("div", {}, h("b", {}, "Next collection"),
-        h("div", { class: "muted" }, next ? `${next === 1 ? "1 message" : `${next} messages`} will change form. ` : "Nothing is queued to change yet. ", whenWhy))));
 }

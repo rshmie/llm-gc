@@ -8,7 +8,7 @@ doc/design/generational-memory/overview.md.
 
 from collections.abc import Sequence
 from dataclasses import replace
-from typing import Protocol
+from typing import Literal, Protocol
 
 from llm_gc.extraction.knowledge_extractor import KnowledgeExtractor
 from llm_gc.models import KnowledgeEntry, Message
@@ -17,6 +17,15 @@ from llm_gc.models.message import tool_result_ids
 
 class FactReader(Protocol):
     """Reads what a collection's spans settled, as facts filed against the turns that state them."""
+
+    @property
+    def speakers(self) -> frozenset[Literal["user", "assistant"]]:
+        """Whose turns it reads facts from.
+
+        A side it does not read has no facts on record, which the dashboard says
+        rather than showing that side as having settled nothing.
+        """
+        ...
 
     async def read(self, spans: Sequence[Sequence[Message]], on_record: Sequence[KnowledgeEntry]
                    ) -> list[KnowledgeEntry]:
@@ -43,6 +52,8 @@ class PatternFactReader:
     a fragment filed twice under the same words read as a decision that changed.
     Tool results are output, not statements, and are skipped with them.
     """
+
+    speakers: frozenset[Literal["user", "assistant"]] = frozenset({"user"})
 
     def __init__(self, extractor: KnowledgeExtractor | None = None) -> None:
         self.extractor = extractor if extractor is not None else KnowledgeExtractor()

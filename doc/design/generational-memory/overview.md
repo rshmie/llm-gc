@@ -394,6 +394,8 @@ one call reads every span the collection makes, given the facts already on recor
   filing by turn order.
 
 Without a model, patterns read the user's own turns only — see the rules below.
+Each reader declares whose turns it reads, so a side left unread is reported as
+unread, never as a side that settled nothing.
 
 #### Who can change a decision, in plain words
 
