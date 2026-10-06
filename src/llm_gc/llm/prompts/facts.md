@@ -19,6 +19,10 @@ Something the conversation settled and may need later, said by either side:
   "index shards: recommended 3, with 2 replicas each". Leave it out if the user
   turned it down.
 
+Tool calls (`[tool call: name] {input}`) and their output (`[tool result] ...`)
+are what the assistant did and saw. A value in them is a fact only when the
+conversation settles on it, not because a file or a command's output contains it.
+
 Not facts: explanations, reasoning, trade-offs, options only considered, general
 knowledge, advice nobody took up, questions, and pleasantries. When in doubt, leave
 it out. A missed fact costs little, because the words themselves are kept; a wrong

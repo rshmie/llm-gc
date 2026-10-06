@@ -342,9 +342,20 @@ the life of its session: a span in the old generation holds the turns it
 condenses, so it can be shown at any level again. The dashboard shows a condensed
 turn's words beside what the model receives instead, read from its span. A
 transcript recorder the proxy feeds while the dashboard runs supplies only what
-the session has not recorded yet — the newest message, recorded with its reply —
-and each conversation's opening words for the picker: text only, bounded by
-session count, dropped with its session. *Accepted cost:* the engine holds
+the session has not recorded yet — the newest request's own message, which joins
+the conversation when a later request carries it with its reply — and each
+conversation's opening words for the picker: text only, bounded by session count,
+dropped with its session. That message is shown as the *newest request*, never as
+something the user said: clients send side requests too (after each reply, Claude
+Code asks the model to suggest the user's next prompt), and one arrives with the
+same history, system prompt and tools as a real next message, so nothing in it
+tells the two apart. *Rejected: recognising known side requests by their wording*
+— it is tied to one client's current text, and anything it misses is still
+attributed to the user. *Rejected: showing the message only while it is being
+answered* — a chat client's latest message would vanish once its reply arrived.
+For the same reason a turn carrying tool results is shown as *tool results*, not
+as the user's words: the client sends what its tools returned under the user's
+role. *Accepted cost:* the engine holds
 every original in memory for every session, dashboard or not — the price of being
 able to restore one. *Rejected: no originals* — an archived turn could
 never be shown whole again, to the model or to a person.

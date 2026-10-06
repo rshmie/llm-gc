@@ -10,7 +10,8 @@ class Message(BaseModel):
     Represents one turn (user, assistant, or system) with its content,
     token count, and position in the conversation sequence.
 
-    `content` is the turn's text, which is what scoring, compaction and extraction
+    `content` is the turn as text - its words, with any tool calls and tool results
+    written out - which is what sizing, scoring, compaction, extraction and quoting
     read. `raw_content` is the provider's original content exactly as the client
     sent it - images, tool calls, thinking blocks - so a turn forwarded verbatim is
     forwarded byte for byte. It never leaves through serialisation or repr: it can

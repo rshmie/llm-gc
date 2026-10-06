@@ -2,9 +2,12 @@
 
 import pytest
 
+from llm_gc.engine.generations.front import Annotations, span_text
 from llm_gc.exceptions import ConfigError
 from llm_gc.models import Message
+from llm_gc.models.generation_snapshot import DetailLevel, Span
 from llm_gc.proxy.anthropic_translation import Instruction, extract_instructions, extract_messages, rewrite_messages
+from llm_gc.utils import count_tokens
 
 # The shape Claude Code sends: its environment, then its tools' instructions, as system
 # messages after the user turns they accompany.
@@ -37,6 +40,55 @@ class TestReading:
     def test_a_request_with_no_conversation_is_not_one_we_can_process(self):
         with pytest.raises(ConfigError):
             extract_messages({"messages": [{"role": "system", "content": "only instructions"}]})
+
+
+# One tool round as Claude Code sends it: the assistant explains and calls a tool,
+# and the client answers with what the tool returned.
+TOOL_ROUND = {"model": "m", "max_tokens": 10, "messages": [
+    {"role": "user", "content": "run the tests"},
+    {"role": "assistant", "content": [
+        {"type": "thinking", "thinking": "The suite is in tests/.", "signature": "sig"},
+        {"type": "text", "text": "Running them."},
+        {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "pytest -q"}}]},
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "42 passed in 1.2s"}]},
+]}
+
+
+class TestToolTurnsAreRead:
+    """A tool call and its result are part of what a turn says: everything that sizes,
+    scores, summarises or quotes a turn reads its text, so a block left out of it is
+    lost from every collected turn."""
+
+    def test_a_tool_call_reads_as_its_name_and_input_and_thinking_is_left_out(self):
+        call = extract_messages(TOOL_ROUND)[1]
+
+        assert call.content == 'Running them.\n[tool call: Bash] {"command": "pytest -q"}'
+        assert call.token_count == count_tokens(call.content)
+
+    def test_a_tool_result_reads_as_its_output(self):
+        assert extract_messages(TOOL_ROUND)[2].content == "[tool result] 42 passed in 1.2s"
+
+    def test_a_failed_tool_says_so_and_an_attachment_in_its_output_is_a_placeholder(self):
+        result = {"type": "tool_result", "tool_use_id": "toolu_1", "is_error": True,
+                  "content": [{"type": "text", "text": "No such file"}, {"type": "image", "source": {}}]}
+        payload = {"messages": [{"role": "user", "content": [result]}]}
+
+        assert extract_messages(payload)[0].content == "[tool result, error] No such file\n[image]"
+
+    def test_a_tool_result_with_no_output_still_reads_as_one(self):
+        payload = {"messages": [{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1"}]}]}
+
+        assert extract_messages(payload)[0].content == "[tool result] "
+
+    def test_a_kept_span_quotes_what_the_tool_returned(self):
+        """The subtle failure: a span kept word for word whose quote leaves out the
+        tool's output, while the dashboard says nothing was lost."""
+        span = Span(turns=tuple(extract_messages(TOOL_ROUND)), level=DetailLevel.KEPT)
+
+        quoted = span_text(span, Annotations())
+
+        assert '[tool call: Bash] {"command": "pytest -q"}' in quoted
+        assert "[tool result] 42 passed in 1.2s" in quoted
 
 
 class TestWritingBack:

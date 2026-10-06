@@ -14,6 +14,9 @@ const smooth = () => (reducedMotion() ? "auto" : "smooth");
 export const speakerName = (role) => role === "user" ? "You" : role ? role[0].toUpperCase() + role.slice(1) : "—";
 const avatarText = (role) => role === "user" ? "You" : role === "assistant" ? "AI" : (role || "?").slice(0, 2).toUpperCase();
 const avatar = (role) => h("div", { class: `av ${role === "user" ? "user" : "assistant"}`, "aria-hidden": "true" }, avatarText(role));
+// A turn of tool results is the client reporting what its tools returned, under the user role.
+const speakerOf = (turn) => turn.tool_results ? "Tool results" : speakerName(turn.role);
+const avatarOf = (turn) => turn.tool_results ? h("div", { class: "av user", "aria-hidden": "true" }, "Tool") : avatar(turn.role);
 const changes = (n) => n === 1 ? "1 message changes" : `${fmt(n)} messages change`;
 const changing = (k) => k.turns.filter((t) => t.becomes).length;
 export const messagesLabel = (turns) => turns.length === 1 ? `message ${turns[0]}` : `messages ${ranges(turns)}`;
@@ -159,7 +162,7 @@ export function renderMap(k) {
   }
   const GROUP = { condensed: "Collected", next: "Next", tail: "Recent", newest: "" };
   setChildren($("an-labels"), runs.map((r) => h("div", { class: "an-l", style: `flex-grow:${r.w}` },
-    h("span", { title: r.g === "newest" ? "Your newest message" : `${GROUP[r.g]} · ${plural(r.n, "message")}` },
+    h("span", { title: r.g === "newest" ? "Newest request" : `${GROUP[r.g]} · ${plural(r.n, "message")}` },
       r.g === "newest" ? " " : [h("b", {}, GROUP[r.g]), ` · ${r.n}`]))));
 
   let changed = 0;
@@ -188,10 +191,11 @@ export function renderMap(k) {
     el.style.setProperty("--h", `${x.pending ? 100 : HEIGHT[x.cat]}%`);
     setChildren(el, t && t.becomes ? h("span", { class: "q", style: `--qb:${levelColour(t.becomes)}` }) : null);
     const size = plural(x.tok, "token");
-    el.setAttribute("aria-label", `Message ${x.i}, ${speakerName(x.role)}, ${size}: ${x.pending ? "newest, not recorded yet" : CATS[x.cat].label}`);
+    el.setAttribute("aria-label", x.pending ? `Message ${x.i}, newest request, ${size}: not in the conversation yet`
+      : `Message ${x.i}, ${speakerOf(x.turn)}, ${size}: ${CATS[x.cat].label}`);
     el._tip = x.pending
-      ? [`Message ${x.i} · ${speakerName(x.role)} · ${size}`, "Your newest message: recorded, with its reply, once the next request arrives.", tipQuote(preview(x.text))]
-      : [[swatch(x.cat), `Message ${x.i} · ${speakerName(x.role)} · ${size}`], `${CATS[x.cat].label}: ${CATS[x.cat].desc}`,
+      ? [`Message ${x.i} · newest request · ${size}`, GLOSSARY.newest[1], tipQuote(preview(x.text))]
+      : [[swatch(x.cat), `Message ${x.i} · ${speakerOf(x.turn)} · ${size}`], `${CATS[x.cat].label}: ${CATS[x.cat].desc}`,
         span ? `Its exchange: ${messagesLabel(span.turns)}` : null,
         t.becomes ? `Next collection: ${BECOMES[t.becomes]}. ${whyText(span || t)}` : null,
         tipQuote(preview(x.text)), h("div", { class: "tip-row muted" }, "Click to open it")];
@@ -215,7 +219,7 @@ export function renderMap(k) {
     block: [blockW, `The recap · ${plural(k.front_tokens, "token")}`, "Stands in for the collected messages above it.", cond],
     saved: [condW - blockW, `Saved · ${plural(Math.max(0, saved), "token")}`, "What collections took out of every request.", cond],
     recent: [sum(verb), `Recent messages · ${plural(recent, "token")}`, "Not collected yet: each sent as its own message, as written.", verb],
-    pending: [sum(pend), `Your newest · ${plural(pendTok, "token")}`, "Sent with your next request, on top of the rest.", pend],
+    pending: [sum(pend), `Newest request · ${plural(pendTok, "token")}`, "Its own message, sent on top of the recorded ones; not in the conversation yet.", pend],
   };
   for (const [key, [grow, title, text, list]] of Object.entries(parts)) {
     const seg = segs[key];
@@ -239,14 +243,14 @@ function renderKey(k, items, { saved, recent, pendTok }) {
     h("div", { class: "items" },
       ORDER.filter((key) => counts[key]).map((key) => explained(key, h("i", { class: `lg f-${key}`, style: `height:${Math.max(3, Math.round(HEIGHT[key] * 0.14))}px` }), CATS[key].label)),
       queued ? explained("next", h("i", { class: "qdot" }), "Dot: changes at the next collection, in the colour it will become") : null,
-      pending ? item(h("i", { class: "key pending" }), "Outline: your newest message") : null),
+      pending ? item(h("i", { class: "key pending" }), "Outline: the newest request, not in the conversation yet") : null),
     h("div", { class: "an-rowlab" }, "Sent"),
     h("div", { class: "items" },
       k.front_tokens ? item(h("i", { class: "key block" }), "Recap ", h("b", {}, fmt(k.front_tokens))) : null,
       saved > 0 && k.front_tokens ? item(h("i", { class: "key saved" }), "Saved ", h("b", {}, fmt(saved))) : null,
       saved < 0 ? item(null, "The recap is ", h("b", {}, fmt(-saved)), " tokens larger than what it replaced") : null,
       item(h("i", { class: "key recent" }), "Recent messages ", h("b", {}, fmt(recent))),
-      pending ? item(h("i", { class: "key pending" }), "Your newest ", h("b", {}, fmt(pendTok)), ", sent next") : null));
+      pending ? item(h("i", { class: "key pending" }), "Newest request ", h("b", {}, fmt(pendTok))) : null));
 }
 
 // Hovering a message anywhere traces it: its bar, its Sent segment, its row, and its score.
@@ -315,7 +319,7 @@ export function renderChips(k) {
 }
 
 // One row per exchange the old generation holds, one per run of folded exchanges (they share a
-// line in the recap), then one per recent message, then your newest.
+// line in the recap), then one per recent message, then the newest request.
 export function buildRows(k) {
   const byIndex = new Map(k.turns.map((t) => [t.turn_index, t]));
   const rows = [];
@@ -428,7 +432,7 @@ function rowElement(row, facts) {
 }
 
 export function textBlock(text, { faded = false, key = null } = {}) {
-  if (!text) return h("div", { class: "lost" }, "no text: tool calls or attachments only");
+  if (!text) return h("div", { class: "lost" }, "no text: thinking, or blocks with no text form");
   const long = text.length > CLAMP_CHARS || text.split("\n").length > 6 || (faded && text.length > 160);
   const open = !long || (key && ui.open.has(key)) || (query() && has(text));
   if (!long) return h("div", { class: `text${faded ? " faded" : ""}` }, marked(text));
@@ -491,10 +495,10 @@ export function nextTag(item, turnIndex) {
 export function turnRow(turn) {
   return h("article", { class: "msg", id: `turn-${turn.turn_index}`, "data-turns": String(turn.turn_index) },
     h("div", { class: "msg-no" }, turn.turn_index),
-    avatar(turn.role),
+    avatarOf(turn),
     h("div", { class: "msg-body" },
       h("div", { class: "msg-head" },
-        h("span", { class: "who" }, speakerName(turn.role)),
+        h("span", { class: "who" }, speakerOf(turn)),
         turn.becomes ? nextTag(turn, turn.turn_index) : null,
         h("span", { class: "tok" }, plural(turn.tokens, "token"))),
       textBlock(turn.text, { key: `t-${turn.turn_index}` })));
@@ -503,7 +507,7 @@ export function turnRow(turn) {
 // The messages of an exchange as they were said, each still reachable from the map.
 function originals(turns, faded) {
   return turns.map((t) => h("div", { class: "orig", id: `turn-${t.turn_index}` },
-    h("div", { class: "msg-head" }, h("span", { class: "who" }, speakerName(t.role)), h("span", { class: "num" }, `message ${t.turn_index}`),
+    h("div", { class: "msg-head" }, h("span", { class: "who" }, speakerOf(t)), h("span", { class: "num" }, `message ${t.turn_index}`),
       h("span", { class: "tok" }, plural(t.tokens, "token"))),
     textBlock(t.text, { faded, key: `t-${t.turn_index}` })));
 }
@@ -557,11 +561,13 @@ export function foldedRow(row, facts) {
 }
 
 export function pendingRow(p) {
+  // Named for what the proxy knows, never for who wrote it: a side request a client
+  // makes, such as Claude Code asking for a suggested next prompt, looks the same.
   return h("article", { class: "msg pending", id: `turn-${p.turn_index}`, "data-turns": String(p.turn_index) },
-    h("div", { class: "msg-no" }, p.turn_index), avatar(p.role),
+    h("div", { class: "msg-no" }, p.turn_index), h("div", { class: "av user", "aria-hidden": "true" }, "New"),
     h("div", { class: "msg-body" },
-      h("div", { class: "msg-head" }, h("span", { class: "who" }, speakerName(p.role)), h("span", { class: "tag" }, "newest"),
-        h("span", { class: "muted" }, "recorded with its reply, so not counted yet")),
+      h("div", { class: "msg-head" }, h("span", { class: "who" }, "Newest request"),
+        h("span", { class: "muted" }, "not in the conversation yet"), info("newest")),
       textBlock(p.text, { key: `t-${p.turn_index}` })));
 }
 
@@ -615,14 +621,17 @@ export function renderPrompt(k) {
     try { await navigator.clipboard.writeText(whole); copy.textContent = "Copied"; } catch { copy.textContent = "Could not copy"; }
     setTimeout(() => { copy.textContent = "Copy"; }, 1500);
   } }, "Copy");
+  // Newest first, as the other view is, so switching views keeps the newest message on top;
+  // Copy keeps the order the model reads, since that is the prompt someone would replay.
   setChildren($("prompt"),
-    h("div", { class: "prompt-head" }, h("div", { class: "note" }, "The conversation as LLM-GC forwards it, before your next message. ",
+    h("div", { class: "prompt-head" }, h("div", { class: "note" }, "The conversation as LLM-GC forwards it, before your next message, newest first. ",
+      "The model reads it from the bottom up, and Copy gives it in that order. ",
       k.front_text ? "The recap stays byte for byte the same until the next collection, so the provider can keep it cached."
         : "Nothing has been collected, so your app's own request is forwarded untouched."), copy),
+    [...tail].reverse().map((t) => h("div", { class: "prompt-msg" }, h("div", { class: "msg-head" }, h("span", { class: "who" }, t.role),
+      h("span", { class: "num" }, `message ${t.turn_index} · ${plural(t.tokens, "token")}`)), promptText(t.text || "(no text)", `prompt-${t.turn_index}`))),
     k.front_text ? h("div", { class: "prompt-msg front" }, h("div", { class: "msg-head" }, h("span", { class: "who" }, "user"),
-      h("span", { class: "tag" }, h("span", { class: "key block" }), `the recap · ${plural(k.front_tokens, "token")}`), info("block")), promptText(k.front_text, "prompt-front")) : null,
-    tail.map((t) => h("div", { class: "prompt-msg" }, h("div", { class: "msg-head" }, h("span", { class: "who" }, t.role),
-      h("span", { class: "num" }, `message ${t.turn_index} · ${plural(t.tokens, "token")}`)), promptText(t.text || "(no text)", `prompt-${t.turn_index}`))));
+      h("span", { class: "tag" }, h("span", { class: "key block" }), `the recap · ${plural(k.front_tokens, "token")}`), info("block")), promptText(k.front_text, "prompt-front")) : null);
 }
 
 // A long block starts folded, as messages do elsewhere; Copy still takes the whole prompt.
@@ -660,7 +669,7 @@ function renderSearchVerdict(k) {
   if (box.hidden) return;
   if (verbatim.length || inRecap || newest.length) {
     const how = [verbatim.length ? `as written, in recent ${messagesLabel(verbatim)}` : null, inRecap ? "in the recap" : null,
-      newest.length ? "in your newest message, sent with your next request" : null].filter(Boolean).join(", and ");
+      newest.length ? "in the newest request, which is not in the conversation yet" : null].filter(Boolean).join(", and ");
     box.className = "search-verdict good";
     setChildren(box, h("b", {}, `“${words}”: the model receives it`), ` ${how}.`);
     return;

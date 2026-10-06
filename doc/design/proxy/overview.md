@@ -160,6 +160,20 @@ conversation are tested against what clients actually do.
 - **Forward the client's bytes whenever nothing changed.** Rebuilding every turn as
   plain text dropped attached images and tool calls, and any rewrite resets the
   provider's prompt cache.
+- **Read a turn as text, with its tool calls and results written out.** The engine
+  sizes, scores, summarises, reads facts from and quotes a turn by its text alone.
+  A tool call reads as `[tool call: name] {input}` and its output as
+  `[tool result] ...` (`[tool result, error] ...` when the tool failed); an
+  attachment reads as `[image]` or `[document]`; thinking has no text form. In an
+  agent's conversation most turns are tool rounds, so reading only the words
+  counted them as empty: the prompt looked smaller than it was, summaries were
+  written without what the tools did, and a span kept word for word lost every
+  tool output while being shown as complete. *Rejected: counting the blocks'
+  tokens separately* — the sizes come right, but summaries and quotes still lose
+  the output. *Rejected: a second text field for tool content* — every reader
+  needs it, and a second field invites the next reader to read the wrong one.
+  *Accepted cost:* a large tool output (a file read in full) makes the summary
+  and facts calls for its span as large.
 
 ### After a cut
 
@@ -197,5 +211,7 @@ absent or wrong.
 
 ## Known limitations (planned, not yet built)
 
-- **A cut turn's non-text content** survives in the front only as text.
+- **A cut turn's attachments** reach the front as a placeholder, `[image]` or
+  `[document]`, and are counted as one: the front is text, so a collected image
+  is named, not shown, and its size is undercounted.
 - **Anthropic Messages only.** The OpenAI-compatible endpoint is not built.

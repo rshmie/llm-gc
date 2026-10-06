@@ -15,6 +15,10 @@ recover it, and will not know it is missing.
    matters more than something settled, because the conversation will come back
    to it.
 4. **Commitments and action items**, with who owns them if the run says.
+5. **What the tools did.** A tool call reads `[tool call: name] {input}` and its
+   output `[tool result] ...`. Record what was done and what came back — files
+   written or read, commands run and whether they succeeded, errors with their
+   message — not the output itself.
 
 ## What to drop
 

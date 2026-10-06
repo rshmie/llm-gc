@@ -99,6 +99,20 @@ class TestWhereEachTurnIs:
         assert all(t.text == _turn(t.turn_index).content for t in condensed)
 
 
+    def test_a_turn_of_tool_results_is_marked_so_it_is_not_shown_as_the_users_words(self):
+        call = [{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}}]
+        result = [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "README.md"}]
+        turns = [Message(role="user", content="list the files", token_count=3, turn_index=0),
+                 Message(role="assistant", content="[tool call: Bash]", token_count=5, turn_index=1, raw_content=call),
+                 Message(role="user", content="[tool result] README.md", token_count=6, turn_index=2,
+                         raw_content=result)]
+        service = _service(min_cut_tokens=100_000)
+        service.gc_record(SESSION, turns, ["h0", "h1", "h2"])
+
+        state = project_knowledge_state(service.inspect(SESSION))
+
+        assert [t.tool_results for t in state.turns] == [False, False, True]
+
 class TestThePassOutcome:
     def test_every_cut_reports_where_its_turns_actually_went(self):
         """Read off the knowledge state before and after each pass, a cut's outcome
