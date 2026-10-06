@@ -19,6 +19,7 @@ from evals.decision_survival.dataset import Conversation
 from evals.decision_survival.grading import Presence, presence, question_message
 from llm_gc.config import GCConfig
 from llm_gc.engine import GcService, build_gc_service
+from llm_gc.extraction import FactReader, PatternFactReader
 from llm_gc.events import Event, EventType
 from llm_gc.llm import FakeProvider, LLMProvider, LLMResponse, StopReason
 from llm_gc.models import Message
@@ -58,15 +59,17 @@ class Run:
 
 async def run_conversation(conversation: Conversation, *, config: GCConfig, summary_provider: LLMProvider,
                            model_transport: ModelTransport, api_key: str, model: str, effort: Effort,
-                           service: GcService | None = None,
+                           service: GcService | None = None, fact_reader: FactReader | None = None,
                            on_client_history: Callable[[str, list[Message]], None] | None = None,
                            on_step: Callable[[str], None] = lambda status: None) -> Run:
     """One conversation through the proxy, then its questions both ways.
 
     `service` shares one engine across a run, each conversation in its own session,
-    so one dashboard can show them all; without it the conversation gets its own.
+    so one dashboard can show them all; without it the conversation gets its own, reading
+    facts with `fact_reader`.
     """
-    service = service if service is not None else build_gc_service(config, summary_provider=summary_provider)
+    service = service if service is not None else build_gc_service(config, summary_provider=summary_provider,
+                                                                    fact_reader=fact_reader)
     degradations: list[str] = []
 
     def record_degradation(event: Event) -> None:
@@ -139,6 +142,11 @@ def rehearsal_summaries() -> LLMProvider:
     response = LLMResponse(text=text, stop_reason=StopReason.COMPLETE, input_tokens=0,
                            output_tokens=count_tokens(text), model="rehearsal", provider="offline")
     return FakeProvider(responses=[response] * 5_000)
+
+
+def rehearsal_facts() -> FactReader:
+    """Facts read by patterns, so a rehearsal makes no model call for them either."""
+    return PatternFactReader()
 
 
 class _ProxyUpstream(httpx2.AsyncBaseTransport):

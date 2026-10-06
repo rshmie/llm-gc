@@ -24,7 +24,7 @@ import uvicorn
 
 from evals.decision_survival.dataset import load_conversations
 from evals.decision_survival.grading import Presence, Verdict, grade, presence, split_answers
-from evals.decision_survival.harness import Effort, Run, rehearsal_model, rehearsal_summaries, run_conversation
+from evals.decision_survival.harness import Effort, Run, rehearsal_facts, rehearsal_model, rehearsal_summaries, run_conversation
 from evals.decision_survival.progress import Progress, plural
 from llm_gc.config import GCConfig
 from llm_gc.engine import GcService, build_gc_service
@@ -79,7 +79,8 @@ async def check(args: argparse.Namespace, api_key: str | None, publish: Callable
     every_probe: list[ProbeResult] = []
     summaries: LLMProvider = rehearsal_summaries() if api_key is None else AnthropicClient(api_key=api_key)
     # One engine for the run, each conversation in its own session, so one dashboard can show them all.
-    service = build_gc_service(config, summary_provider=summaries)
+    service = build_gc_service(config, summary_provider=summaries,
+                               fact_reader=rehearsal_facts() if api_key is None else None)
     transcripts = TranscriptRecorder() if args.dashboard else None
     dashboard = _serve_dashboard(service, config, transcripts, args.dashboard_port) if args.dashboard else None
     progress = Progress(total=len(conversations))
