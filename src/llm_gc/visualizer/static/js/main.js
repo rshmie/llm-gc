@@ -5,7 +5,7 @@ import { $, clearMotionCaches, fill, h, plural, setChildren, storeGet, storeSet 
 import { collecting, getJSON, sessionPath, state, ui } from "./state.js";
 import { hideTooltip } from "./tooltip.js";
 import { THEMES, applyTheme, fillConfigValues, setGuide, setLive, showCleanupNotice, showTab } from "./shell.js";
-import { celebrateCleanup, clearMapCache, renderChips, renderCleanupLog, renderHero, renderMap, renderMemory, renderMessages, renderPrompt, renderStatus, renderTimeline, setPromptView } from "./conversation.js";
+import { celebrateCleanup, clearMapCache, renderChips, renderCleanupLog, renderFacts, renderHero, renderMap, renderMessages, renderPrompt, renderStatus, renderTimeline, setPromptView } from "./conversation.js";
 import { initCards, renderChart, renderChecks, renderEngineStatus, renderGenerations, renderHistory, renderNext, renderProblems, renderProxy, renderRelevance, renderSettings } from "./engine.js";
 import { renderRunGcButton, runGcNow } from "./run-gc.js";
 
@@ -28,7 +28,7 @@ function renderConversation() {
   renderHero(k);
   renderChips(k);
   if (ui.promptView) renderPrompt(k); else renderTimeline(k);
-  renderMemory(k);
+  renderFacts(k);
   renderRelevance(k);
 }
 
@@ -77,7 +77,7 @@ async function refresh() {
       state.activity = await getJSON(sessionPath("/activity"));
       if (state.knowledge) { renderStatus(); renderCleanupLog(); renderNext(state.knowledge); renderGenerations(state.knowledge); }
       // The facts panel is otherwise drawn only when the conversation changes; it says when a collection is running.
-      if (state.knowledge && !state.knowledge.facts.length && collecting() !== shownCollecting) renderMemory(state.knowledge);
+      if (state.knowledge && !state.knowledge.facts.length && collecting() !== shownCollecting) renderFacts(state.knowledge);
       shownCollecting = collecting();
       renderProxy();
       renderEngineStatus();

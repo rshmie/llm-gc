@@ -58,12 +58,20 @@
   <div id="view-conversation" class="view" role="tabpanel" aria-labelledby="tab-conversation" hidden>
     <div class="status-stack" id="status" role="status"></div>
 
-    <section class="card prompt-card" aria-labelledby="hero-title">
+    <section class="card prompt-card" aria-label="What is sent with each request">
       <div class="prompt-top">
         <section id="panel-size"></section>
         <section id="panel-holds"></section>
         <section id="panel-window"></section>
       </div>
+    </section>
+
+    <section class="card facts-card" aria-labelledby="facts-title">
+      <h2 id="facts-title">What the model is told, fact by fact<button class="info" type="button" data-info="facts" aria-label="About the facts the model is told">i</button></h2>
+      <div id="facts"></div>
+    </section>
+
+    <section class="card prompt-card" aria-labelledby="hero-title">
       <div>
         <div class="map-head">
           <h2 id="hero-title">What the model has of each message</h2>
@@ -104,11 +112,6 @@
         <div id="prompt" hidden></div>
       </section>
       <aside class="side">
-        <section class="card memory" aria-labelledby="memory-title">
-          <h2 id="memory-title">Facts read from the conversation<button class="info" type="button" data-info="remembers" aria-label="About the facts read from the conversation">i</button></h2>
-          <div class="sub">Short <i>topic: value</i> notes, read from each exchange when it was collected. Click one to see where it came from.</div>
-          <div id="memory"></div>
-        </section>
         <section class="card" aria-labelledby="cleanups-title">
           <h2 id="cleanups-title">Collections</h2>
           <ul class="log" id="cleanup-log"></ul>

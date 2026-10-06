@@ -284,7 +284,7 @@ views, one per question, and the transparency view opens first:
 
 | View | Answers | Shows |
 |---|---|---|
-| **The conversation** | What does the model know, at what fidelity, and what has it lost? | Every exchange with exactly what the model reads for it — quoted word for word, its summary, its opening line and facts, or one shared line when folded out of view — every message as it was said, and every fact with how it reaches the model |
+| **The conversation** | What does the model know, at what fidelity, and what has it lost? | Every exchange with exactly what the model reads for it — quoted word for word, its summary, its opening line and facts, or one shared line when folded out of view — every message as it was said, and every fact, by who stated it, with how it reaches the model |
 | **LLM-GC at work** | What did LLM-GC do, and did it work? | What the next collection would take; why every exchange is at its level, in the planner's own steps (the band its score earns, the margin, a level no cheaper than a richer one, the budget); every pass and its outcome, degradations, transitions, the proxy's counters, and the settings in effect |
 
 It polls once a second, and fetches a session's content again only when it has
@@ -530,21 +530,58 @@ level for a turn whose facts were all replaced.* Its span is still shown at its
 level, with a note naming the replacement, so the turn is no less visible than
 before; the replacement is a property of the fact, and the fact carries it.
 
-### The facts panel leads with what needs a look
+### Facts are an audit of the prompt, not a digest of the conversation
 
-Facts are listed under what they are — short *topic: value* notes — rather than as
-"what the model remembers": the model reads far more than its facts, and a list of
-notes under that title passes a small annotation off as the whole memory. The
-panel opens with the facts the model cannot see and with each replacement, shown
-as the old value and the new one, so a false replacement is plain at a glance.
-Every fact sits folded below them; most are on the page already, on their
-exchange's line. *Rejected: every fact first, grouped by how it is sent.* The
-groups that needed a look sat under forty notes that did not. The list is headed
-with how far it reaches — on record up to the newest collected message — because
-facts are read only at a collection: a change of plan in a recent message is in
-its words, which the model receives as written, and is filed once that message is
-collected. Headed "current", a value the conversation had already changed read as
-still in force.
+Under the conversation's totals, every fact on record is shown by who stated it,
+with how it reaches the model, and every value replaced beside them:
+
+```
+What the model is told, fact by fact
+13 facts on record up to message 21 · 12 sent · ⚠ 1 not sent · 1 replaced
+
+YOU SAID                     THE ASSISTANT SAID           REPLACED
+index shards                 master nodes                 search index
+9 primaries, 2 replicas      recommended 3 dedicated      Elasticsearch
+message 6 · ✓ on its line    message 1 · ⚠ not sent       → OpenSearch
+                                                          message 0 → message 16
+                                                          ✓ noted on its line
+```
+
+The section is meant to answer four questions in seconds:
+
+- **What survived?** Each fact is either ✓ on its exchange's line in the recap,
+  ✓ in its words when that exchange is kept, or ⚠ not sent when it is out of view.
+  "Sent" is read from the facts the rendered front carries, so every status can be
+  checked against the bytes forwarded.
+- **What changed?** Each replacement shows the old and new values, links to both
+  messages, and says whether the recap notes it. The recap does, on the old
+  value's line, unless that exchange is out of view, and then the old value isn't
+  sent at all.
+- **Whose value is it?** Who said a fact is its column. That decides what a later
+  message may change: only the user replaces a decision the user made.
+- **Where did it come from?** Every fact names its message and jumps to it.
+
+What needs a look still comes first. The headline counts the facts not sent, they
+sort above the rest of their column, and replacements have a column of their own.
+None of them sits under forty notes that need nothing.
+
+*Rejected: a model-written digest (goal, key decisions, implementation, open
+questions).* It would be one model's account of what another was told, paid for at
+every collection and stale by the next message. It would also be the only thing on
+the page that couldn't be checked against what was sent. Open questions appear only
+inside summaries, and nothing records them as items or knows when one is answered.
+
+*Rejected: "what the model knows", or "what the model is told" alone.* The model is
+told far more than its facts, since summaries and recent messages carry the rest, so
+either title would pass a small annotation off as the whole prompt. The dashboard
+shows what was sent, not what the model made of it, and "fact by fact" limits the
+claim to what is shown.
+
+*Rejected: "current facts".* Facts are read only at a collection, so the headline
+says how far the record reaches: on record up to the newest collected message. It
+also says that newer messages go word for word, so a change of plan in one of them
+reaches the model in its words and is filed once collected. Headed "current", a
+value the conversation had already changed would read as still in force.
 
 ### A banner only for what needs a look
 
@@ -552,7 +589,7 @@ The top of the conversation view carries a banner only for something the reader
 should act on or know about: messages the model can no longer see, and a collection
 that fell short — plus a passing line while a collection runs. Everything else is said
 in the panel it is about: that nothing is out of view, in the message counts; that a
-collection runs after the next reply, beside them; replaced facts, at the top of the
+collection runs after the next reply, beside them; replaced facts, in their own column of the
 facts panel. A warning can be dismissed, and returns only when there is more of what
 it warns about: the reader has seen this loss, not every future one. *Rejected:
 standing banners for good news and routine state.* Three of them sat above the

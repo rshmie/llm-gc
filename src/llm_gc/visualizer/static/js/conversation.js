@@ -1,4 +1,4 @@
-// The conversation view: what the model knows, exchange by exchange and message by message.
+// The conversation view: what the model is told, fact by fact, exchange by exchange and message by message.
 //
 // Every value comes from an endpoint; this view formats and explains, and derives
 // nothing beyond grouping, counting, and sums and differences of numbers it was given.
@@ -308,7 +308,7 @@ export function renderMessages() {
   if (!k) return;
   renderChips(k);
   if (ui.promptView) renderPrompt(k); else renderTimeline(k);
-  renderMemory(k);
+  renderFacts(k);
   renderMap(k);
 }
 
@@ -474,23 +474,8 @@ const factStatus = (fact) => fact.status === "superseded"
 // Who stated a fact: the user's decisions are theirs to change, an assistant's value is a recommendation.
 const WHO = { user: "you", assistant: "AI" };
 const said = (turn, speaker) => `message ${turn}${WHO[speaker] ? ` · ${WHO[speaker]}` : ""}`;
-const whoTitle = (fact) => fact.speaker === "user" ? `You said this, in message ${fact.turn}.`
-  : fact.speaker === "assistant" ? `The assistant said this, in message ${fact.turn}: a recommendation, which never replaces a decision of yours.` : null;
 // A fact read from a statement that names no topic, like "we decided to ship on Friday".
 const topicOf = (fact) => fact.topic === "general" ? "no topic" : fact.topic;
-
-export function factRow(fact, { onclick = null } = {}) {
-  const replaced = fact.status === "superseded";
-  return h(onclick ? "button" : "div", { class: `fact s-${fact.status}`, type: onclick ? "button" : null, onclick,
-    title: onclick ? "Show the message it came from" : null },
-    h("span", { class: "fact-topic", title: topicOf(fact) }, topicOf(fact)),
-    h("span", { class: "fact-what" }, replaced
-      ? [h("div", { class: "was" }, marked(fact.content)), h("div", { class: "now" }, h("span", { class: "now-label" }, "now: "), marked(fact.superseded_by ?? ""))]
-      : marked(fact.content)),
-    h("span", { class: "fact-meta", title: replaced ? null : whoTitle(fact) }, h("span", { class: "num" }, replaced && fact.superseded_by_turn !== null
-      ? `${said(fact.turn, fact.speaker)} → ${said(fact.superseded_by_turn, fact.superseded_by_speaker)}` : said(fact.turn, fact.speaker)),
-      replaced ? null : factStatus(fact)));
-}
 
 function factChip(fact) {
   return h("span", { class: `fact-chip s-${fact.status}` }, h("b", {}, topicOf(fact)),
@@ -722,58 +707,96 @@ export function setPromptView(on) {
   if (state.knowledge) { if (on) renderPrompt(state.knowledge); else renderTimeline(state.knowledge); }
 }
 
-// The facts read from the conversation: what needs a look first - facts the model cannot see,
-// and replacements to check - then every fact, folded, since most are already on the page.
-export function renderMemory(k) {
+// ----------------------------------------------------------------- what the model is told, fact by fact
+
+// A current fact reaches the model on its exchange's line in the recap, or in its words when that
+// exchange is kept; `sent` is set from the facts the recap actually carries.
+const reaches = (fact) => fact.sent || fact.span_level === "kept";
+// Newest first, as the exchanges below are, with the facts the model can't see ahead of the rest.
+const lookFirst = (a, b) => reaches(a) - reaches(b) || b.turn - a.turn;
+const changedAt = (fact) => fact.superseded_by_turn ?? fact.turn;
+
+// Every fact on record by who stated it, with how it reaches the model, then each value replaced.
+// Facts are read only when messages are collected, so the headline says how far the record reaches:
+// headed "current", a value a recent message had already changed would read as still in force.
+export function renderFacts(k) {
   const matches = (f) => !query() || has(f.content) || has(f.topic) || has(f.superseded_by);
   const active = k.facts.filter((f) => f.status === "active");
-  // Facts are read when a message is collected, so they reach only as far as the newest collected one.
+  const replaced = k.facts.filter((f) => f.status === "superseded");
+  const unseen = active.filter((f) => !reaches(f));
   const collected = k.turns.filter((t) => t.fidelity !== "verbatim").map((t) => t.turn_index);
-  const readTo = collected.length ? Math.max(...collected) : null;
-  const groups = [
-    { id: "unseen", title: "Not sent: out of view", icon: h("span", { class: "st warn" }, "⚠"),
-      facts: active.filter((f) => !f.sent && f.span_level !== "kept"),
-      note: "Their exchanges are folded to keep the recap within its budget, so the model can't see these." },
-    { id: "replaced", title: "Replaced later", icon: h("span", { class: "st" }, "↺"), facts: k.facts.filter((f) => f.status === "superseded"),
-      note: "The recap notes each replacement beside the exchange that said the old value, so the model reads that value as no longer current. Only your own messages replace a decision you made." },
-    { id: "all", title: readTo === null ? "Every fact on record" : `On record up to message ${readTo}`, icon: null, facts: active,
-      note: `${readTo === null ? "" : `Read from messages 0–${readTo} as they were collected. Newer messages reach the model word for word, so a change made in one is in its words, and is filed here once it is collected. `}`
-        + "A compacted or archived exchange shows its facts on its line in the recap; a kept one has them in its words." },
-  ];
+  const recent = k.turns.filter((t) => t.fidelity === "verbatim").map((t) => t.turn_index);
   // An exchange made while its facts couldn't be read holds none, whatever its messages settled.
   const unreadTurns = k.spans.filter((s) => s.facts_unread).flatMap((s) => s.turns);
-  const unread = unreadTurns.length ? h("section", { id: "memory-unread" },
-    h("h3", {}, h("span", { class: "st warn" }, "⚠"), `Not read from ${messagesLabel(unreadTurns)}`),
-    h("div", { class: "group-note" }, "Their facts couldn't be read when they were collected, so none are on record, and a later collection doesn't read them again. ",
-      "The model still reads these messages at their level in the recap: word for word, as a summary, or by their opening line alone.")) : null;
+  const unread = unreadTurns.length ? h("p", { class: "facts-unread" },
+    h("b", {}, h("span", { class: "st warn" }, "⚠ "), `Not read from ${messagesLabel(unreadTurns)}. `),
+    "Their facts couldn't be read when they were collected, so none are on record, and a later collection doesn't read them again. ",
+    "The model still reads these messages at their level in the recap: word for word, as a summary, or by their opening line alone.") : null;
   if (!k.facts.length) {
-    fill("memory", unread || h("p", { class: "empty", style: "margin-top:10px" }, collecting()
+    fill("facts", unread || h("p", { class: "facts-note" }, collecting()
       ? "A collection is reading this conversation now; the facts it reads appear here when it finishes."
-      : "Nothing yet. When a collection makes an exchange, the facts read from it appear here."));
+      : !k.cuts ? "Nothing has been collected yet, so the model is sent every message word for word. Facts are read from messages when a collection takes them."
+      : "No facts were read from the collected messages. The model reads them in the recap, at their level."));
     return;
   }
-  const [unseen, replaced] = groups;
-  fill("memory",
-    replaced.facts.length || unseen.facts.length ? h("div", { class: "memory-counts" }, h("span", {}, h("b", {}, fmt(active.length)), " on record"),
-      replaced.facts.length ? h("span", {}, h("b", {}, fmt(replaced.facts.length)), " replaced") : null,
-      unseen.facts.length ? h("span", {}, h("b", {}, fmt(unseen.facts.length)), " out of view") : null) : null,
+  const readTo = collected.length ? ` up to message ${Math.max(...collected)}` : "";
+  const recentLabel = messagesLabel(recent);
+  fill("facts",
+    h("div", { class: "facts-headline" },
+      h("span", {}, h("b", {}, fmt(active.length)), ` ${active.length === 1 ? "fact" : "facts"} on record${readTo}`),
+      h("span", {}, h("b", {}, fmt(active.length - unseen.length)), " sent"),
+      unseen.length ? h("span", { class: "alert" }, h("span", { class: "st warn" }, "⚠ "), h("b", {}, fmt(unseen.length)), " not sent") : null,
+      h("span", {}, h("b", {}, fmt(replaced.length)), " replaced")),
+    h("p", { class: "facts-note" },
+      collected.length ? `Read from ${messagesLabel(collected)} as they were collected. ` : null,
+      recent.length ? `${recentLabel[0].toUpperCase()}${recentLabel.slice(1)} ${recent.length === 1 ? "goes" : "go"} to the model word for word: `
+        + "a change made there reaches it in those words, and is filed here once collected. " : null,
+      "Click a fact to see the message it came from."),
     unread,
-    groups.filter((g) => g.facts.some(matches)).map((g) => {
-      const shown = g.facts.filter(matches);
-      const open = ui.open.has(`facts-${g.id}`) || !!query();
-      const toggle = (label) => h("button", { class: "link-btn show-all", type: "button",
-        onclick: () => { if (open) ui.open.delete(`facts-${g.id}`); else ui.open.add(`facts-${g.id}`); renderMemory(k); } }, label);
-      const list = open ? shown : shown.slice(0, FACTS_SHOWN);
-      return h("section", { id: `memory-${g.id}` },
-        h("h3", {}, g.icon, g.title, h("span", { class: "count" }, `· ${shown.length}`)),
-        g.note ? h("div", { class: "group-note" }, g.note) : null,
-        list.length ? h("div", { class: "list" }, list.map((f) => factRow(f, { onclick: () => jumpTo(f.turn) }))) : null,
-        shown.length > FACTS_SHOWN && !query() ? toggle(open ? "Show fewer" : `Show all ${shown.length}`) : null);
-    }),
-    query() && !k.facts.some(matches) ? h("p", { class: "empty" }, "No fact matches.") : null);
+    k.facts.some(matches) ? h("div", { class: "facts-cols" },
+      factColumn(k, "user", "You said", active.filter((f) => f.speaker !== "assistant").sort(lookFirst), currentFact, "Nothing of yours on record yet.", matches),
+      factColumn(k, "assistant", "The assistant said", active.filter((f) => f.speaker === "assistant").sort(lookFirst), currentFact,
+        "Nothing of the assistant's on record yet.", matches),
+      factColumn(k, "replaced", "Replaced", replaced.sort((a, b) => changedAt(b) - changedAt(a)), replacedFact, "No value has changed.", matches))
+      : h("p", { class: "empty facts-note" }, "No fact matches."));
 }
 
-// The collections beside the facts: when each was made and what it did, then what comes next.
+function factColumn(k, id, title, facts, row, none, matches) {
+  const shown = facts.filter(matches);
+  const key = `facts-${id}`;
+  const open = ui.open.has(key) || !!query();
+  const list = open ? shown : shown.slice(0, FACTS_SHOWN);
+  return h("section", { class: "facts-col", "aria-labelledby": `${key}-title` },
+    h("h3", { id: `${key}-title` }, title, h("span", { class: "count" }, fmt(shown.length))),
+    list.length ? h("div", { class: "list" }, list.map(row)) : h("p", { class: "empty" }, query() ? "None match." : none),
+    shown.length > FACTS_SHOWN && !query() ? h("button", { class: "link-btn show-all", type: "button",
+      onclick: () => { if (open) ui.open.delete(key); else ui.open.add(key); renderFacts(k); } }, open ? "Show fewer" : `Show all ${shown.length}`) : null);
+}
+
+// A current fact, as a link to the message that stated it; the column says who.
+function currentFact(fact) {
+  return h("button", { class: "fact", type: "button", title: `Show message ${fact.turn}, where this was said`, onclick: () => jumpTo(fact.turn) },
+    h("span", { class: "fact-topic" }, topicOf(fact)),
+    h("span", { class: "fact-what" }, marked(fact.content)),
+    h("span", { class: "fact-meta" }, h("span", { class: "num" }, `message ${fact.turn}`), factStatus(fact)));
+}
+
+// A replaced value, what replaced it, and a link to each message. The recap notes the replacement
+// on the old value's exchange; when that exchange is out of view, the old value isn't sent at all.
+function replacedFact(fact) {
+  const link = (turn, speaker) => h("button", { class: "link-btn num", type: "button", title: `Show message ${turn}`, onclick: () => jumpTo(turn) },
+    said(turn, speaker));
+  const noted = fact.span_level !== null && fact.span_level !== "out_of_view";
+  return h("div", { class: "fact s-superseded" },
+    h("span", { class: "fact-topic" }, topicOf(fact)),
+    h("span", { class: "fact-what" }, h("span", { class: "was" }, marked(fact.content)),
+      fact.superseded_by !== null ? h("span", { class: "now" }, "→ ", marked(fact.superseded_by)) : null),
+    h("span", { class: "fact-meta" }, link(fact.turn, fact.speaker),
+      fact.superseded_by_turn !== null ? ["→", link(fact.superseded_by_turn, fact.superseded_by_speaker)] : null,
+      h("span", { class: "fact-status" }, noted ? [h("span", { class: "st good" }, "✓ "), "noted on its line"] : "old value not sent")));
+}
+
+// The collections: when each was made and what it did, then what comes next.
 export function renderCleanupLog() {
   const k = state.knowledge;
   if (!k) return;
