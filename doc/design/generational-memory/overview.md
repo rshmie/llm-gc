@@ -356,12 +356,61 @@ one call reads every span the collection makes, given the facts already on recor
   replaced. A turn that only repeats or explains a fact on record is left out, and a
   fact restating its topic's active value is never filed: it would read "MySQL 8, not
   MySQL 8".
+- **Only the user changes a decision the user made.** Every fact records who stated
+  it, taken from its turn rather than from the model. A value the assistant states on
+  a topic the user decided is not filed; the recommendation stays in its exchange's
+  summary. Measured on the check, twice: the user chose 9 shards and the assistant
+  recommended 3. Filed as a replacement, the recap's "Replaced later" note made the
+  model answer 3. Filed beside the decision, "index shards: recommended 3" was the
+  only labelled note — the user's 9 sat inside a quoted sentence — and the model
+  still led with 3. The rule is enforced when facts are filed, so it holds whatever
+  the model writes. Recommendations on topics the user never decided are filed, as
+  recommendations.
 - **The answer is untrusted output.** It must be JSON in the expected shape, or the
   read fails and is reported; a fact naming a turn the reader was not shown, or that
   is not a short topic and value, is dropped.
 - **A failed read** makes the collection's spans without facts, and is reported once.
 
 Without a model, patterns read the user's own turns only — see the rules below.
+
+#### Who can change a decision, in plain words
+
+Beside each condensed exchange, the recap carries short notes like `database:
+Postgres`, and when a later message changes one, a warning beside the old value:
+"↳ Replaced later: database: MySQL, not Postgres". That warning is the strongest
+thing LLM-GC tells the model, so it must only ever say something that happened. The
+one rule: **only you change a decision you made.** The assistant can suggest; its
+suggestion stays in its exchange's summary, where the model reads it in context, and
+never becomes a note on a topic you decided.
+
+```
+ you:   "Let's use 9 shards."               → note: index shards: 9   (you)
+ AI:    "I'd recommend 3 instead."          → no note: a suggestion against your decision
+                                              stays in this exchange's summary
+ you:   (never replied about it)
+ recap: index shards: 9, and no "Replaced later" — as in the conversation itself
+```
+
+| What happens | What the model is told |
+|---|---|
+| You decide 9; the AI suggests 3; you never reply | your 9 is the note; the suggestion is in that exchange's summary |
+| You decide 9; the AI suggests 3; you say "ok, go with 3" | your new decision replaces your 9: "Replaced later: index shards: 3, not 9" |
+| You decide 9; the AI disagrees; you say "no, keep 9" | your 9 stays; repeating it is not a change, so no note |
+| The AI proposes Postgres; you say nothing | "database: recommended Postgres" — a suggestion, and it reads as one |
+| The AI proposes Postgres; you say "sounds good" | your agreement is your decision: "database: Postgres" |
+| The AI changes its own earlier suggestion | its new suggestion replaces its old one |
+| You said "use pytest"; the AI later switched to unittest on its own | your "pytest" stays the note; the switch is in that exchange's summary |
+
+In every case the exchange's own words are still there — quoted, summarised, or as
+its opening line — and the notes are hints on top. When LLM-GC is unsure, it adds
+no note: a missing hint costs a little, and a false one cost an answer on the check.
+*Accepted cost:* the last row. When the assistant itself changes something you
+decided, as an agent acting on code can, your decision stays the note and the change
+is only in the summary, so the model can take the note as current. *Revisit if* the
+Claude Code sessions show that case often: the reader would then mark what the
+assistant *did*, as distinct from what it suggested, and only the first would replace
+your decision.
+
 
 **Why the model reads them.** Patterns over every turn were measured on the check:
 they captured the answer to 8 of 37 probes and missed four of five changes of plan

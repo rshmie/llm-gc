@@ -189,3 +189,44 @@ class TestSupersessionRules:
             (), (_fact("general", "use microservices"), _fact("general", "ship on Friday")))
         assert supersessions == ()
         assert all(e.knowledge_status == KnowledgeStatus.ACTIVE for e in knowledge)
+
+    def test_restating_an_active_value_files_nothing_and_replaces_nothing(self):
+        """A later turn that repeats a decision has not changed it. Filed, it would
+        retire the first statement and tell the model "MySQL 8, not MySQL 8"."""
+        knowledge, supersessions = file_knowledge((_fact("database", "MySQL 8"),), (_fact("database", "mysql 8."),))
+        assert supersessions == ()
+        assert [(e.content, e.knowledge_status) for e in knowledge] == [("MySQL 8", KnowledgeStatus.ACTIVE)]
+
+    def test_a_value_that_returns_after_a_change_is_a_change(self):
+        """Postgres, then MySQL, then Postgres again: the third statement replaces the
+        active MySQL, because only an active value can be restated."""
+        knowledge, supersessions = file_knowledge(
+            (), (_fact("database", "postgres"), _fact("database", "mysql"), _fact("database", "postgres")))
+        assert [e.content for e in knowledge if e.knowledge_status == KnowledgeStatus.ACTIVE] == ["postgres"]
+        assert len(supersessions) == 2
+
+    def test_an_assistants_value_on_a_topic_the_user_decided_is_not_filed(self):
+        """Measured on the decision-survival check: the user chose 9 shards and the
+        assistant recommended 3. Filed as a replacement, the recap said 9 was replaced
+        and the model answered 3; filed beside it, "index shards: recommended 3" was
+        the only labelled note and the model still led with 3. Only the user changes
+        their own decision; the recommendation stays in its exchange's summary."""
+        users = KnowledgeEntry(message_turn=6, content="9", topic_label="index shards",
+                               knowledge_type=KnowledgeType.DECISION, speaker="user")
+        recommended = KnowledgeEntry(message_turn=7, content="recommended 3", topic_label="index shards",
+                                     knowledge_type=KnowledgeType.FACT, speaker="assistant")
+
+        knowledge, supersessions = file_knowledge((users,), (recommended,))
+
+        assert supersessions == ()
+        assert knowledge == (users,)
+
+    def test_the_user_can_replace_anything_and_the_assistant_its_own_values(self):
+        def fact(turn, content, speaker):
+            return KnowledgeEntry(message_turn=turn, content=content, topic_label="cache",
+                                  knowledge_type=KnowledgeType.DECISION, speaker=speaker)
+
+        _, by_user = file_knowledge((fact(1, "redis", "assistant"),), (fact(2, "memcached", "user"),))
+        _, by_assistant = file_knowledge((fact(1, "redis", "assistant"),), (fact(2, "valkey", "assistant"),))
+
+        assert len(by_user) == 1 and len(by_assistant) == 1

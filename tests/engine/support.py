@@ -14,7 +14,7 @@ from llm_gc.engine import GcService
 from llm_gc.engine.compaction import BaseCompactor, LLMCompactor
 from llm_gc.engine.generations import GenerationalMemory
 from llm_gc.events import EventBus
-from llm_gc.extraction import KnowledgeExtractor
+from llm_gc.extraction import FactReader, PatternFactReader
 from llm_gc.llm import FakeProvider, LLMResponse, StopReason
 from llm_gc.models import Message
 from llm_gc.scoring import SpanScore
@@ -53,7 +53,7 @@ class ScriptedSpanScorer:
 
 
 def make_service(config: GCConfig | None = None, scores: Mapping[int, float] | None = None, *,
-                 compactor: BaseCompactor | None = None, extractor: KnowledgeExtractor | None = None,
+                 compactor: BaseCompactor | None = None, fact_reader: FactReader | None = None,
                  default_score: float = KEPT_SCORE) -> tuple[GcService, ScriptedSpanScorer, FakeProvider]:
     """A service on a scripted scorer and a scripted summariser; returns both for the test to steer."""
     bus = EventBus()
@@ -62,7 +62,7 @@ def make_service(config: GCConfig | None = None, scores: Mapping[int, float] | N
     service = GcService(
         session_manager=SessionManager(),
         generational_memory=GenerationalMemory(
-            knowledge_extractor=extractor if extractor is not None else KnowledgeExtractor(),
+            fact_reader=fact_reader if fact_reader is not None else PatternFactReader(),
             compactor=compactor if compactor is not None else LLMCompactor(event_bus=bus, provider=provider)),
         span_scorer=scorer,  # type: ignore[arg-type]  # duck-typed: only `score` is called
         event_bus=bus,

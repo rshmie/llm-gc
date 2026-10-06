@@ -1,0 +1,55 @@
+"""The seam a collection reads facts through, and the reader for a deployment without a model.
+
+Facts are read once per collection, over every span it makes, given the facts
+already on record: a change of plan in one span has to be filed under the topic it
+changes, wherever that topic was first stated. See
+doc/design/generational-memory/overview.md.
+"""
+
+from collections.abc import Sequence
+from dataclasses import replace
+from typing import Protocol
+
+from llm_gc.extraction.knowledge_extractor import KnowledgeExtractor
+from llm_gc.models import KnowledgeEntry, Message
+from llm_gc.models.message import tool_result_ids
+
+
+class FactReader(Protocol):
+    """Reads what a collection's spans settled, as facts filed against the turns that state them."""
+
+    async def read(self, spans: Sequence[Sequence[Message]], on_record: Sequence[KnowledgeEntry]
+                   ) -> list[KnowledgeEntry]:
+        """The facts these spans state, in conversation order.
+
+        Args:
+            spans: The spans a collection is making, each its turns in order.
+            on_record: The conversation's active facts. A fact that changes one of
+                them carries its topic, so filing it marks the old value replaced.
+
+        Raises:
+            Exception: Any failure to read. The collection makes its spans without
+                facts and reports it; the turns themselves are kept either way.
+        """
+        ...
+
+
+class PatternFactReader:
+    """Facts matched by patterns, from the user's own words: the reader when there is no model.
+
+    Only the user's turns. On the decision-survival check, what the patterns read
+    from a user turn was a real statement - a choice, a name, a date - while what
+    they read from the assistant's explanations was mostly sentence fragments, and
+    a fragment filed twice under the same words read as a decision that changed.
+    Tool results are output, not statements, and are skipped with them.
+    """
+
+    def __init__(self, extractor: KnowledgeExtractor | None = None) -> None:
+        self.extractor = extractor if extractor is not None else KnowledgeExtractor()
+
+    async def read(self, spans: Sequence[Sequence[Message]], on_record: Sequence[KnowledgeEntry]
+                   ) -> list[KnowledgeEntry]:
+        """See `FactReader.read`. Patterns do not consult the facts on record."""
+        return [replace(entry, speaker="user") for span in spans for turn in span
+                if turn.role == "user" and not tool_result_ids(turn)
+                for entry in self.extractor.extract_knowledge(turn, turn.turn_index)]

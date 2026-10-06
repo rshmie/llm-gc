@@ -224,7 +224,7 @@ class TestTheBatchDecidesWhen:
         result = results[-1]
         assert result.status is GCStatus.BYPASSED_NO_SAVING
         assert result.abandoned_cut is not None
-        assert result.abandoned_cut.outcome == CutOutcome(quoted=1, summarised=0, archived=0)
+        assert result.abandoned_cut.outcome == CutOutcome(kept=[0])
         assert DegradationReason.COMPACTION_FAILED in {d.reason for d in result.degradations}
         assert _young(service) == [0, 1]
 
@@ -240,7 +240,7 @@ class TestLevelsAreReplannedAtEveryCollection:
         results = _converse(service, 1, start=3)
 
         assert _levels(service)[0] is KEPT
-        assert results[-1].outcome.front_raised == 1
+        assert results[-1].outcome.raised == [0]
         assert f"[Quoted exactly] (turn 0, user) {turn(0).content}" in asyncio.run(service.gc_collect("s"))[0].content
 
     def test_a_score_near_a_line_does_not_move_a_span(self):
@@ -273,11 +273,11 @@ class TestFailuresAreReportedAndLoseNothing:
         assert (DegradationReason.COMPACTION_FAILED, [0]) in [(d.reason, d.turn_indices) for d in result.degradations]
 
     def test_a_failed_extraction_still_makes_the_span(self):
-        class _FailingExtractor:
-            def extract_knowledge(self, message, message_turn):
+        class _FailingReader:
+            async def read(self, spans, on_record):
                 raise RuntimeError("extraction unavailable")
 
-        service, _, _ = make_service(extractor=_FailingExtractor(), default_score=ARCHIVED_SCORE)  # type: ignore[arg-type]
+        service, _, _ = make_service(fact_reader=_FailingReader(), default_score=ARCHIVED_SCORE)  # type: ignore[arg-type]
 
         result = _converse(service, 2)[-1]
 
@@ -325,8 +325,8 @@ class TestTheBusSeesWhatTheCollectionDid:
         _converse(service, 3)
 
         assert [event.data["source_turn_indices"] for event in promoted] == [[0]]
-        assert [(event.data["message"].turn_index, event.data["source_generation"]) for event in archived] == [
-            (1, "young")]
+        assert [(event.data["source_turn_indices"], event.data["source_generation"]) for event in archived] == [
+            ([1], "young")]
 
 
 class TestNothingRecordedIsDestroyed:

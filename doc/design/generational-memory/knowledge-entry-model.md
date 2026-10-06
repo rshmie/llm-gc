@@ -51,6 +51,7 @@ class KnowledgeEntry:
     knowledge_type: KnowledgeType # FACT, DECISION, or PREFERENCE
     knowledge_status: KnowledgeStatus = KnowledgeStatus.ACTIVE
     created_at: datetime = field(default_factory=datetime.now)
+    speaker: Literal["user", "assistant"] | None = None   # who stated it
 ```
 
 ### Why `frozen=True`?
@@ -116,6 +117,10 @@ record and files a changed value under the topic it changes. An entry restating 
 topic's active value unchanged is not filed, so a repetition never reads as a change.
 Patterns, used without a model, label by the sentence's subject and cannot see the labels
 in use, so a change worded differently is missed.
+
+Each entry records its `speaker`, from the turn it was read from. An entry the assistant
+stated on a topic the user decided is not filed: only the user changes their own decision,
+and the recommendation stays in its exchange's summary.
 
 ---
 

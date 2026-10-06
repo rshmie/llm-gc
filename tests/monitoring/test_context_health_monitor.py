@@ -7,10 +7,11 @@ from llm_gc.engine import AgingDegradation, DegradationReason, GCResult, GCStatu
 from llm_gc.engine.generations.front import FRONT_OVERHEAD_TOKENS, render_front
 from llm_gc.events import Event, EventBus, EventType
 from llm_gc.models.generation_snapshot import DetailLevel, GenerationSnapshot, Span
-from llm_gc.models import KnowledgeEntry, Message, SweepClassification
+from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.knowledge_entry import KnowledgeType
 from llm_gc.monitoring import ContextHealthMonitor
 from llm_gc.monitoring.context_health import TransitionType
+from llm_gc.monitoring.knowledge_state import TurnFidelity
 
 
 # ---- Helper factories -------------------------------------------------------
@@ -23,24 +24,24 @@ def _make_message(turn_index: int = 0, token_count: int = 10, content: str = "ms
     return Message(role="user", content=content, token_count=token_count, turn_index=turn_index)
 
 
-def _make_completed_result(classifications: dict[int, SweepClassification], token_count: int = 10,
+def _make_completed_result(classifications: dict[int, TurnFidelity], token_count: int = 10,
                            gc_run_id: str = "run-1") -> GCResult:
     """A completed pass from {turn_index: what became of it}, every turn token_count tokens.
 
-    KEEP turns stay in the tail, forwarded word for word; COMPACT and ARCHIVE turns
-    were condensed into the front, which carries the summaries' tokens.
+    VERBATIM turns stay in the tail, forwarded word for word; COMPACTED and ARCHIVED
+    turns were condensed into the front, which carries the summaries' tokens.
     """
-    count = {c: sum(1 for v in classifications.values() if v == c) for c in SweepClassification}
-    tail = [_make_message(turn, token_count) for turn, c in classifications.items() if c == SweepClassification.KEEP]
-    front = Message(role="user", content="front", token_count=count[SweepClassification.COMPACT] * token_count,
+    count = {c: sum(1 for v in classifications.values() if v == c) for c in TurnFidelity}
+    tail = [_make_message(turn, token_count) for turn, c in classifications.items() if c == TurnFidelity.VERBATIM]
+    front = Message(role="user", content="front", token_count=count[TurnFidelity.COMPACTED] * token_count,
                     turn_index=-1)
     return GCResult(final_messages=[front, *tail], gc_run_id=gc_run_id, status=GCStatus.COMPLETED,
                     tokens_before=len(classifications) * token_count,
-                    tokens_in_final=(count[SweepClassification.KEEP] + count[SweepClassification.COMPACT]) * token_count,
-                    kept_count=count[SweepClassification.KEEP], compacted_count=count[SweepClassification.COMPACT],
-                    archived_count=count[SweepClassification.ARCHIVE],
-                    compacted_tokens=count[SweepClassification.COMPACT] * token_count,
-                    archived_tokens=count[SweepClassification.ARCHIVE] * token_count, duration_ms=2.0)
+                    tokens_in_final=(count[TurnFidelity.VERBATIM] + count[TurnFidelity.COMPACTED]) * token_count,
+                    kept_count=count[TurnFidelity.VERBATIM], compacted_count=count[TurnFidelity.COMPACTED],
+                    archived_count=count[TurnFidelity.ARCHIVED],
+                    compacted_tokens=count[TurnFidelity.COMPACTED] * token_count,
+                    archived_tokens=count[TurnFidelity.ARCHIVED] * token_count, duration_ms=2.0)
 
 
 def _make_bypassed_result(messages: list[Message], status: GCStatus = GCStatus.BYPASSED_BATCH_TOO_SMALL,
@@ -135,8 +136,8 @@ class TestPromotionRecording:
         """The regression that matters most: a KEEP -> COMPACT change is a sweep
         *decision*, not a move. Only the producer can say a turn actually left."""
         monitor, bus, _ = _make_monitor()
-        _emit_gc_finished(bus, _make_completed_result({2: SweepClassification.KEEP}))
-        _emit_gc_finished(bus, _make_completed_result({2: SweepClassification.COMPACT}))
+        _emit_gc_finished(bus, _make_completed_result({2: TurnFidelity.VERBATIM}))
+        _emit_gc_finished(bus, _make_completed_result({2: TurnFidelity.COMPACTED}))
 
         assert _transitions_of(monitor, TransitionType.PROMOTED) == []
 
@@ -144,7 +145,7 @@ class TestPromotionRecording:
         """The case the old diff silently missed: a turn appended and classified
         COMPACT in the same pass has no prior KEEP, but it really was promoted."""
         monitor, bus, _ = _make_monitor()
-        _emit_gc_finished(bus, _make_completed_result({2: SweepClassification.COMPACT}))
+        _emit_gc_finished(bus, _make_completed_result({2: TurnFidelity.COMPACTED}))
         _emit_promoted(bus, [2])
 
         assert [t.turn_index for t in _transitions_of(monitor, TransitionType.PROMOTED)] == [2]
@@ -167,17 +168,16 @@ class TestPromotionRecording:
 
 
 class TestArchiveAndSupersedeHandlers:
-    def test_message_archived_appends_transition(self):
+    def test_message_archived_appends_one_transition_per_turn_of_its_span(self):
+        """A reply is archived with the question it answered: both move, so both are listed."""
         monitor, bus, _ = _make_monitor()
         bus.emit(Event(event_type=EventType.MESSAGE_ARCHIVED,
-                       data={"message": _make_message(turn_index=7), "extracted_knowledge_entries": []},
+                       data={"source_turn_indices": [7, 8], "extracted_knowledge_entries": []},
                        timestamp=111.0))
 
         archived = _transitions_of(monitor, TransitionType.ARCHIVED)
-        assert len(archived) == 1
-        assert archived[0].turn_index == 7
-        assert archived[0].topic_label is None
-        assert archived[0].occurred_at == 111.0
+        assert [t.turn_index for t in archived] == [7, 8]
+        assert all(t.topic_label is None and t.occurred_at == 111.0 for t in archived)
 
     def test_superseded_appends_one_transition_per_entry(self):
         monitor, bus, _ = _make_monitor()
@@ -195,7 +195,7 @@ class TestArchiveAndSupersedeHandlers:
         monitor, bus, _ = _make_monitor(max_recent_transitions=3)
         for turn in range(5):
             bus.emit(Event(event_type=EventType.MESSAGE_ARCHIVED,
-                           data={"message": _make_message(turn_index=turn), "extracted_knowledge_entries": []}))
+                           data={"source_turn_indices": [turn], "extracted_knowledge_entries": []}))
 
         transitions = monitor.get_snapshot().generation_lifecycle.recent_transitions
         assert [t.turn_index for t in transitions] == [2, 3, 4]
@@ -225,8 +225,8 @@ class TestSnapshotNeverRan:
 
 
 class TestSnapshotCompleted:
-    CLASSIFICATIONS = {0: SweepClassification.ARCHIVE, 1: SweepClassification.COMPACT,
-                       2: SweepClassification.COMPACT, 3: SweepClassification.KEEP}
+    CLASSIFICATIONS = {0: TurnFidelity.ARCHIVED, 1: TurnFidelity.COMPACTED,
+                       2: TurnFidelity.COMPACTED, 3: TurnFidelity.VERBATIM}
 
     def _snapshot(self, monitor, bus, timestamp: float = 500.0):
         _emit_gc_finished(bus, _make_completed_result(self.CLASSIFICATIONS), timestamp=timestamp)
@@ -293,7 +293,7 @@ class TestSnapshotCompleted:
 
     def test_zero_token_sweep_yields_no_ratio(self):
         monitor, bus, _ = _make_monitor()
-        _emit_gc_finished(bus, _make_completed_result({0: SweepClassification.KEEP}, token_count=0))
+        _emit_gc_finished(bus, _make_completed_result({0: TurnFidelity.VERBATIM}, token_count=0))
         assert monitor.get_snapshot().transformation_ratio is None
 
 
@@ -362,7 +362,7 @@ class TestSnapshotSemantics:
     def test_each_call_builds_a_fresh_snapshot(self):
         monitor, bus, _ = _make_monitor()
         before = monitor.get_snapshot()
-        _emit_gc_finished(bus, _make_completed_result({0: SweepClassification.KEEP}))
+        _emit_gc_finished(bus, _make_completed_result({0: TurnFidelity.VERBATIM}))
         after = monitor.get_snapshot()
 
         assert before is not after
@@ -385,7 +385,7 @@ class TestSessionsAreKeptApart:
     def test_each_session_sees_only_its_own_pass_and_transitions(self):
         monitor, bus, _ = _make_monitor()
         _emit_for(bus, "alice", EventType.GC_FINISHED, gc_result=_make_completed_result(
-            {0: SweepClassification.KEEP}, gc_run_id="alice-run"))
+            {0: TurnFidelity.VERBATIM}, gc_run_id="alice-run"))
         _emit_for(bus, "bob", EventType.MESSAGE_PROMOTED_TO_OLD_GEN, source_turn_indices=[4])
 
         alice, bob = monitor.get_snapshot("alice"), monitor.get_snapshot("bob")
@@ -429,7 +429,7 @@ class TestSessionsAreKeptApart:
         every conversation's text alive in the monitor long after its session closed."""
         monitor, bus, _ = _make_monitor()
         _emit_for(bus, "alice", EventType.GC_FINISHED, gc_result=_make_completed_result(
-            {0: SweepClassification.KEEP, 1: SweepClassification.COMPACT}))
+            {0: TurnFidelity.VERBATIM, 1: TurnFidelity.COMPACTED}))
 
         record = monitor._records["alice"]
         assert not any(isinstance(value, GCResult) for value in vars(record.last_pass).values())
@@ -456,9 +456,9 @@ class TestPassHistory:
         monitor, bus, _ = _make_monitor()
         for run in ("one", "two"):
             _emit_for(bus, "alice", EventType.GC_FINISHED, gc_result=_make_completed_result(
-                {0: SweepClassification.KEEP}, gc_run_id=run))
+                {0: TurnFidelity.VERBATIM}, gc_run_id=run))
         _emit_for(bus, "bob", EventType.GC_FINISHED, gc_result=_make_completed_result(
-            {0: SweepClassification.KEEP}, gc_run_id="bob-run"))
+            {0: TurnFidelity.VERBATIM}, gc_run_id="bob-run"))
 
         assert [p.gc_run_id for p in monitor.get_snapshot("alice").recent_passes] == ["one", "two"]
         assert [p.gc_run_id for p in monitor.get_snapshot("bob").recent_passes] == ["bob-run"]

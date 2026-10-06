@@ -108,11 +108,11 @@ class TestASpanMadeWithoutItsSummaryIsRecorded:
 
 class TestASpanMadeWithoutItsFactsIsRecorded:
     def test_an_extraction_failure_is_recorded_and_the_span_is_still_made(self):
-        class _FailingExtractor:
-            def extract_knowledge(self, message, message_turn):
+        class _FailingReader:
+            async def read(self, spans, on_record):
                 raise RuntimeError("extraction unavailable")
 
-        service, _, _ = make_service(scores=SCORES, extractor=_FailingExtractor())  # type: ignore[arg-type]
+        service, _, _ = make_service(scores=SCORES, fact_reader=_FailingReader())  # type: ignore[arg-type]
         results = _run(service)
 
         assert DegradationReason.ARCHIVE_FAILED in {d.reason for d in _degradations(results)}

@@ -19,6 +19,16 @@ from importlib import resources
 COMPACTION_PROMPT = "compaction.md"
 """System prompt for `LLMCompactor`."""
 
+FACTS_PROMPT = "facts.md"
+"""System prompt for `LLMFactReader`."""
+
+# Delimiters the prompts name, so a model can tell our instructions from conversation
+# content. Unlikely to occur in ordinary prose, which is the only property that matters.
+TRANSCRIPT_OPEN = "<<<TRANSCRIPT"
+TRANSCRIPT_CLOSE = "TRANSCRIPT>>>"
+FACTS_OPEN = "<<<FACTS"
+FACTS_CLOSE = "FACTS>>>"
+
 
 @lru_cache(maxsize=None)
 def load_prompt(name: str) -> str:

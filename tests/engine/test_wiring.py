@@ -1,8 +1,16 @@
+import asyncio
+import json
+import re
+
 from llm_gc.config import GCConfig
 from llm_gc.engine import build_gc_service
 from llm_gc.engine.compaction import LLMCompactor, NoOpCompactor
-from llm_gc.llm import FakeProvider
+from llm_gc.extraction import LLMFactReader, PatternFactReader
+from llm_gc.llm import FakeProvider, LLMResponse, StopReason
+from llm_gc.llm.prompts import FACTS_PROMPT, load_prompt
+from llm_gc.models import Message
 from llm_gc.scoring import RelevanceType
+from llm_gc.utils import count_tokens
 
 
 def test_without_a_summary_provider_turns_are_kept_whole():
@@ -19,6 +27,90 @@ def test_a_summary_provider_is_what_the_compactor_calls():
     compactor = service.generational_memory.compactor
     assert isinstance(compactor, LLMCompactor)
     assert compactor.provider is provider
+
+
+def test_facts_are_read_by_the_model_that_summarises_or_by_patterns_without_one():
+    provider = FakeProvider(responses=[])
+
+    assert isinstance(build_gc_service(GCConfig(), summary_provider=None).generational_memory.fact_reader,
+                      PatternFactReader)
+    reader = build_gc_service(GCConfig(), summary_provider=provider).generational_memory.fact_reader
+    assert isinstance(reader, LLMFactReader) and reader.provider is provider
+
+
+class _Model:
+    """Answers the facts call with what each turn settles, and every other call with a summary."""
+
+    SETTLED = {0: ("cloud", "Google Cloud"), 2: ("cloud", "AWS")}
+
+    def __init__(self) -> None:
+        self.facts_requests: list[str] = []
+
+    async def generate(self, *, messages, system=None, max_output_tokens, timeout_s):
+        if system == load_prompt(FACTS_PROMPT):
+            request = messages[0].content
+            self.facts_requests.append(request)
+            facts = [{"turn": turn, "topic": topic, "value": value}
+                     for turn, (topic, value) in self.SETTLED.items() if f"[turn {turn}]" in request]
+            text = json.dumps({"facts": facts})
+        else:
+            text = "The assistant set out an architecture."
+        return LLMResponse(text=text, stop_reason=StopReason.COMPLETE, input_tokens=0, output_tokens=5,
+                           model="m", provider="fake")
+
+
+def test_a_change_of_plan_in_a_later_collection_replaces_the_value_under_its_topic():
+    """The model files the change under the topic on record, so the front tells the
+    model the old value was replaced - once, and only by a real change."""
+    model = _Model()
+    service = build_gc_service(GCConfig(min_cut_tokens=0, last_n_turns_to_keep=2, context_window=100_000),
+                               summary_provider=model)
+    said = ["We'll host on Google Cloud. What should the architecture be?", "A long answer. " * 60,
+            "Change of plan: we're moving to AWS.", "Another long answer. " * 60, "Thanks.", "Welcome."]
+
+    async def converse() -> None:
+        for turn, text in enumerate(said):
+            message = Message(role="user" if turn % 2 == 0 else "assistant", content=text,
+                              token_count=count_tokens(text), turn_index=turn)
+            service.gc_record("s", [message], [f"h{turn}"])
+            await service.gc_age("s")
+
+    asyncio.run(converse())
+
+    front = asyncio.run(service.gc_collect("s"))[0].content
+    assert len(model.facts_requests) == 2, "one read per collection"
+    assert "cloud: Google Cloud" in model.facts_requests[1], "the second read sees the first's fact on record"
+    assert re.findall(r"↳ Replaced later.*", front) == ["↳ Replaced later (turn 2): cloud: AWS, not Google Cloud."]
+
+
+def test_a_recommendation_never_marks_the_users_decision_replaced():
+    """The decision-survival check's lost answer, end to end: the user chose 9
+    shards, the assistant recommended 3, and the model filed the recommendation
+    under the user's topic. The user's 9 must stay the one fact on that topic, with
+    no "Replaced later" note telling the model otherwise."""
+
+    class _Recommending(_Model):
+        SETTLED = {0: ("index shards", "9, with 2 replicas each"), 1: ("index shards", "recommended 3")}
+
+    model = _Recommending()
+    service = build_gc_service(GCConfig(min_cut_tokens=0, last_n_turns_to_keep=2, context_window=100_000),
+                               summary_provider=model)
+    said = ["Let's use 9 shards with 2 replicas each for the index.", "I'd recommend 3 primaries instead. " * 40,
+            "How do we handle growth?", "Reindex through an alias. " * 40, "Thanks.", "Welcome."]
+
+    async def converse() -> None:
+        for turn, text in enumerate(said):
+            message = Message(role="user" if turn % 2 == 0 else "assistant", content=text,
+                              token_count=count_tokens(text), turn_index=turn)
+            service.gc_record("s", [message], [f"h{turn}"])
+            await service.gc_age("s")
+
+    asyncio.run(converse())
+
+    front = asyncio.run(service.gc_collect("s"))[0].content
+    assert "Replaced later" not in front
+    snapshot = service.session_manager.store.get("s").snapshot
+    assert [(f.content, f.speaker) for f in snapshot.active_knowledge] == [("9, with 2 replicas each", "user")]
 
 
 def test_every_component_reports_on_the_one_bus():

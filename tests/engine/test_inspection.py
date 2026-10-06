@@ -13,6 +13,7 @@ from llm_gc.engine import build_gc_service
 from llm_gc.engine.gc_service import GcService
 from llm_gc.engine.gc_status import GCStatus
 from llm_gc.events import Event, EventType
+from llm_gc.extraction import PatternFactReader
 from llm_gc.llm import FakeProvider, LLMResponse, StopReason
 from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.generation_snapshot import DetailLevel, GenerationSnapshot, Span
@@ -35,7 +36,8 @@ def _build(**overrides) -> GcService:
     """The real engine graph, scaled so collections happen within a short conversation."""
     config = GCConfig(**{"context_window": 700, "keep_threshold": 0.55, "archive_threshold": 0.25,
                          "last_n_turns_to_keep": 3, "min_cut_tokens": 60, **overrides})
-    return build_gc_service(config, summary_provider=FakeProvider(responses=[SUMMARY] * 400))
+    return build_gc_service(config, summary_provider=FakeProvider(responses=[SUMMARY] * 400),
+                            fact_reader=PatternFactReader())
 
 
 def _turn(index: int) -> Message:
@@ -181,6 +183,32 @@ class TestTheViewIsTheEngine:
 
         asyncio.run(scenario())
         assert cuts_checked > 0
+
+    def test_the_estimated_saving_is_the_collections_own_first_check(self):
+        """A collection checks its saving at estimated summary sizes before paying for
+        any summary, and skips a cut that would not pay for itself. The preview reports
+        that same estimate, so a cut it shows as not paying is one the collection skips,
+        by exactly the margin shown."""
+        service = _build(min_cut_tokens=0)
+        finished: list[Event] = []
+        service.event_bus.subscribe(EventType.GC_FINISHED, finished.append)
+        checked = []
+
+        async def scenario() -> None:
+            for index in range(30):
+                _record(service, index)
+                preview = service.inspect(SESSION).next_cut
+                await service.gc_age(SESSION)
+                if preview.batch_ready:
+                    checked.append((preview.estimated_saving, finished[-1].data["gc_result"]))
+
+        asyncio.run(scenario())
+        assert any(saving <= 0 for saving, _ in checked), "a cut that does not pay was previewed"
+        assert any(result.status is GCStatus.COMPLETED for _, result in checked), "and one that does"
+        for saving, result in checked:
+            if saving <= 0:
+                assert result.status is GCStatus.BYPASSED_NO_SAVING
+                assert result.abandoned_cut.context_tokens_after == result.tokens_before - saving
 
     def test_the_front_reports_exactly_the_facts_it_carries(self):
         """Facts reach the model on their archived span's line; a kept or compacted

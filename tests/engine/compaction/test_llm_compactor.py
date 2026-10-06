@@ -372,11 +372,11 @@ class TestItIsInterchangeableWithTheNoOp:
         is the test that says so."""
         from llm_gc.engine.compaction import NoOpCompactor
         from llm_gc.engine.generations import GenerationalMemory
-        from llm_gc.extraction import KnowledgeExtractor
+        from llm_gc.extraction import PatternFactReader
 
         def _memory(compactor):
             return GenerationalMemory(
-                knowledge_extractor=KnowledgeExtractor(),
+                fact_reader=PatternFactReader(),
                 compactor=compactor,
             )
 

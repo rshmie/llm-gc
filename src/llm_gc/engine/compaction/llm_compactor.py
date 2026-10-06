@@ -20,18 +20,12 @@ from llm_gc.engine.compaction.compaction_result import CompactionResult
 from llm_gc.engine.compaction.compaction_strategy import CompactionStrategy
 from llm_gc.events import Event, EventBus, EventType
 from llm_gc.exceptions import CompactionRefused
-from llm_gc.llm.prompts import COMPACTION_PROMPT, load_prompt
+from llm_gc.llm.prompts import COMPACTION_PROMPT, TRANSCRIPT_CLOSE, TRANSCRIPT_OPEN, load_prompt
 from llm_gc.llm.provider import LLMProvider
 from llm_gc.models import Message
 from llm_gc.utils import count_tokens
 
 logger = logging.getLogger(__name__)
-
-# Delimiters the system prompt names, so the model can tell our instructions from
-# the user's conversation. Unlikely to occur in ordinary prose, which is the only
-# property that matters.
-TRANSCRIPT_OPEN = "<<<TRANSCRIPT"
-TRANSCRIPT_CLOSE = "TRANSCRIPT>>>"
 
 # Models follow a length in words far better than one in tokens; English prose
 # runs at about three words to four tokens.

@@ -208,8 +208,9 @@ Here every span is one exchange of two turns.
 - **Per fact**, how it reaches the model: on its span's line when the span is
   compacted or archived; inside the quoted words when it is kept; not at all when
   it is folded out of view. *Stored, not sent* is the signal that matters most: the
-  conversation has not forgotten it, and the model cannot see it. A fact later
-  replaced names the turn that replaced it.
+  conversation has not forgotten it, and the model cannot see it. Each fact says
+  who stated it — you, or the assistant — and a fact later replaced names the turn,
+  and the speaker, that replaced it.
 - **The next collection**: which verbatim turns it would take, as which spans and
   at what level; which spans already collected it would show at another level; and
   the conditions it must meet, each with its state — a batch worth

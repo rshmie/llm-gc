@@ -7,9 +7,10 @@ verbatim, and a tool round is never split - a `tool_result` sent without the
 request because of LLM-GC.
 """
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 
 from llm_gc.models import Message
+from llm_gc.models.message import tool_result_ids, tool_use_ids
 
 
 def find_cut_point(turns: Sequence[Message], keep_last: int) -> int:
@@ -36,17 +37,3 @@ def is_safe_cut(turns: Sequence[Message], cut: int) -> bool:
     cut_calls = {i for turn in turns[:cut] for i in tool_use_ids(turn)}
     return not any(set(tool_result_ids(turn)) & cut_calls for turn in turns[cut:])
 
-
-def tool_use_ids(message: Message) -> list[str]:
-    return [block["id"] for block in _blocks(message) if block.get("type") == "tool_use" and "id" in block]
-
-
-def tool_result_ids(message: Message) -> list[str]:
-    return [block["tool_use_id"] for block in _blocks(message)
-            if block.get("type") == "tool_result" and "tool_use_id" in block]
-
-
-def _blocks(message: Message) -> Iterable[dict]:
-    if isinstance(message.raw_content, list):
-        return (block for block in message.raw_content if isinstance(block, dict))
-    return ()

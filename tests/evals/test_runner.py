@@ -15,6 +15,7 @@ from evals.decision_survival.harness import (
     Run,
     rehearsal_answer,
     rehearsal_model,
+    rehearsal_facts,
     rehearsal_summaries,
     run_conversation,
 )
@@ -31,7 +32,7 @@ CONFIG = GCConfig(context_window=200_000, min_cut_tokens=300, last_n_turns_to_ke
 def _run(summary_provider=None, model_transport=None) -> Run:
     return asyncio.run(run_conversation(
         CONVERSATION, config=CONFIG, summary_provider=summary_provider or rehearsal_summaries(),
-        model_transport=model_transport or rehearsal_model(CONVERSATION),
+        fact_reader=rehearsal_facts(), model_transport=model_transport or rehearsal_model(CONVERSATION),
         api_key="rehearsal", model="claude-opus-5-5", effort="medium"))
 
 
@@ -145,7 +146,7 @@ def test_a_run_says_what_it_is_doing_at_each_step():
     """A long conversation plays for minutes; without steps the run looks stuck."""
     steps = []
     asyncio.run(run_conversation(
-        CONVERSATION, config=CONFIG, summary_provider=rehearsal_summaries(),
+        CONVERSATION, config=CONFIG, summary_provider=rehearsal_summaries(), fact_reader=rehearsal_facts(),
         model_transport=rehearsal_model(CONVERSATION), api_key="rehearsal", model="claude-opus-5-5",
         effort="medium", on_step=steps.append))
 

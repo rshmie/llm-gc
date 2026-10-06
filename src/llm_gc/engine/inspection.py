@@ -35,10 +35,18 @@ class CutPreview:
     """
 
     turns: tuple[int, ...]               # the verbatim turns the collection would take, in order
+    spans: tuple[tuple[int, ...], ...]   # those turns, as the spans the collection would make of them
     levels: Mapping[int, DetailLevel]    # each of those turns: the level its span would be shown at
     scores: Mapping[int, float]          # each of those turns: its span's score
     compactable_tokens: int              # tokens of those turns the plan would not keep word for word
     min_cut_tokens: int
+    # What the cut would save at estimated summary sizes: the check a collection makes
+    # before paying for any summary. Zero or less, and the collection is skipped.
+    estimated_saving: int = 0
+    # Every span the old generation already holds, in the snapshot's order: the
+    # level the collection would give it, and its score against what is discussed now.
+    span_levels: tuple[DetailLevel, ...] = ()
+    span_scores: tuple[float, ...] = ()
 
     @property
     def batch_ready(self) -> bool:

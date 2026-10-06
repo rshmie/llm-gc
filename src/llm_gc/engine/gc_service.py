@@ -1,13 +1,13 @@
 import logging
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from time import perf_counter
 
 from llm_gc.config.constants import DEFAULT_COMPACTION_TARGET_RATIO
 from llm_gc.config.gc_config import GCConfig
 from llm_gc.engine.aging_degradation import AgingDegradation, DegradationReason
-from llm_gc.engine.cut_point import find_cut_point, tool_result_ids
+from llm_gc.engine.cut_point import find_cut_point
 from llm_gc.engine.gc_result import AbandonedCut, CutOutcome, GCResult
 from llm_gc.engine.gc_status import GCStatus
 from llm_gc.engine.generations.condensing import Condensed
@@ -25,6 +25,7 @@ from llm_gc.engine.inspection import CutPreview, SessionInspection, batch_worth_
 from llm_gc.events import Event, EventBus, EventType
 from llm_gc.exceptions import CompactionRefused, LLMGCError
 from llm_gc.models import KnowledgeEntry, Message
+from llm_gc.models.message import tool_result_ids
 from llm_gc.models.generation_snapshot import (
     AgingDelta,
     AppliedAging,
@@ -104,13 +105,18 @@ class _Planned:
         )
 
     def outcome(self) -> CutOutcome:
-        lowered = sum(len(span.turns) for span, level in self.replanned
-                      if level in _CONDENSED and _RANK[level] < _RANK[span.level])
-        raised = sum(len(span.turns) for span, level in self.replanned if _RANK[level] > _RANK[span.level])
-        return CutOutcome(quoted=self.turns_at(DetailLevel.KEPT), summarised=self.turns_at(DetailLevel.COMPACTED),
-                          archived=self.turns_at(*_CONDENSED), front_archived=lowered, front_raised=raised)
+        def placed_at(level: DetailLevel) -> list[int]:
+            return [turn for span, placed in self.placed if placed is level for turn in span.turn_indices]
 
-    def preview(self, min_cut_tokens: int) -> CutPreview:
+        def replanned(moved: Callable[[int, int], bool]) -> list[int]:
+            return [turn for span, level in self.replanned if moved(_RANK[level], _RANK[span.level])
+                    for turn in span.turn_indices]
+
+        return CutOutcome(kept=placed_at(DetailLevel.KEPT), compacted=placed_at(DetailLevel.COMPACTED),
+                          archived=placed_at(DetailLevel.ARCHIVED), folded=placed_at(DetailLevel.OUT_OF_VIEW),
+                          lowered=replanned(lambda now, was: now < was), raised=replanned(lambda now, was: now > was))
+
+    def preview(self, min_cut_tokens: int, front_exists: bool) -> CutPreview:
         new = self.spans[self.new_from:]
         scores = self.scores[self.new_from:]
         return CutPreview(
@@ -119,6 +125,10 @@ class _Planned:
             scores={turn.turn_index: score for span, score in zip(new, scores, strict=True) for turn in span.turns},
             compactable_tokens=self.compactable_tokens,
             min_cut_tokens=min_cut_tokens,
+            estimated_saving=self.cut_saving(front_exists) if new else 0,
+            spans=tuple(span.turn_indices for span in new),
+            span_levels=self.plan.levels[: self.new_from],
+            span_scores=self.scores[: self.new_from],
         )
 
 
@@ -201,7 +211,7 @@ class GcService:
             snapshot=snapshot,
             front=self._render_front(snapshot),
             tail=tuple(young),
-            next_cut=planned.preview(self.gc_config.min_cut_tokens),
+            next_cut=planned.preview(self.gc_config.min_cut_tokens, front_exists=bool(snapshot.old)),
             aging_in_flight=state.aging_in_flight,
             last_activity=state.last_updated_at,
         )
@@ -307,7 +317,7 @@ class GcService:
                                               abandoned_cut=self._abandoned(base, estimated, saving))
 
             current_stage = "condense"
-            condensed = await self.generational_memory.summarise(drafts)
+            condensed = await self.generational_memory.complete(drafts, base.active_knowledge)
             degradations.extend(self._report_failures(session_id, condensed))
 
             current_stage = "plan"
@@ -394,25 +404,27 @@ class GcService:
                             context_tokens_after=self._context_tokens(base) - saving)
 
     def _report_failures(self, session_id: str, condensed: Sequence[Condensed]) -> list[AgingDegradation]:
-        """A degradation for each span made without its summary, or without its facts, because something failed.
+        """A degradation for each summary that failed, and one for facts that could not be read.
 
-        Neither keeps the span from being made: without a summary it can still be
-        kept or archived, and without facts it is archived by its index line alone.
+        Neither keeps a span from being made: without a summary it can still be
+        kept or archived, and without facts it is shown by its opening line. Facts
+        are read once for every span, so one failure names all their turns.
         """
         degradations = []
         for draft in condensed:
-            turns = [turn.turn_index for turn in draft.turns]
             if draft.summary_error is not None:
+                turns = [turn.turn_index for turn in draft.turns]
                 reason = (DegradationReason.COMPACTION_REFUSED if isinstance(draft.summary_error, CompactionRefused)
                           else DegradationReason.COMPACTION_FAILED)
                 logger.warning("a span was made without its summary",
                                extra={"session_id": session_id, "turn_indices": turns, "reason": reason.value})
                 degradations.append(self._record_degradation(session_id, reason, turns, draft.summary_error))
-            if draft.facts_error is not None:
-                logger.warning("a span was made without its facts",
-                               extra={"session_id": session_id, "turn_indices": turns})
-                degradations.append(self._record_degradation(session_id, DegradationReason.ARCHIVE_FAILED, turns,
-                                                             draft.facts_error))
+        unread = [(draft, draft.facts_error) for draft in condensed if draft.facts_error is not None]
+        if unread:
+            turns = [turn.turn_index for draft, _ in unread for turn in draft.turns]
+            logger.warning("spans were made without their facts", extra={"session_id": session_id, "turn_indices": turns})
+            degradations.append(self._record_degradation(session_id, DegradationReason.ARCHIVE_FAILED, turns,
+                                                         unread[0][1]))
         return degradations
 
     def _completed_result(self, base: GenerationSnapshot, final: GenerationSnapshot, gc_run_id: str,
@@ -489,7 +501,7 @@ class GcService:
     def _announce_archived(self, session_id: str, span: Span, facts: list[KnowledgeEntry], source: str) -> None:
         self.event_bus.emit(Event(event_type=EventType.MESSAGE_ARCHIVED, data={
             "session_id": session_id,
-            "message": span.turns[0],
+            "source_turn_indices": [turn.turn_index for turn in span.turns],
             "extracted_knowledge_entries": facts,
             "source_generation": source,
         }))

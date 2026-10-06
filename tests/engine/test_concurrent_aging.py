@@ -13,7 +13,7 @@ from llm_gc.engine.gc_service import GcService
 from llm_gc.engine.gc_status import GCStatus
 from llm_gc.engine.generations import GenerationalMemory
 from llm_gc.events import Event, EventBus, EventType
-from llm_gc.extraction import KnowledgeExtractor
+from llm_gc.extraction import PatternFactReader
 from llm_gc.models import Message
 from llm_gc.session import SessionManager
 from tests.engine.support import COMPACTED_SCORE, ScriptedSpanScorer, turn
@@ -45,7 +45,7 @@ def _service():
     compactor = _GatedCompactor(event_bus=bus)
     service = GcService(
         session_manager=SessionManager(),
-        generational_memory=GenerationalMemory(knowledge_extractor=KnowledgeExtractor(), compactor=compactor),
+        generational_memory=GenerationalMemory(fact_reader=PatternFactReader(), compactor=compactor),
         span_scorer=ScriptedSpanScorer({0: COMPACTED_SCORE, 1: COMPACTED_SCORE, 2: COMPACTED_SCORE}),  # type: ignore[arg-type]
         event_bus=bus,
         gc_config=GCConfig(context_window=1000, min_cut_tokens=0, last_n_turns_to_keep=0, archive_threshold=0.0),

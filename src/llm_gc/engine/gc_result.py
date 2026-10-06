@@ -6,20 +6,27 @@ from llm_gc.engine.gc_status import GCStatus
 from llm_gc.models.message import Message
 
 class CutOutcome(BaseModel):
-    """Where the turns a cut took ended up, and what it changed for turns condensed earlier.
+    """Where the turns a cut took ended up, and which turns condensed earlier it moved.
 
     The same pass re-plans every span, so it can show earlier turns with less
     detail (to fit the budget, or because they went quiet) or with more (because
-    the conversation came back to them).
+    the conversation came back to them). Turn indices rather than counts, so a
+    reader can name every message a collection moved.
     """
 
     model_config = {"frozen": True}
 
-    quoted: int                 # turns quoted word for word in the front
-    summarised: int             # turns inside a summary in the front
-    archived: int               # turns shown by their index line and facts, or folded out of view
-    front_archived: int = 0     # turns earlier cuts had condensed, archived or folded by this pass
-    front_raised: int = 0       # turns earlier cuts had condensed, shown with more detail by this pass
+    kept: list[int] = Field(default_factory=list)        # new turns, quoted word for word
+    compacted: list[int] = Field(default_factory=list)   # new turns, under their span's summary
+    archived: list[int] = Field(default_factory=list)    # new turns, shown by their span's opening line and facts
+    folded: list[int] = Field(default_factory=list)      # new turns, folded out of view
+    lowered: list[int] = Field(default_factory=list)     # turns condensed earlier, now shown with less detail
+    raised: list[int] = Field(default_factory=list)      # turns condensed earlier, now shown with more detail
+
+    @property
+    def taken(self) -> list[int]:
+        """Every turn the cut took, at whichever level."""
+        return sorted(self.kept + self.compacted + self.archived + self.folded)
 
 
 class AbandonedCut(BaseModel):

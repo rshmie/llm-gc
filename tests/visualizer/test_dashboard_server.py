@@ -188,7 +188,8 @@ class TestRunGcNow:
         assert response.json()["tokens_after"] < response.json()["tokens_before"]
         assert service.session_manager.store.get("s").snapshot.cut_count == 1
         outcome = response.json()["outcome"]
-        assert outcome["quoted"] + outcome["summarised"] + outcome["archived"] > 0, "it says where the turns went"
+        assert outcome["kept"] + outcome["compacted"] + outcome["archived"] + outcome["folded"], \
+            "it names where the turns went"
 
     def test_it_is_refused_without_the_action_header(self):
         """Another site's page can make the browser send a plain POST to localhost;

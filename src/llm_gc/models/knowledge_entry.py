@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from typing import Literal
 
 class KnowledgeType(Enum):
     """Semantic classification of extracted knowledge."""
@@ -22,7 +23,9 @@ class KnowledgeEntry:
 
     Read from the turn's own words when its span is made, and kept for the life of
     the session. Immutable - supersession creates a new copy via
-    dataclasses.replace(). `message_turn` is the turn it was read from.
+    dataclasses.replace(). `message_turn` is the turn it was read from, and
+    `speaker` who stated it: a value the assistant states never replaces one the
+    user stated (see `file_knowledge`). None when the reader did not say.
     """
     message_turn: int
     content: str
@@ -30,6 +33,7 @@ class KnowledgeEntry:
     knowledge_type: KnowledgeType
     knowledge_status: KnowledgeStatus = KnowledgeStatus.ACTIVE
     created_at: datetime = field(default_factory=datetime.now)
+    speaker: Literal["user", "assistant"] | None = None
 
     @property
     def can_supersede(self) -> bool:

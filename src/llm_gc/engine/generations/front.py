@@ -76,6 +76,7 @@ class Front:
     message: Message
     entries: tuple[tuple[Span, str], ...]   # every span with lines of its own, and exactly those lines
     facts: tuple[KnowledgeEntry, ...]       # the facts those lines carry
+    folded: tuple[tuple[tuple[Span, ...], str], ...] = ()   # each run of folded spans, and the one line it shares
 
 
 def span_text(span: Span, annotations: Annotations) -> str:
@@ -97,13 +98,6 @@ def span_text(span: Span, annotations: Annotations) -> str:
         lines = [_heading(ARCHIVED_PREFIX, span, annotations.facts)]
     lines += [_replaced_note(old, new) for old, new in annotations.replaced]
     return "\n".join(lines)
-
-
-def stated_text(span: Span) -> str:
-    """What a kept or compacted span says, without the front's markers: for a person to read."""
-    if span.level is DetailLevel.COMPACTED and span.summary is not None:
-        return span.summary_text if span.summary_text is not None else span.summary.content
-    return "\n".join(turn.content for turn in span.turns)
 
 
 def folded_line(first_turn: int, last_turn: int, spans: int) -> str:
@@ -133,11 +127,14 @@ def render_front(old: Sequence[Span], knowledge: Sequence[KnowledgeEntry]) -> Fr
     lines: list[str] = []
     entries: list[tuple[Span, str]] = []
     carried: list[KnowledgeEntry] = []
+    folded_runs: list[tuple[tuple[Span, ...], str]] = []
     for folded, run in groupby(sorted(old, key=lambda span: span.first_turn),
                                key=lambda span: span.level is DetailLevel.OUT_OF_VIEW):
         spans = list(run)
         if folded:
-            lines.append(folded_line(spans[0].first_turn, spans[-1].turns[-1].turn_index, len(spans)))
+            line = folded_line(spans[0].first_turn, spans[-1].turns[-1].turn_index, len(spans))
+            lines.append(line)
+            folded_runs.append((tuple(spans), line))
             continue
         for span in spans:
             annotations = index.for_span(span)
@@ -151,7 +148,7 @@ def render_front(old: Sequence[Span], knowledge: Sequence[KnowledgeEntry]) -> Fr
 
     content = f"{FRONT_HEADER}\n\n{CONDENSED_HEADER}\n" + "\n".join(lines)
     message = Message(role="user", content=content, token_count=count_tokens(content), turn_index=-1)
-    return Front(message=message, entries=tuple(entries), facts=tuple(carried))
+    return Front(message=message, entries=tuple(entries), facts=tuple(carried), folded=tuple(folded_runs))
 
 
 def _heading(prefix: str, span: Span, facts: Iterable[KnowledgeEntry]) -> str:

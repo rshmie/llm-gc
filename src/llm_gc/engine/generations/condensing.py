@@ -10,8 +10,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
-from llm_gc.engine.cut_point import tool_result_ids
 from llm_gc.models import KnowledgeEntry, Message
+from llm_gc.models.message import tool_result_ids
 
 # An exchange larger than this is split between tool rounds, so one long agentic
 # exchange becomes several summaries rather than a single call over all of it.

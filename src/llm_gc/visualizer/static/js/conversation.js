@@ -453,6 +453,11 @@ const factStatus = (fact) => fact.status === "superseded"
   : fact.sent ? h("span", { class: "fact-status" }, h("span", { class: "st good" }, "✓ "), "on its line")
   : fact.span_level === "kept" ? h("span", { class: "fact-status" }, h("span", { class: "st good" }, "✓ "), "in its words")
   : h("span", { class: "fact-status" }, h("span", { class: "st warn" }, "⚠ "), "not sent");
+// Who stated a fact: the user's decisions are theirs to change, an assistant's value is a recommendation.
+const WHO = { user: "you", assistant: "AI" };
+const said = (turn, speaker) => `message ${turn}${WHO[speaker] ? ` · ${WHO[speaker]}` : ""}`;
+const whoTitle = (fact) => fact.speaker === "user" ? `You said this, in message ${fact.turn}.`
+  : fact.speaker === "assistant" ? `The assistant said this, in message ${fact.turn}: a recommendation, which never replaces a decision of yours.` : null;
 // A fact read from a statement that names no topic, like "we decided to ship on Friday".
 const topicOf = (fact) => fact.topic === "general" ? "no topic" : fact.topic;
 
@@ -464,8 +469,9 @@ export function factRow(fact, { onclick = null } = {}) {
     h("span", { class: "fact-what" }, replaced
       ? [h("div", { class: "was" }, marked(fact.content)), h("div", { class: "now" }, h("span", { class: "now-label" }, "now: "), marked(fact.superseded_by ?? ""))]
       : marked(fact.content)),
-    h("span", { class: "fact-meta" }, h("span", { class: "num" }, replaced && fact.superseded_by_turn !== null
-      ? `message ${fact.turn} → ${fact.superseded_by_turn}` : `message ${fact.turn}`), replaced ? null : factStatus(fact)));
+    h("span", { class: "fact-meta", title: replaced ? null : whoTitle(fact) }, h("span", { class: "num" }, replaced && fact.superseded_by_turn !== null
+      ? `${said(fact.turn, fact.speaker)} → ${said(fact.superseded_by_turn, fact.superseded_by_speaker)}` : said(fact.turn, fact.speaker)),
+      replaced ? null : factStatus(fact)));
 }
 
 function factChip(fact) {
@@ -689,8 +695,8 @@ export function renderMemory(k) {
       facts: active.filter((f) => !f.sent && f.span_level !== "kept"),
       note: "Their exchanges are folded to keep the recap within its budget, so the model can't see these." },
     { id: "replaced", title: "Replaced later", icon: h("span", { class: "st" }, "↺"), facts: k.facts.filter((f) => f.status === "superseded"),
-      note: "The recap notes each replacement beside the exchange that said the old value, so the model reads that value as no longer current. Check each against what was said." },
-    { id: "all", title: "Every current fact", icon: null, facts: active, folds: true,
+      note: "The recap notes each replacement beside the exchange that said the old value, so the model reads that value as no longer current. Only your own messages replace a decision you made." },
+    { id: "all", title: "Every current fact", icon: null, facts: active,
       note: "A compacted or archived exchange shows its facts on its line in the recap; a kept one has them in its words." },
   ];
   if (!k.facts.length) {
@@ -707,15 +713,12 @@ export function renderMemory(k) {
       const open = ui.open.has(`facts-${g.id}`) || !!query();
       const toggle = (label) => h("button", { class: "link-btn show-all", type: "button",
         onclick: () => { if (open) ui.open.delete(`facts-${g.id}`); else ui.open.add(`facts-${g.id}`); renderMemory(k); } }, label);
-      // A short list is shown whole; "Every fact" folds only when it is long, since most are on the page already.
-      const folds = g.folds && shown.length > FACTS_SHOWN;
-      const list = folds && !open ? [] : open ? shown : shown.slice(0, FACTS_SHOWN);
+      const list = open ? shown : shown.slice(0, FACTS_SHOWN);
       return h("section", { id: `memory-${g.id}` },
         h("h3", {}, g.icon, g.title, h("span", { class: "count" }, `· ${shown.length}`)),
         g.note ? h("div", { class: "group-note" }, g.note) : null,
         list.length ? h("div", { class: "list" }, list.map((f) => factRow(f, { onclick: () => jumpTo(f.turn) }))) : null,
-        folds && !open ? toggle(`Show all ${shown.length}`)
-          : shown.length > FACTS_SHOWN && !query() ? toggle(open ? "Show fewer" : `Show all ${shown.length}`) : null);
+        shown.length > FACTS_SHOWN && !query() ? toggle(open ? "Show fewer" : `Show all ${shown.length}`) : null);
     }),
     query() && !k.facts.some(matches) ? h("p", { class: "empty" }, "No fact matches.") : null);
 }

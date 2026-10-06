@@ -126,10 +126,12 @@ class ContextHealthMonitor:
                                      topic_label=None, occurred_at=event.timestamp))
 
     def _on_message_archived(self, event: Event) -> None:
-        message: Message = event.data["message"]
-        self._record_for(event).transitions.append(
-            GenerationTransition(transition_type=TransitionType.ARCHIVED, turn_index=message.turn_index,
-                                 topic_label=None, occurred_at=event.timestamp))
+        """Record a span shown archived or out of view, one transition per turn in it."""
+        transitions = self._record_for(event).transitions
+        for turn_index in event.data["source_turn_indices"]:
+            transitions.append(
+                GenerationTransition(transition_type=TransitionType.ARCHIVED, turn_index=turn_index,
+                                     topic_label=None, occurred_at=event.timestamp))
 
     def _on_knowledge_entry_superseded(self, event: Event) -> None:
         superseded_entries: list[KnowledgeEntry] = event.data["superseded_knowledge_entries"]

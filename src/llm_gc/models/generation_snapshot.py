@@ -24,7 +24,7 @@ class DetailLevel(Enum):
 
     KEPT = "kept"                # the turns, word for word
     COMPACTED = "compacted"      # the span's summary
-    ARCHIVED = "archived"        # only the facts extracted from it
+    ARCHIVED = "archived"        # its opening line and the facts read from it
     OUT_OF_VIEW = "out_of_view"  # folded with its neighbours into one line naming the turns
 
 
@@ -215,11 +215,19 @@ def file_knowledge(
 
     Sequential, so an entry filed earlier in the same batch can be superseded by a
     later one: the conversation changed its mind, and the later statement wins.
-    Topic-less entries supersede nothing - see `KnowledgeEntry.can_supersede`.
+    Topic-less entries supersede nothing - see `KnowledgeEntry.can_supersede`. An
+    entry that only restates an active one - same topic, same value - is not filed:
+    nothing changed, and filing it would tell the model the value was replaced by itself.
+    A value the assistant states on a topic the user decided is not filed: only the
+    user changes their own decision, and a labelled recommendation beside an
+    unlabelled decision reads as the answer. The recommendation stays in its
+    exchange's words and summary.
     """
     filed = list(knowledge)
     supersessions: list[Supersession] = []
     for new_entry in new_entries:
+        if any(_restates(new_entry, existing) or _contradicts_users_decision(new_entry, existing) for existing in filed):
+            continue
         if new_entry.can_supersede:
             superseded = []
             for i, existing in enumerate(filed):
@@ -230,3 +238,20 @@ def file_knowledge(
                 supersessions.append(Supersession(new_entry=new_entry, superseded=tuple(superseded)))
         filed.append(new_entry)
     return tuple(filed), tuple(supersessions)
+
+
+def _restates(new: KnowledgeEntry, existing: KnowledgeEntry) -> bool:
+    return (existing.knowledge_status is KnowledgeStatus.ACTIVE and existing.topic_label == new.topic_label
+            and _same_value(existing.content, new.content))
+
+
+def _contradicts_users_decision(new: KnowledgeEntry, existing: KnowledgeEntry) -> bool:
+    return (new.speaker == "assistant" and existing.speaker == "user" and new.can_supersede
+            and existing.knowledge_status is KnowledgeStatus.ACTIVE and existing.topic_label == new.topic_label)
+
+
+def _same_value(a: str, b: str) -> bool:
+    """Equal once case, spacing and closing punctuation are set aside: "MySQL 8." restates "mysql 8"."""
+    def plain(value: str) -> str:
+        return " ".join(value.split()).rstrip(".!;,").casefold()
+    return plain(a) == plain(b)

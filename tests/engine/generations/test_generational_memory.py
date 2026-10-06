@@ -3,7 +3,7 @@ import asyncio
 from llm_gc.engine.compaction import NoOpCompactor
 from llm_gc.engine.generations.generational_memory import GenerationalMemory
 from llm_gc.events import EventBus
-from llm_gc.extraction import KnowledgeExtractor
+from llm_gc.extraction import PatternFactReader
 from llm_gc.models import Message
 
 
@@ -13,7 +13,7 @@ def _make_message(content: str, turn_index: int = 1) -> Message:
 
 def _make_generational_memory() -> GenerationalMemory:
     bus = EventBus()
-    return GenerationalMemory(knowledge_extractor=KnowledgeExtractor(),
+    return GenerationalMemory(fact_reader=PatternFactReader(),
                               compactor=NoOpCompactor(event_bus=bus))
 
 

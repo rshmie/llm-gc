@@ -5,15 +5,16 @@ import asyncio
 from hypothesis import given
 from hypothesis import strategies as st
 
-from llm_gc.engine.compaction import LLMCompactor
-from llm_gc.engine.cut_point import tool_result_ids, tool_use_ids
+from llm_gc.engine.compaction import LLMCompactor, NoOpCompactor
 from llm_gc.engine.generations import GenerationalMemory, OpeningWordsIndexWriter
 from llm_gc.engine.generations.condensing import INDEX_LINE_MAX_CHARS, group_exchanges
 from llm_gc.events import EventBus
-from llm_gc.extraction import KnowledgeExtractor
+from llm_gc.extraction import PatternFactReader
 from llm_gc.llm import FakeProvider, LLMResponse, StopReason
 from llm_gc.exceptions import LLMTimeoutError
-from llm_gc.models import Message
+from llm_gc.models import KnowledgeEntry, Message
+from llm_gc.models.knowledge_entry import KnowledgeType
+from llm_gc.models.message import tool_result_ids, tool_use_ids
 from llm_gc.utils import count_tokens
 
 
@@ -110,7 +111,7 @@ _SUMMARY = LLMResponse(text="They settled on mysql for the database after a long
 def _memory(responses) -> tuple[GenerationalMemory, FakeProvider]:
     bus = EventBus()
     provider = FakeProvider(responses=responses)
-    return GenerationalMemory(knowledge_extractor=KnowledgeExtractor(),
+    return GenerationalMemory(fact_reader=PatternFactReader(),
                               compactor=LLMCompactor(event_bus=bus, provider=provider)), provider
 
 
@@ -118,7 +119,8 @@ def _said(index: int, role: str, text: str) -> Message:
     return Message(role=role, content=text, token_count=count_tokens(text), turn_index=index)
 
 
-_LONG_ANSWER = ("The database is postgres. " + "We compared replication, failover and the cost of each option. " * 12)
+_LONG_ANSWER = "We compared replication, failover and the cost of each option. " * 12
+_STATED = "The database is postgres. Which cache should sit in front of it?"
 
 
 class TestCondensing:
@@ -126,12 +128,11 @@ class TestCondensing:
         """The summary says mysql; the turns said postgres. A fact read second-hand
         would put words in the conversation's mouth."""
         memory, _ = _memory([_SUMMARY])
-        [span] = asyncio.run(memory.condense([_said(0, "user", "Which database?"),
-                                              _said(1, "assistant", _LONG_ANSWER)]))
+        [span] = asyncio.run(memory.condense([_said(0, "user", _STATED), _said(1, "assistant", _LONG_ANSWER)]))
 
         assert span.summary is not None
         assert [(fact.topic_label, fact.content) for fact in span.facts] == [("database", "postgres")]
-        assert span.facts[0].message_turn == 1, "a fact names the turn it was read from"
+        assert span.facts[0].message_turn == 0, "a fact names the turn it was read from"
 
     def test_nothing_is_kept_as_raw_text(self):
         """The span keeps the turns themselves, so text extraction cannot read is not copied anywhere."""
@@ -150,13 +151,12 @@ class TestCondensing:
 
     def test_a_failed_summary_is_recorded_and_the_span_is_still_made(self):
         memory, _ = _memory([LLMTimeoutError("the provider did not answer in time")])
-        [span] = asyncio.run(memory.condense([_said(0, "user", "Which database?"),
-                                              _said(1, "assistant", _LONG_ANSWER)]))
+        [span] = asyncio.run(memory.condense([_said(0, "user", _STATED), _said(1, "assistant", _LONG_ANSWER)]))
 
         assert span.summary is None
         assert isinstance(span.summary_error, LLMTimeoutError)
         assert span.facts, "the facts do not depend on the summary"
-        assert span.index_line == "Which database?"
+        assert span.index_line == "The database is postgres."
 
     def test_each_span_gets_its_own_summary(self):
         memory, provider = _memory([_SUMMARY, _SUMMARY])
@@ -166,3 +166,41 @@ class TestCondensing:
         assert [[turn.turn_index for turn in span.turns] for span in spans] == [[0, 1], [2, 3]]
         assert len(provider.calls) == 2
         assert all(span.summary is not None for span in spans)
+
+
+class _RecordingReader:
+    """Answers with one fact per span, on its last turn, and records what it was asked."""
+
+    def __init__(self) -> None:
+        self.asked: list[tuple[list[list[int]], list[str]]] = []
+
+    async def read(self, spans, on_record):
+        self.asked.append(([[turn.turn_index for turn in span] for span in spans],
+                           [f"{fact.topic_label}: {fact.content}" for fact in on_record]))
+        return [KnowledgeEntry(message_turn=span[-1].turn_index, content=f"value {span[-1].turn_index}",
+                               topic_label=f"topic {span[-1].turn_index}", knowledge_type=KnowledgeType.FACT)
+                for span in spans]
+
+
+class TestFactsAreReadOncePerCollection:
+    def test_one_read_covers_every_span_and_sees_the_facts_on_record(self):
+        """A change of plan in one span must replace a value stated in another, or
+        before this collection: the reader sees them all at once."""
+        reader = _RecordingReader()
+        memory = GenerationalMemory(fact_reader=reader, compactor=NoOpCompactor(event_bus=EventBus()))
+        on_record = [KnowledgeEntry(message_turn=0, content="Google Cloud", topic_label="cloud",
+                                    knowledge_type=KnowledgeType.DECISION)]
+
+        spans = asyncio.run(memory.condense([_said(4, "user", "Which database?"), _said(5, "assistant", "Postgres."),
+                                             _said(6, "user", "And the cache?"), _said(7, "assistant", "Redis.")],
+                                            on_record))
+
+        assert reader.asked == [([[4, 5], [6, 7]], ["cloud: Google Cloud"])]
+        assert [[fact.message_turn for fact in span.facts] for span in spans] == [[5], [7]], "each fact on its span"
+
+    def test_no_turns_means_no_read(self):
+        reader = _RecordingReader()
+        memory = GenerationalMemory(fact_reader=reader, compactor=NoOpCompactor(event_bus=EventBus()))
+
+        assert asyncio.run(memory.condense([])) == []
+        assert reader.asked == []

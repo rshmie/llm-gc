@@ -3,7 +3,8 @@
 from hypothesis import given
 from hypothesis import strategies as st
 
-from llm_gc.engine.cut_point import find_cut_point, tool_result_ids, tool_use_ids
+from llm_gc.engine.cut_point import find_cut_point
+from llm_gc.models.message import tool_result_ids, tool_use_ids
 from llm_gc.models import Message
 
 
