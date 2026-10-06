@@ -21,6 +21,8 @@ export function showTooltip(event, title, ...rows) {
 }
 export const hideTooltip = () => { $("tooltip").hidden = true; };
 export const tipQuote = (text) => text ? h("div", { class: "tip-quote" }, text) : null;
+// What clicking does, as the last line of a tooltip.
+export const tipAction = (text) => h("div", { class: "tip-action" }, text, h("span", { class: "tip-arrow", "aria-hidden": "true" }, " →"));
 export const hoverTip = (title, ...rows) => ({ onpointerenter: (e) => showTooltip(e, title, ...rows), onpointerleave: hideTooltip });
 
 export function info(term) {

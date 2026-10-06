@@ -547,10 +547,15 @@ tr.cut td { font-weight: 600; }
 @media (prefers-reduced-motion: reduce) { .cleanup-toast { transition: none; } }
 @media (max-width: 640px) { .toast-stack { left: 16px; right: 16px; align-items: stretch; } .cleanup-toast { max-width: none; } }
 
-#tooltip { position: fixed; z-index: 40; pointer-events: none; max-width: 340px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-size: 12.5px; line-height: 1.45; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18); }
+#tooltip { position: fixed; z-index: 40; pointer-events: none; max-width: 360px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-size: 12.5px; line-height: 1.45; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18); }
 #tooltip .tip-title { font-weight: 650; margin-bottom: 3px; display: flex; gap: 6px; align-items: center; }
 #tooltip .tip-row { color: var(--ink-2); }
-#tooltip .tip-quote { color: var(--ink-3); font-style: italic; margin-top: 3px; }
+#tooltip .tip-quote { color: var(--ink-3); font-style: italic; margin-top: 6px; }
+/* A level's badge, tinted with the level's own colour so compacted, kept and archived read apart at a glance. */
+#tooltip .tip-level { color: var(--ink-2); margin: 2px 0 4px; }
+#tooltip .tip-badge { display: inline-block; padding: 0 7px; margin-right: 2px; border-radius: 6px; font-size: 11.5px; font-weight: 650; color: var(--ink); background: color-mix(in srgb, var(--f) 26%, transparent); border: 1px solid color-mix(in srgb, var(--f) 60%, transparent); }
+#tooltip .tip-action { color: var(--ink-2); font-weight: 600; margin-top: 8px; }
+#tooltip .tip-arrow { color: var(--accent); }
 #tooltip .tip-figure { display: flex; justify-content: space-between; gap: 14px; }
 #tooltip .tip-figure b { color: var(--ink); font-variant-numeric: tabular-nums; }
 

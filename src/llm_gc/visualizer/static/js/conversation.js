@@ -6,7 +6,7 @@
 import { BECOMES, CATS, CLAMP_CHARS, EARLIER_SHOWN, FACTS_SHOWN, GLOSSARY, HEIGHT, MIN_BAR_PX, ORDER, RUN_MIN, FACT_STATUS, categoryOf, describeOutcome, swatch } from "./vocabulary.js";
 import { $, agoTs, countEl, fill, fmt, h, meterBar, percent, plural, ranges, reducedMotion, setChildren, storeGet, storeSet, svg } from "./dom.js";
 import { collecting, countCats, factsByTurn, has, instructionTokens, marked, newestReply, pendingTurns, preview, query, recapLimit, state, turnMatches, ui, writtenTokens } from "./state.js";
-import { hideTooltip, info, showTooltip, tipQuote, hoverTip } from "./tooltip.js";
+import { hideTooltip, info, showTooltip, tipAction, tipQuote, hoverTip } from "./tooltip.js";
 import { offerReturn, showTab } from "./shell.js";
 import { openCard, showWhy, whyText } from "./engine.js";
 
@@ -30,7 +30,11 @@ function instructionsTag(turn) {
 }
 const changes = (n) => n === 1 ? "1 message changes" : `${fmt(n)} messages change`;
 const changing = (k) => k.turns.filter((t) => t.becomes).length;
+const capitalised = (text) => text[0].toUpperCase() + text.slice(1);
 export const messagesLabel = (turns) => turns.length === 1 ? `message ${turns[0]}` : `messages ${ranges(turns)}`;
+// A level as a tooltip names it: a badge in the level's colour, then what the model reads for it.
+const levelBadge = (cat) => h("span", { class: `tip-badge f-${cat}` }, CATS[cat].label);
+const levelLine = (cat) => h("div", { class: "tip-level" }, levelBadge(cat), ` ${capitalised(CATS[cat].desc)}.`);
 // The colour of a level; out of view is drawn as a warning outline rather than a fill.
 const levelColour = (cat) => cat === "out_of_view" ? "var(--warn)" : `var(--fid-${cat})`;
 
@@ -220,10 +224,10 @@ export function renderMap(k) {
       : `Message ${x.i}, ${speakerOf(x.turn)}, ${size}: ${CATS[x.cat].label}`);
     el._tip = x.pending
       ? [`Message ${x.i} · newest request · ${size}`, GLOSSARY.newest[1], tipQuote(preview(x.text))]
-      : [[swatch(x.cat), `Message ${x.i} · ${speakerOf(x.turn)} · ${size}`], `${CATS[x.cat].label}: ${CATS[x.cat].desc}`,
+      : [[swatch(x.cat), `Message ${x.i} · ${speakerOf(x.turn)} · ${size}`], levelLine(x.cat),
         span ? `Its exchange: ${messagesLabel(span.turns)}` : null,
-        t.becomes ? `Next collection: ${BECOMES[t.becomes]}. ${whyText(span || t)}` : null,
-        tipQuote(preview(x.text)), h("div", { class: "tip-row muted" }, "Click to open it")];
+        t.becomes ? h("div", { class: "tip-level" }, "Next collection: ", levelBadge(t.becomes), ` ${whyText(span || t)}`) : null,
+        tipQuote(preview(x.text)), tipAction("Click to open")];
     return el._cell;
   });
   reconcile(barsHost, cells);
@@ -502,7 +506,7 @@ function factChip(fact) {
 // `item` is a recent message, or an exchange already collected.
 export function nextTag(item, turnIndex) {
   return h("button", { class: "tag next why", type: "button", "aria-label": `Next collection: ${BECOMES[item.becomes]}. Show why on the Engine tab`,
-    onpointerenter: (e) => showTooltip(e, `Why ${BECOMES[item.becomes]}?`, whyText(item), h("div", { class: "tip-row muted" }, "Click to see its score on the Engine tab")),
+    onpointerenter: (e) => showTooltip(e, `Why ${BECOMES[item.becomes]}?`, whyText(item), tipAction("Click to see its score on the Engine tab")),
     onpointerleave: hideTooltip, onclick: () => { hideTooltip(); showWhy(turnIndex); } },
     h("span", { class: `swatch f-${item.becomes}` }), `next: ${BECOMES[item.becomes]}`);
 }
@@ -733,7 +737,6 @@ const lookFirst = (a, b) => reaches(a) - reaches(b) || b.turn - a.turn;
 const changedAt = (fact) => fact.superseded_by_turn ?? fact.turn;
 // Whether the engine reads facts from the assistant's turns; without a model it reads only the user's.
 const readsAssistant = () => !state.config || !state.config.facts_read_from || state.config.facts_read_from.includes("assistant");
-const capitalised = (text) => text[0].toUpperCase() + text.slice(1);
 
 // Every fact on record by who stated it, with how it reaches the model, then each value replaced.
 // The head - the counts, how far the record reaches, and any warning - stays in view when the card is
