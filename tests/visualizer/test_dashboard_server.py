@@ -239,6 +239,37 @@ class TestTranscript:
 
         assert [t["instruction_tokens"] for t in transcript["turns"]] == [count_tokens(rewritten), 0]
 
+    def test_the_newest_reply_is_shown_until_the_next_request_records_it(self):
+        service, monitor = _engine()
+        _converse(service, "s", 2)
+        recorder = TranscriptRecorder()
+        asked = Message(role="user", content="which database?", token_count=3, turn_index=2)
+        recorder.record("s", [Message(role="user", content="a", token_count=1, turn_index=0),
+                              Message(role="assistant", content="b", token_count=1, turn_index=1), asked])
+
+        recorder.record_reply("s", asked, "Postgres.")
+        client = _client(service, monitor, transcripts=recorder)
+        reply = client.get("/api/sessions/s/transcript").json()["reply"]
+        assert (reply["turn_index"], reply["role"], reply["text"]) == (3, "assistant", "Postgres.")
+        # It arrives without changing the session's version, so the polled list says it is there.
+        assert client.get("/api/overview").json()["sessions"][0]["newest_reply"] == 3
+
+        recorder.record("s", [Message(role="user", content="a", token_count=1, turn_index=0)])
+        assert recorder.reply("s") is None, "the next request carries it, or the client moved on without it"
+
+    def test_a_late_reply_to_an_earlier_message_is_not_shown_under_the_newest(self):
+        """A client can have several requests in flight; the slower one finishing last
+        put its answer under a question it did not answer."""
+        recorder = TranscriptRecorder()
+        earlier = Message(role="user", content="which database?", token_count=3, turn_index=0)
+        recorder.record("s", [earlier, Message(role="assistant", content="Postgres.", token_count=2, turn_index=1),
+                              Message(role="user", content="and the cache?", token_count=4, turn_index=2)])
+
+        recorder.record_reply("s", earlier, "Postgres.")
+        recorder.record_reply("s", Message(role="user", content="suggest a prompt", token_count=3, turn_index=2), "x")
+
+        assert recorder.reply("s") is None
+
     def test_tokens_are_compared_over_the_same_turns(self):
         """The client's latest message reaches the session only with the next request.
         Comparing the whole transcript with the context the model is sent showed a
@@ -259,7 +290,7 @@ class TestTranscript:
         service, monitor = _engine()
         _converse(service, "s", 3)
         transcript = _client(service, monitor).get("/api/sessions/s/transcript").json()
-        assert transcript == {"captured": False, "turns": [], "total_tokens": 0, "recorded_tokens": 0}
+        assert transcript == {"captured": False, "turns": [], "total_tokens": 0, "recorded_tokens": 0, "reply": None}
 
     def test_a_closed_sessions_copy_is_dropped(self):
         service, monitor = _engine()

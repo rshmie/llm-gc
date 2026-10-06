@@ -194,6 +194,52 @@ def _block_as_text(block: object) -> str | None:
     return _ATTACHMENTS.get(kind) if isinstance(kind, str) else None
 
 
+def reply_text(raw: bytes, *, streamed: bool) -> str | None:
+    """A finished reply's text, in the form the turn will be read in once a later request carries it.
+
+    For showing only, never for the record. None when the reply did not finish, or
+    is not one: an error body, or a stream that stopped before its end.
+    """
+    try:
+        blocks = _streamed_blocks(raw) if streamed else _answered_blocks(raw)
+    except (ValueError, KeyError, TypeError, AttributeError):
+        # Malformed or of a shape this reader does not know: nothing is shown, and nothing else changes.
+        return None
+    return _content_as_text(blocks, -1) if blocks is not None else None
+
+
+def _answered_blocks(raw: bytes) -> list[Any] | None:
+    body = json.loads(raw)
+    finished = isinstance(body, dict) and body.get("type") == "message" and body.get("stop_reason")
+    return body["content"] if finished and isinstance(body.get("content"), list) else None
+
+
+def _streamed_blocks(raw: bytes) -> list[Any] | None:
+    """The content blocks a server-sent event stream built, if it reached `message_stop`."""
+    blocks: dict[int, dict[str, Any]] = {}
+    partial_inputs: dict[int, list[str]] = {}
+    for line in raw.decode("utf-8").splitlines():
+        if not line.startswith("data:"):
+            continue
+        event = json.loads(line[len("data:"):])
+        kind, index = event.get("type"), event.get("index")
+        if kind == "content_block_start":
+            blocks[index] = dict(event["content_block"])
+        elif kind == "content_block_delta":
+            delta = event["delta"]
+            if delta.get("type") == "text_delta":
+                block = blocks.setdefault(index, {"type": "text"})
+                block["text"] = block.get("text", "") + delta["text"]
+            elif delta.get("type") == "input_json_delta":
+                partial_inputs.setdefault(index, []).append(delta["partial_json"])
+        elif kind == "message_stop":
+            # A tool call's input arrives as pieces of JSON text, whole only at the end.
+            for at, pieces in partial_inputs.items():
+                blocks[at]["input"] = json.loads("".join(pieces) or "{}")
+            return [blocks[at] for at in sorted(blocks)]
+    return None
+
+
 def rewrite_messages(payload: dict[str, Any], messages: list[Message], strip_thinking_before: int = 0,
                      instructions: Sequence[Instruction] = ()) -> dict[str, Any]:
     """Return a copy of the body with its conversation replaced.

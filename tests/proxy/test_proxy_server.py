@@ -58,7 +58,7 @@ def _engine(**config_overrides):
     return service, service.generational_memory
 
 
-def _proxy(upstream=None, *, gc_service=None, **engine_kwargs):
+def _proxy(upstream=None, *, gc_service=None, on_reply=None, **engine_kwargs):
     """A proxy whose upstream is a scripted handler, with aging run synchronously.
 
     `schedule` is injected to run the post-response work to completion inline.
@@ -80,6 +80,7 @@ def _proxy(upstream=None, *, gc_service=None, **engine_kwargs):
         schedule=lambda coro: asyncio.get_event_loop().run_until_complete(coro)
         if False
         else _run_now(coro),
+        on_reply=on_reply,
     )
     app.state.seen = seen
     return TestClient(app), service, memory, seen
@@ -747,6 +748,43 @@ class TestStreaming:
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("text/event-stream")
         assert response.content == body
+
+    def test_a_finished_reply_is_shown_but_not_recorded(self):
+        """The dashboard showed the newest message without its answer until the user
+        wrote again. The reply is read for showing only; the record still waits for
+        the next request, which says whether the client kept it."""
+        body = _sse("Postgres, ", "partitioned by day.")
+        shown = []
+        client, service, _, _ = _proxy(_streaming_upstream(body), on_reply=lambda *args: shown.append(args))
+        opening = [("user", "we need a database"), ("assistant", "Noted.")]
+
+        response = _post(client, _body(*opening, ("user", "which database?"), stream=True), headers={SESSION_HEADER: "s"})
+
+        assert response.content == body
+        [(session_id, answering, text)] = shown
+        assert (session_id, answering.turn_index, answering.content, text) == (
+            "s", 2, "which database?", "Postgres, partitioned by day.")
+        assert service.session_manager.store.get("s").snapshot.recorded_turn_count == 2
+
+    def test_a_reply_cut_off_or_refused_is_not_shown(self):
+        shown = []
+        cut_off, _, _, _ = _proxy(_streaming_upstream(_sse("Postg", stop=False)), on_reply=lambda *a: shown.append(a))
+        _post(cut_off, _body(("user", "a"), ("assistant", "b"), ("user", "c"), stream=True))
+        refused, _, _, _ = _proxy(lambda request: httpx2.Response(529, json={"type": "error"}),
+                                  on_reply=lambda *a: shown.append(a))
+        _post(refused, _body(("user", "a"), ("assistant", "b"), ("user", "c")))
+
+        assert shown == []
+
+    def test_a_failing_reply_observer_never_reaches_the_client(self):
+        def broken(*_):
+            raise RuntimeError("dashboard bug")
+        body = _sse("Postgres.")
+        client, _, _, _ = _proxy(_streaming_upstream(body), on_reply=broken)
+        answered, _, _, _ = _proxy(on_reply=broken)
+
+        assert _post(client, _body(("user", "a"), ("assistant", "b"), ("user", "c"), stream=True)).content == body
+        assert _post(answered, _body(("user", "a"), ("assistant", "b"), ("user", "c"))).json() == UPSTREAM_OK
 
     def test_a_streamed_reply_is_recorded_from_the_next_request(self):
         """The defect this suite once existed for: a streamed reply was never

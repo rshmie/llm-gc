@@ -5,7 +5,7 @@
 
 import { BECOMES, CATS, CLAMP_CHARS, EARLIER_SHOWN, FACTS_SHOWN, GLOSSARY, HEIGHT, MIN_BAR_PX, ORDER, RUN_MIN, categoryOf, describeOutcome, swatch } from "./vocabulary.js";
 import { $, agoTs, countEl, fill, fmt, h, meterBar, percent, plural, ranges, reducedMotion, setChildren, storeGet, storeSet, svg } from "./dom.js";
-import { collecting, countCats, factsByTurn, has, instructionTokens, marked, pendingTurns, preview, query, recapLimit, state, turnMatches, ui, writtenTokens } from "./state.js";
+import { collecting, countCats, factsByTurn, has, instructionTokens, marked, newestReply, pendingTurns, preview, query, recapLimit, state, turnMatches, ui, writtenTokens } from "./state.js";
 import { hideTooltip, info, showTooltip, tipQuote, hoverTip } from "./tooltip.js";
 import { offerReturn, showTab } from "./shell.js";
 import { openCard, showWhy, whyText } from "./engine.js";
@@ -314,7 +314,7 @@ export function renderMessages() {
 
 export function renderChips(k) {
   const counts = countCats(k);
-  const pending = pendingTurns(k).length;
+  const pending = pendingTurns(k).length + (newestReply() ? 1 : 0);
   const nextCount = changing(k);
   const chip = (key, label, count, mark) => h("button", { class: "chip-btn", type: "button", "aria-pressed": String(ui.filter === key),
     ...(GLOSSARY[key] ? hoverTip(GLOSSARY[key][0], GLOSSARY[key][1]) : {}),
@@ -343,16 +343,19 @@ export function buildRows(k) {
   }
   for (const turn of k.turns) if (turn.fidelity === "verbatim") rows.push({ kind: "turn", cat: "verbatim", turn, turns: [turn] });
   for (const pending of pendingTurns(k)) rows.push({ kind: "pending", cat: "verbatim", pending, turns: [] });
+  const reply = newestReply();
+  if (reply) rows.push({ kind: "reply", cat: "verbatim", pending: reply, turns: [] });
   return rows;
 }
 
 export function rowVisible(row, facts) {
   const f = ui.filter;
-  // The newest message is not recorded yet, so it belongs to no category but "all".
-  const passes = f === "all" || (f === "next" ? row.turns.some((t) => t.becomes) : row.kind !== "pending" && row.cat === f);
+  // The newest message and its reply are not recorded yet, so they belong to no category but "all".
+  const unrecorded = row.kind === "pending" || row.kind === "reply";
+  const passes = f === "all" || (f === "next" ? row.turns.some((t) => t.becomes) : !unrecorded && row.cat === f);
   if (!passes) return false;
   if (!query()) return true;
-  if (row.kind === "pending") return has(row.pending.text);
+  if (unrecorded) return has(row.pending.text);
   const line = row.kind === "span" ? row.span.text : row.kind === "folded" ? row.spans[0].text : null;
   return has(line) || row.turns.some((t) => turnMatches(t, facts));
 }
@@ -373,7 +376,7 @@ export function foldRuns(rows) {
 }
 
 // How many original messages a row stands for.
-export const rowMessageCount = (row) => row.kind === "pending" ? 1 : row.turns.length;
+export const rowMessageCount = (row) => row.kind === "pending" || row.kind === "reply" ? 1 : row.turns.length;
 
 const isQueued = (row) => row.kind === "turn" && !!row.turn.becomes;
 const RECAP_ROWS_SHOWN = 3;   // recap rows shown before "Show N older messages"
@@ -439,7 +442,7 @@ export function renderTimeline(k) {
 
 function rowElement(row, facts) {
   return row.kind === "run" ? runRow(row) : row.kind === "span" ? spanRow(row) : row.kind === "folded" ? foldedRow(row, facts)
-    : row.kind === "pending" ? pendingRow(row.pending) : turnRow(row.turn);
+    : row.kind === "pending" ? pendingRow(row.pending) : row.kind === "reply" ? replyRow(row.pending) : turnRow(row.turn);
 }
 
 export function textBlock(text, { faded = false, key = null } = {}) {
@@ -582,6 +585,17 @@ export function pendingRow(p) {
       textBlock(p.text, { key: `t-${p.turn_index}` })));
 }
 
+// The reply as it reached the client. Shown, never recorded from here: the next request says whether the client kept it.
+function replyRow(r) {
+  return h("article", { class: "msg pending", id: `turn-${r.turn_index}`, "data-turns": String(r.turn_index) },
+    h("div", { class: "msg-no" }, r.turn_index), h("div", { class: "av assistant", "aria-hidden": "true" }, "AI"),
+    h("div", { class: "msg-body" },
+      h("div", { class: "msg-head" }, h("span", { class: "who" }, "Newest reply"),
+        h("span", { class: "muted" }, "not in the conversation yet"), info("reply"),
+        h("span", { class: "tok" }, plural(r.tokens, "token"))),
+      textBlock(r.text, { key: `t-${r.turn_index}` })));
+}
+
 export function runRow(run) {
   const first = run.turns[0].turn_index, last = run.turns.at(-1).turn_index;
   const key = `run-${first}`;
@@ -607,7 +621,7 @@ export function jumpTo(turnIndex) {
   if (!k) return;
   const facts = factsByTurn(k);
   // Make sure the message is on the page: clear a filter that hides it, open what folds it.
-  const row = buildRows(k).find((r) => r.turns.some((t) => t.turn_index === turnIndex) || (r.kind === "pending" && r.pending.turn_index === turnIndex));
+  const row = buildRows(k).find((r) => r.turns.some((t) => t.turn_index === turnIndex) || (r.pending && r.pending.turn_index === turnIndex));
   if (row && !rowVisible(row, facts)) { ui.filter = "all"; ui.query = ""; $("search").value = ""; }
   ui.earlierOpen = true;
   ui.listOpen = true;

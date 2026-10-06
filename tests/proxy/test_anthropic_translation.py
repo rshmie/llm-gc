@@ -1,5 +1,7 @@
 """Reading a request's conversation and writing it back: the client's instructions are never condensed."""
 
+import json
+
 import pytest
 
 from llm_gc.engine.generations.front import Annotations, span_text
@@ -11,6 +13,7 @@ from llm_gc.proxy.anthropic_translation import (
     carry_instructions,
     extract_instructions,
     extract_messages,
+    reply_text,
     rewrite_messages,
 )
 from llm_gc.utils import count_tokens
@@ -98,6 +101,48 @@ class TestToolTurnsAreRead:
 
 
 REMINDER = "<system-reminder>\nContents of CLAUDE.md: use uv, never pip.\n</system-reminder>"
+
+
+def _events(*events: dict) -> bytes:
+    return "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events).encode()
+
+
+STREAMED_TOOL_ROUND = (
+    {"type": "message_start", "message": {"id": "m", "role": "assistant", "content": []}},
+    {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}},
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "The suite is in tests/."}},
+    {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
+    {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "Running "}},
+    {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "them."}},
+    {"type": "content_block_start", "index": 2,
+     "content_block": {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {}}},
+    {"type": "content_block_delta", "index": 2, "delta": {"type": "input_json_delta", "partial_json": '{"command": '}},
+    {"type": "content_block_delta", "index": 2, "delta": {"type": "input_json_delta", "partial_json": '"pytest -q"}'}},
+    {"type": "message_delta", "delta": {"stop_reason": "tool_use"}},
+)
+
+
+class TestTheNewestReplyIsRead:
+    """Shown on the dashboard before the next request records it, so it must read as
+    the recorded turn will: a reply shown one way and recorded another is two answers."""
+
+    def test_a_streamed_reply_reads_as_its_recorded_turn_will(self):
+        streamed = reply_text(_events(*STREAMED_TOOL_ROUND, {"type": "message_stop"}), streamed=True)
+        assert streamed == extract_messages(TOOL_ROUND)[1].content
+
+    def test_a_stream_that_stopped_before_its_end_is_not_a_reply(self):
+        assert reply_text(_events(*STREAMED_TOOL_ROUND), streamed=True) is None
+
+    def test_an_answer_reads_as_its_recorded_turn_will(self):
+        body = {"type": "message", "role": "assistant", "stop_reason": "tool_use",
+                "content": TOOL_ROUND["messages"][1]["content"]}
+        assert reply_text(json.dumps(body).encode(), streamed=False) == extract_messages(TOOL_ROUND)[1].content
+
+    def test_an_error_or_garbage_is_not_a_reply(self):
+        error = {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
+        assert reply_text(json.dumps(error).encode(), streamed=False) is None
+        assert reply_text(b"not json", streamed=False) is None
+        assert reply_text(b"data: {broken\n\n", streamed=True) is None
 
 
 class TestInstructionsInsideATurn:

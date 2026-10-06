@@ -269,7 +269,8 @@ def serve(args: argparse.Namespace, api_key: str | None) -> None:
     # Transcripts are a second copy of every conversation, so they exist only for the dashboard.
     transcripts = TranscriptRecorder() if args.dashboard else None
     proxy_app = create_app(service, http_client=stub,
-                           on_client_history=transcripts.record if transcripts is not None else None)
+                           on_client_history=transcripts.record if transcripts is not None else None,
+                           on_reply=transcripts.record_reply if transcripts is not None else None)
     apps = [(proxy_app, args.port)]
     if args.dashboard:
         store = service.session_manager.store

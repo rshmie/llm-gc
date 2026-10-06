@@ -353,6 +353,13 @@ tells the two apart. *Rejected: recognising known side requests by their wording
 — it is tied to one client's current text, and anything it misses is still
 attributed to the user. *Rejected: showing the message only while it is being
 answered* — a chat client's latest message would vanish once its reply arrived.
+Its reply is shown above it as the *newest reply*, read by the proxy as it reached
+the client, and replaced by the recorded turn when the next request carries it:
+someone watching looks for the answer they just read. It is never recorded from
+there — a regenerated or broken reply must not enter the record — and it is kept
+only while it answers the newest message, so a slower reply to an earlier request
+is not shown under a question it did not answer. *Accepted cost:* a reply the
+client regenerates is shown until the regenerated one replaces it.
 For the same reason a turn carrying tool results is shown as *tool results*, not
 as the user's words: the client sends what its tools returned under the user's
 role. Instructions the client wrote into a message — Claude Code's

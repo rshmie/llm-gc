@@ -87,9 +87,10 @@ that no longer exists.
 - **Untouched when nothing has aged.** If the collected context is exactly the
   client's history, the client's own request bytes are forwarded. Images, tool
   calls, thinking blocks, and the provider's prompt cache all survive intact.
-- **Streaming is relayed chunk by chunk** as it arrives. Nothing in the stream is
-  parsed: the reply is learnt from the next request, so a stream needs no
-  observer.
+- **Streaming is relayed chunk by chunk** as it arrives. The record never reads
+  the stream: the reply is learnt from the next request. Only while the dashboard
+  runs is a copy kept, one append per chunk, and read once the client has the
+  whole reply, to show it (below).
 - **The provider's answer and errors pass through verbatim**, status codes
   included: the client's error handling was written against the provider's format.
 - **Recent turns go as the client sent them in this request**, not as recorded
@@ -228,8 +229,16 @@ history, at the cost of one uncompressed request.
 The live dashboard runs in the same process on its own localhost port, reading
 the same sessions; it is opt-in because it shows conversation content. To show
 what was said beside what the model still has, the proxy hands each request's
-conversation to an optional observer before forwarding; it is attached only when
-the dashboard runs. See [visibility](../visibility/overview.md).
+conversation to an optional observer before forwarding, and each finished reply
+to another once the client has it all; both are attached only when the dashboard
+runs, and neither can fail a request. A reply is read for showing only, in the
+same text form its turn will have once recorded; one that stopped before its end,
+or longer than 4 MB, is not shown. See [visibility](../visibility/overview.md).
+
+```
+request N ──► forwarded ──► reply streams to the client ──► copy read: shown as "newest reply"
+request N+1 carries the reply in its history ──► recorded; the shown copy is dropped
+```
 
 ### Request size
 

@@ -37,6 +37,7 @@ from llm_gc.proxy.anthropic_translation import (
     extract_messages,
     forwardable_headers,
     instruction_tokens,
+    reply_text,
     rewrite_messages,
 )
 from llm_gc.proxy.session_identity import SESSION_HEADER, chain_hashes
@@ -56,6 +57,10 @@ DEFAULT_UPSTREAM_TIMEOUT_S = 600.0
 # anyway, so refusing it here costs no user anything, and it stops one request from
 # making the proxy buffer an unbounded body.
 MAX_REQUEST_BYTES = 32 * 1024 * 1024
+
+# A streamed reply longer than this is relayed whole but not kept to show on the
+# dashboard: the copy is held until the stream ends, once per request in flight.
+_REPLY_KEPT_MAX_BYTES = 4 * 1024 * 1024
 
 # Response headers that describe the upstream connection, not its content.
 # Returning them would have us promise an encoding or a length that no longer
@@ -110,6 +115,7 @@ def create_app(
     upstream_timeout_s: float = DEFAULT_UPSTREAM_TIMEOUT_S,
     schedule: Callable[[Awaitable[None]], None] | None = None,
     on_client_history: Callable[[str, list[Message]], None] | None = None,
+    on_reply: Callable[[str, Message, str], None] | None = None,
 ) -> FastAPI:
     """Wire the proxy around an already-built engine.
 
@@ -125,6 +131,10 @@ def create_app(
         on_client_history: Called with each request's session and the conversation
             the client sent, before forwarding. How the dashboard sees what was
             said; must be fast, and a failure in it never affects the request.
+        on_reply: Called with the session, the turn being answered and the reply's
+            text, once a reply has finished reaching the client. How the dashboard
+            shows the newest reply before the next request records it; the same
+            rules apply.
     """
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -152,6 +162,7 @@ def create_app(
     app.state.owns_http_client = http_client is None
     app.state.schedule = schedule if schedule is not None else _default_schedule
     app.state.on_client_history = on_client_history
+    app.state.on_reply = on_reply
 
 
     @app.get("/health")
@@ -251,7 +262,8 @@ async def _handle(app: FastAPI, request: Request) -> Response:
 
     metrics.gc_applied += 1
     metrics.tokens_forwarded += forwarded_tokens
-    response = await _send(app, forward_body, headers, streaming, target)
+    response = await _send(app, forward_body, headers, streaming, target,
+                           on_complete=_reply_observer(app, session_id, new_turn, streaming))
 
     # Aging prepares the next request from the conversation recorded so far; it
     # never depends on this reply, which the next request will show us exactly.
@@ -403,14 +415,37 @@ def _target(request: Request) -> str:
     return f"{request.url.path}?{request.url.query}" if request.url.query else request.url.path
 
 
-async def _send(app: FastAPI, body: bytes, headers: dict[str, str], streaming: bool, target: str) -> Response:
+async def _send(app: FastAPI, body: bytes, headers: dict[str, str], streaming: bool, target: str,
+                on_complete: Callable[[bytes], None] | None = None) -> Response:
     if streaming:
-        return await _forward_stream(app, body, headers, target)
-    return await _forward(app, body, headers, target)
+        return await _forward_stream(app, body, headers, target, on_complete)
+    return await _forward(app, body, headers, target, on_complete=on_complete)
+
+
+def _reply_observer(app: FastAPI, session_id: str | None, answering: Message,
+                    streaming: bool) -> Callable[[bytes], None] | None:
+    """What to do with a finished reply's bytes: show its text, when an observer is attached.
+
+    Read only for showing: the record still learns the reply from the next request,
+    which says whether the client kept it. Never fails the response.
+    """
+    observer = app.state.on_reply
+    if observer is None or session_id is None:
+        return None
+
+    def observe(raw: bytes) -> None:
+        try:
+            text = reply_text(raw, streamed=streaming)
+            if text is not None:
+                observer(session_id, answering, text)
+        except Exception:
+            logger.exception("reply observer failed; the response is unaffected", extra={"session_id": session_id})
+
+    return observe
 
 
 async def _forward(app: FastAPI, body: bytes, headers: dict[str, str], target: str, *,
-                   method: str = "POST") -> Response:
+                   method: str = "POST", on_complete: Callable[[bytes], None] | None = None) -> Response:
     """Send the request upstream and hand the answer back verbatim.
 
     Status codes and error bodies pass through unchanged: the client's error
@@ -421,11 +456,18 @@ async def _forward(app: FastAPI, body: bytes, headers: dict[str, str], target: s
         upstream = await client.send(_upstream_request(app, body, headers, target, method))
     except httpx2.RequestError as err:
         return _unreachable(err)
+    if on_complete is not None and upstream.status_code == 200:
+        on_complete(upstream.content)
     return _verbatim(upstream, upstream.content)
 
 
-async def _forward_stream(app: FastAPI, body: bytes, headers: dict[str, str], target: str) -> Response:
-    """Relay a streamed reply chunk by chunk, as it arrives."""
+async def _forward_stream(app: FastAPI, body: bytes, headers: dict[str, str], target: str,
+                          on_complete: Callable[[bytes], None] | None = None) -> Response:
+    """Relay a streamed reply chunk by chunk, as it arrives.
+
+    With `on_complete`, each chunk is also kept, and the whole stream is handed
+    over once the client has it all: one append per chunk on the way through.
+    """
     client: httpx2.AsyncClient = app.state.http_client
     try:
         upstream = await client.send(_upstream_request(app, body, headers, target, "POST"), stream=True)
@@ -441,11 +483,21 @@ async def _forward_stream(app: FastAPI, body: bytes, headers: dict[str, str], ta
         return _verbatim(upstream, content)
 
     async def relay() -> AsyncIterator[bytes]:
+        kept: list[bytes] | None = [] if on_complete is not None else None
+        size = 0
         try:
             # Decoded bytes: we strip `content-encoding`, so relaying raw gzip would
             # hand the client compressed bytes labelled as plain text.
             async for chunk in upstream.aiter_bytes():
                 yield chunk
+                if kept is not None:
+                    size += len(chunk)
+                    if size > _REPLY_KEPT_MAX_BYTES:
+                        kept = None
+                    else:
+                        kept.append(chunk)
+            if on_complete is not None and kept is not None:
+                on_complete(b"".join(kept))
         except httpx2.TransportError as err:
             logger.warning("provider stream dropped mid-response", extra={"error_type": type(err).__name__})
             raise

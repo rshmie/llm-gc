@@ -55,8 +55,10 @@ async function refresh() {
 
     if (state.selected) {
       const current = state.sessions.find((s) => s.session_id === state.selected);
-      // Content changes only with the conversation's version; activity is cheap and polled every time.
-      if (current.version !== state.version) {
+      // Content changes only with the conversation's version, and a reply arrives without one;
+      // activity is cheap and polled every time.
+      const replyShown = state.transcript && state.transcript.reply ? state.transcript.reply.turn_index : null;
+      if (current.version !== state.version || (current.newest_reply ?? null) !== replyShown) {
         const previousCuts = state.knowledge ? state.knowledge.cuts : null;
         const [k, transcript] = await Promise.all([getJSON(sessionPath()), getJSON(sessionPath("/transcript"))]);
         if (k) {

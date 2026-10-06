@@ -57,6 +57,7 @@ class SessionSummary(BaseModel):
     cuts: int
     aging_in_flight: bool
     last_activity: datetime
+    newest_reply: int | None = None   # the turn index of the reply being shown, which arrives without a new version
 
 
 class Transcript(BaseModel):
@@ -65,6 +66,7 @@ class Transcript(BaseModel):
     total_tokens: int             # what the client's conversation costs sent whole
     recorded_tokens: int          # the same, for only the turns the session has recorded -
                                   # what to compare with the context the model is sent
+    reply: TranscriptTurn | None = None   # the newest reply, shown until the next request records it
 
 
 class ManualCutResult(BaseModel):
@@ -126,7 +128,8 @@ def create_dashboard_app(
                            title=_opening_words(transcripts.get(state.session_id) if transcripts is not None else None),
                            version=state.snapshot.version,
                            recorded_turns=state.snapshot.recorded_turn_count, cuts=state.snapshot.cut_count,
-                           aging_in_flight=state.aging_in_flight, last_activity=state.last_updated_at)
+                           aging_in_flight=state.aging_in_flight, last_activity=state.last_updated_at,
+                           newest_reply=_reply_index(transcripts, state.session_id))
             for state in sorted(states, key=lambda state: state.last_updated_at, reverse=True)
         ]
         return DashboardOverview(
@@ -162,7 +165,8 @@ def create_dashboard_app(
         recorded = state.snapshot.recorded_turn_count
         return Transcript(captured=turns is not None, turns=list(turns or ()),
                           total_tokens=sum(turn.tokens for turn in turns or ()),
-                          recorded_tokens=sum(turn.tokens for turn in turns or () if turn.turn_index < recorded))
+                          recorded_tokens=sum(turn.tokens for turn in turns or () if turn.turn_index < recorded),
+                          reply=transcripts.reply(session_id) if transcripts is not None else None)
 
     @app.post("/api/sessions/{session_id}/gc", response_model=ManualCutResult)
     async def run_gc_now(session_id: str, request: Request) -> ManualCutResult | JSONResponse:
@@ -183,6 +187,11 @@ def create_dashboard_app(
                                duration_ms=result.duration_ms)
 
     return app
+
+
+def _reply_index(transcripts: TranscriptRecorder | None, session_id: str) -> int | None:
+    reply = transcripts.reply(session_id) if transcripts is not None else None
+    return reply.turn_index if reply is not None else None
 
 
 def _opening_words(turns: Sequence[TranscriptTurn] | None) -> str | None:
