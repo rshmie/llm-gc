@@ -13,6 +13,9 @@ export const keepLast = () => (state.config ? state.config.last_n_turns_to_keep 
 export const recapLimit = () => !state.config ? "a share of the model's window"
   : `${Number(state.config.max_recap_tokens).toLocaleString()} tokens`;
 export const captured = () => !!(state.transcript && state.transcript.captured);
+// Read from the session list, polled every time: the conversation itself is refetched only when it changes,
+// and a collection starts and runs without changing it.
+export const collecting = () => !!state.sessions.find((s) => s.session_id === state.selected && s.aging_in_flight);
 export const preview = (text, n = 150) => !text ? null : text.length > n ? `“${text.slice(0, n).trim()}…”` : `“${text}”`;
 
 export async function getJSON(path) {

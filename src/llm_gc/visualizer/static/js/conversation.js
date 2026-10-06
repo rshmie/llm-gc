@@ -5,7 +5,7 @@
 
 import { BECOMES, CATS, CLAMP_CHARS, EARLIER_SHOWN, FACTS_SHOWN, GLOSSARY, HEIGHT, MIN_BAR_PX, ORDER, RUN_MIN, categoryOf, describeOutcome, swatch } from "./vocabulary.js";
 import { $, agoTs, countEl, fill, fmt, h, meterBar, percent, plural, ranges, reducedMotion, setChildren, storeGet, storeSet, svg } from "./dom.js";
-import { countCats, factsByTurn, has, instructionTokens, marked, pendingTurns, preview, query, recapLimit, state, turnMatches, ui, writtenTokens } from "./state.js";
+import { collecting, countCats, factsByTurn, has, instructionTokens, marked, pendingTurns, preview, query, recapLimit, state, turnMatches, ui, writtenTokens } from "./state.js";
 import { hideTooltip, info, showTooltip, tipQuote, hoverTip } from "./tooltip.js";
 import { offerReturn, showTab } from "./shell.js";
 import { openCard, showWhy, whyText } from "./engine.js";
@@ -77,7 +77,7 @@ export function renderStatus() {
   if (latestShortfall > (hidden.shortfalls ?? 0)) items.push(line("warn", "!", `${plural(shortfalls.length, "part")} of a collection fell short.`,
     "Each says what the model gets instead. Nothing is lost: an exchange always keeps its words.",
     ["See why", () => { showTab("engine"); openCard("notmoved", true); }], ["shortfalls", latestShortfall]));
-  if (k.aging_in_flight) items.push(line("", "…", "Collecting this conversation.", "The page updates when it finishes."));
+  if (collecting()) items.push(line("", "…", "Collecting this conversation.", "The page updates when it finishes."));
   fill("status", items);
 }
 
@@ -733,7 +733,9 @@ export function renderMemory(k) {
     h("div", { class: "group-note" }, "Their facts couldn't be read when they were collected, so none are on record, and a later collection doesn't read them again. ",
       "The model still reads these messages at their level in the recap: word for word, as a summary, or by their opening line alone.")) : null;
   if (!k.facts.length) {
-    fill("memory", unread || h("p", { class: "empty", style: "margin-top:10px" }, "Nothing yet. When a collection makes an exchange, the facts read from it appear here."));
+    fill("memory", unread || h("p", { class: "empty", style: "margin-top:10px" }, collecting()
+      ? "A collection is reading this conversation now; the facts it reads appear here when it finishes."
+      : "Nothing yet. When a collection makes an exchange, the facts read from it appear here."));
     return;
   }
   const [unseen, replaced] = groups;
@@ -770,6 +772,9 @@ export function renderCleanupLog() {
       h("b", {}, "Collection"), h("span", { class: "when" }, ` · ${agoTs(p.gc_completed_at)}`),
       h("div", { class: "muted" }, `${p.outcome ? `${describeOutcome(p.outcome)} · ` : ""}${fmt(p.tokens_before)} → ${fmt(p.tokens_before - p.tokens_saved)} tokens`))))
       : k.cuts ? null : h("li", { class: "future" }, h("div", { class: "muted" }, "No collections yet.")),
-    h("li", { class: "future" }, h("div", {}, h("b", {}, "Next collection"),
-      h("div", { class: "muted" }, next ? `${next === 1 ? "1 message" : `${next} messages`} will change form. ` : "Nothing is queued to change yet. ", whenWhy))));
+    // A collection waits on model calls and can take minutes; until it commits, the panels show the one before it.
+    collecting() ? h("li", { class: "future" }, h("div", {}, h("b", {}, "Collecting now"),
+      h("div", { class: "muted" }, "Summarising and reading facts in the background. This panel and the facts update when it finishes.")))
+      : h("li", { class: "future" }, h("div", {}, h("b", {}, "Next collection"),
+        h("div", { class: "muted" }, next ? `${next === 1 ? "1 message" : `${next} messages`} will change form. ` : "Nothing is queued to change yet. ", whenWhy))));
 }

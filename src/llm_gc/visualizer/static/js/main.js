@@ -2,12 +2,14 @@
 
 import { CATS, GLOSSARY, GUIDE_TERMS, ORDER, swatch } from "./vocabulary.js";
 import { $, clearMotionCaches, fill, h, plural, setChildren, storeGet, storeSet } from "./dom.js";
-import { getJSON, sessionPath, state, ui } from "./state.js";
+import { collecting, getJSON, sessionPath, state, ui } from "./state.js";
 import { hideTooltip } from "./tooltip.js";
 import { THEMES, applyTheme, fillConfigValues, setGuide, setLive, showCleanupNotice, showTab } from "./shell.js";
 import { celebrateCleanup, clearMapCache, renderChips, renderCleanupLog, renderHero, renderMap, renderMemory, renderMessages, renderPrompt, renderStatus, renderTimeline, setPromptView } from "./conversation.js";
 import { initCards, renderChart, renderChecks, renderEngineStatus, renderGenerations, renderHistory, renderNext, renderProblems, renderProxy, renderRelevance, renderSettings } from "./engine.js";
 import { renderRunGcButton, runGcNow } from "./run-gc.js";
+
+let shownCollecting = false;
 
 function renderSessions() {
   const select = $("session-select");
@@ -72,6 +74,9 @@ async function refresh() {
       }
       state.activity = await getJSON(sessionPath("/activity"));
       if (state.knowledge) { renderStatus(); renderCleanupLog(); renderNext(state.knowledge); renderGenerations(state.knowledge); }
+      // The facts panel is otherwise drawn only when the conversation changes; it says when a collection is running.
+      if (state.knowledge && !state.knowledge.facts.length && collecting() !== shownCollecting) renderMemory(state.knowledge);
+      shownCollecting = collecting();
       renderProxy();
       renderEngineStatus();
       renderChart();
