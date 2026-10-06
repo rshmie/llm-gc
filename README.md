@@ -24,16 +24,19 @@ offline, with canned replies):
 ```bash
 python scripts/run_proxy.py --serve --dashboard   # the proxy on :9900, the dashboard on :9901
 python scripts/chat.py                            # talk through it, and watch http://localhost:9901
+ANTHROPIC_BASE_URL=http://127.0.0.1:9900 claude   # or run Claude Code through it
 ```
 
 > **Status: work in progress, not yet pip-installable.** The engine, an
-> Anthropic-compatible proxy (streaming included) and the dashboard are built and tested.
-> A [decision-survival check](evals/decision_survival/README.md) measures what the model
-> can still answer once LLM-GC has condensed a conversation: on its latest run all 37
-> answers survived, with prompts 11–15% smaller on the short conversations and 42% smaller
-> on the long ones — one run, on scripted conversations. Not done yet: recall (restoring a
-> condensed exchange on the request that asks about it), tuning for larger savings, the
-> OpenAI-compatible endpoint, and a verified run of Claude Code through the proxy.
+> Anthropic-compatible proxy (streaming included) and the dashboard are built and tested,
+> and Claude Code runs through the proxy. A
+> [decision-survival check](evals/decision_survival/README.md) measures what the model can
+> still answer once LLM-GC has condensed a conversation: on its latest run all 37 answers
+> survived, with prompts 12–15% smaller on the short conversations and 44–45% smaller on
+> the long ones — one run, on scripted conversations. Not done yet: an `llm-gc` command
+> with layered configuration, benchmarks on real sessions with a post-session report,
+> recall (restoring a condensed exchange on the request that asks about it), and the
+> OpenAI-compatible endpoint.
 
 ## The problem
 
@@ -56,13 +59,19 @@ LLM-GC sits between your app and the provider as a proxy. Every request is forwa
 1. **Group** — the turns that have aged out of the recent tail become **spans**, one per exchange: a user's message and everything up to their next one
 2. **Score** — every span, new and old, is scored by how much it matters *now*: recent, or about what the user is discussing, lifted by the decisions and specifics it states
 3. **Plan** — each span gets a **detail level** from its score: quoted whole, summarised, or archived to its opening line and facts
-4. **Condense** — each new span is summarised (one model call) and its facts filed; the next request carries one **recap** of every span at its level, then the recent turns word for word. The system prompt is never touched
+4. **Condense** — each new span is summarised (one model call each), and one more call per collection reads the facts its turns settled, filed under the topic they change; the next request carries one **recap** of every span at its level, then the recent turns word for word
 
 ```
  what the client sends:     t0  t1  t2  …  t39  t40 … t57
  what the model receives:   [RECAP]  t40 … t57
                              └ t0–t39 as spans, each at its level, in one message
 ```
+
+An agent's tool calls and their results are part of the conversation: they are sized,
+scored, summarised and quoted like words, so old file reads and command output are
+condensed too. The client's own instructions are not: its system prompt, its tools, and
+the instructions it writes into messages (Claude Code's CLAUDE.md, memory and notes) reach
+the model word for word with every request.
 
 A collection decides whether it is worth making before it pays for a single summary. Collecting in batches means the start of the prompt changes rarely, so the provider's prompt cache keeps working, and none of it runs while a request waits.
 
@@ -104,8 +113,10 @@ Right now, developers have no data:
 LLM-GC's Context Visualizer solves this. Every GC component already computes rich internal state — span scores, detail levels, which generation each turn is in, what each collection did. Instead of using that data only internally, the visualizer **exposes it to the developer** as a live dashboard:
 
 - **Named signals, no aggregate score** — token budget pressure, and what the last GC pass actually did (including when it was bypassed or failed — an unhealthy pass is visible, never hidden). Each signal is named for what it literally measures; nothing looks more authoritative than its math supports. The *transformation ratio* is computed but deliberately **not** displayed: it is honest arithmetic that would still be misread as a risk score if it sat on the page as the one number to glance at
-- **Generation lifecycle & transitions timeline** — where every turn lives right now (young / old / permanent) and the last N promote / archive / supersede events — including the moment a newer fact contradicted and superseded an older one, which no current-state view can ever show
-- **What the model knows, exchange by exchange** — every exchange with exactly what the model reads for it: kept (quoted word for word), compacted (its summary), archived (its opening line and facts), or out of view (one shared line saying it exists) — beside what was said, and every fact with how it reaches the model. A fact that is stored but never sent is the case this view exists to expose
+- **What the model has of each message** — the whole conversation as a map, widths to scale: which messages go word for word, which are kept, compacted, archived or out of view, and what one request costs against the conversation as written
+- **What the model knows, exchange by exchange** — every exchange with exactly what the model reads for it: kept (quoted word for word), compacted (its summary), archived (its opening line and facts), or out of view (one shared line saying it exists) — beside what was said. The newest request and its reply are shown as they happen, marked as not in the conversation yet; tool calls and results are labelled as such, never as your words; the client's own instructions show as a tag with their size. A second view shows the prompt exactly as forwarded, and a search answers "does the model still receive these words?"
+- **Facts** — every fact read from the conversation, how it reaches the model, what replaced it, how far the record reaches, and which messages' facts could not be read. A fact that is stored but never sent is the case this view exists to expose
+- **What moved, and what fell short** — where every turn lives now (young / old / permanent), what each collection moved and when, a collection in progress, and every part of one that could not be done, with what the model gets instead
 - **The next collection, and why** — the messages it would take and the level each would get, the earlier exchanges it would show at another level, and every exchange's score against the keep and archive lines, with the reason it sits where it does
 - **Post-Session Analysis** *(planned)* — After a session ends: full timeline of when quality peaked, when it degraded, which decisions survived, where the danger zones were
 
@@ -240,9 +251,31 @@ import anthropic
 client = anthropic.Anthropic(base_url="http://127.0.0.1:9900")
 ```
 
-`python scripts/chat.py` is exactly that, as a terminal chat. Claude Code can be pointed
-the same way (`ANTHROPIC_BASE_URL=http://127.0.0.1:9900 claude`), but that path has not
-yet been verified on real sessions.
+`python scripts/chat.py` is exactly that, as a terminal chat.
+
+### With Claude Code
+
+```bash
+python scripts/run_proxy.py --serve --dashboard   # with ANTHROPIC_API_KEY set
+ANTHROPIC_BASE_URL=http://127.0.0.1:9900 claude   # in the project you are working on
+```
+
+Claude Code's own credentials are forwarded to Anthropic, never stored; the proxy's
+`ANTHROPIC_API_KEY` pays only for summaries and fact reads. Without it, the proxy runs
+with canned summaries, which is only useful for trying the dashboard. With an agent's conversation, LLM-GC:
+
+- reads tool calls and results as text, so they are summarised and quoted like words;
+- sends Claude Code's instructions (its system prompt, its tools, and the
+  `<system-reminder>` blocks that carry CLAUDE.md and memory) word for word with every
+  request, never condensed;
+- passes its other calls, such as token counting, through untouched;
+- shows its side requests (after each reply it asks the model to suggest your next
+  prompt) as the *newest request*, never as something you said.
+
+Sessions live in memory: restarting the proxy starts each conversation again from what
+Claude Code sends, at the cost of one request sent whole and one collection. The first
+collection of a long conversation can take a couple of minutes, and requests meanwhile
+go whole — never worse than without LLM-GC.
 
 ### As a library
 
@@ -269,21 +302,23 @@ async def on_turn(session_id: str, text: str, role: str, index: int) -> list[Mes
 - Detail levels — kept, summarised, archived, out of view — re-planned at every collection under one recap budget, so a span the conversation returns to rises again
 - Generational memory (young / old / permanent): every span keeps its original turns; facts are filed with supersession, and a span whose decision was later replaced says so
 - A summarising compactor that refuses any summary that does not shrink what it replaces
+- Facts read by a model once per collection, filed under the topic they change; only the user changes a decision the user made
 - Collections: the prompt changes only at its start, the recap, in batches, so the provider's prompt cache and the model's thinking blocks stay valid
-- An Anthropic Messages proxy, streaming included, that finds each conversation by its content and never makes a reply wait on GC
+- An Anthropic Messages proxy, streaming included, that finds each conversation by its content, passes the client's other calls through, and never makes a reply wait on GC
+- Agent conversations: tool rounds condensed like words, the client's instructions never condensed — verified with Claude Code
 - Per-session state that reads never wait for
-- A live dashboard: what the model knows of each turn, and what LLM-GC did
+- A live dashboard: what the model has of every message and fact, the newest request and reply, and what LLM-GC did
 - Configurable level lines, margin, recap budget and batch size
 - A decision-survival check: scripted conversations asked about their own facts, through LLM-GC and sent whole
 
 **In scope — not built yet:**
-- Recall: restoring a condensed exchange on the request that asks about it, rather than at the next collection
-- Tuning the defaults for larger savings, checked on the decision-survival check
-- A dashboard that shows spans and their levels directly (it still rates single messages)
-- The OpenAI-compatible endpoint
-- Claude Code through the proxy, verified on real traffic
-- Broader benchmarks, on real sessions rather than scripted ones
+- An `llm-gc` command, and layered configuration (defaults, a file, the environment, flags), with the context window taken from the model being called
+- Benchmarks on real sessions: savings against cached-token pricing, latency, and decision survival
 - Post-session analysis (session timeline, decision survival, GC effectiveness report)
+- Tuning the defaults for larger savings, checked on the decision-survival check
+- Faster first collections: summaries written at the same time, not one after another
+- Recall: restoring a condensed exchange on the request that asks about it, rather than at the next collection
+- The OpenAI-compatible endpoint, and retries for summary and fact-reading calls
 
 **Does not handle (not our problem):**
 - Model routing (use LiteLLM or your proxy)
@@ -321,10 +356,20 @@ layer around it.
 
 ## Measured results
 
-Not published yet: results here will come from benchmarks on real sessions, with their
-dataset and method. During development, the
-[decision-survival check](evals/decision_survival/README.md) measures what the model can
-still answer once LLM-GC has condensed a scripted conversation, and records its runs.
+Benchmarks on real sessions are not published yet; results from them will come with their
+dataset and method. What exists is the
+[decision-survival check](evals/decision_survival/README.md): five scripted conversations,
+37 questions about facts they established, asked once through LLM-GC and once with the
+whole conversation sent, and graded. Its latest committed run:
+
+| | Short conversations (18 questions) | Long conversations (19 questions) |
+|---|---|---|
+| Through LLM-GC | 18/18, prompts 12–15% smaller | 19/19, prompts 44–45% smaller |
+| Whole conversation | 18/18 | 19/19 |
+
+One run, on scripted conversations, with `claude-sonnet-5-5` answering; the
+[evidence file](evals/decision_survival/evidence/aligned-cuts-2026-10-06.json) holds every
+answer. The check's README lists the earlier runs and what each change won back.
 
 Savings will also be judged against **cached-token pricing**, not raw token counts:
 rewriting the start of the prompt invalidates the provider's prompt cache, so a real
@@ -376,6 +421,8 @@ alternatives that were rejected and the reason.**
 - [Detail levels](doc/design/generational-memory/detail-levels.md) — kept, summarised, archived, out of view, and how the planner picks them
 - [The cut](doc/design/generational-memory/the-cut.md) — when a collection happens, and how it changes the prompt
 - [Compaction](doc/design/generational-memory/compaction.md) — how a span gets its summary, and refusing one that does not help
+- [The proxy](doc/design/proxy/overview.md) — reconciling with the client's history, finding the conversation, forwarding, and what it never condenses
+- [LLM providers](doc/design/llm-provider.md) — the model calls behind summaries and facts
 - [Session management](doc/design/session/overview.md) — per-conversation state and its concurrency contract
 - [Visibility](doc/design/visibility/overview.md) — transparency vs. observability, and why there is no aggregate risk score
 - [Events](doc/design/events/overview.md) — the pub/sub bus every component instruments through
