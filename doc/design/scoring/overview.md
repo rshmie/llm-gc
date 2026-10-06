@@ -112,9 +112,13 @@ conversation:
 ```
 
 A back-reference reaches its span through the words that name the subject, not
-through "as we discussed", which fits every earlier span alike. Between collections
-the front does not change, so until the next one the model sees that span at its
-current level, and the front's header tells it to say so rather than guess.
+through "as we discussed", which fits every earlier span alike. Words that only refer
+back — "mentioned", "earlier", "discussed", "again" — are not counted at all: each
+would be a word asked about that no span matches, and measured, they cut the fee
+span's score for "as I mentioned earlier, what was the fee again?" from about 0.5 to
+0.13. Between collections the front does not change, so until the next one the model
+sees that span at its current level, and the front's header tells it to say so rather
+than guess.
 
 ### Known misses
 
@@ -122,9 +126,6 @@ current level, and the front's header tells it to say so rather than guess.
   of the same seam fixes it without changing anything else.
 - **A reference that names nothing.** "Do what I said earlier" reaches no span; no
   word in it is about anything.
-- **Reference words dilute the match.** "Mentioned", "earlier" and "again" count as
-  words asked about and match nothing, so "as I mentioned earlier, what was the fee
-  again?" scores the fee span well below what "what was the fee?" would.
 
 ## Where the score is used
 

@@ -72,7 +72,7 @@ def _snapshot(service: GcService) -> GenerationSnapshot:
 class TestCoverage:
     def test_a_summary_records_every_turn_of_its_run(self):
         service = _build()
-        _converse(service, 12)
+        _converse(service, 30)
 
         summaries = [span for span in _snapshot(service).old if span.summary is not None]
         assert summaries, "the conversation is long enough to have been cut"

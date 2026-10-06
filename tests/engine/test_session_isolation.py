@@ -27,10 +27,13 @@ def _service(score: float) -> GcService:
     return service
 
 
-async def _alice_condenses_her_first_turn(service: GcService) -> None:
+async def _alice_condenses_her_first_exchange(service: GcService) -> None:
+    """Her question and its answer: a cut never separates them, so her next question
+    is what lets the first exchange be condensed."""
     await service.gc_update("alice", turn(0, opening=ALICE_SECRET))
     await service.gc_update("alice", turn(1, role="assistant"))
-    assert service.session_manager.store.get("alice").snapshot.old, "precondition: turn 0 was condensed"
+    await service.gc_update("alice", turn(2))
+    assert service.session_manager.store.get("alice").snapshot.old, "precondition: turns 0-1 were condensed"
 
 
 def _text(messages: list[Message]) -> str:
@@ -41,7 +44,7 @@ def test_an_archived_span_stays_in_its_own_session():
     service = _service(ARCHIVED_SCORE)
 
     async def scenario():
-        await _alice_condenses_her_first_turn(service)
+        await _alice_condenses_her_first_exchange(service)
         await service.gc_update("bob", turn(0, opening="Hello, I am planning a party."))
         return await service.gc_collect("alice"), await service.gc_collect("bob")
 
@@ -54,7 +57,7 @@ def test_a_summary_stays_in_its_own_session():
     service = _service(COMPACTED_SCORE)
 
     async def scenario():
-        await _alice_condenses_her_first_turn(service)
+        await _alice_condenses_her_first_exchange(service)
         await service.gc_update("bob", turn(0, opening="Hello, I am planning a party."))
         return await service.gc_collect("alice"), await service.gc_collect("bob")
 
@@ -69,7 +72,7 @@ def test_a_removed_session_takes_its_memory_with_it():
     service = _service(ARCHIVED_SCORE)
 
     async def scenario():
-        await _alice_condenses_her_first_turn(service)
+        await _alice_condenses_her_first_exchange(service)
         service.session_manager.store.remove("alice")
         await service.gc_update("alice", turn(0, opening="A brand new conversation."))
         return await service.gc_collect("alice")

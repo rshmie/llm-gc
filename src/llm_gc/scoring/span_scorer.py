@@ -39,6 +39,15 @@ class Relevance(Protocol):
     def score(self, spans: Sequence[str], now: str) -> list[float]: ...
 
 
+# Words saying that a message refers back to the conversation, not what it refers to:
+# "as I mentioned earlier, what was the fee?" is about the fee. Counted as words asked
+# about, they match no span and dilute the match with the span that is meant.
+_BACK_REFERENCES = frozenset({
+    "mention", "mentioned", "earlier", "before", "previously", "discuss", "discussed", "say", "said",
+    "tell", "told", "talk", "talked", "remember", "recall", "remind", "back", "above", "again", "conversation",
+})
+
+
 class LexicalRelevance:
     """How much of what is being discussed now a span talks about, word for word.
 
@@ -46,13 +55,14 @@ class LexicalRelevance:
     spans - a word every span uses says little about which one is meant - and a
     span earns that weight by repeating it, with diminishing credit: one mention
     earns half, ten earn nine-tenths. A span that discusses the subject outranks
-    one that names it in passing, and a weak match stays weak. Misses paraphrase
+    one that names it in passing, and a weak match stays weak. Words that only
+    refer back ("as I mentioned earlier") are not counted. Misses paraphrase
     ("datastore" for "database"), which an embedding implementation fixes.
     """
 
     def score(self, spans: Sequence[str], now: str) -> list[float]:
         """See `Relevance.score`."""
-        asked = significant_words(now)
+        asked = significant_words(now) - _BACK_REFERENCES
         if not spans or not asked:
             return [0.0] * len(spans)
         mentions = [Counter(word for word in tokenize_words(text) if word in asked) for text in spans]

@@ -27,7 +27,8 @@ the next collection:     [FRONT′] t52 … t60       ← new spans added, every
  after a response, in the background, one pass per session at a time
 
  1  CUT POINT   the latest position that keeps at least `last_n_turns_to_keep` turns
-                verbatim and splits no tool round; everything before it is the batch
+                verbatim, where a span may begin, and splits no tool round;
+                everything before it is the batch
                       │
  2  DRAFT       group the batch into spans (one exchange each) and take each span's
                 opening line — no model call
@@ -169,6 +170,29 @@ occasionally, is the one rewrite both accept.
 
 - **Change the prompt only at the front, only at a collection.** The one rewrite the
   provider's checks accept and caching survives.
+- **Cut only where a span may begin.** Before a user message that opens an exchange,
+  or, inside an exchange the assistant has already answered, between its tool
+  rounds — never between a question and its first answer.
+
+  ```
+   you  "Which database?"      ┐
+   AI   "Postgres, because…"   ┘ one exchange: the cut falls before it or after it
+   you  "And the cache?"       ◄─ a cut may fall here
+   AI   [tool call]            ┐
+        [tool result]          │ one long agentic exchange
+   AI   [tool call]            ◄─ or here, between its tool rounds
+        [tool result]          │
+   AI   "Done."                ┘
+  ```
+
+  Measured before it: with `last_n_turns_to_keep` at 5 and replies far larger than
+  `min_cut_tokens`, nearly every cut fell between a question and its answer. Each
+  question became a span of its own that the summariser could not shorten — one
+  refused, paid call each — and each answer a span whose opening line was its first
+  heading rather than what was asked. *Accepted cost:* the tail can be one turn
+  longer than `last_n_turns_to_keep`. *Rejected: cutting only before a user message.*
+  One long agentic exchange has no such point, so it would never be collected and
+  its prompt would grow without bound.
 - **Batch by the tokens the plan would condense, not by window fill.** LLM-GC
   condenses what has gone quiet, which is its generational premise; batching only
   stops it collecting for a handful of tokens.
@@ -225,12 +249,6 @@ occasionally, is the one rewrite both accept.
 
 ## Known gaps
 
-- **A cut can fall between a question and its answer.** The cut point respects the
-  newest turns and tool rounds, not exchanges. When replies are far larger than
-  `min_cut_tokens`, a collection fires after nearly every reply and the cut lands
-  between the question and its answer, so each becomes a span of its own: the
-  answer's opening line is its first sentence (often a heading) rather than what was
-  asked, and the question alone is sent to the summariser, which cannot shorten it.
 - **A span that lost its summary is never summarised later.** Only a provider
   *failure* is worth retrying; a refusal would be refused again.
 - **Defaults are drafts.** `min_cut_tokens`, `last_n_turns_to_keep`, the level lines,

@@ -51,6 +51,19 @@ class TestLexicalRelevance:
                                       "phase the rollout, the biggest risks, and who signs off")
         assert max(scores) < 0.2
 
+    def test_words_that_only_refer_back_do_not_dilute_the_match(self):
+        """"As I mentioned earlier" says the message refers back, not to what. Measured
+        before they were dropped: the fee span scored 0.13 for this question, against
+        about 0.5 without the referring words."""
+        spans = ["Let's use Stripe for payments, with a 4% platform fee on each ticket.",
+                 "Seat holds last seven minutes.", "The checkout API must answer within 300 ms."]
+
+        plain = self.relevance.score(spans, "What was the fee?")
+        referring = self.relevance.score(spans, "As I mentioned earlier, what was the fee again? We discussed it before.")
+
+        assert referring == plain
+        assert referring[0] > 0.4
+
     def test_nothing_to_match_scores_zero(self):
         assert self.relevance.score(["the database is postgres"], "ok, thanks!") == [0.0]
         assert self.relevance.score([], "the database") == []

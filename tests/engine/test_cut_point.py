@@ -1,9 +1,10 @@
-"""Where a conversation may be cut: never inside a tool round, never into the recent turns."""
+"""Where a conversation may be cut: never into the recent turns, never between a question and
+its answer, never inside a tool round."""
 
 from hypothesis import given
 from hypothesis import strategies as st
 
-from llm_gc.engine.cut_point import find_cut_point
+from llm_gc.engine.cut_point import _span_starts, find_cut_point
 from llm_gc.models.message import tool_result_ids, tool_use_ids
 from llm_gc.models import Message
 
@@ -27,8 +28,12 @@ def _chat(n: int) -> list[Message]:
 
 
 class TestRecentTurnsStayVerbatim:
-    def test_the_latest_cut_keeps_exactly_the_last_n(self):
+    def test_the_latest_cut_keeps_exactly_the_last_n_when_an_exchange_opens_there(self):
         assert find_cut_point(_chat(10), keep_last=4) == 6
+
+    def test_otherwise_it_keeps_one_more_rather_than_cut_a_question_from_its_answer(self):
+        """With five kept, the cut would fall between question 4 and its answer."""
+        assert find_cut_point(_chat(10), keep_last=5) == 4
 
     def test_a_conversation_no_longer_than_keep_last_is_not_cut(self):
         assert find_cut_point(_chat(4), keep_last=4) == 0
@@ -43,8 +48,23 @@ class TestToolRoundsAreNeverSplit:
         assert find_cut_point(turns, keep_last=3) == 2
 
     def test_parallel_calls_answered_in_one_turn_stay_together(self):
-        turns = [_text(0, "user"), _call(1, "a", "b"), _result(2, "a", "b"), _text(3, "assistant")]
-        assert find_cut_point(turns, keep_last=2) == 1
+        turns = [_text(0, "user"), _call(1, "a", "b"), _result(2, "a", "b"), _text(3, "assistant"), _text(4, "user")]
+        assert find_cut_point(turns, keep_last=2) == 3
+
+    def test_a_question_stays_with_the_tool_call_that_answers_it(self):
+        """Cutting at 1 would separate the question from its first answer, a tool call."""
+        turns = [_text(0, "user"), _call(1, "a"), _result(2, "a"), _text(3, "assistant")]
+        assert find_cut_point(turns, keep_last=2) == 0
+
+
+class TestALongAgenticExchangeIsStillCollected:
+    def test_it_is_cut_between_tool_rounds(self):
+        """One question, then rounds of tool calls: with no later question to cut
+        before, the cut falls between two rounds, so the exchange's start can still be
+        condensed while the agent works on."""
+        turns = [_text(0, "user"), _call(1, "a"), _result(2, "a"), _call(3, "b"), _result(4, "b"),
+                 _call(5, "c"), _result(6, "c"), _text(7, "assistant")]
+        assert find_cut_point(turns, keep_last=2) == 5
 
     def test_no_safe_cut_means_no_cut(self):
         """Every candidate cut would orphan the result in the last turn."""
@@ -70,6 +90,14 @@ def _conversations():
     return shape.map(build)
 
 
+def _splits_a_question_from_its_answer(turns: list[Message], cut: int) -> bool:
+    """The turn after the cut is the first answer to the question before it."""
+    if not 0 < cut < len(turns):
+        return False
+    before, after = turns[cut - 1], turns[cut]
+    return before.role == "user" and not tool_result_ids(before) and after.role == "assistant"
+
+
 def _safe(turns: list[Message], cut: int, keep_last: int) -> bool:
     cut_calls = {i for turn in turns[:cut] for i in tool_use_ids(turn)}
     tail_results = {i for turn in turns[cut:] for i in tool_result_ids(turn)}
@@ -77,9 +105,11 @@ def _safe(turns: list[Message], cut: int, keep_last: int) -> bool:
 
 
 @given(turns=_conversations(), keep_last=st.integers(0, 6))
-def test_the_cut_is_the_latest_safe_one(turns, keep_last):
+def test_the_cut_is_the_latest_safe_one_where_a_span_may_begin(turns, keep_last):
     cut = find_cut_point(turns, keep_last)
     if cut:
         assert _safe(turns, cut, keep_last)
+        assert _span_starts(turns)[cut]
+        assert not _splits_a_question_from_its_answer(turns, cut)
     later = range(cut + 1, len(turns) - keep_last + 1)
-    assert not any(_safe(turns, c, keep_last) for c in later), "a later safe cut was missed"
+    assert not any(_safe(turns, c, keep_last) and _span_starts(turns)[c] for c in later), "a later cut was missed"

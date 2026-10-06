@@ -145,8 +145,8 @@ span, so choosing between them later costs no model call.
   change, so its summary, facts and opening line are made once. Raising or lowering
   it later only changes how it is rendered.
 
-*Known gap:* a collection can still cut between a question and its answer, which
-makes each a span of its own; see [the-cut.md](the-cut.md#known-gaps).
+A collection never cuts between them either: it cuts only where a span may begin
+(see [the-cut.md](the-cut.md#why-this-shape)).
 
 ### The precise rule
 
