@@ -483,13 +483,13 @@ export function fidTag(cat) {
   return h("span", { class: "tag", ...hoverTip(CATS[cat].label, GLOSSARY[cat][1]) }, swatch(cat), CATS[cat].tag);
 }
 
-// A status on a fact, with its meaning on hover.
+// A status on a fact, with its meaning on hover; the dotted underline says there is one.
 function statusTag(key) {
   const [glyph, tone, label, meaning] = FACT_STATUS[key];
   return h("span", { class: "fact-status", ...hoverTip(glyph ? `${glyph} ${label}` : label, meaning) },
-    glyph ? h("span", { class: `st ${tone}` }, `${glyph} `) : null, label);
+    glyph ? h("span", { class: `st ${tone}` }, `${glyph} `) : null, h("span", { class: "term" }, label));
 }
-// How a current fact reaches the model: on its exchange's line, inside quoted words, or not at all.
+// How a current fact reaches the model: listed beside its exchange, in its exchange's words, or not at all.
 const factStatus = (fact) => statusTag(fact.sent ? "line" : fact.span_level === "kept" ? "words" : "unsent");
 // Who stated a fact: the user's decisions are theirs to change, an assistant's value is a recommendation.
 const WHO = { user: "you", assistant: "AI" };
@@ -738,10 +738,10 @@ const changedAt = (fact) => fact.superseded_by_turn ?? fact.turn;
 // Whether the engine reads facts from the assistant's turns; without a model it reads only the user's.
 const readsAssistant = () => !state.config || !state.config.facts_read_from || state.config.facts_read_from.includes("assistant");
 
-// Every fact on record by who stated it, with how it reaches the model, then each value replaced.
-// The head - the counts, how far the record reaches, and any warning - stays in view when the card is
-// folded. It says "on record", not "current": facts are read only when messages are collected, so a
-// value a recent message has already changed would read as still in force.
+// Every fact read so far by who stated it, with how it reaches the model, then each value replaced.
+// The head - the counts, how far the reading reaches, and any warning - stays in view when the card is
+// folded. It leads with "as of message N", never "current": facts are read only when messages are
+// collected, so a value a recent message has already changed would read as still in force.
 export function renderFacts(k) {
   const matches = (f) => !query() || has(f.content) || has(f.topic) || has(f.superseded_by);
   const active = k.facts.filter((f) => f.status === "active");
@@ -753,7 +753,7 @@ export function renderFacts(k) {
   const unreadTurns = k.spans.filter((s) => s.facts_unread).flatMap((s) => s.turns);
   const unread = unreadTurns.length ? h("p", { class: "facts-unread" },
     h("b", {}, h("span", { class: "st warn" }, "⚠ "), `Not read from ${messagesLabel(unreadTurns)}. `),
-    "Their facts couldn't be read when they were collected, so none are on record, and a later collection doesn't read them again. ",
+    "Their facts couldn't be read when they were collected, so none are listed here, and a later collection doesn't read them again. ",
     "The model still reads these messages at their level in the recap: word for word, as a summary, or by their opening line alone.") : null;
   if (!k.facts.length) {
     fill("facts");
@@ -761,21 +761,22 @@ export function renderFacts(k) {
       ? "A collection is reading this conversation now; the facts it reads appear here when it finishes."
       : !k.cuts ? "Nothing has been collected yet, so the model is sent every message word for word. Facts are read from messages when a collection takes them."
       : readsAssistant() ? "No facts were read from the collected messages. The model reads them in the recap, at their level."
-      : "No facts on record. Facts are read from your messages only here, as they are when LLM-GC runs without a model, by simple "
+      : "No facts found. Facts are read from your messages only here, as they are when LLM-GC runs without a model, by simple "
         + "patterns that catch statements such as “The database is Postgres.”; none of the collected messages has one. "
         + "The model reads them in the recap, at their level."));
     return;
   }
   fill("facts-head",
     h("div", { class: "facts-headline" },
-      h("span", {}, h("b", {}, fmt(active.length)), ` ${active.length === 1 ? "fact" : "facts"} on record`),
-      h("span", {}, h("b", {}, fmt(active.length - unseen.length)), " sent"),
-      unseen.length ? h("span", { class: "alert" }, h("span", { class: "st warn" }, "⚠ "), h("b", {}, fmt(unseen.length)), " not sent") : null,
-      h("span", {}, h("b", {}, fmt(replaced.length)), " replaced")),
+      collected.length ? h("span", {}, "As of ", h("b", {}, `message ${Math.max(...collected)}`)) : null,
+      h("span", {}, h("b", {}, fmt(active.length)), ` ${active.length === 1 ? "fact" : "facts"}`),
+      reachLine(active.length, unseen.length),
+      replaced.length ? h("span", {}, h("b", {}, fmt(replaced.length)), ` earlier ${replaced.length === 1 ? "value" : "values"} replaced`)
+        : h("span", {}, "nothing replaced")),
     h("p", { class: "facts-note" },
-      collected.length ? `Facts are collected from ${messagesLabel(collected)}.` : null,
-      recent.length ? ` ${capitalised(messagesLabel(recent))} ${recent.length === 1 ? "is" : "are"} sent word for word, `
-        + "so a change there reaches the model directly and is filed here once collected." : null),
+      collected.length ? `Facts are read from ${messagesLabel(collected)}.` : null,
+      recent.length ? ` ${capitalised(messagesLabel(recent))} ${recent.length === 1 ? "is" : "are"} sent word for word and read `
+        + "only once collected, so a fact here may be out of date: a value changed there reaches the model now, and shows here then." : null),
     unread);
   const assistantFacts = readsAssistant() ? active.filter((f) => f.speaker === "assistant").sort(lookFirst) : null;
   fill("facts", h("div", { class: "facts-cols" },
@@ -790,6 +791,16 @@ export function renderFacts(k) {
     factColumn(k, matches, { id: "replaced", title: "Replaced", mark: h("div", { class: "av replaced", "aria-hidden": "true" }, "↺"),
       row: replacedFact, facts: replaced.sort((a, b) => changedAt(b) - changedAt(a)),
       empty: ["No replacements on record", "When a later message changes a value, such as Elasticsearch → OpenSearch, the old and new values appear here."] })));
+}
+
+// How many of the facts listed reach the model, worded so the parts visibly add up to the whole.
+function reachLine(total, unseen) {
+  const seen = total - unseen;
+  const reach = (n) => n === 1 ? " reaches the model" : " reach the model";
+  const missing = (words) => h("span", { class: "alert" }, h("span", { class: "st warn" }, "⚠ "), ...words);
+  if (!unseen) return h("span", {}, total === 1 ? "it reaches the model" : ["all ", h("b", {}, fmt(total)), reach(total)]);
+  if (!seen) return missing([total === 1 ? "it doesn't" : "none", reach(2)]);
+  return [h("span", {}, h("b", {}, fmt(seen)), reach(seen)), missing([h("b", {}, fmt(unseen)), unseen === 1 ? " doesn't" : " don't"])];
 }
 
 // One column: its facts under a heading, or a card saying why it has none, so an empty column never

@@ -532,28 +532,30 @@ before; the replacement is a property of the fact, and the fact carries it.
 
 ### Facts are an audit of the prompt, not a digest of the conversation
 
-Under the conversation's totals, every fact on record is shown by who stated it,
+Under the conversation's totals, every fact read so far is shown by who stated it,
 with how it reaches the model, and every value replaced beside them:
 
 ```
 What the model is told, fact by fact
-13 facts on record · 12 sent · ⚠ 1 not sent · 1 replaced
-Facts are collected from messages 0–21. Messages 22–29 are sent word for word, so a
-change there reaches the model directly and is filed here once collected.
+As of message 21 · 13 facts · 12 reach the model · ⚠ 1 doesn't · nothing replaced
+Facts are read from messages 0–21. Messages 22–29 are sent word for word and read
+only once collected, so a fact here may be out of date: a value changed there
+reaches the model now, and shows here then.
 
 ┌ YOU SAID ──────────────┐ ┌ THE ASSISTANT SAID ────┐ ┌╌ ↺ ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┐
 │ index shards           │ │ master nodes           │ ╎ No replacements on     ╎
 │ 9 primaries, 2 replicas│ │ recommended 3 dedicated│ ╎ record. When a later   ╎
-│ message 6 ✓ on its     │ │ message 1 ⚠ not sent → │ ╎ message changes a      ╎
-│ line                 → │ │                        │ ╎ value, both appear here╎
+│ message 6 ✓ sent as a  │ │ message 1 ⚠ not sent → │ ╎ message changes a      ╎
+│ fact                 → │ │                        │ ╎ value, both appear here╎
 └────────────────────────┘ └────────────────────────┘ └╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┘
 › How fact collection works
 ```
 
 The section is meant to answer four questions in seconds:
 
-- **What survived?** Each fact is either ✓ on its exchange's line in the recap,
-  ✓ in its words when that exchange is kept, or ⚠ not sent when it is out of view.
+- **What survived?** Each fact is either ✓ sent as a fact, listed in the recap beside
+  its exchange's summary or opening line; ✓ sent word for word, inside its exchange
+  when that exchange is kept; or ⚠ not sent, when that exchange is out of view.
   "Sent" is read from the facts the rendered front carries, so every status can be
   checked against the bytes forwarded.
 - **What changed?** Each replacement shows the old and new values, links to both
@@ -567,10 +569,19 @@ The section is meant to answer four questions in seconds:
   settled nothing.
 - **Where did it come from?** Every fact names its message and jumps to it.
 
+Every label names what the model gets, so the section reads without its guide. The
+headline is worded so its parts visibly add up: "13 facts · 12 reach the model · ⚠ 1
+doesn't", with replaced values counted apart as earlier values, never as facts. A
+status is an outcome, "sent as a fact" or "sent word for word", not where the fact
+sits in the recap, and its meaning is one hover away, its dotted underline saying so.
+*Rejected: "shown verbatim" and "summarised only".* A fact sent as a fact is the one
+a summary can't drop, since it is listed on its own; "summarised only" would warn
+about the safest case.
+
 What needs a look still comes first. The headline counts the facts not sent, they
 sort above the rest of their column, and replacements have a column of their own.
 None of them sits under forty notes that need nothing. The section folds, as the
-Engine tab's cards do, but its headline, how far the record reaches and the warning
+Engine tab's cards do, but its headline, the note on how far the facts reach and the warning
 for facts that couldn't be read stay in view. Folding hides detail, never a fact the
 model cannot see.
 
@@ -595,10 +606,11 @@ shows what was sent, not what the model made of it, and "fact by fact" limits th
 claim to what is shown.
 
 *Rejected: "current facts".* Facts are read only at a collection, so the headline
-says how far the record reaches: on record up to the newest collected message. It
-also says that newer messages go word for word, so a change of plan in one of them
-reaches the model in its words and is filed once collected. Headed "current", a
-value the conversation had already changed would read as still in force.
+opens with the message they are as of, the newest collected, and the note under it
+says what that costs: newer messages go word for word and are read only once
+collected, so a change of plan in one of them reaches the model in its words while a
+fact here still shows the old value. Headed "current", a value the conversation had
+already changed would read as still in force.
 
 ### A banner only for what needs a look
 

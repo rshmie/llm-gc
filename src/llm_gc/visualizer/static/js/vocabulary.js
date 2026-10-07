@@ -71,11 +71,12 @@ export function describeOutcome(o) {
   return OUTCOME_LINES.map(([key]) => o[key].length ? `${o[key].length} ${words[key]}` : null).filter(Boolean).join(" · ");
 }
 // What each status on a fact means: shown when it is hovered, and listed in "How fact collection works".
+// Each label is the outcome for the model, so it reads without the guide.
 export const FACT_STATUS = {
-  line: ["✓", "good", "on its line", "The recap shows this fact on its exchange's line, beside the exchange's summary or opening line."],
-  words: ["✓", "good", "in its words", "Its exchange is kept, quoted word for word in the recap, so the model reads the words that state it."],
+  line: ["✓", "good", "sent as a fact", "Its exchange is summarised or cut to its opening line, and the recap lists this fact beside it, so the model is told the fact itself, not only a summary that might leave it out."],
+  words: ["✓", "good", "sent word for word", "Its exchange is kept word for word in the recap, so the model reads the fact in the words of the message that stated it."],
   unsent: ["⚠", "warn", "not sent", "Its exchange is out of view: the recap says only that the exchange exists, so the model can't see this fact."],
-  noted: ["✓", "good", "noted on its line", "The recap marks the old value as replaced, on the line of the exchange that said it, so the model reads it as no longer current."],
+  noted: ["✓", "good", "sent marked replaced", "The recap marks the old value as replaced, beside the exchange that said it, so the model reads it as no longer current."],
   oldUnsent: ["", "", "old value not sent", "The exchange that said the old value is out of view, so neither the old value nor the note about it is sent."],
 };
 // What fell short in a collection, and what the model gets instead.
