@@ -12,7 +12,7 @@ not cost facts this check can see.
 ## What a run does
 
 Each scripted conversation is played through the real proxy, running the same
-engine `run_proxy.py` serves (`build_gc_service`). Then the conversation's questions
+engine `llm-gc start` serves (`build_gc_service`). Then the conversation's questions
 are asked twice: once through LLM-GC, once with the whole conversation sent
 straight to the model.
 

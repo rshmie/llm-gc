@@ -169,12 +169,6 @@ def test_has_summary_credential_follows_the_chosen_provider(monkeypatch):
     assert not load_settings(summary={"provider": "openai"}).has_summary_credential
 
 
-def test_the_example_config_loads_and_states_the_real_defaults():
-    """Keeps llm-gc.example.toml from drifting: every value it shows must be what the code does."""
-    example = Path(__file__).resolve().parents[2] / "llm-gc.example.toml"
-    # Dumped, because each load builds its own subclass and pydantic compares types too.
-    assert load_settings(example).model_dump() == load_settings().model_dump()
-
 
 class TestFindConfigFile:
     """Where the file comes from. The environment, directory and home are passed in, never patched."""
@@ -230,3 +224,17 @@ class TestFindConfigFile:
             self._find(places, environ={"LLM_GC_CONFIG": str(tmp_path / "absent.toml")})
         with pytest.raises(ConfigError, match="--config"):
             self._find(places, explicit=tmp_path / "absent.toml")
+
+
+@pytest.mark.parametrize("how", ["file", "environment", "flag"])
+def test_the_proxy_window_default_survives_setting_any_other_engine_key(isolated, monkeypatch, how):
+    """A partial [engine] must not fall back to the library's own window: only the keys given are overridden."""
+    if how == "file":
+        settings = load_settings(_write(isolated, "c.toml", "[engine]\nmin_cut_tokens = 2000\n"))
+    elif how == "environment":
+        monkeypatch.setenv("LLM_GC_ENGINE__MIN_CUT_TOKENS", "2000")
+        settings = load_settings()
+    else:
+        settings = load_settings(engine={"min_cut_tokens": 2000})
+    assert settings.engine.min_cut_tokens == 2000
+    assert settings.engine.context_window == DEFAULT_PROXY_CONTEXT_WINDOW

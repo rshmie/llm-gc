@@ -120,3 +120,16 @@ def test_a_missing_named_config_file_is_an_error(isolated):
 def test_no_credential_value_reaches_the_output(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "key-that-must-not-print")
     assert "key-that-must-not-print" not in _run(Recorder()).output
+
+
+def test_a_passed_check_says_so_and_where(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    result = _run(Recorder(), "--upstream", "https://gateway.example.com", "--summary-model", "gw-sonnet")
+    assert "check:     gw-sonnet answered at https://gateway.example.com" in result.output
+
+
+def test_the_banner_comes_before_the_check_so_a_refusal_reads_in_context(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    recorder = Recorder(provider_script=[LLMAuthError("invalid x-api-key")])
+    output = _run(recorder).output
+    assert output.index("upstream:") < output.index("refused LLM-GC's credential")

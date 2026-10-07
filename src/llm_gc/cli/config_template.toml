@@ -1,5 +1,7 @@
-# Configuration for llm-gc. Copy to llm-gc.toml (the file `llm-gc start` looks for in the
-# directory you run it from) and change what you need, or pass --config PATH.
+# Configuration for llm-gc, written by `llm-gc config init`. Every setting is shown at its
+# default: change what you need and leave the rest. `llm-gc start` uses the first file it
+# finds (--config, $LLM_GC_CONFIG, ./llm-gc.toml, ~/.config/llm-gc/config.toml);
+# `llm-gc config path` says which.
 #
 # Precedence, lowest to highest: these defaults, this file, .env, LLM_GC_* environment
 # variables, command-line flags. Credentials never go in this file: put them in .env or
