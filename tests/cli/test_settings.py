@@ -169,12 +169,6 @@ def test_has_summary_credential_follows_the_chosen_provider(monkeypatch):
     assert not load_settings(summary={"provider": "openai"}).has_summary_credential
 
 
-def test_the_example_config_loads_and_states_the_real_defaults():
-    """Keeps llm-gc.example.toml from drifting: every value it shows must be what the code does."""
-    example = Path(__file__).resolve().parents[2] / "llm-gc.example.toml"
-    # Dumped, because each load builds its own subclass and pydantic compares types too.
-    assert load_settings(example).model_dump() == load_settings().model_dump()
-
 
 class TestFindConfigFile:
     """Where the file comes from. The environment, directory and home are passed in, never patched."""

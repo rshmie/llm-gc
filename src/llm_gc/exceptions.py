@@ -34,6 +34,17 @@ class ConfigError(LLMGCError):
     code = "CONFIG_ERROR"
 
 
+class ProxyUnavailableError(LLMGCError):
+    """A running LLM-GC proxy could not be reached, or did not answer like one.
+
+    Raised by the command line when it asks a proxy about itself. Retryable: the
+    proxy may simply not have finished starting.
+    """
+
+    code = "PROXY_UNAVAILABLE"
+    retryable = True
+
+
 class CompactionRefused(LLMGCError):
     """A compactor declined to file the summary it was handed.
 

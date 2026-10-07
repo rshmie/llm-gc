@@ -1,6 +1,7 @@
 """The `llm-gc` command line. Application code: the library never imports it."""
 
 import asyncio
+import json
 import logging
 from collections.abc import Callable
 from pathlib import Path
@@ -8,26 +9,31 @@ from pathlib import Path
 import click
 
 from llm_gc import __version__
+from llm_gc.cli.config_commands import add_config_commands
+from llm_gc.cli.options import config_file_option
 from llm_gc.cli.serve import serve_proxy
 from llm_gc.cli.settings import (
     ProxySettings, create_summary_provider, find_config_file, load_settings, summary_base_url,
 )
 from llm_gc.engine import GcService, build_gc_service
-from llm_gc.exceptions import ConfigError
+from llm_gc.cli.stats import ProxyStats, fetch_proxy_stats, render_stats
+from llm_gc.exceptions import ConfigError, ProxyUnavailableError
 from llm_gc.llm.provider import LLMProvider
 from llm_gc.proxy.startup_checks import check_summariser
 
 ServeFn = Callable[[GcService, ProxySettings], None]
 ProviderFactory = Callable[[ProxySettings], LLMProvider]
+StatsFetcher = Callable[[str], ProxyStats]
 
 _LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
 
-def build_cli(*, serve: ServeFn = serve_proxy, make_provider: ProviderFactory = create_summary_provider) -> click.Group:
-    """The command group, with its two side effects passed in.
+def build_cli(*, serve: ServeFn = serve_proxy, make_provider: ProviderFactory = create_summary_provider,
+              fetch_stats: StatsFetcher = fetch_proxy_stats) -> click.Group:
+    """The command group, with its side effects passed in.
 
-    Binding ports and calling a model are what a test must not do, so they arrive as
-    arguments: `main` uses the real ones, and a test hands in recorders.
+    Binding ports, calling a model and calling a running proxy are what a test must not
+    do, so they arrive as arguments: `main` uses the real ones, and a test hands in fakes.
     """
 
     @click.group()
@@ -36,7 +42,7 @@ def build_cli(*, serve: ServeFn = serve_proxy, make_provider: ProviderFactory = 
         """LLM-GC: context garbage collection for LLM conversations, as a proxy."""
 
     @cli.command()
-    @click.option("--config", "config_path", type=click.Path(path_type=Path), help="The TOML config file.")
+    @config_file_option
     @click.option("--port", type=int, help="Where the proxy listens.")
     @click.option("--dashboard/--no-dashboard", default=None, help="Serve the live dashboard (shows conversations).")
     @click.option("--dashboard-port", type=int, help="Where the dashboard listens.")
@@ -90,6 +96,22 @@ def build_cli(*, serve: ServeFn = serve_proxy, make_provider: ProviderFactory = 
         click.echo("")
         serve(build_gc_service(settings.engine, summary_provider=engine_provider), settings)
 
+    @cli.command()
+    @config_file_option
+    @click.option("--port", type=int, help="The proxy's port (default: from the settings).")
+    @click.option("--json", "as_json", is_flag=True, help="Print the raw counters as JSON.")
+    def stats(config_path: Path | None, port: int | None, as_json: bool) -> None:
+        """Show a running proxy's counters: requests, and tokens in against tokens sent."""
+        try:
+            location = find_config_file(config_path)
+            settings = load_settings(location.path if location else None, port=port)
+            base_url = f"http://127.0.0.1:{settings.port}"
+            counters = fetch_stats(f"{base_url}/stats")
+        except (ConfigError, ProxyUnavailableError) as err:
+            raise click.ClickException(str(err)) from err
+        click.echo(json.dumps(counters.model_dump(), indent=2) if as_json else render_stats(counters, base_url))
+
+    add_config_commands(cli)
     return cli
 
 

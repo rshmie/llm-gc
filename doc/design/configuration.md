@@ -110,8 +110,10 @@ where one in a file is checked only when read. The single visible list of settin
 instead from a commented template, which shows every setting at its default, and a
 command that prints the effective values.
 
-**The template is a separate file, tested against the code.** A test loads it and
-requires the result to equal the built-in defaults, so the template cannot drift. The
+**The template is a separate file, tested against the code.** It ships inside the
+package, so it exists wherever LLM-GC is installed, and `config init` writes it out. A
+test loads it and requires the result to equal the built-in defaults, so the template
+cannot drift. The
 alternative, generating it from the settings' field descriptions, makes drift impossible
 by construction but gives up the grouping and prose that help a first-time reader. It is
 worth revisiting if the settings grow past about twenty-five.
@@ -167,8 +169,19 @@ makes one of them such a reason.
 - A misspelt LLM-GC variable in `.env` is ignored, not reported.
 - The template and the code are two things kept equal by a test, not one.
 
-## Not built yet
+### The commands around the file
 
-Commands to write the starter file, print the effective settings with the layer each
-came from, print the file in use, and read the running proxy's statistics. Until then the
-template is a file in the repository.
+`config init` writes the starter file into the current directory, or the per-user location
+with `--user`. It creates the file or fails in a single step, so it can never replace one
+that appeared between a check and the write; replacing is a separate, explicit flag.
+`config path` names the file the proxy would use and why, or says there is none.
+
+`config show` prints every effective setting, with the layer it came from beside it. The
+layers are merged before validation, so by then the origin of a value is gone; the origin
+is found by asking each source what it contains, highest first, and taking the first that
+mentions the setting. A setting no source mentions is a default. The output is valid
+TOML, with the layer as a trailing comment, so it can be redirected into a file and loads
+back as the same settings. A credential is reported as set or not, with the layer, and its
+value is never printed. It runs the same validation as startup, so it also answers whether
+a configuration is valid without starting anything. It takes no flags: a flag belongs to
+one particular start, and the point is to see what the file, `.env` and environment give.

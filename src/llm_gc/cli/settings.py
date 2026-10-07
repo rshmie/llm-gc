@@ -25,6 +25,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, SecretStr, Vali
 from pydantic_settings import (
     BaseSettings,
     DotEnvSettingsSource,
+    EnvSettingsSource,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
     TomlConfigSettingsSource,
@@ -247,12 +248,19 @@ def find_config_file(
             raise ConfigError(f"config file not found: {path} (from {origin})")
         return ConfigLocation(path, origin)
 
-    user_dir = Path(environ["XDG_CONFIG_HOME"]) if environ.get("XDG_CONFIG_HOME") else home / ".config"
     for path, origin in ((cwd / DEFAULT_CONFIG_FILENAME, "working directory"),
-                         (user_dir / USER_CONFIG_RELATIVE, "user config")):
+                         (user_config_path(environ=environ, home=home), "user config")):
         if path.is_file():
             return ConfigLocation(path, origin)
     return None
+
+
+def user_config_path(*, environ: Mapping[str, str] | None = None, home: Path | None = None) -> Path:
+    """Where the per-user config file lives, whether or not it exists yet."""
+    environ = os.environ if environ is None else environ
+    home = Path.home() if home is None else home
+    base = Path(environ["XDG_CONFIG_HOME"]) if environ.get("XDG_CONFIG_HOME") else home / ".config"
+    return base / USER_CONFIG_RELATIVE
 
 
 def load_settings(config_path: Path | None = None, **flags: Any) -> ProxySettings:
@@ -289,6 +297,44 @@ def load_settings(config_path: Path | None = None, **flags: Any) -> ProxySetting
         raise ConfigError(f"{config_path}: not valid TOML: {err}") from err
     except ValidationError as err:
         raise ConfigError(_describe_problems(err, config_path)) from err
+
+
+def settings_origins(config_path: Path | None, **flags: Any) -> dict[str, str]:
+    """For each setting some layer supplies, the highest layer that does: `flag`, `environment`, `.env` or `file`.
+
+    A setting no layer mentions is not in the result: it is the built-in default. Dotted
+    names, so `engine.min_cut_tokens`; credentials are keyed by their field name.
+
+    Asks the same sources `load_settings` uses what they contain, rather than inferring
+    from the finished object, because once layers are merged the origin is gone.
+    """
+    layers = (  # highest precedence first
+        ("flag", _drop_unset(flags)),
+        ("environment", EnvSettingsSource(ProxySettings)()),
+        (".env", _KnownSettingsDotEnvSource(ProxySettings)()),
+        ("file", _ConfigFileSource(ProxySettings, config_path)()),
+    )
+    origins: dict[str, str] = {}
+    for layer, supplied in layers:
+        for name in flatten_settings(supplied):
+            origins.setdefault(name.lower(), layer)  # lower: a credential's source key is its alias
+    return origins
+
+
+def flatten_settings(tree: Mapping[str, Any], prefix: str = "") -> dict[str, Any]:
+    """Nested settings as one level of dotted names: `{"engine": {"a": 1}}` becomes `{"engine.a": 1}`."""
+    flat: dict[str, Any] = {}
+    for key, value in tree.items():
+        if isinstance(value, Mapping):
+            flat.update(flatten_settings(value, f"{prefix}{key}."))
+        else:
+            flat[f"{prefix}{key}"] = value
+    return flat
+
+
+def credential_fields() -> frozenset[str]:
+    """The settings fields that hold a credential, which a display must never print."""
+    return frozenset(name for pair in _CREDENTIAL_FIELDS.values() for name in pair if name)
 
 
 def _drop_unset(flags: dict[str, Any]) -> dict[str, Any]:

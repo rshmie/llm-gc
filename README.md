@@ -250,6 +250,7 @@ pytest                # run the test suite
 ruff check .          # lint
 mypy                  # type-check the library
 python -m evals.decision_survival.run --rehearse   # the decision-survival check, offline
+llm-gc stats          # a running proxy's counters: requests, and tokens in against tokens sent
 ```
 
 ## Using it
@@ -516,8 +517,14 @@ it finds, and its banner says which; files are never merged:
 4. `llm-gc/config.toml` under `~/.config` (or `$XDG_CONFIG_HOME`)
 
 A file you asked for in 1 or 2 that doesn't exist is an error, not a silent fallback.
-[`llm-gc.example.toml`](llm-gc.example.toml) lists every setting with its default and what
-it decides: copy it to `llm-gc.toml` and change what you need. An unknown or misspelt
+`llm-gc config init` writes a commented starter file,
+[`llm-gc.toml`](src/llm_gc/cli/config_template.toml), into the current directory (`--user`
+writes the per-user one instead, and it will not replace a file you already have without
+`--force`). It lists every setting with its default and what it decides: change what you
+need. `llm-gc config path` says which file `start` would use, and `llm-gc config show` prints every
+effective setting with the layer it came from (file, `.env`, environment or default), which
+is the quickest way to find out why a value isn't what you expected; credentials are only
+reported as set or not, never shown. An unknown or misspelt
 setting is an error that names it, so it never looks configured when it isn't.
 
 **The proxy:**

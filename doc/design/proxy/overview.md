@@ -163,6 +163,15 @@ reconciliations — `history_rewinds`, `history_restarts`, `sessions_seeded`. A
 restart or a seed costs one uncompressed request, so each is counted rather than
 hidden.
 
+`llm-gc stats` reads these from a running proxy, on the port the settings name, and
+validates the answer before using it, since whatever is on that port may not be an
+LLM-GC proxy. "Applied" counts requests that went through LLM-GC's path, which includes
+the early ones where nothing has been condensed yet; "bypassed" counts requests
+forwarded untouched because they could not be read or the engine failed on the request
+path. Tokens are LLM-GC's own count, not what the provider bills, so the savings figure is
+an estimate of size, not of cost. With no requests it says so instead of printing zeros,
+because a ratio with nothing behind it is not a measurement.
+
 ## Why it exists
 
 The engine is a library; the proxy is how a real application uses it without
