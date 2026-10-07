@@ -273,8 +273,9 @@ python scripts/run_proxy.py --serve --dashboard   # with ANTHROPIC_API_KEY set
 ANTHROPIC_BASE_URL=http://127.0.0.1:9900 claude   # in the project you are working on
 ```
 
-Claude Code going through your organisation's proxy? See
-[Behind your organisation's proxy](#behind-your-organisations-proxy).
+If your `~/.claude/settings.json` already sets `ANTHROPIC_BASE_URL`, because your
+company routes Claude through its own proxy, that setting wins over the command line:
+follow [Behind your organisation's proxy](#behind-your-organisations-proxy) instead.
 
 Claude Code's own credentials are forwarded to Anthropic, never stored; the proxy's
 `ANTHROPIC_API_KEY` pays only for summaries and fact reads. Without it, the proxy runs
@@ -295,65 +296,82 @@ go whole — never worse than without LLM-GC.
 
 ### Behind your organisation's proxy
 
-Some organisations send all traffic to Anthropic through their own proxy: a gateway
-set as `ANTHROPIC_BASE_URL`, often with an `ANTHROPIC_AUTH_TOKEN`. LLM-GC goes in front
-of it. Your client talks to LLM-GC, LLM-GC forwards to the gateway, and LLM-GC's own
-summary and fact calls go through the gateway too, so nothing reaches Anthropic any
-other way:
+Use this if your company sends Claude's traffic through its own proxy: your
+`~/.claude/settings.json` has an `env` block with `ANTHROPIC_BASE_URL` (the company
+proxy's address) and a token or key. LLM-GC goes in the middle:
 
 ```
-your client ──► LLM-GC (127.0.0.1:9900) ──► your organisation's proxy ──► Anthropic
-                  │                                   ▲
-                  └──── LLM-GC's summaries and ───────┘
-                        fact reads
+Claude Code  ──►  LLM-GC  ──►  your company's proxy  ──►  Anthropic
 ```
 
-**1. Start LLM-GC with the gateway as its upstream.** Use the exact URL your client
-has as `ANTHROPIC_BASE_URL`, path included. Give LLM-GC a credential the gateway
-accepts, in this terminal: a bearer token (`ANTHROPIC_AUTH_TOKEN`), a key
-(`ANTHROPIC_API_KEY`), or both, each sent when set. If Claude Code's settings already
-hold the token, read it from there, so it never appears on screen or in your shell
-history:
+LLM-GC needs two things from your settings file:
+
+- **the company proxy's URL**, the `ANTHROPIC_BASE_URL`, to forward Claude's requests to;
+- **a credential it accepts**, the `ANTHROPIC_AUTH_TOKEN` (or `ANTHROPIC_API_KEY`), for
+  LLM-GC's own summary calls, which go through the company proxy too.
+
+#### 1. Start LLM-GC
+
+In a terminal, from the LLM-GC folder:
 
 ```bash
-export ANTHROPIC_AUTH_TOKEN="$(python3 -c 'import json, os; print(json.load(open(os.path.expanduser("~/.claude/settings.json")))["env"]["ANTHROPIC_AUTH_TOKEN"])')"
-python scripts/run_proxy.py --serve --dashboard --upstream https://your-gateway.example.com
+settings=~/.claude/settings.json
+export ANTHROPIC_AUTH_TOKEN="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["env"]["ANTHROPIC_AUTH_TOKEN"])' "$settings")"
+python scripts/run_proxy.py --serve --dashboard \
+  --upstream "$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["env"]["ANTHROPIC_BASE_URL"])' "$settings")"
 ```
 
-The startup lines confirm it: `upstream:` names your gateway, and `compactor:` says
-`AnthropicClient at https://your-gateway.example.com`. A warning that no credential was
-found means summaries would be canned: export one and start again.
+This reads both values from your settings, so you type neither and the token is never
+shown. If your settings have `ANTHROPIC_API_KEY` rather than `ANTHROPIC_AUTH_TOKEN`,
+change the name in both places on the `export` line.
 
-**2. Point your client at LLM-GC instead of the gateway.** Its own credential stays as it
-is; LLM-GC forwards it untouched and never stores it.
+In what it prints, `upstream:` should show your company proxy's URL. A warning that no
+credential was found means the `export` didn't work. Leave this terminal open; the
+dashboard is at http://127.0.0.1:9901.
 
-- **Claude Code.** Set the address in a settings file, not on the command line: the
-  `env` block in `~/.claude/settings.json` is applied after the shell's variables, so
-  `ANTHROPIC_BASE_URL=… claude` still goes straight to the gateway. In the project you
-  work in, `.claude/settings.local.json` overrides your user settings for that project
-  only:
+#### 2. Point Claude Code at LLM-GC
 
-  ```json
-  { "env": { "ANTHROPIC_BASE_URL": "http://127.0.0.1:9900" } }
-  ```
+Claude Code takes `ANTHROPIC_BASE_URL` from its settings files, and a value typed before
+`claude` on the command line is overridden by them. So set LLM-GC's address in a settings
+file. In the project you want to use, put this in `.claude/settings.local.json`:
 
-  Delete it to go straight to the gateway again.
-- **An application using the SDK.** `anthropic.Anthropic(base_url="http://127.0.0.1:9900")`,
-  with the credential it already uses for the gateway.
-- **`scripts/chat.py`.** Export the same credential in its terminal; it talks to
-  `127.0.0.1:9900` by default. Add `--model` if your gateway allows only some models.
+```json
+{ "env": { "ANTHROPIC_BASE_URL": "http://127.0.0.1:9900" } }
+```
 
-**3. Check that it works.** The proxy's terminal logs a line for every request it
-handles, and the dashboard shows the conversation from its second message. After the
-first collection, the Engine tab's *What fell short* says whether LLM-GC's own calls got
-through.
+If that file already exists (Claude Code saves your permission choices there), add the
+`env` entry to it rather than replacing the file. Then start Claude in that project as
+usual: `claude`.
 
-| What you see | What it means |
+A project's settings take priority over `~/.claude/settings.json`, so only this project
+goes through LLM-GC; your other projects still use the company proxy directly. To stop,
+remove the entry.
+
+> **Every project instead?** Set `ANTHROPIC_BASE_URL` to `http://127.0.0.1:9900` in
+> `~/.claude/settings.json` itself. Write down the company proxy's URL first: step 1 can
+> no longer read it from that file, so pass it yourself, as `--upstream https://…`.
+
+#### 3. Check that it works
+
+Send Claude a message. LLM-GC's terminal prints a line for every request, and the
+dashboard shows the conversation from its second message. Once the conversation has
+grown, the dashboard says *Last collection …* and the prompt it sends gets smaller.
+
+| What you see | What to do |
 |---|---|
-| No lines in the proxy's terminal while you chat | The client still goes straight to the gateway: check its base URL (for Claude Code, the settings file above) |
-| Replies fail with the gateway's error | The gateway refused the forwarded request: check that `--upstream` is the exact URL your client used, path included |
-| *Summary request failed* with a 401 or 403 | The gateway refused LLM-GC's own calls: export the credential it takes. It may also need headers LLM-GC's calls don't send yet, or not allow the summary model, `claude-sonnet-5` |
-| Nothing is ever compacted | Every summary failed, so each collection kept the words and was dropped as no smaller; *What fell short* says why |
+| Nothing new in LLM-GC's terminal | Claude isn't using LLM-GC: check step 2, and that you started `claude` in that project |
+| Claude shows an error from the company proxy | `--upstream` is wrong: it must be exactly the company proxy's URL from your settings |
+| Engine tab: *Summary request failed*, with a 401 or 403 | The company proxy refused LLM-GC's own calls: check the credential exported in step 1 |
+| Nothing is ever compacted | Same cause as the row above: when every summary fails, nothing can shrink |
+
+If the credential is right and summaries still fail, the error on the Engine tab says
+why: the company proxy may block the model LLM-GC summarises with (`claude-sonnet-5`)
+or need headers LLM-GC doesn't send yet.
+
+**Other clients** work the same way: point them at `http://127.0.0.1:9900` with the
+credential they already use for the company proxy. With the SDK, that is
+`anthropic.Anthropic(base_url="http://127.0.0.1:9900")`; for `scripts/chat.py`, export
+the same token in its terminal.
 
 ### As a library
 
