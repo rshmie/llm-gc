@@ -85,6 +85,9 @@ export const NOT_MOVED = {
   archive_failed: ["Facts couldn't be read", "Its exchange has no facts: shown compacted or archived, the model reads it without them."],
   recap_over_budget: ["Recap over its budget", "Every exchange is folded out of view and the recap still doesn't fit: the budget is too small for this conversation."],
 };
+// Said where a refused credential shows: on both tabs, so it is not found only by opening a card.
+export const CREDENTIAL_REFUSED_TITLE = "The upstream is refusing LLM-GC's credential.";
+export const CREDENTIAL_REFUSED_TEXT = "LLM-GC can't make summaries, so collections are being skipped and the prompt has stopped getting smaller. What was already condensed stays. Check the credential LLM-GC was started with, then restart it.";
 // How much of a message the model still has, drawn as the height of its bar (percent of full).
 export const HEIGHT = { verbatim: 100, kept: 100, compacted: 52, archived: 24, out_of_view: 10 };
 // The ⓘ beside each card: the explanation its one-line subtitle leaves out.

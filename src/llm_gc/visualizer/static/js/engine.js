@@ -2,9 +2,9 @@
 // runs and why each message gets what it gets, what collections did and couldn't do, every check,
 // and last the proxy's totals and settings, which apply to every conversation.
 
-import { BECOMES, CARD_INFO, CATS, CHART_HEIGHT, CHECKS_SHOWN, MOVES_SHOWN, NOT_MOVED, OUTCOME_LINES, STATUS, describeOutcome, swatch } from "./vocabulary.js";
+import { BECOMES, CARD_INFO, CATS, CHART_HEIGHT, CHECKS_SHOWN, CREDENTIAL_REFUSED_TEXT, CREDENTIAL_REFUSED_TITLE, MOVES_SHOWN, NOT_MOVED, OUTCOME_LINES, STATUS, describeOutcome, swatch } from "./vocabulary.js";
 import { $, agoTs, compact, countEl, fill, fmt, h, meterBar, plural, reducedMotion, setChildren, storeGet, storeSet, svg } from "./dom.js";
-import { keepLast, preview, state, ui } from "./state.js";
+import { credentialRefusal, keepLast, preview, state, ui } from "./state.js";
 import { hideTooltip, info, placeTooltip, showTooltip, tipQuote, tooltipContent, hoverTip } from "./tooltip.js";
 import { jumpTo, messagesLabel, trace } from "./conversation.js";
 import { showTab } from "./shell.js";
@@ -113,13 +113,15 @@ export function renderEngineStatus() {
   const problems = a ? a.recent_degradations.length : 0;
   $("view-engine").classList.toggle("has-problems", problems > 0);
   const failed = !!last && last.gc_status === "bypassed_on_error";
-  const tone = failed ? "critical" : problems ? "warn" : "good";
+  const refusal = credentialRefusal();
+  const tone = failed || refusal ? "critical" : problems ? "warn" : "good";
   const lastText = last ? `Last check ${agoTs(last.gc_completed_at)}: ${STATUS[last.gc_status]?.text || last.gc_status}, ${last.duration_ms.toFixed(0)} ms.`
     : "No checks yet. LLM-GC checks after every reply.";
   fill("eng-status", h("div", { class: `status-line tone-${tone}` },
-    h("span", { class: "badge", "aria-hidden": "true" }, failed ? "✕" : problems ? "!" : "✓"),
-    h("span", { class: "msg-text" }, h("b", {}, failed ? "The last check failed, and nothing changed." : problems ? `${plural(problems, "part")} of a collection fell short.` : "LLM-GC is working normally."),
-      ` ${lastText}`, failed && last.failure_reason ? ` ${last.failure_stage}: ${last.failure_reason}` : null),
+    h("span", { class: "badge", "aria-hidden": "true" }, failed || refusal ? "✕" : problems ? "!" : "✓"),
+    h("span", { class: "msg-text" }, h("b", {}, refusal ? CREDENTIAL_REFUSED_TITLE : failed ? "The last check failed, and nothing changed." : problems ? `${plural(problems, "part")} of a collection fell short.` : "LLM-GC is working normally."),
+      refusal ? ` ${CREDENTIAL_REFUSED_TEXT} The upstream said: ${refusal.degradation.detail}` : ` ${lastText}`,
+      !refusal && failed && last.failure_reason ? ` ${last.failure_stage}: ${last.failure_reason}` : null),
     problems ? h("button", { class: "link-btn", type: "button", onclick: () => openCard("notmoved", true) }, "See why →")
       : h("span", { class: "then" }, "Every collection did all it planned.")));
 }

@@ -384,7 +384,8 @@ grown, the dashboard says *Last collection …* and the prompt it sends gets sma
 | Claude shows an error from the company proxy | `--upstream` is wrong: it must be exactly the company proxy's URL from your settings |
 | LLM-GC stops at startup: *the upstream refused LLM-GC's summary request … invalid model* | The company proxy doesn't offer that model: pass one it does with `--summary-model` |
 | LLM-GC stops at startup: *refused LLM-GC's credential* | Check the credential exported in step 1 |
-| Engine tab: *Summary request failed*, later on | The company proxy refused a summary after startup; the Engine tab shows its reason. It may need headers LLM-GC doesn't send yet |
+| Both tabs: *The upstream is refusing LLM-GC's credential* | The company proxy accepted LLM-GC's credential at startup and refuses it now, for example a revoked or expired token. Both tabs show the proxy's own reason. Fix the credential and restart LLM-GC; what was already condensed stays |
+| Engine tab: *Summary request failed*, later on, without that message | The company proxy refused a summary for another reason; the Engine tab shows it. It may need headers LLM-GC doesn't send yet |
 
 **Other clients** work the same way: point them at `http://127.0.0.1:9900` with the
 credential they already use for the company proxy. With the SDK, that is
