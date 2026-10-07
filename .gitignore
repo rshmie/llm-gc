@@ -33,5 +33,8 @@ uv.lock
 # macOS
 .DS_Store
 
+# A deployment's own config (gateway URL, ports); the committed template is llm-gc.example.toml
+llm-gc.toml
+
 # Decision-survival check results; a run cited as evidence is committed on purpose
 evals/decision_survival/runs/

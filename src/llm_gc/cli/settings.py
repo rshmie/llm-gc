@@ -86,6 +86,17 @@ class _KnownSettingsDotEnvSource(DotEnvSettingsSource):
         return {key: value for key, value in super().__call__().items() if key in known}
 
 
+class EngineSettings(GCConfig):
+    """The engine's tunables as the proxy defaults them: `GCConfig`, with the proxy's window.
+
+    A subclass rather than a `default_factory` on the field, because a layer that sets
+    only some engine keys makes pydantic build the section from just those keys: a
+    factory is bypassed, and the library's own window would fill in the rest.
+    """
+
+    context_window: int = Field(default=DEFAULT_PROXY_CONTEXT_WINDOW, gt=0)
+
+
 class SummarySettings(BaseModel):
     """The model LLM-GC itself calls to summarise spans and read their facts.
 
@@ -137,7 +148,7 @@ class ProxySettings(BaseSettings):
     compactor: Literal["llm", "noop"] = "llm"
     summary: SummarySettings = Field(default_factory=SummarySettings)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
-    engine: GCConfig = Field(default_factory=lambda: GCConfig(context_window=DEFAULT_PROXY_CONTEXT_WINDOW))
+    engine: EngineSettings = Field(default_factory=EngineSettings)
 
     # `SecretStr` keeps a value out of repr(), logs and error messages. The alias
     # replaces the LLM_GC_ prefix for these two, so they read as ANTHROPIC_API_KEY.
@@ -303,6 +314,13 @@ def _describe_problems(err: ValidationError, config_path: Path | None) -> str:
     return "\n".join(lines)
 
 
+def summary_base_url(settings: ProxySettings) -> str | None:
+    """Where the summary calls go: the setting, else the upstream for anthropic, else the vendor's own address (None)."""
+    chosen = settings.summary
+    # Only a provider speaking the proxy's own protocol can share its upstream.
+    return chosen.base_url or (settings.upstream if chosen.provider == "anthropic" else None)
+
+
 def create_summary_provider(settings: ProxySettings) -> LLMProvider:
     """The client for LLM-GC's own model calls, as the settings describe it.
 
@@ -311,14 +329,12 @@ def create_summary_provider(settings: ProxySettings) -> LLMProvider:
     """
     chosen = settings.summary
     api_key_field, token_field = _CREDENTIAL_FIELDS[chosen.provider]
-    # Only a provider speaking the proxy's own protocol can share its upstream.
-    base_url = chosen.base_url or (settings.upstream if chosen.provider == "anthropic" else None)
     # Each vendor gets only its own credentials: another vendor's, exported for some
     # other tool, must neither be sent to it nor stop it starting.
     return create_provider(
         chosen.provider,
         model=chosen.model,
-        base_url=base_url,
+        base_url=summary_base_url(settings),
         api_key=_reveal(getattr(settings, api_key_field)),
         auth_token=_reveal(getattr(settings, token_field)) if token_field else None,
     )

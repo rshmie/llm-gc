@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Talk to a model through the LLM-GC proxy, and watch the dashboard while you do.
 
-    python scripts/run_proxy.py --serve --dashboard       # terminal 1
+    llm-gc start --dashboard                              # terminal 1
     python scripts/chat.py                                # terminal 2
     open http://127.0.0.1:9901                            # the dashboard
 
@@ -13,7 +13,7 @@ streamed, and thinking blocks are returned with the history unchanged.
 Commands: /new starts a fresh conversation; /quit (or Ctrl-D) leaves.
 
 Credentials: ANTHROPIC_API_KEY, or any credential the SDK resolves on its own.
-None is needed when the proxy runs with --stub-upstream.
+None is needed when the proxy runs offline (`python scripts/run_proxy.py --serve`).
 
 Developer tooling, not library code, which is why it lives in `scripts/`.
 """
@@ -39,7 +39,7 @@ PLACEHOLDER_KEY = "no-credential-found"
 NO_CREDENTIAL_HINT = (
     "no Anthropic credential was found, so a placeholder key was sent.\n"
     "  for a real model:  export ANTHROPIC_API_KEY=... and start chat.py again\n"
-    "  to run offline:    restart the proxy with --stub-upstream"
+    "  to run offline:    python scripts/run_proxy.py --serve --dashboard"
 )
 
 _DIM, _RESET = "\033[2m", "\033[0m"
@@ -99,7 +99,7 @@ def chat(args: argparse.Namespace) -> None:
     history: list[dict] = []
     print(f"talking to {args.model} through {args.proxy}   (/new, /quit)")
     if not has_credential:
-        print(f"{_DIM}no Anthropic credential found - fine if the proxy runs with --stub-upstream{_RESET}")
+        print(f"{_DIM}no Anthropic credential found - fine if the proxy runs offline (run_proxy.py --serve){_RESET}")
 
     while True:
         try:
@@ -120,7 +120,7 @@ def chat(args: argparse.Namespace) -> None:
         try:
             reply = send(client, args, history)
         except anthropic.APIConnectionError:
-            print(f"\ncannot reach the proxy at {args.proxy} - is `run_proxy.py --serve` running?")
+            print(f"\ncannot reach the proxy at {args.proxy} - is `llm-gc start` running?")
         except anthropic.AuthenticationError as err:
             print(f"\nthe provider answered {err.status_code}: {err.message}")
             if not has_credential:

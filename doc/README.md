@@ -27,6 +27,7 @@ design/
   events/                     the event bus components report through
   visibility/                 what the model knows, what LLM-GC did, and the dashboard
   llm-provider.md             the model calls LLM-GC makes on its own behalf
+  configuration.md            where settings come from, which wins, and what a bad one does
   storage.md                  schema versioning for persisted records
   failure-handling.md         the circuit breaker around engine failures
 ```

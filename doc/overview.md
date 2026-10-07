@@ -329,6 +329,8 @@ not just what it does.
   history, and never makes a conversation worse than not using LLM-GC.
 - **[design/llm-provider.md](design/llm-provider.md)** — the model calls LLM-GC
   makes for itself, and why they never share the user's key.
+- **[design/configuration.md](design/configuration.md)** — where settings come from,
+  which one wins, and why a bad one stops startup instead of degrading a request.
 
 **Transparency and failure**
 

@@ -18,11 +18,11 @@ next request carries one compact recap instead of the whole history. **And it ne
 silently:** a live dashboard shows, for every turn, exactly what the model still
 receives, so you can see when its grounding has gone.
 
-After the [setup](#setup), with `ANTHROPIC_API_KEY` set (or add `--stub-upstream` to run
-offline, with canned replies):
+After the [setup](#setup), with `ANTHROPIC_API_KEY` set (or try it offline, with canned
+replies, using `python scripts/run_proxy.py --serve --dashboard`):
 
 ```bash
-python scripts/run_proxy.py --serve --dashboard   # the proxy on :9900, the dashboard on :9901
+llm-gc start --dashboard                          # the proxy on :9900, the dashboard on :9901
 python scripts/chat.py                            # talk through it, and watch http://localhost:9901
 ANTHROPIC_BASE_URL=http://127.0.0.1:9900 claude   # or run Claude Code through it
 ```
@@ -216,8 +216,8 @@ If the test suite passes, the environment is ready.
 Run the proxy with the dashboard beside it, then talk through it:
 
 ```bash
-python scripts/run_proxy.py --serve --dashboard   # add --stub-upstream to run offline
-python scripts/chat.py                            # in a second terminal
+llm-gc start --dashboard    # needs a credential; offline: python scripts/run_proxy.py --serve --dashboard
+python scripts/chat.py      # in a second terminal
 # open http://localhost:9901
 ```
 
@@ -269,7 +269,7 @@ client = anthropic.Anthropic(base_url="http://127.0.0.1:9900")
 ### With Claude Code
 
 ```bash
-python scripts/run_proxy.py --serve --dashboard   # with ANTHROPIC_API_KEY set
+llm-gc start --dashboard                          # with ANTHROPIC_API_KEY set
 ANTHROPIC_BASE_URL=http://127.0.0.1:9900 claude   # in the project you are working on
 ```
 
@@ -311,8 +311,8 @@ LLM-GC needs three values. All three are usually in `~/.claude/settings.json`, u
 
 | Value | Where to find it | How you give it |
 |---|---|---|
-| The company proxy's URL | `ANTHROPIC_BASE_URL` | `--upstream` |
-| A model name the company proxy offers | an entry ending in `_MODEL`, such as `ANTHROPIC_DEFAULT_SONNET_MODEL`; if there is none, ask your proxy team | `--summary-model` |
+| The company proxy's URL | `ANTHROPIC_BASE_URL` | `--upstream` (or `upstream` in the [config file](#configuration)) |
+| A model name the company proxy offers | an entry ending in `_MODEL`, such as `ANTHROPIC_DEFAULT_SONNET_MODEL`; if there is none, ask your proxy team | `--summary-model` (or `model` under `[summary]`) |
 | Your token | `ANTHROPIC_AUTH_TOKEN` (or `ANTHROPIC_API_KEY`) | an environment variable, never a flag |
 
 LLM-GC uses the model and the token for its own summaries, which go through the company
@@ -324,7 +324,7 @@ In a terminal, from the LLM-GC folder:
 
 ```bash
 read -s ANTHROPIC_AUTH_TOKEN && export ANTHROPIC_AUTH_TOKEN    # paste your token, press Enter
-python scripts/run_proxy.py --serve --dashboard \
+llm-gc start --dashboard \
   --upstream https://your-company-proxy.example.com \
   --summary-model your-sonnet-model-name
 ```
@@ -337,8 +337,11 @@ Before it serves, LLM-GC asks the company proxy for one token with that model an
 credential, so a wrong one stops it straight away rather than failing later:
 
 ```
+config:    none, built-in defaults
 upstream:  https://your-company-proxy.example.com
+compactor: anthropic, model your-sonnet-model-name
 check:     your-sonnet-model-name answered at https://your-company-proxy.example.com
+
 proxy      http://127.0.0.1:9900   (stats: /stats)
 dashboard  http://127.0.0.1:9901
 ```
@@ -378,7 +381,7 @@ grown, the dashboard says *Last collection …* and the prompt it sends gets sma
 |---|---|
 | Nothing new in LLM-GC's terminal | Claude isn't using LLM-GC: check step 2, and that you started `claude` in that project |
 | Claude shows an error from the company proxy | `--upstream` is wrong: it must be exactly the company proxy's URL from your settings |
-| LLM-GC stops at startup: *cannot summarise … invalid model* | The company proxy doesn't offer that model: pass one it does with `--summary-model` |
+| LLM-GC stops at startup: *the upstream refused LLM-GC's summary request … invalid model* | The company proxy doesn't offer that model: pass one it does with `--summary-model` |
 | LLM-GC stops at startup: *refused LLM-GC's credential* | Check the credential exported in step 1 |
 | Engine tab: *Summary request failed*, later on | The company proxy refused a summary after startup; the Engine tab shows its reason. It may need headers LLM-GC doesn't send yet |
 
@@ -491,10 +494,51 @@ isn't an honest number.
 
 ## Configuration
 
-The library takes a `GCConfig`; the proxy script exposes the settings worth turning while
-you watch the dashboard:
+`llm-gc start` needs nothing but a credential. To change anything else, say so in whichever
+of these suits you. When a setting appears in more than one, the later one wins:
 
-| `GCConfig` | `run_proxy.py` flag | Default | What it decides |
+```
+built-in defaults  <  config file  <  .env  <  LLM_GC_* environment variables  <  flags
+ what works         what you        local        CI, containers,               a quick
+ out of the box     keep and share  secrets      one-off overrides             experiment
+```
+
+A flag you leave out changes nothing: the setting comes from the layer below, so a flag's
+own default never overrides your file.
+
+**The config file** is TOML, because it allows comments and has no surprises
+(`no` stays a string, `3.10` isn't turned into `3.1`). `llm-gc start` uses the first one
+it finds, and its banner says which; files are never merged:
+
+1. `--config PATH`
+2. the file named by the `LLM_GC_CONFIG` environment variable
+3. `llm-gc.toml` in the directory you run it from
+4. `llm-gc/config.toml` under `~/.config` (or `$XDG_CONFIG_HOME`)
+
+A file you asked for in 1 or 2 that doesn't exist is an error, not a silent fallback.
+[`llm-gc.example.toml`](llm-gc.example.toml) lists every setting with its default and what
+it decides: copy it to `llm-gc.toml` and change what you need. An unknown or misspelt
+setting is an error that names it, so it never looks configured when it isn't.
+
+**The proxy:**
+
+| Setting | File key | Flag | Environment | Default |
+|---|---|---|---|---|
+| Where the proxy listens | `port` | `--port` | `LLM_GC_PORT` | 9900 |
+| Serve the dashboard (shows conversations) | `dashboard` | `--dashboard` | `LLM_GC_DASHBOARD` | off |
+| Where the dashboard listens | `dashboard_port` | `--dashboard-port` | `LLM_GC_DASHBOARD_PORT` | 9901 |
+| Where requests are forwarded, and where LLM-GC's own summary calls go | `upstream` | `--upstream` | `LLM_GC_UPSTREAM` | `https://api.anthropic.com` |
+| `llm` summarises with a model; `noop` makes no model calls | `compactor` | `--compactor` | `LLM_GC_COMPACTOR` | `llm` |
+| The vendor LLM-GC summarises with: `anthropic` or `openai` | `[summary] provider` | `--summary-provider` | `LLM_GC_SUMMARY__PROVIDER` | `anthropic` |
+| The model it summarises and reads facts with, as that vendor (or a gateway) names it. Checked at startup | `[summary] model` | `--summary-model` | `LLM_GC_SUMMARY__MODEL` | the vendor's own |
+| Where summary calls go, if not the upstream | `[summary] base_url` | | `LLM_GC_SUMMARY__BASE_URL` | the upstream for `anthropic`; the vendor's address otherwise |
+| Log level | `log_level` | `--log-level` | `LLM_GC_LOG_LEVEL` | `INFO` |
+
+**The engine** is what the library takes as a `GCConfig`. These are the settings worth
+turning while you watch the dashboard; in the file they go under `[engine]`, and in the
+environment they take `LLM_GC_ENGINE__`:
+
+| `GCConfig` | Flag | Default | What it decides |
 |---|---|---|---|
 | `min_cut_tokens` | `--min-cut-tokens` | 1000 | tokens a collection must summarise or archive before it runs |
 | `last_n_turns_to_keep` | `--keep-last` | 5 | newest messages always sent word for word |
@@ -504,20 +548,29 @@ you watch the dashboard:
 | `level_margin` | | 0.05 | how far past a line a score must move before a span changes level, so a score near a line does not flip it back and forth |
 | `max_recap_ratio` | | 0.3 | share of the window the recap may spend; over it, the coldest spans lose detail, then the oldest fold out of view |
 
-An unknown setting is an error, so a misspelt one never looks configured.
+The proxy's default window is 200,000, the smallest of the current models'. Raise it only
+if every model you proxy has a larger one: a window set too large lets a recap outgrow the
+model's, and requests fail.
 
-The proxy also takes where to forward, and LLM-GC's own credential:
+**Credentials** are LLM-GC's own, for its summary and fact calls, never taken from a
+client's request. They come only from the environment or `.env` (copy
+[`.env.example`](.env.example)), never from flags, so they never land in shell history,
+and never from the config file, which is meant to be shared: a credential there is
+refused.
 
-| Setting | Given as | What it decides |
-|---|---|---|
-| `--upstream` | flag | where requests are forwarded, and where LLM-GC's own summary and fact calls go; `https://api.anthropic.com` unless set |
-| `--summary-model` | flag | the model LLM-GC summarises and reads facts with, as the upstream names it; `claude-sonnet-5` unless set. Checked at startup |
-| `ANTHROPIC_API_KEY` | environment | LLM-GC's own key, sent as `x-api-key` |
-| `ANTHROPIC_AUTH_TOKEN` | environment | LLM-GC's own bearer token, sent as `Authorization`; either or both |
+| Variable | What it is |
+|---|---|
+| `ANTHROPIC_API_KEY` | an Anthropic key, sent as `x-api-key` |
+| `ANTHROPIC_AUTH_TOKEN` | a bearer token, sent as `Authorization`, as a gateway often takes; either or both |
+| `OPENAI_API_KEY` | only when `provider` is `openai` |
 
-Credentials come only from the environment, never from flags, so they never land in
-shell history. Without either, summaries are canned: useful for trying the dashboard,
-not for real work.
+Each vendor receives only its own credentials. Without one for the chosen vendor,
+`llm-gc start` stops and says so, rather than running on summaries that only look like
+compaction. `--compactor noop` runs with no credential and no model calls: exchanges are
+kept or archived and never condensed, which is also the baseline to measure against. To
+look around with no key at all, use `python scripts/run_proxy.py --serve --dashboard`.
+
+The library never reads files or the environment: it takes a `GCConfig` in code.
 
 ## GC strategies
 
@@ -549,6 +602,7 @@ alternatives that were rejected and the reason.**
 - [Compaction](doc/design/generational-memory/compaction.md) — how a span gets its summary, and refusing one that does not help
 - [The proxy](doc/design/proxy/overview.md) — reconciling with the client's history, finding the conversation, forwarding, and what it never condenses
 - [LLM providers](doc/design/llm-provider.md) — the model calls behind summaries and facts
+- [Configuration](doc/design/configuration.md) — where settings come from, which one wins, and why a bad one stops startup
 - [Session management](doc/design/session/overview.md) — per-conversation state and its concurrency contract
 - [Visibility](doc/design/visibility/overview.md) — transparency vs. observability, and why there is no aggregate risk score
 - [Events](doc/design/events/overview.md) — the pub/sub bus every component instruments through

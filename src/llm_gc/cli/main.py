@@ -9,7 +9,9 @@ import click
 
 from llm_gc import __version__
 from llm_gc.cli.serve import serve_proxy
-from llm_gc.cli.settings import ProxySettings, create_summary_provider, find_config_file, load_settings
+from llm_gc.cli.settings import (
+    ProxySettings, create_summary_provider, find_config_file, load_settings, summary_base_url,
+)
 from llm_gc.engine import GcService, build_gc_service
 from llm_gc.exceptions import ConfigError
 from llm_gc.llm.provider import LLMProvider
@@ -65,7 +67,6 @@ def build_cli(*, serve: ServeFn = serve_proxy, make_provider: ProviderFactory = 
                 engine={"min_cut_tokens": min_cut_tokens, "last_n_turns_to_keep": keep_last,
                         "context_window": context_window},
             )
-            engine_provider = _prepare_summariser(settings, make_provider)
         except ConfigError as err:
             raise click.ClickException(str(err)) from err
 
@@ -75,9 +76,14 @@ def build_cli(*, serve: ServeFn = serve_proxy, make_provider: ProviderFactory = 
                             datefmt="%H:%M:%S")
         logging.getLogger("httpx2").setLevel(logging.WARNING)
 
+        # Said before the check, so a refusal reads against what was being tried.
         click.echo(f"config:    {f'{location.path} ({location.origin})' if location else 'none, built-in defaults'}")
         click.echo(f"upstream:  {settings.upstream}")
         click.echo(f"compactor: {_describe_compactor(settings)}")
+        try:
+            engine_provider = _prepare_summariser(settings, make_provider)
+        except ConfigError as err:
+            raise click.ClickException(str(err)) from err
         click.echo(f"\nproxy      http://127.0.0.1:{settings.port}   (stats: /stats)")
         if settings.dashboard:
             click.echo(f"dashboard  http://127.0.0.1:{settings.dashboard_port}")
@@ -100,13 +106,13 @@ def _prepare_summariser(settings: ProxySettings, make_provider: ProviderFactory)
             f"no credential for the {settings.summary.provider} summariser. Set it in the environment or .env "
             "(see .env.example), or pass --compactor noop to run without summaries."
         )
-    _check_summariser(make_provider(settings))
+    _check_summariser(make_provider(settings), settings)
     # A second client for the engine: the check's was closed on its own event loop, and the
     # engine's first use is on the servers'.
     return make_provider(settings)
 
 
-def _check_summariser(probe: LLMProvider) -> None:
+def _check_summariser(probe: LLMProvider, settings: ProxySettings) -> None:
     async def check() -> str | None:
         try:
             return await check_summariser(probe)
@@ -118,6 +124,10 @@ def _check_summariser(probe: LLMProvider) -> None:
     warning = asyncio.run(check())
     if warning:
         click.echo(f"check:     WARNING: {warning}")
+    else:
+        chosen = settings.summary
+        click.echo(f"check:     {chosen.model or 'the default model'} answered at "
+                   f"{summary_base_url(settings) or chosen.provider}")
 
 
 def _describe_compactor(settings: ProxySettings) -> str:

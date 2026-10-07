@@ -230,3 +230,17 @@ class TestFindConfigFile:
             self._find(places, environ={"LLM_GC_CONFIG": str(tmp_path / "absent.toml")})
         with pytest.raises(ConfigError, match="--config"):
             self._find(places, explicit=tmp_path / "absent.toml")
+
+
+@pytest.mark.parametrize("how", ["file", "environment", "flag"])
+def test_the_proxy_window_default_survives_setting_any_other_engine_key(isolated, monkeypatch, how):
+    """A partial [engine] must not fall back to the library's own window: only the keys given are overridden."""
+    if how == "file":
+        settings = load_settings(_write(isolated, "c.toml", "[engine]\nmin_cut_tokens = 2000\n"))
+    elif how == "environment":
+        monkeypatch.setenv("LLM_GC_ENGINE__MIN_CUT_TOKENS", "2000")
+        settings = load_settings()
+    else:
+        settings = load_settings(engine={"min_cut_tokens": 2000})
+    assert settings.engine.min_cut_tokens == 2000
+    assert settings.engine.context_window == DEFAULT_PROXY_CONTEXT_WINDOW
