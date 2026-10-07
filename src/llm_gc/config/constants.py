@@ -5,6 +5,10 @@ from llm_gc import __version__
 APP_VERSION = __version__
 
 DEFAULT_CONTEXT_WINDOW = 128_000
+# The proxy's window when none is configured: the smallest of the current models'. Too
+# small costs some compression; too large lets a recap outgrow the model's window and
+# fail requests. A larger model is an explicit opt-in.
+DEFAULT_PROXY_CONTEXT_WINDOW = 200_000
 DEFAULT_KEEP_THRESHOLD = 0.7
 DEFAULT_ARCHIVE_THRESHOLD = 0.3
 DEFAULT_LAST_N_TURNS_TO_KEEP = 5

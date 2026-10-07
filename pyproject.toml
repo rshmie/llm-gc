@@ -7,7 +7,18 @@ name = "llm-gc"
 version = "0.1.0"
 description = "Context-aware garbage collection for LLMs with built-in epistemic transparency — see what your model remembers, what it's forgotten, and when to worry."
 requires-python = ">=3.13"
-dependencies = ["pydantic", "tiktoken", "fastapi", "uvicorn", "httpx2"]
+dependencies = [
+    "pydantic",
+    "tiktoken",
+    "fastapi",
+    "uvicorn",
+    "httpx2",
+    "pydantic-settings>=2.15.0",
+    "click>=8.4.2",
+]
+
+[project.scripts]
+llm-gc = "llm_gc.cli.main:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
