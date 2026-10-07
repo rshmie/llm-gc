@@ -33,6 +33,20 @@ confuse:
 | Where it's set     | The incoming request (`GCConfig` describes its context window) | The provider client handed to the compactor |
 | Which package      | `proxy/` (inbound)                          | `llm/` (outbound)                              |
 
+The compaction model is a name the deployment gives, passed to the upstream as is:
+Anthropic's own (`claude-sonnet-5` by default) or whatever a gateway in front of it
+calls the model, which LLM-GC never interprets. Since a name the upstream does not
+offer would fail every collection, the proxy asks the upstream for one token with that
+model and credential before it serves, and stops with the upstream's own words when
+either is refused. An upstream that is busy or out of reach only warns, as that may
+pass. *Rejected: summarising with whatever model the client asked for.* Summary cost
+and quality would follow the client's choice, request by request, and the summariser
+the decision-survival check measures would no longer be fixed. *Rejected: falling back
+to the client's model when the configured one is refused.* It hides a misconfiguration
+and changes the summariser unannounced. *Rejected: discovering models from the
+upstream.* Gateways often do not serve a model list, and choosing by name breaks on
+their aliases.
+
 
 ## How it works
 

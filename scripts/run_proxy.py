@@ -63,10 +63,12 @@ from llm_gc.config.constants import (  # noqa: E402
 )
 from llm_gc.engine import GcService, build_gc_service  # noqa: E402
 from llm_gc.extraction import PatternFactReader
-from llm_gc.llm import AnthropicClient, FakeProvider, LLMResponse, StopReason  # noqa: E402
+from llm_gc.exceptions import ConfigError  # noqa: E402
+from llm_gc.llm import DEFAULT_ANTHROPIC_MODEL, AnthropicClient, FakeProvider, LLMResponse, StopReason  # noqa: E402
 from llm_gc.monitoring import ContextHealthMonitor  # noqa: E402
 from llm_gc.proxy import DEFAULT_PROXY_PORT, SESSION_HEADER, create_app  # noqa: E402
 from llm_gc.proxy.server import ANTHROPIC_UPSTREAM  # noqa: E402
+from llm_gc.proxy.startup_checks import check_summariser  # noqa: E402
 from llm_gc.utils import count_tokens  # noqa: E402
 from llm_gc.visualizer import TranscriptRecorder, create_dashboard_app  # noqa: E402
 
@@ -142,7 +144,7 @@ def serve_config(args: argparse.Namespace) -> GCConfig:
 
 @dataclass(frozen=True)
 class EngineAccess:
-    """Where LLM-GC's own summary and fact calls go, and what they authenticate with.
+    """Where LLM-GC's own summary and fact calls go, the model they ask for, and what they authenticate with.
 
     A credential of LLM-GC's own, read from the environment: never one taken from a
     client's request (see doc/design/llm-provider.md). Kept out of the repr, so it
@@ -150,12 +152,16 @@ class EngineAccess:
     """
 
     base_url: str
+    model: str = DEFAULT_ANTHROPIC_MODEL   # any name the upstream accepts: a gateway's own, for one
     api_key: str | None = field(default=None, repr=False)
     auth_token: str | None = field(default=None, repr=False)
 
     @property
     def configured(self) -> bool:
         return bool(self.api_key or self.auth_token)
+
+    def client(self) -> AnthropicClient:
+        return AnthropicClient(api_key=self.api_key, auth_token=self.auth_token, base_url=self.base_url, model=self.model)
 
 
 def build_engine(config: GCConfig, *, access: EngineAccess, compactor_kind: str) -> tuple[GcService, str]:
@@ -164,9 +170,8 @@ def build_engine(config: GCConfig, *, access: EngineAccess, compactor_kind: str)
         return (build_gc_service(config, summary_provider=None),
                 "NoOpCompactor (baseline: wraps the run, does not summarise)")
     if access.configured:
-        client = AnthropicClient(api_key=access.api_key, auth_token=access.auth_token, base_url=access.base_url)
-        return (build_gc_service(config, summary_provider=client),
-                f"LLMCompactor -> AnthropicClient at {access.base_url} (live compaction calls)")
+        return (build_gc_service(config, summary_provider=access.client()),
+                f"LLMCompactor -> AnthropicClient at {access.base_url}, model {access.model} (live compaction calls)")
     provider = FakeProvider(
         responses=[
             LLMResponse(
@@ -291,6 +296,21 @@ def demo(compactor_kind: str, access: EngineAccess) -> None:
     print(f"  old gen: {len(snapshot.old)} spans {dict(levels)}   permanent gen: {len(snapshot.active_knowledge)} facts\n")
 
 
+def check_summariser_or_exit(access: EngineAccess) -> None:
+    """Ask the upstream for one token before serving; stop if it refuses the model or the credential."""
+    async def check() -> str | None:
+        # A client of its own, closed here: the engine's is first used on the servers' event loop.
+        async with access.client() as probe:
+            return await check_summariser(probe)
+
+    try:
+        warning = asyncio.run(check())
+    except ConfigError as err:
+        sys.exit(f"\nLLM-GC cannot summarise through {access.base_url} with model {access.model}:\n  {err}\n"
+                 "Pass a model the upstream offers with --summary-model, or a credential it accepts, and start again.")
+    print(f"check:     WARNING: {warning}" if warning else f"check:     {access.model} answered at {access.base_url}")
+
+
 def serve(args: argparse.Namespace, access: EngineAccess) -> None:
     """Run the proxy for real traffic, and the dashboard beside it if asked."""
     import uvicorn
@@ -320,6 +340,8 @@ def serve(args: argparse.Namespace, access: EngineAccess) -> None:
     print(f"upstream:  {'stub (canned replies, no network)' if args.stub_upstream else args.upstream}")
     print(f"settings:  min_cut_tokens={config.min_cut_tokens}  last_n_turns_to_keep={config.last_n_turns_to_keep}  "
           f"context_window={config.context_window}")
+    if access.configured and args.compactor != "noop":
+        check_summariser_or_exit(access)
     print(f"\nproxy      http://127.0.0.1:{args.port}   (stats: /stats)")
     if args.dashboard:
         print(f"dashboard  http://127.0.0.1:{args.dashboard_port}")
@@ -396,6 +418,9 @@ def main() -> None:
     serving.add_argument("--dashboard", action="store_true", help="also serve the live dashboard (localhost only)")
     serving.add_argument("--dashboard-port", type=int, default=DEFAULT_DASHBOARD_PORT)
     serving.add_argument("--stub-upstream", action="store_true", help="answer with canned replies; no network")
+    serving.add_argument("--summary-model", default=DEFAULT_ANTHROPIC_MODEL,
+                         help="the model LLM-GC summarises with, as the upstream names it: behind a gateway, "
+                              "one it offers (default %(default)s)")
     serving.add_argument("--upstream", default=ANTHROPIC_UPSTREAM,
                          help="where to forward requests, and where LLM-GC's own summary calls go: "
                               "a gateway in front of Anthropic, for one (default %(default)s)")
@@ -419,7 +444,7 @@ def main() -> None:
         parser.error(f"--upstream {args.upstream} is this process: every request would be forwarded back to it")
 
     # From the environment, never a flag, so a credential never lands in shell history.
-    access = EngineAccess(base_url=args.upstream if args.serve else ANTHROPIC_UPSTREAM,
+    access = EngineAccess(base_url=args.upstream if args.serve else ANTHROPIC_UPSTREAM, model=args.summary_model,
                           api_key=os.environ.get("ANTHROPIC_API_KEY"), auth_token=os.environ.get("ANTHROPIC_AUTH_TOKEN"))
 
     if args.serve:

@@ -304,30 +304,47 @@ proxy's address) and a token or key. LLM-GC goes in the middle:
 Claude Code  ──►  LLM-GC  ──►  your company's proxy  ──►  Anthropic
 ```
 
-LLM-GC needs two things from your settings file:
-
-- **the company proxy's URL**, the `ANTHROPIC_BASE_URL`, to forward Claude's requests to;
-- **a credential it accepts**, the `ANTHROPIC_AUTH_TOKEN` (or `ANTHROPIC_API_KEY`), for
-  LLM-GC's own summary calls, which go through the company proxy too.
-
 #### 1. Start LLM-GC
+
+LLM-GC needs three values. All three are usually in `~/.claude/settings.json`, under
+`env`, because Claude Code needs them too:
+
+| Value | Where to find it | How you give it |
+|---|---|---|
+| The company proxy's URL | `ANTHROPIC_BASE_URL` | `--upstream` |
+| A model name the company proxy offers | an entry ending in `_MODEL`, such as `ANTHROPIC_DEFAULT_SONNET_MODEL`; if there is none, ask your proxy team | `--summary-model` |
+| Your token | `ANTHROPIC_AUTH_TOKEN` (or `ANTHROPIC_API_KEY`) | an environment variable, never a flag |
+
+LLM-GC uses the model and the token for its own summaries, which go through the company
+proxy too. Company proxies often name models their own way, so LLM-GC's default,
+`claude-sonnet-5`, may be refused. Choose a Sonnet model: summaries need to be good, and
+they are short.
 
 In a terminal, from the LLM-GC folder:
 
 ```bash
-settings=~/.claude/settings.json
-export ANTHROPIC_AUTH_TOKEN="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["env"]["ANTHROPIC_AUTH_TOKEN"])' "$settings")"
+read -s ANTHROPIC_AUTH_TOKEN && export ANTHROPIC_AUTH_TOKEN    # paste your token, press Enter
 python scripts/run_proxy.py --serve --dashboard \
-  --upstream "$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["env"]["ANTHROPIC_BASE_URL"])' "$settings")"
+  --upstream https://your-company-proxy.example.com \
+  --summary-model your-sonnet-model-name
 ```
 
-This reads both values from your settings, so you type neither and the token is never
-shown. If your settings have `ANTHROPIC_API_KEY` rather than `ANTHROPIC_AUTH_TOKEN`,
-change the name in both places on the `export` line.
+`read -s` takes the token without showing it, so it never appears on screen or in your
+shell history. (If your company uses `ANTHROPIC_API_KEY` instead, use that name in both
+places.)
 
-In what it prints, `upstream:` should show your company proxy's URL. A warning that no
-credential was found means the `export` didn't work. Leave this terminal open; the
-dashboard is at http://127.0.0.1:9901.
+Before it serves, LLM-GC asks the company proxy for one token with that model and
+credential, so a wrong one stops it straight away rather than failing later:
+
+```
+upstream:  https://your-company-proxy.example.com
+check:     your-sonnet-model-name answered at https://your-company-proxy.example.com
+proxy      http://127.0.0.1:9900   (stats: /stats)
+dashboard  http://127.0.0.1:9901
+```
+
+If it stops instead, it prints the company proxy's own reason, such as *invalid model
+specified*: fix that value and start again. Leave this terminal open while you work.
 
 #### 2. Point Claude Code at LLM-GC
 
@@ -361,12 +378,9 @@ grown, the dashboard says *Last collection …* and the prompt it sends gets sma
 |---|---|
 | Nothing new in LLM-GC's terminal | Claude isn't using LLM-GC: check step 2, and that you started `claude` in that project |
 | Claude shows an error from the company proxy | `--upstream` is wrong: it must be exactly the company proxy's URL from your settings |
-| Engine tab: *Summary request failed*, with a 401 or 403 | The company proxy refused LLM-GC's own calls: check the credential exported in step 1 |
-| Nothing is ever compacted | Same cause as the row above: when every summary fails, nothing can shrink |
-
-If the credential is right and summaries still fail, the error on the Engine tab says
-why: the company proxy may block the model LLM-GC summarises with (`claude-sonnet-5`)
-or need headers LLM-GC doesn't send yet.
+| LLM-GC stops at startup: *cannot summarise … invalid model* | The company proxy doesn't offer that model: pass one it does with `--summary-model` |
+| LLM-GC stops at startup: *refused LLM-GC's credential* | Check the credential exported in step 1 |
+| Engine tab: *Summary request failed*, later on | The company proxy refused a summary after startup; the Engine tab shows its reason. It may need headers LLM-GC doesn't send yet |
 
 **Other clients** work the same way: point them at `http://127.0.0.1:9900` with the
 credential they already use for the company proxy. With the SDK, that is
@@ -497,6 +511,7 @@ The proxy also takes where to forward, and LLM-GC's own credential:
 | Setting | Given as | What it decides |
 |---|---|---|
 | `--upstream` | flag | where requests are forwarded, and where LLM-GC's own summary and fact calls go; `https://api.anthropic.com` unless set |
+| `--summary-model` | flag | the model LLM-GC summarises and reads facts with, as the upstream names it; `claude-sonnet-5` unless set. Checked at startup |
 | `ANTHROPIC_API_KEY` | environment | LLM-GC's own key, sent as `x-api-key` |
 | `ANTHROPIC_AUTH_TOKEN` | environment | LLM-GC's own bearer token, sent as `Authorization`; either or both |
 
