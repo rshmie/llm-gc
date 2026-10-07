@@ -585,6 +585,14 @@ Engine tab's cards do, but its headline, the note on how far the facts reach and
 for facts that couldn't be read stay in view. Folding hides detail, never a fact the
 model cannot see.
 
+Each column scrolls inside a box about four and a half cards tall, so the card keeps
+its height however many facts a long conversation piles up, and the conversation
+below it never moves further down the page. The cut card, and a fade on whichever edge
+has more, show the column goes on; its heading counts every fact in it. A column keeps
+its place when the section is redrawn, as it is at every update and keystroke.
+*Rejected: listing the first few with "Show all".* Opened, it grows the page by every
+fact, which is the length the section exists to contain.
+
 The value is what each fact card shows largest, with its topic as a label above it:
 a value without its topic ("9 primaries") says nothing. An empty column is a dashed
 card saying why it is empty, not a blank, so it never reads as content that failed to
@@ -623,6 +631,18 @@ facts panel. A warning can be dismissed, and returns only when there is more of 
 it warns about: the reader has seen this loss, not every future one. *Rejected:
 standing banners for good news and routine state.* Three of them sat above the
 page on every visit, and a warning among them was one more line to skim past.
+
+### What lifts is what opens something
+
+A block that opens something when clicked rises a little on hover and on keyboard
+focus, and settles when pressed: a message's bar on the map, a fact's card. The
+movement is the promise of a click, so it is kept for blocks that keep it.
+Everything else that is clickable already says so in its own way: a row that unfolds
+in place carries a chevron, a link underlines, a button shades. A static card does
+not move at all. *Rejected: lifting every card.* The dashboard's cards are panels to
+read, not things to open, and a panel that rose under the pointer would promise a
+click that does nothing, which teaches the reader to stop trusting the lift where it
+does mean something.
 
 ### The conversation view keeps no collection log
 

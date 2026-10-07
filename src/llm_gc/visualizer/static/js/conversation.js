@@ -3,7 +3,7 @@
 // Every value comes from an endpoint; this view formats and explains, and derives
 // nothing beyond grouping, counting, and sums and differences of numbers it was given.
 
-import { BECOMES, CATS, CLAMP_CHARS, EARLIER_SHOWN, FACTS_SHOWN, GLOSSARY, HEIGHT, MIN_BAR_PX, ORDER, RUN_MIN, FACT_STATUS, categoryOf, describeOutcome, swatch } from "./vocabulary.js";
+import { BECOMES, CATS, CLAMP_CHARS, EARLIER_SHOWN, GLOSSARY, HEIGHT, MIN_BAR_PX, ORDER, RUN_MIN, FACT_STATUS, categoryOf, describeOutcome, swatch } from "./vocabulary.js";
 import { $, agoTs, countEl, fill, fmt, h, meterBar, percent, plural, ranges, reducedMotion, setChildren, storeGet, storeSet, svg } from "./dom.js";
 import { collecting, countCats, factsByTurn, has, instructionTokens, marked, newestReply, pendingTurns, preview, query, recapLimit, state, turnMatches, ui, writtenTokens } from "./state.js";
 import { hideTooltip, info, showTooltip, tipAction, tipQuote, hoverTip } from "./tooltip.js";
@@ -779,18 +779,32 @@ export function renderFacts(k) {
         + "only once collected, so a fact here may be out of date: a value changed there reaches the model now, and shows here then." : null),
     unread);
   const assistantFacts = readsAssistant() ? active.filter((f) => f.speaker === "assistant").sort(lookFirst) : null;
+  const scrolled = new Map([...$("facts").querySelectorAll(".facts-col .list")].map((list) => [list.dataset.col, list.scrollTop]));
   fill("facts", h("div", { class: "facts-cols" },
-    factColumn(k, matches, { id: "user", title: "You said", mark: avatar("user"), row: currentFact,
+    factColumn(matches, { id: "user", title: "You said", mark: avatar("user"), row: currentFact,
       facts: active.filter((f) => f.speaker !== "assistant").sort(lookFirst),
       empty: ["No facts from you yet", "Choices, names, numbers and dates you state appear here once their messages are collected."] }),
-    factColumn(k, matches, { id: "assistant", title: "The assistant said", mark: avatar("assistant"), row: currentFact, facts: assistantFacts,
+    factColumn(matches, { id: "assistant", title: "The assistant said", mark: avatar("assistant"), row: currentFact, facts: assistantFacts,
       empty: assistantFacts
         ? ["No assistant facts yet", "Values the assistant states, such as a recommended setting, appear here once their messages are collected."]
         : ["The assistant's messages aren't read", "Facts are read from your messages only here, as they are when LLM-GC runs without a model. "
           + "The model still reads the assistant's replies, in the recap and as written."] }),
-    factColumn(k, matches, { id: "replaced", title: "Replaced", mark: h("div", { class: "av replaced", "aria-hidden": "true" }, "↺"),
+    factColumn(matches, { id: "replaced", title: "Replaced", mark: h("div", { class: "av replaced", "aria-hidden": "true" }, "↺"),
       row: replacedFact, facts: replaced.sort((a, b) => changedAt(b) - changedAt(a)),
       empty: ["No replacements on record", "When a later message changes a value, such as Elasticsearch → OpenSearch, the old and new values appear here."] })));
+  // Redrawn at every update and keystroke: each column stays where its reader scrolled it.
+  for (const list of $("facts").querySelectorAll(".facts-col .list")) {
+    list.scrollTop = scrolled.get(list.dataset.col) ?? 0;
+    markMore(list);
+  }
+}
+
+// Fades the edge a list scrolls on, so facts out of its box don't read as the end of the column.
+function markMore(list) {
+  const above = list.scrollTop > 1;
+  const below = list.scrollTop + list.clientHeight < list.scrollHeight - 1;
+  if (above || below) list.dataset.more = above && below ? "both" : above ? "above" : "below";
+  else delete list.dataset.more;
 }
 
 // How many of the facts listed reach the model, worded so the parts visibly add up to the whole.
@@ -803,22 +817,19 @@ function reachLine(total, unseen) {
   return [h("span", {}, h("b", {}, fmt(seen)), reach(seen)), missing([h("b", {}, fmt(unseen)), unseen === 1 ? " doesn't" : " don't"])];
 }
 
-// One column: its facts under a heading, or a card saying why it has none, so an empty column never
+// One column: every fact under a heading, in a box that scrolls once they outgrow it, so the card
+// keeps its height however many pile up; or a card saying why it has none, so an empty column never
 // reads as missing content. `facts` is null for a side whose turns are not read.
-function factColumn(k, matches, { id, title, mark, facts, row, empty }) {
+function factColumn(matches, { id, title, mark, facts, row, empty }) {
   const shown = (facts ?? []).filter(matches);
   const key = `facts-${id}`;
   if (!shown.length) {
     const [what, why] = facts?.length ? ["No match", "None of these facts match your search."] : empty;
     return h("section", { class: "facts-col empty", "aria-label": title }, mark, h("div", {}, h("b", {}, what), h("p", {}, why)));
   }
-  const open = ui.open.has(key) || !!query();
-  const list = open ? shown : shown.slice(0, FACTS_SHOWN);
   return h("section", { class: "facts-col", "aria-labelledby": `${key}-title` },
     h("h3", { id: `${key}-title` }, mark, title, h("span", { class: "count" }, fmt(shown.length))),
-    h("div", { class: "list" }, list.map(row)),
-    shown.length > FACTS_SHOWN && !query() ? h("button", { class: "link-btn show-all", type: "button",
-      onclick: () => { if (open) ui.open.delete(key); else ui.open.add(key); renderFacts(k); } }, open ? "Show fewer" : `Show all ${shown.length}`) : null);
+    h("div", { class: "list", "data-col": id, onscroll: (e) => markMore(e.currentTarget) }, shown.map(row)));
 }
 
 // A current fact, as a link to the message that stated it; the column says who.

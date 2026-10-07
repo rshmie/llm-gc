@@ -5,7 +5,6 @@ import { h } from "./dom.js";
 
 export const ACTION_HEADER = { "x-llm-gc-dashboard": "1" };
 export const RUN_MIN = 4;              // consecutive archived exchanges folded into one row
-export const FACTS_SHOWN = 6;          // facts listed per group before "show all"
 export const EARLIER_SHOWN = 8;        // newest rows shown before "Show N older messages" folds the rest
 export const CHECKS_SHOWN = 5;         // rows of "Every check" before "Show all"
 export const MOVES_SHOWN = 3;          // collections listed in "What moved" and "What fell short" before "Show all"
