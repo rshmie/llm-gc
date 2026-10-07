@@ -294,10 +294,35 @@ the interface:
   prose. The substring match in the second adapter looked like laziness until the
   first one showed what the alternative is.
 
+## Choosing the provider
+
+A deployment names the compaction model's vendor in its settings, and one factory
+turns that name into a client:
+
+```
+  llm-gc.toml            ProxySettings              llm/factory.py            engine
+  [summary]         ──►  summary.provider    ──►   create_provider(name) ──►  LLMProvider
+  provider = "openai"    + that vendor's own        the only place that       (never sees
+  model    = "..."         credential from the      maps a name to an         a vendor name)
+                           environment              adapter
+```
+
+- **The factory lives in `llm/`, not in the application.** A library user who picks a
+  vendor by name needs it too, and the application's settings only decide which name.
+- **Each vendor is given only its own credentials.** A bearer token exported for
+  another tool must neither be sent to a different vendor nor stop it starting.
+- **`summary.base_url` follows the proxy's `upstream` only for Anthropic.** The
+  upstream speaks Anthropic's protocol, so a gateway serving client traffic serves
+  those calls too. Any other vendor is a different service with its own address.
+- **The inbound side is not abstracted.** The proxy reads one wire format, and its
+  translation sits in one module. A second format would be the time to draw the
+  interface, because one implementation cannot show where the seams belong.
+
 ## Consequences
 
-Every vendor quirk has exactly one home. Adding a vendor means one new adapter
-and its error mapping, with no changes to the engine.
+Every vendor quirk has exactly one home. Adding a vendor means one new adapter and
+its error mapping, one entry in the factory, and a credential field in the
+application's settings, with no changes to the engine.
 
 The fake is load-bearing, because every unit test runs against it. A fake that's
 more forgiving than reality will let a green test suite hide a broken adapter: one
