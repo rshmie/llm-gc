@@ -89,7 +89,7 @@ export function renderProxy() {
   }
   fill("proxy-line", h("span", { class: "label" }, "All conversations"),
     h("span", {}, h("b", {}, fmt(p.requests)), " requests"), h("span", { class: "sep" }, "·"),
-    h("span", {}, h("b", {}, fmt(p.tokens_forwarded)), ` tokens sent in total${p.ratio !== null ? `, ${Math.round(p.ratio * 100)}% of what your apps sent` : ""}`), h("span", { class: "sep" }, "·"),
+    h("span", {}, h("b", {}, fmt(p.tokens_forwarded)), ` tokens forwarded since the proxy started${p.ratio !== null ? `, ${Math.round(p.ratio * 100)}% of what your apps sent${p.gc_applied ? "" : " - nothing collected yet"}` : ""}`), h("span", { class: "sep" }, "·"),
     p.gc_bypassed ? h("span", {}, h("span", { class: "st warn" }, "⚠ "), `${fmt(p.gc_bypassed)} passed on untouched after an error`) : h("span", {}, "none passed on after an error"),
     h("button", { class: "link-btn", type: "button", onclick: () => $("proxy-details").scrollIntoView({ behavior: smooth(), block: "start" }) }, "Details ↓"));
   const tile = (label, term, value, caption, extra) => h("section", { class: "card tile" },
