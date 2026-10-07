@@ -110,8 +110,9 @@ class AnthropicClient:
 
     def __init__(
         self,
-        api_key: str,
+        api_key: str | None = None,
         *,
+        auth_token: str | None = None,
         model: str = DEFAULT_ANTHROPIC_MODEL,
         base_url: str = ANTHROPIC_BASE_URL,
         http_client: httpx2.AsyncClient | None = None,
@@ -119,9 +120,12 @@ class AnthropicClient:
         """Build a client.
 
         Args:
-            api_key: The Anthropic API key. Validated here rather than on first use,
-                so a misconfigured deployment fails at startup instead of on the
-                first compaction under load.
+            api_key: An Anthropic API key, sent as `x-api-key`.
+            auth_token: A bearer token, sent as `Authorization`: what a gateway in
+                front of Anthropic often takes instead of a key. Either or both,
+                each sent when given, as Anthropic's own SDK does. Validated here
+                rather than on first use, so a misconfigured deployment fails at
+                startup instead of on the first compaction under load.
             model: The model to summarise with. See `DEFAULT_ANTHROPIC_MODEL`.
             base_url: Overridable for a proxy or a test double.
             http_client: An existing client to borrow, chiefly so tests can supply an
@@ -129,12 +133,16 @@ class AnthropicClient:
                 mapping without a network. When None, we own one and close it.
 
         Raises:
-            ConfigError: The API key is missing or blank.
+            ConfigError: Neither credential is given, or both are blank.
         """
-        if not api_key or not api_key.strip():
-            raise ConfigError("AnthropicClient requires a non-empty api_key")
-
-        self._api_key = api_key
+        # The credential headers. Never logged: they are what authenticates the call.
+        self._auth_headers: dict[str, str] = {}
+        if api_key and api_key.strip():
+            self._auth_headers["x-api-key"] = api_key
+        if auth_token and auth_token.strip():
+            self._auth_headers["authorization"] = f"Bearer {auth_token}"
+        if not self._auth_headers:
+            raise ConfigError("AnthropicClient requires an api_key or an auth_token")
         self._model = model
         self._base_url = base_url.rstrip("/")
         self._http_client = http_client or httpx2.AsyncClient()
@@ -167,7 +175,7 @@ class AnthropicClient:
             http_response = await self._http_client.post(
                 f"{self._base_url}{MESSAGES_PATH}",
                 headers={
-                    "x-api-key": self._api_key,
+                    **self._auth_headers,
                     "anthropic-version": ANTHROPIC_API_VERSION,
                     "content-type": "application/json",
                 },

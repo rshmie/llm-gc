@@ -273,6 +273,9 @@ python scripts/run_proxy.py --serve --dashboard   # with ANTHROPIC_API_KEY set
 ANTHROPIC_BASE_URL=http://127.0.0.1:9900 claude   # in the project you are working on
 ```
 
+Claude Code going through your organisation's proxy? See
+[Behind your organisation's proxy](#behind-your-organisations-proxy).
+
 Claude Code's own credentials are forwarded to Anthropic, never stored; the proxy's
 `ANTHROPIC_API_KEY` pays only for summaries and fact reads. Without it, the proxy runs
 with canned summaries, which is only useful for trying the dashboard. With an agent's conversation, LLM-GC:
@@ -289,6 +292,68 @@ Sessions live in memory: restarting the proxy starts each conversation again fro
 Claude Code sends, at the cost of one request sent whole and one collection. The first
 collection of a long conversation can take a couple of minutes, and requests meanwhile
 go whole — never worse than without LLM-GC.
+
+### Behind your organisation's proxy
+
+Some organisations send all traffic to Anthropic through their own proxy: a gateway
+set as `ANTHROPIC_BASE_URL`, often with an `ANTHROPIC_AUTH_TOKEN`. LLM-GC goes in front
+of it. Your client talks to LLM-GC, LLM-GC forwards to the gateway, and LLM-GC's own
+summary and fact calls go through the gateway too, so nothing reaches Anthropic any
+other way:
+
+```
+your client ──► LLM-GC (127.0.0.1:9900) ──► your organisation's proxy ──► Anthropic
+                  │                                   ▲
+                  └──── LLM-GC's summaries and ───────┘
+                        fact reads
+```
+
+**1. Start LLM-GC with the gateway as its upstream.** Use the exact URL your client
+has as `ANTHROPIC_BASE_URL`, path included. Give LLM-GC a credential the gateway
+accepts, in this terminal: a bearer token (`ANTHROPIC_AUTH_TOKEN`), a key
+(`ANTHROPIC_API_KEY`), or both, each sent when set. If Claude Code's settings already
+hold the token, read it from there, so it never appears on screen or in your shell
+history:
+
+```bash
+export ANTHROPIC_AUTH_TOKEN="$(python3 -c 'import json, os; print(json.load(open(os.path.expanduser("~/.claude/settings.json")))["env"]["ANTHROPIC_AUTH_TOKEN"])')"
+python scripts/run_proxy.py --serve --dashboard --upstream https://your-gateway.example.com
+```
+
+The startup lines confirm it: `upstream:` names your gateway, and `compactor:` says
+`AnthropicClient at https://your-gateway.example.com`. A warning that no credential was
+found means summaries would be canned: export one and start again.
+
+**2. Point your client at LLM-GC instead of the gateway.** Its own credential stays as it
+is; LLM-GC forwards it untouched and never stores it.
+
+- **Claude Code.** Set the address in a settings file, not on the command line: the
+  `env` block in `~/.claude/settings.json` is applied after the shell's variables, so
+  `ANTHROPIC_BASE_URL=… claude` still goes straight to the gateway. In the project you
+  work in, `.claude/settings.local.json` overrides your user settings for that project
+  only:
+
+  ```json
+  { "env": { "ANTHROPIC_BASE_URL": "http://127.0.0.1:9900" } }
+  ```
+
+  Delete it to go straight to the gateway again.
+- **An application using the SDK.** `anthropic.Anthropic(base_url="http://127.0.0.1:9900")`,
+  with the credential it already uses for the gateway.
+- **`scripts/chat.py`.** Export the same credential in its terminal; it talks to
+  `127.0.0.1:9900` by default. Add `--model` if your gateway allows only some models.
+
+**3. Check that it works.** The proxy's terminal logs a line for every request it
+handles, and the dashboard shows the conversation from its second message. After the
+first collection, the Engine tab's *What fell short* says whether LLM-GC's own calls got
+through.
+
+| What you see | What it means |
+|---|---|
+| No lines in the proxy's terminal while you chat | The client still goes straight to the gateway: check its base URL (for Claude Code, the settings file above) |
+| Replies fail with the gateway's error | The gateway refused the forwarded request: check that `--upstream` is the exact URL your client used, path included |
+| *Summary request failed* with a 401 or 403 | The gateway refused LLM-GC's own calls: export the credential it takes. It may also need headers LLM-GC's calls don't send yet, or not allow the summary model, `claude-sonnet-5` |
+| Nothing is ever compacted | Every summary failed, so each collection kept the words and was dropped as no smaller; *What fell short* says why |
 
 ### As a library
 
@@ -408,6 +473,18 @@ you watch the dashboard:
 | `max_recap_ratio` | | 0.3 | share of the window the recap may spend; over it, the coldest spans lose detail, then the oldest fold out of view |
 
 An unknown setting is an error, so a misspelt one never looks configured.
+
+The proxy also takes where to forward, and LLM-GC's own credential:
+
+| Setting | Given as | What it decides |
+|---|---|---|
+| `--upstream` | flag | where requests are forwarded, and where LLM-GC's own summary and fact calls go; `https://api.anthropic.com` unless set |
+| `ANTHROPIC_API_KEY` | environment | LLM-GC's own key, sent as `x-api-key` |
+| `ANTHROPIC_AUTH_TOKEN` | environment | LLM-GC's own bearer token, sent as `Authorization`; either or both |
+
+Credentials come only from the environment, never from flags, so they never land in
+shell history. Without either, summaries are canned: useful for trying the dashboard,
+not for real work.
 
 ## GC strategies
 

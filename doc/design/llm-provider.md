@@ -125,6 +125,13 @@ Library users show the same problem from the other side: a library call has no
 incoming request, so there is no user key to borrow. The compactor has to be
 configurable on its own either way.
 
+Its credential is a key, a bearer token, or both, as Anthropic's own SDK accepts:
+a gateway in front of Anthropic often takes a token rather than a key. On the
+proxy, its calls go to the same upstream requests are forwarded to. Behind an
+organisation's gateway, that keeps the conversation with the one company the
+organisation chose, and the person running LLM-GC may configure their own
+gateway credential for it: chosen for LLM-GC, not taken from a request.
+
 ### Why not the user's model
 
 The conversation model is whatever the client asked for on that request. It

@@ -20,6 +20,12 @@ client ──► POST /v1/messages (the whole conversation, every time)
              └─ 5. age:        in the background, from the recorded conversation only
 ```
 
+The provider is Anthropic's API unless the proxy is given an upstream. Behind an
+organisation's gateway, the gateway is the upstream: requests go there with the
+client's own headers, and LLM-GC's summary and fact calls go there too, so every
+call reaches Anthropic the one way the organisation allows. An upstream that is the
+proxy's own address is refused at startup, since every request would come back to it.
+
 ### The client's history is the truth
 
 A chat API is stateless: every request carries the entire conversation. That

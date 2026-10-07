@@ -126,6 +126,28 @@ class TestTheRequestShape:
         assert headers["x-api-key"] == "sk-test"
         assert headers["anthropic-version"] == ANTHROPIC_API_VERSION
 
+    def test_a_bearer_token_is_sent_as_authorization_and_no_key_is_invented(self):
+        """A gateway in front of Anthropic often takes a bearer token instead of a key."""
+        handler = _respond()
+        _call(_client(handler, api_key=None, auth_token="tok-test"))
+
+        headers = handler.seen[0].headers
+        assert headers["authorization"] == "Bearer tok-test"
+        assert "x-api-key" not in headers
+
+    def test_a_key_and_a_token_are_both_sent(self):
+        """As Anthropic's SDK does: the endpoint decides which one it reads."""
+        handler = _respond()
+        _call(_client(handler, auth_token="tok-test"))
+
+        headers = handler.seen[0].headers
+        assert (headers["x-api-key"], headers["authorization"]) == ("sk-test", "Bearer tok-test")
+
+    def test_calls_go_to_the_given_base_url(self):
+        handler = _respond()
+        _call(_client(handler, base_url="https://gateway.example.com/anthropic/"))
+        assert str(handler.seen[0].url) == "https://gateway.example.com/anthropic/v1/messages"
+
     def test_no_temperature_is_sent(self):
         """Current Claude models reject `temperature` with a 400. The Protocol has no
         such parameter for exactly this reason; this pins that we never add one back
@@ -382,6 +404,14 @@ class TestConfigurationAndValidation:
     def test_a_blank_api_key_fails_at_construction(self):
         with pytest.raises(ConfigError):
             AnthropicClient(api_key="   ")
+
+    def test_no_credential_at_all_fails_at_construction(self):
+        with pytest.raises(ConfigError):
+            AnthropicClient()
+
+    def test_a_blank_token_does_not_count_as_a_credential(self):
+        with pytest.raises(ConfigError):
+            AnthropicClient(api_key="", auth_token="  ")
 
     def test_the_shared_preconditions_are_enforced(self):
         """Same validation the fake runs, which is the point: a request rejected in

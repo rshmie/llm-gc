@@ -16,6 +16,12 @@ the dashboard shows the generations moving, this shows the wire.
     export ANTHROPIC_API_KEY=...      # for LLM-GC's own compaction calls
     python scripts/run_proxy.py --serve --dashboard
 
+Behind a gateway, as in an organisation whose traffic to Anthropic goes through
+its own proxy, forward there instead; LLM-GC's own calls go there too, with
+ANTHROPIC_API_KEY and/or ANTHROPIC_AUTH_TOKEN (a bearer token):
+
+    python scripts/run_proxy.py --serve --dashboard --upstream https://gateway.example.com
+
 Then talk through it (`python scripts/chat.py`) or point any client at it and
 change nothing else:
 
@@ -35,12 +41,14 @@ Developer tooling, not library code, which is why it lives in `scripts/`.
 
 import argparse
 from collections import Counter
+from dataclasses import dataclass, field
 import asyncio
 import json
 import logging
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
@@ -58,6 +66,7 @@ from llm_gc.extraction import PatternFactReader
 from llm_gc.llm import AnthropicClient, FakeProvider, LLMResponse, StopReason  # noqa: E402
 from llm_gc.monitoring import ContextHealthMonitor  # noqa: E402
 from llm_gc.proxy import DEFAULT_PROXY_PORT, SESSION_HEADER, create_app  # noqa: E402
+from llm_gc.proxy.server import ANTHROPIC_UPSTREAM  # noqa: E402
 from llm_gc.utils import count_tokens  # noqa: E402
 from llm_gc.visualizer import TranscriptRecorder, create_dashboard_app  # noqa: E402
 
@@ -109,6 +118,10 @@ _SCRIPTED_SUMMARIES = [
 ] * 6
 
 
+# Names that reach this machine: an upstream on one of them, at this proxy's port, is a loop.
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
 def demo_config() -> GCConfig:
     """Scaled so the recap's budget bites: older spans fold, recent ones are archived or summarised."""
     return GCConfig(
@@ -127,14 +140,33 @@ def serve_config(args: argparse.Namespace) -> GCConfig:
                     last_n_turns_to_keep=args.keep_last)
 
 
-def build_engine(config: GCConfig, *, api_key: str | None, compactor_kind: str) -> tuple[GcService, str]:
+@dataclass(frozen=True)
+class EngineAccess:
+    """Where LLM-GC's own summary and fact calls go, and what they authenticate with.
+
+    A credential of LLM-GC's own, read from the environment: never one taken from a
+    client's request (see doc/design/llm-provider.md). Kept out of the repr, so it
+    never reaches a log.
+    """
+
+    base_url: str
+    api_key: str | None = field(default=None, repr=False)
+    auth_token: str | None = field(default=None, repr=False)
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.api_key or self.auth_token)
+
+
+def build_engine(config: GCConfig, *, access: EngineAccess, compactor_kind: str) -> tuple[GcService, str]:
     """The proxy's engine, and a label saying which summariser it calls."""
     if compactor_kind == "noop":
         return (build_gc_service(config, summary_provider=None),
                 "NoOpCompactor (baseline: wraps the run, does not summarise)")
-    if api_key:
-        return (build_gc_service(config, summary_provider=AnthropicClient(api_key=api_key)),
-                "LLMCompactor -> AnthropicClient (live compaction calls)")
+    if access.configured:
+        client = AnthropicClient(api_key=access.api_key, auth_token=access.auth_token, base_url=access.base_url)
+        return (build_gc_service(config, summary_provider=client),
+                f"LLMCompactor -> AnthropicClient at {access.base_url} (live compaction calls)")
     provider = FakeProvider(
         responses=[
             LLMResponse(
@@ -150,7 +182,7 @@ def build_engine(config: GCConfig, *, api_key: str | None, compactor_kind: str) 
     )
     # Canned summaries are not a model: facts are read by patterns, from the user's own words.
     return (build_gc_service(config, summary_provider=provider, fact_reader=PatternFactReader()),
-            "LLMCompactor -> scripted provider (no ANTHROPIC_API_KEY; wording canned, arithmetic real)")
+            "LLMCompactor -> scripted provider (no credential; wording canned, arithmetic real)")
 
 
 def _stub_upstream(forwarded: list[dict]):
@@ -179,9 +211,9 @@ def _stub_upstream(forwarded: list[dict]):
     return handler
 
 
-def demo(compactor_kind: str, api_key: str | None) -> None:
+def demo(compactor_kind: str, access: EngineAccess) -> None:
     """Replay a conversation through the real proxy over real HTTP."""
-    service, label = build_engine(demo_config(), api_key=api_key, compactor_kind=compactor_kind)
+    service, label = build_engine(demo_config(), access=access, compactor_kind=compactor_kind)
     forwarded: list[dict] = []
 
     def run_now(coro) -> None:
@@ -259,16 +291,16 @@ def demo(compactor_kind: str, api_key: str | None) -> None:
     print(f"  old gen: {len(snapshot.old)} spans {dict(levels)}   permanent gen: {len(snapshot.active_knowledge)} facts\n")
 
 
-def serve(args: argparse.Namespace, api_key: str | None) -> None:
+def serve(args: argparse.Namespace, access: EngineAccess) -> None:
     """Run the proxy for real traffic, and the dashboard beside it if asked."""
     import uvicorn
 
     config = serve_config(args)
-    service, label = build_engine(config, api_key=api_key, compactor_kind=args.compactor)
+    service, label = build_engine(config, access=access, compactor_kind=args.compactor)
     stub = httpx2.AsyncClient(transport=httpx2.MockTransport(_stub_provider)) if args.stub_upstream else None
     # Transcripts are a second copy of every conversation, so they exist only for the dashboard.
     transcripts = TranscriptRecorder() if args.dashboard else None
-    proxy_app = create_app(service, http_client=stub,
+    proxy_app = create_app(service, upstream_base_url=args.upstream, http_client=stub,
                            on_client_history=transcripts.record if transcripts is not None else None,
                            on_reply=transcripts.record_reply if transcripts is not None else None)
     apps = [(proxy_app, args.port)]
@@ -282,10 +314,10 @@ def serve(args: argparse.Namespace, api_key: str | None) -> None:
                                           transcripts=transcripts), args.dashboard_port))
 
     print(f"\ncompactor: {label}")
-    if not api_key and args.compactor != "noop":
-        print("WARNING: no ANTHROPIC_API_KEY, so compaction summaries are canned. "
-              "Set it for real summarisation.")
-    print(f"upstream:  {'stub (canned replies, no network)' if args.stub_upstream else 'https://api.anthropic.com'}")
+    if not access.configured and args.compactor != "noop":
+        print("WARNING: no ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN, so compaction summaries are canned. "
+              "Set one for real summarisation.")
+    print(f"upstream:  {'stub (canned replies, no network)' if args.stub_upstream else args.upstream}")
     print(f"settings:  min_cut_tokens={config.min_cut_tokens}  last_n_turns_to_keep={config.last_n_turns_to_keep}  "
           f"context_window={config.context_window}")
     print(f"\nproxy      http://127.0.0.1:{args.port}   (stats: /stats)")
@@ -364,6 +396,9 @@ def main() -> None:
     serving.add_argument("--dashboard", action="store_true", help="also serve the live dashboard (localhost only)")
     serving.add_argument("--dashboard-port", type=int, default=DEFAULT_DASHBOARD_PORT)
     serving.add_argument("--stub-upstream", action="store_true", help="answer with canned replies; no network")
+    serving.add_argument("--upstream", default=ANTHROPIC_UPSTREAM,
+                         help="where to forward requests, and where LLM-GC's own summary calls go: "
+                              "a gateway in front of Anthropic, for one (default %(default)s)")
     serving.add_argument("--min-cut-tokens", type=int, default=DEFAULT_MIN_CUT_TOKENS,
                          help="tokens a collection must condense (lower it to see collections sooner)")
     serving.add_argument("--keep-last", type=int, default=DEFAULT_LAST_N_TURNS_TO_KEEP,
@@ -377,13 +412,20 @@ def main() -> None:
                         datefmt="%H:%M:%S")
     logging.getLogger("httpx2").setLevel(logging.WARNING)
 
-    # From the environment, never a flag, so a key never lands in shell history.
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    upstream = urlsplit(args.upstream)
+    if upstream.scheme not in ("http", "https") or not upstream.hostname:
+        parser.error(f"--upstream must be an http(s) URL, not {args.upstream!r}")
+    if upstream.hostname in LOOPBACK_HOSTS and upstream.port in (args.port, args.dashboard_port):
+        parser.error(f"--upstream {args.upstream} is this process: every request would be forwarded back to it")
+
+    # From the environment, never a flag, so a credential never lands in shell history.
+    access = EngineAccess(base_url=args.upstream if args.serve else ANTHROPIC_UPSTREAM,
+                          api_key=os.environ.get("ANTHROPIC_API_KEY"), auth_token=os.environ.get("ANTHROPIC_AUTH_TOKEN"))
 
     if args.serve:
-        serve(args, api_key)
+        serve(args, access)
     else:
-        demo(args.compactor, api_key)
+        demo(args.compactor, access)
 
 
 if __name__ == "__main__":
