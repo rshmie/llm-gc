@@ -33,7 +33,7 @@ from llm_gc.monitoring import ContextHealthMonitor
 from llm_gc.visualizer import TranscriptRecorder, create_dashboard_app
 
 DEFAULT_MODEL = "claude-sonnet-5-5" #"claude-opus-5-5"
-# As `run_proxy.py --serve` runs it; the memory budget is a share of this window.
+# As `llm-gc start` runs it by default; the memory budget is a share of this window.
 CONTEXT_WINDOW = 200_000
 RUNS_DIR = Path(__file__).with_name("runs")
 

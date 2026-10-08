@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Run the proxy, or drive a conversation through it and watch what it forwards.
+"""Try LLM-GC offline: no API key, no network, no cost.
 
-Two modes.
+The real proxy is `llm-gc start`. This script is for looking at the engine work.
 
-**Demo (default, no API key, no network):**
+**Demo (default):**
 
     python scripts/run_proxy.py
 
@@ -11,28 +11,15 @@ Starts the real proxy app against a stub upstream, replays a conversation throug
 real HTTP, and prints what the client sent versus what was forwarded, per request:
 the dashboard shows the generations moving, this shows the wire.
 
-**Serve (real traffic to a real provider), with the live dashboard:**
+**Serve offline, with the live dashboard:**
 
-    export ANTHROPIC_API_KEY=...      # for LLM-GC's own compaction calls
     python scripts/run_proxy.py --serve --dashboard
 
-Behind a gateway, as in an organisation whose traffic to Anthropic goes through
-its own proxy, forward there instead; LLM-GC's own calls go there too, with
-ANTHROPIC_API_KEY and/or ANTHROPIC_AUTH_TOKEN (a bearer token):
+Serves the proxy on 9900 and the dashboard on 9901 with canned replies from the
+upstream and canned summaries, then talk through it (`python scripts/chat.py`) and
+watch http://127.0.0.1:9901. Summaries and facts are scripted and read by patterns, so
+the wording is not a model's; the arithmetic is real.
 
-    python scripts/run_proxy.py --serve --dashboard --upstream https://gateway.example.com
-
-Then talk through it (`python scripts/chat.py`) or point any client at it and
-change nothing else:
-
-    client = anthropic.Anthropic(base_url="http://127.0.0.1:9900", api_key="sk-...")
-
-and watch http://127.0.0.1:9901 while you do. Add `--stub-upstream` to run the
-whole loop offline, with canned replies instead of a model.
-
-The client's key is forwarded from its own request and never stored. The key in
-the environment is a *separate* credential, used only for LLM-GC's compaction
-calls — see doc/design/llm-provider.md for why those must not be the same key.
 The dashboard shows conversation content, so it is off unless asked for and only
 ever listens on localhost.
 
@@ -40,37 +27,31 @@ Developer tooling, not library code, which is why it lives in `scripts/`.
 """
 
 import argparse
-from collections import Counter
-from dataclasses import dataclass, field
-import asyncio
 import json
 import logging
-import os
 import sys
+from collections import Counter
 from pathlib import Path
-from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import httpx2  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
+from llm_gc.cli.serve import serve_proxy  # noqa: E402
+from llm_gc.cli.settings import load_settings  # noqa: E402
 from llm_gc.config import GCConfig  # noqa: E402
 from llm_gc.config.constants import (  # noqa: E402
     DEFAULT_DASHBOARD_PORT,
     DEFAULT_LAST_N_TURNS_TO_KEEP,
     DEFAULT_MIN_CUT_TOKENS,
+    DEFAULT_PROXY_CONTEXT_WINDOW,
 )
 from llm_gc.engine import GcService, build_gc_service  # noqa: E402
-from llm_gc.extraction import PatternFactReader
-from llm_gc.exceptions import ConfigError  # noqa: E402
-from llm_gc.llm import DEFAULT_ANTHROPIC_MODEL, AnthropicClient, FakeProvider, LLMResponse, StopReason  # noqa: E402
-from llm_gc.monitoring import ContextHealthMonitor  # noqa: E402
+from llm_gc.extraction import PatternFactReader  # noqa: E402
+from llm_gc.llm import FakeProvider, LLMResponse, StopReason  # noqa: E402
 from llm_gc.proxy import DEFAULT_PROXY_PORT, SESSION_HEADER, create_app  # noqa: E402
-from llm_gc.proxy.server import ANTHROPIC_UPSTREAM  # noqa: E402
-from llm_gc.proxy.startup_checks import check_summariser  # noqa: E402
 from llm_gc.utils import count_tokens  # noqa: E402
-from llm_gc.visualizer import TranscriptRecorder, create_dashboard_app  # noqa: E402
 
 SESSION = "demo"
 
@@ -120,9 +101,6 @@ _SCRIPTED_SUMMARIES = [
 ] * 6
 
 
-# Names that reach this machine: an upstream on one of them, at this proxy's port, is a loop.
-LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
-
 
 def demo_config() -> GCConfig:
     """Scaled so the recap's budget bites: older spans fold, recent ones are archived or summarised."""
@@ -142,36 +120,11 @@ def serve_config(args: argparse.Namespace) -> GCConfig:
                     last_n_turns_to_keep=args.keep_last)
 
 
-@dataclass(frozen=True)
-class EngineAccess:
-    """Where LLM-GC's own summary and fact calls go, the model they ask for, and what they authenticate with.
-
-    A credential of LLM-GC's own, read from the environment: never one taken from a
-    client's request (see doc/design/llm-provider.md). Kept out of the repr, so it
-    never reaches a log.
-    """
-
-    base_url: str
-    model: str = DEFAULT_ANTHROPIC_MODEL   # any name the upstream accepts: a gateway's own, for one
-    api_key: str | None = field(default=None, repr=False)
-    auth_token: str | None = field(default=None, repr=False)
-
-    @property
-    def configured(self) -> bool:
-        return bool(self.api_key or self.auth_token)
-
-    def client(self) -> AnthropicClient:
-        return AnthropicClient(api_key=self.api_key, auth_token=self.auth_token, base_url=self.base_url, model=self.model)
-
-
-def build_engine(config: GCConfig, *, access: EngineAccess, compactor_kind: str) -> tuple[GcService, str]:
+def build_engine(config: GCConfig, *, compactor_kind: str) -> tuple[GcService, str]:
     """The proxy's engine, and a label saying which summariser it calls."""
     if compactor_kind == "noop":
         return (build_gc_service(config, summary_provider=None),
                 "NoOpCompactor (baseline: wraps the run, does not summarise)")
-    if access.configured:
-        return (build_gc_service(config, summary_provider=access.client()),
-                f"LLMCompactor -> AnthropicClient at {access.base_url}, model {access.model} (live compaction calls)")
     provider = FakeProvider(
         responses=[
             LLMResponse(
@@ -187,7 +140,7 @@ def build_engine(config: GCConfig, *, access: EngineAccess, compactor_kind: str)
     )
     # Canned summaries are not a model: facts are read by patterns, from the user's own words.
     return (build_gc_service(config, summary_provider=provider, fact_reader=PatternFactReader()),
-            "LLMCompactor -> scripted provider (no credential; wording canned, arithmetic real)")
+            "LLMCompactor -> scripted provider (wording canned, arithmetic real)")
 
 
 def _stub_upstream(forwarded: list[dict]):
@@ -215,10 +168,9 @@ def _stub_upstream(forwarded: list[dict]):
 
     return handler
 
-
-def demo(compactor_kind: str, access: EngineAccess) -> None:
+def demo(compactor_kind: str) -> None:
     """Replay a conversation through the real proxy over real HTTP."""
-    service, label = build_engine(demo_config(), access=access, compactor_kind=compactor_kind)
+    service, label = build_engine(demo_config(), compactor_kind=compactor_kind)
     forwarded: list[dict] = []
 
     def run_now(coro) -> None:
@@ -295,77 +247,21 @@ def demo(compactor_kind: str, access: EngineAccess) -> None:
     levels = Counter(span.level.value for span in snapshot.old)
     print(f"  old gen: {len(snapshot.old)} spans {dict(levels)}   permanent gen: {len(snapshot.active_knowledge)} facts\n")
 
-
-def check_summariser_or_exit(access: EngineAccess) -> None:
-    """Ask the upstream for one token before serving; stop if it refuses the model or the credential."""
-    async def check() -> str | None:
-        # A client of its own, closed here: the engine's is first used on the servers' event loop.
-        async with access.client() as probe:
-            return await check_summariser(probe)
-
-    try:
-        warning = asyncio.run(check())
-    except ConfigError as err:
-        sys.exit(f"\nLLM-GC cannot summarise through {access.base_url} with model {access.model}:\n  {err}\n"
-                 "Pass a model the upstream offers with --summary-model, or a credential it accepts, and start again.")
-    print(f"check:     WARNING: {warning}" if warning else f"check:     {access.model} answered at {access.base_url}")
-
-
-def serve(args: argparse.Namespace, access: EngineAccess) -> None:
-    """Run the proxy for real traffic, and the dashboard beside it if asked."""
-    import uvicorn
-
+def serve(args: argparse.Namespace) -> None:
+    """Serve the proxy offline, and the dashboard beside it if asked."""
     config = serve_config(args)
-    service, label = build_engine(config, access=access, compactor_kind=args.compactor)
-    stub = httpx2.AsyncClient(transport=httpx2.MockTransport(_stub_provider)) if args.stub_upstream else None
-    # Transcripts are a second copy of every conversation, so they exist only for the dashboard.
-    transcripts = TranscriptRecorder() if args.dashboard else None
-    proxy_app = create_app(service, upstream_base_url=args.upstream, http_client=stub,
-                           on_client_history=transcripts.record if transcripts is not None else None,
-                           on_reply=transcripts.record_reply if transcripts is not None else None)
-    apps = [(proxy_app, args.port)]
-    if args.dashboard:
-        store = service.session_manager.store
-        monitor = ContextHealthMonitor(
-            event_bus=service.event_bus, gc_config=config,
-            read_generations=lambda session_id: (state.snapshot if session_id is not None
-                                                 and (state := store.get(session_id)) is not None else None))
-        apps.append((create_dashboard_app(service, monitor, read_proxy_stats=proxy_app.state.metrics.as_dict,
-                                          transcripts=transcripts), args.dashboard_port))
-
+    service, label = build_engine(config, compactor_kind=args.compactor)
+    settings = load_settings(None, port=args.port, dashboard=args.dashboard, dashboard_port=args.dashboard_port,
+                             engine=config.model_dump())
     print(f"\ncompactor: {label}")
-    if not access.configured and args.compactor != "noop":
-        print("WARNING: no ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN, so compaction summaries are canned. "
-              "Set one for real summarisation.")
-    print(f"upstream:  {'stub (canned replies, no network)' if args.stub_upstream else args.upstream}")
+    print("upstream:  stub (canned replies, no network)")
     print(f"settings:  min_cut_tokens={config.min_cut_tokens}  last_n_turns_to_keep={config.last_n_turns_to_keep}  "
           f"context_window={config.context_window}")
-    if access.configured and args.compactor != "noop":
-        check_summariser_or_exit(access)
     print(f"\nproxy      http://127.0.0.1:{args.port}   (stats: /stats)")
     if args.dashboard:
         print(f"dashboard  http://127.0.0.1:{args.dashboard_port}")
     print("talk:      python scripts/chat.py\n")
-    # Localhost only, no auth. Binding wider needs authentication first
-    # (CLAUDE.md §10): the client's provider key passes through this process, and
-    # the dashboard shows every conversation it holds.
-    # No access log: the dashboard polls, and a line per poll buried the proxy's own
-    # lines, which already record each request. uvicorn's access logger is shared by
-    # the process, so it cannot be kept for the proxy alone.
-    servers = [uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="info", access_log=False))
-               for app, port in apps]
-
-    async def run_all() -> None:
-        # One event loop for both, so the dashboard reads sessions from the loop
-        # that writes them.
-        await asyncio.gather(*(server.serve() for server in servers))
-
-    try:
-        asyncio.run(run_all())
-    except KeyboardInterrupt:
-        # Each server has already shut down cleanly by now: uvicorn re-raises the
-        # Ctrl-C after its shutdown so the program running it sees the signal too.
-        print("\nLLM-GC proxy stopped.")
+    serve_proxy(service, settings, http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(_stub_provider)))
 
 
 _STUB_PARAGRAPHS = [
@@ -410,47 +306,30 @@ def _stub_provider(request: httpx2.Request) -> httpx2.Response:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--serve", action="store_true", help="run a real server instead of the demo")
+    parser.add_argument("--serve", action="store_true", help="serve offline instead of running the demo")
     parser.add_argument("--port", type=int, default=DEFAULT_PROXY_PORT)
     parser.add_argument("--compactor", choices=("noop", "llm"), default="llm",
-                        help="noop = the baseline that expands; llm = LLMCompactor")
+                        help="noop = the baseline that expands; llm = LLMCompactor over scripted summaries")
     serving = parser.add_argument_group("serve mode")
     serving.add_argument("--dashboard", action="store_true", help="also serve the live dashboard (localhost only)")
     serving.add_argument("--dashboard-port", type=int, default=DEFAULT_DASHBOARD_PORT)
-    serving.add_argument("--stub-upstream", action="store_true", help="answer with canned replies; no network")
-    serving.add_argument("--summary-model", default=DEFAULT_ANTHROPIC_MODEL,
-                         help="the model LLM-GC summarises with, as the upstream names it: behind a gateway, "
-                              "one it offers (default %(default)s)")
-    serving.add_argument("--upstream", default=ANTHROPIC_UPSTREAM,
-                         help="where to forward requests, and where LLM-GC's own summary calls go: "
-                              "a gateway in front of Anthropic, for one (default %(default)s)")
     serving.add_argument("--min-cut-tokens", type=int, default=DEFAULT_MIN_CUT_TOKENS,
                          help="tokens a collection must condense (lower it to see collections sooner)")
     serving.add_argument("--keep-last", type=int, default=DEFAULT_LAST_N_TURNS_TO_KEEP,
                          help="newest turns always kept verbatim")
-    serving.add_argument("--context-window", type=int, default=200_000,
+    serving.add_argument("--context-window", type=int, default=DEFAULT_PROXY_CONTEXT_WINDOW,
                          help="the proxied model's window; sets the recap budget")
     args = parser.parse_args()
-    # The application chooses how the library's logs are shown: what each request was
-    # and why one was passed on untouched. They name sessions and counts, never content.
+    # The application chooses how the library's logs are shown: what each request was and
+    # why one was passed on untouched. They name sessions and counts, never content.
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s",
                         datefmt="%H:%M:%S")
     logging.getLogger("httpx2").setLevel(logging.WARNING)
 
-    upstream = urlsplit(args.upstream)
-    if upstream.scheme not in ("http", "https") or not upstream.hostname:
-        parser.error(f"--upstream must be an http(s) URL, not {args.upstream!r}")
-    if upstream.hostname in LOOPBACK_HOSTS and upstream.port in (args.port, args.dashboard_port):
-        parser.error(f"--upstream {args.upstream} is this process: every request would be forwarded back to it")
-
-    # From the environment, never a flag, so a credential never lands in shell history.
-    access = EngineAccess(base_url=args.upstream if args.serve else ANTHROPIC_UPSTREAM, model=args.summary_model,
-                          api_key=os.environ.get("ANTHROPIC_API_KEY"), auth_token=os.environ.get("ANTHROPIC_AUTH_TOKEN"))
-
     if args.serve:
-        serve(args, access)
+        serve(args)
     else:
-        demo(args.compactor, access)
+        demo(args.compactor)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,57 @@
+# Configuration for llm-gc, written by `llm-gc config init`. Every setting is shown at its
+# default: change what you need and leave the rest. `llm-gc start` uses the first file it
+# finds (--config, $LLM_GC_CONFIG, ./llm-gc.toml, ~/.config/llm-gc/config.toml);
+# `llm-gc config path` says which.
+#
+# Precedence, lowest to highest: these defaults, this file, .env, LLM_GC_* environment
+# variables, command-line flags. Credentials never go in this file: put them in .env or
+# the environment (see .env.example).
+
+# Where the proxy listens. It binds to localhost only.
+port = 9900
+
+# The live dashboard shows conversation content, so it is off unless you ask for it.
+dashboard = false
+dashboard_port = 9901
+
+# Where client requests are forwarded: Anthropic, or a gateway in front of it.
+upstream = "https://api.anthropic.com"
+
+# DEBUG, INFO, WARNING, ERROR or CRITICAL.
+log_level = "INFO"
+
+# "llm" summarises old turns with a model (needs a credential). "noop" makes no model calls:
+# old turns are kept or archived but never condensed. Useful as a baseline to measure against.
+compactor = "llm"
+
+# The model LLM-GC itself calls to summarise old turns and read their facts. This is not
+# the conversation model, which is whatever your client asks for on each request.
+[summary]
+# anthropic or openai.
+provider = "anthropic"
+# Named as the vendor, or a gateway in front of it, names it. Left out, the vendor's
+# own default is used.
+# model = "claude-sonnet-5"
+# Where summary calls go. For anthropic this follows `upstream` when left out; any other
+# provider defaults to its own address.
+# base_url = "https://gateway.example.com"
+
+# Tunables for the garbage collector. The defaults are a starting point, to be tuned by
+# watching real conversations on the dashboard.
+[engine]
+# The proxied model's input window in tokens. The default suits a 200k model: raise it
+# only if every model you proxy has a larger window, or a recap could outgrow it.
+context_window = 200000
+# The recap's budget, as a share of the window.
+max_recap_ratio = 0.3
+# A collection runs only once the turns it would condense add up to this many tokens.
+min_cut_tokens = 1000
+# The newest turns, always sent word for word.
+last_n_turns_to_keep = 5
+# Score lines between detail levels: at or above `keep`, an exchange is sent in full;
+# below `archive`, only as an index line and its facts; summarised in between.
+keep_threshold = 0.7
+archive_threshold = 0.3
+# How far past a line a score must move to change an exchange's level, so one hovering at
+# a line does not flip between collections.
+level_margin = 0.05
