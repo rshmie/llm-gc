@@ -130,11 +130,14 @@ class ProxySettings(BaseSettings):
     """
 
     # An unknown key, in the file or an LLM_GC_ variable, fails instead of being ignored
-    # while the user believes it took effect.
+    # while the user believes it took effect. An empty value (`ANTHROPIC_API_KEY=`, as
+    # copied from .env.example) is not set: it neither overrides a lower layer nor counts
+    # as a credential.
     model_config = SettingsConfigDict(
         env_prefix=ENV_PREFIX,
         env_nested_delimiter=ENV_NESTED_DELIMITER,
         env_file=ENV_FILENAME,
+        env_ignore_empty=True,
         extra="forbid",
     )
 
@@ -184,6 +187,12 @@ class ProxySettings(BaseSettings):
     def has_summary_credential(self) -> bool:
         """Whether the chosen summary provider has a credential to authenticate with."""
         return any(getattr(self, field) for field in _CREDENTIAL_FIELDS[self.summary.provider] if field)
+
+    @property
+    def summary_credential_names(self) -> tuple[str, ...]:
+        """The variables that can hold the chosen summary provider's credential, such as `ANTHROPIC_API_KEY`."""
+        # A credential's variable is its field name in capitals: the alias set on each field.
+        return tuple(field.upper() for field in _CREDENTIAL_FIELDS[self.summary.provider] if field)
 
     @classmethod
     def settings_customise_sources(

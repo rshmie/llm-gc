@@ -139,6 +139,14 @@ shared with whatever else the user keeps in it, so an unrelated variable must no
 LLM-GC starting. The config file belongs to LLM-GC alone, so an unknown key there is a
 mistake worth reporting. The cost is that a misspelt LLM-GC variable in `.env` is ignored.
 
+**An empty value is not set.** `.env.example` ships its credential lines blank, so a copy
+of it holds `ANTHROPIC_API_KEY=` and the like. Read as values, those would be empty
+credentials that `config show` reports as set while `start` refuses for having none, and
+an empty `LLM_GC_UPSTREAM=` would replace the file's upstream with nothing. Ignoring empty
+values at the source settles both at once, so every command asks one question: does any
+layer give this a value? The cost is that a setting cannot be set to the empty string from
+`.env` or the environment; none has a meaningful empty value.
+
 **The engine's section is `GCConfig` with the proxy's window.** A layer that sets only
 some engine keys builds the section from just those keys, so a default supplied any other
 way would be replaced by the library's whenever any engine key was set. A subclass
