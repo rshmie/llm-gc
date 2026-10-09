@@ -87,6 +87,8 @@ select { color: var(--ink); background: var(--surface); border: 1px solid var(--
 
 main { padding-top: 18px; padding-bottom: 56px; }
 main > * + * , .view > * + * { margin-top: 16px; }
+/* Room under the last card, so a message at the foot of the list (the oldest) can be scrolled to the middle of the screen, clear of the "back" button, rather than left at the edge. */
+#view-conversation { padding-bottom: 40vh; }
 
 /* ================================================================ banners */
 .intro { display: flex; gap: 14px; align-items: center; padding: 12px 16px; border-radius: 12px; background: var(--accent-wash); border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent); }

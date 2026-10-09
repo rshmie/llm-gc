@@ -3,7 +3,7 @@
 // Every value comes from an endpoint; this view formats and explains, and derives
 // nothing beyond grouping, counting, and sums and differences of numbers it was given.
 
-import { BECOMES, CATS, CLAMP_CHARS, MAP_PX_PER_MESSAGE, EARLIER_SHOWN, GLOSSARY, HEIGHT, MIN_BAR_PX, ORDER, RUN_MIN, FACT_STATUS, categoryOf, describeOutcome, swatch } from "./vocabulary.js";
+import { BECOMES, CATS, CLAMP_CHARS, FAR_JUMP_SCREENS, MAP_PX_PER_MESSAGE, EARLIER_SHOWN, GLOSSARY, HEIGHT, MIN_BAR_PX, ORDER, RUN_MIN, FACT_STATUS, categoryOf, describeOutcome, swatch } from "./vocabulary.js";
 import { $, agoTs, countEl, fill, fmt, h, meterBar, percent, plural, ranges, reducedMotion, setChildren, storeGet, storeSet, svg } from "./dom.js";
 import { collecting, countCats, credentialRefusal, factsByTurn, has, instructionTokens, marked, newestReply, pendingTurns, preview, query, recapLimit, state, turnMatches, ui, writtenTokens } from "./state.js";
 import { hideTooltip, info, showTooltip, tipAction, tipQuote, hoverTip } from "./tooltip.js";
@@ -680,7 +680,11 @@ export function jumpTo(turnIndex) {
   renderMessages();
   const target = $(`turn-${turnIndex}`);
   if (!target) return;
-  target.scrollIntoView({ behavior: smooth(), block: "center" });
+  // A long smooth scroll runs for a second or more, and a page that redraws while it runs can leave
+  // it part way down the list. Far targets are jumped to; the flash shows where they landed.
+  const { top, height } = target.getBoundingClientRect();
+  const far = Math.abs(top + height / 2 - innerHeight / 2) > innerHeight * FAR_JUMP_SCREENS;
+  target.scrollIntoView({ behavior: far ? "auto" : smooth(), block: "center" });
   target.classList.add("flash");
   setTimeout(() => target.classList.remove("flash"), 1600);
 }
@@ -801,7 +805,7 @@ export function renderFacts(k) {
     fill("facts-head", unread || h("p", { class: "facts-note" }, collecting()
       ? "A collection is reading this conversation now; the facts it reads appear here when it finishes."
       : !k.cuts ? "Nothing has been collected yet, so the model is sent every message word for word. Facts are read from messages when a collection takes them."
-      : readsAssistant() ? "No facts were read from the collected messages. The model reads them in the recap, at their level."
+      : readsAssistant() ? "The collection read the collected messages and found no settled facts in them. A fact is a topic with a value, such as “database: Postgres”, and appears here only when a message states one; the model still reads each message in the recap, at its level."
       : "No facts found. Facts are read from your messages only here, as they are when LLM-GC runs without a model, by simple "
         + "patterns that catch statements such as “The database is Postgres.”; none of the collected messages has one. "
         + "The model reads them in the recap, at their level."));

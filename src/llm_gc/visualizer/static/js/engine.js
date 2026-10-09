@@ -2,7 +2,7 @@
 // runs and why each message gets what it gets, what collections did and couldn't do, every check,
 // and last the proxy's totals and settings, which apply to every conversation.
 
-import { BECOMES, CARD_INFO, CATS, CHART_HEIGHT, CHECKS_SHOWN, CREDENTIAL_REFUSED_TEXT, CREDENTIAL_REFUSED_TITLE, MOVES_SHOWN, NOT_MOVED, OUTCOME_LINES, STATUS, describeOutcome, swatch } from "./vocabulary.js";
+import { BECOMES, CARD_INFO, CATS, CHART_HEIGHT, CHECKS_SHOWN, CREDENTIAL_REFUSED_TEXT, CREDENTIAL_REFUSED_TITLE, MAX_EXCHANGE_LINKS, MOVES_SHOWN, NOT_MOVED, OUTCOME_LINES, STATUS, describeOutcome, swatch } from "./vocabulary.js";
 import { $, agoTs, compact, countEl, fill, fmt, h, meterBar, plural, reducedMotion, setChildren, storeGet, storeSet, svg } from "./dom.js";
 import { credentialRefusal, keepLast, preview, state, ui } from "./state.js";
 import { hideTooltip, info, placeTooltip, showTooltip, tipQuote, tooltipContent, hoverTip } from "./tooltip.js";
@@ -25,11 +25,22 @@ function messageLinks(numbers) {
   for (let i = 0; i < sorted.length; i++) {
     let j = i;
     while (j + 1 < sorted.length && sorted[j + 1] === sorted[j] + 1) j++;
-    const first = sorted[i];
-    out.push(out.length ? ", " : "", h("button", { class: "link-btn", type: "button", onclick: () => jumpTo(first) }, j > i ? `${first}–${sorted[j]}` : String(first)));
+    out.push(out.length ? ", " : "", rangeLink(sorted[i], sorted[j]));
     i = j;
   }
   return [sorted.length === 1 ? "message " : "messages ", out];
+}
+
+const rangeLink = (first, last) =>
+  h("button", { class: "link-btn", type: "button", onclick: () => jumpTo(first) }, last > first ? `${first}–${last}` : String(first));
+
+// One link per exchange, never merged: neighbouring exchanges at one level are still separate
+// exchanges, and a link can only open the first message of the range it names.
+function exchangeLinks(exchanges) {
+  const shown = exchanges.slice(0, MAX_EXCHANGE_LINKS);
+  const out = shown.flatMap((turns, i) => [i ? ", " : "", rangeLink(turns[0], turns[turns.length - 1])]);
+  if (exchanges.length > shown.length) out.push(`, and ${fmt(exchanges.length - shown.length)} more`);
+  return out;
 }
 
 // ----------------------------------------------------------------- cards: collapse and ⓘ
@@ -543,7 +554,7 @@ export function renderGenerations(k) {
     arrow(`collection${k.cuts ? ` ×${fmt(k.cuts)}` : ""}`, "in exchanges, each by its score"),
     box("old", "Old generation", "the recap: every exchange at its level", plural(k.spans.length, "exchange"),
       `${levels.map((level) => `${at(level).length} ${CATS[level].tag}`).join(" · ") || "none yet"} · ${fmt(k.front_tokens)} of its ${fmt(state.config ? state.config.max_recap_tokens : 0)}-token budget`,
-      levels.map((level) => links(CATS[level].tag, at(level).flatMap((span) => span.turns)))),
+      levels.map((level) => h("div", {}, `${CATS[level].tag}: `, exchangeLinks(at(level).map((span) => span.turns))))),
     arrow("facts read once", "as each exchange is made"),
     box("permanent", "Permanent generation", "facts, and what replaced what", plural(active.length, "current fact"),
       [sent ? `${fmt(sent)} on their exchange's line` : null, inWords ? `${fmt(inWords)} in quoted words` : null,
