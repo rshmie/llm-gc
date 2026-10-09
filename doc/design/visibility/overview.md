@@ -632,6 +632,19 @@ it warns about: the reader has seen this loss, not every future one. *Rejected:
 standing banners for good news and routine state.* Three of them sat above the
 page on every visit, and a warning among them was one more line to skim past.
 
+One banner cannot be dismissed: the upstream is refusing LLM-GC's own credential. A
+single summary that falls short is harmless and passes, but a refused credential makes
+every later collection fall short, so the prompt silently stops getting smaller while
+each collection reads as "skipped: it would have made the prompt bigger". Each
+shortfall alone says nothing about the cause; only together do they say the credential
+is bad. The banner is shown on both tabs, in the critical tone, with the upstream's own
+words, and it says what still holds (what was already condensed stays) and what to do
+(check the credential and restart, since it is read once at startup). It is found from
+the engine's error code on the shortfalls, not by matching message text, and it clears
+as soon as a later collection finishes with nothing falling short, because that means a
+call went through. *Rejected: leaving it to the list of shortfalls,* where the cause is
+the same line repeated per exchange and the instruction to act is nowhere.
+
 ### What lifts is what opens something
 
 A block that opens something when clicked rises a little on hover and on keyboard
