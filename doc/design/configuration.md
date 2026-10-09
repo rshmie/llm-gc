@@ -113,9 +113,12 @@ instead from a commented template, which shows every setting at its default, and
 command that prints the effective values.
 
 **The template is a separate file, tested against the code.** It ships inside the
-package, so it exists wherever LLM-GC is installed, and `config init` writes it out. A
-test loads it and requires the result to equal the built-in defaults, so the template
-cannot drift. The
+package, so it exists wherever LLM-GC is installed, and `config init` writes it out. Every
+setting in it is commented out at its default, so a copy changes nothing until edited: its
+live lines are exactly what the user changed, and the defaults it leaves alone keep
+improving with each release, for the same reason a defaults file is rejected above. Tests
+switch every setting on and require the result to equal the built-in defaults, and require
+the template to list every setting, so it cannot drift. The
 alternative, generating it from the settings' field descriptions, makes drift impossible
 by construction but gives up the grouping and prose that help a first-time reader. It is
 worth revisiting if the settings grow past about twenty-five.

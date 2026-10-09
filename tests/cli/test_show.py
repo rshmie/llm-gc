@@ -151,7 +151,7 @@ def test_the_noop_compactor_needs_no_key():
 
 
 def test_a_value_that_only_repeats_the_default_says_so(isolated):
-    """`config init` writes every default into the file, so "file" alone would hide what was changed."""
+    """A file that repeats a default, copied from another setup say, must not look like a change."""
     file = isolated / "c.toml"
     file.write_text("port = 9900\ndashboard_port = 9500\n")
     output = _show(file)

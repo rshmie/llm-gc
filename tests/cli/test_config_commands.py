@@ -1,5 +1,7 @@
 """`llm-gc config init` and `config path`, and the packaged starter file they rely on."""
 
+import re
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -7,8 +9,13 @@ from click.testing import CliRunner
 
 from llm_gc.cli.config_file import read_config_template, write_config_file
 from llm_gc.cli.main import build_cli
-from llm_gc.cli.settings import load_settings
+from llm_gc.cli.settings import (
+    credential_fields, flatten_settings, load_settings, settings_origins, summary_model,
+)
 from llm_gc.exceptions import ConfigError
+
+# A commented-out setting in the template: `# key = value`, as opposed to a line of prose.
+_COMMENTED_SETTING = re.compile(r"^# (?=[a-z_]+ = )", re.MULTILINE)
 
 
 @pytest.fixture(autouse=True)
@@ -24,11 +31,35 @@ def _run(*args: str):
     return CliRunner().invoke(build_cli(), ["config", *args])
 
 
-def test_the_packaged_template_loads_and_states_the_real_defaults(isolated):
-    """Keeps the template from drifting: every value it shows must be what the code does."""
+def _switched_on(template: str) -> str:
+    """The template with every commented-out setting made live."""
+    return _COMMENTED_SETTING.sub("", template)
+
+
+def test_the_template_as_written_changes_nothing(isolated):
+    """Every setting is commented out, so a copy follows the defaults, including later, improved ones."""
     path = isolated / "template.toml"
     path.write_text(read_config_template())
     assert load_settings(path).model_dump() == load_settings().model_dump()
+    assert "file" not in settings_origins(path).values()
+
+
+def test_every_value_the_template_shows_is_the_real_default(isolated):
+    """Keeps the template from drifting from the code, once each setting in it is switched on."""
+    path = isolated / "template.toml"
+    path.write_text(_switched_on(read_config_template()))
+    shown, defaults = load_settings(path), load_settings()
+    # The model line names the provider's default model; base_url shows an example address.
+    assert summary_model(shown) == summary_model(defaults)
+    examples = {"summary": {"model", "base_url"}}
+    assert shown.model_dump(exclude=examples) == defaults.model_dump(exclude=examples)
+
+
+def test_the_template_lists_every_setting():
+    """A setting added to the code but not the template would be invisible to a reader."""
+    listed = set(flatten_settings(tomllib.loads(_switched_on(read_config_template()))))
+    every = set(flatten_settings(load_settings().model_dump(exclude=set(credential_fields()))))
+    assert listed == every
 
 
 def test_init_writes_a_starter_file_in_this_directory(isolated):

@@ -136,18 +136,19 @@ Open `~/.claude/settings.json` and copy three values from its `env` block:
 
 | Copy from `~/.claude/settings.json` | Into | Like this |
 |---|---|---|
-| `ANTHROPIC_BASE_URL`, the gateway's address | `llm-gc.toml`: the `upstream` line near the top | `upstream = "https://…"` |
+| `ANTHROPIC_BASE_URL`, the gateway's address | `llm-gc.toml`: the `upstream` line under *Proxy*. Delete the `#` in front of it | `upstream = "https://…"` |
 | A model name, from an entry ending in `_MODEL` such as `ANTHROPIC_DEFAULT_SONNET_MODEL` | `llm-gc.toml`: the `model` line under `[summary]`. Delete the `#` in front of it | `model = "…"` |
 | `ANTHROPIC_AUTH_TOKEN` (or `ANTHROPIC_API_KEY`) | `.env`: the line with the same name | `ANTHROPIC_AUTH_TOKEN=…` |
 
 Gateways sometimes name models their own way and refuse LLM-GC's default, so set the model name accordingly.
-The edited lines in `llm-gc.toml` look like this:
+Every setting in `llm-gc.toml` starts commented out at its default, so the file changes
+nothing until you edit it. Once edited, the two lines you set look like this, each in its
+own place in the file:
 
 ```toml
 upstream = "https://your-gateway.example.com"
 
 [summary]
-provider = "anthropic"
 model = "your-gateway-sonnet-name"
 ```
 
@@ -638,8 +639,10 @@ A file you asked for in 1 or 2 that doesn't exist is an error, not a silent fall
 `llm-gc config init` writes a commented starter file,
 [`llm-gc.toml`](src/llm_gc/cli/config_template.toml), into the current directory (`--user`
 writes the per-user one instead, and it will not replace a file you already have without
-`--force`). It lists every setting with its default and what it decides: change what you
-need. `llm-gc config path` says which file `start` would use, and `llm-gc config show` prints every
+`--force`). It lists every setting with its default and what it decides, each one
+commented out: remove the `#` in front of a setting to change it. The file changes nothing
+until you do, and the settings you leave commented follow LLM-GC's defaults, including
+improved ones in later versions. `llm-gc config path` says which file `start` would use, and `llm-gc config show` prints every
 effective setting with the layer it came from (file, `.env`, environment or default), which
 is the quickest way to find out why a value isn't what you expected; credentials are only
 reported as set or not, never shown. An unknown or misspelt

@@ -43,7 +43,7 @@ def add_config_commands(cli: click.Group) -> None:
     def init(user: bool, force: bool) -> None:
         """Write a starter llm-gc.toml, every setting commented.
 
-        Each setting is written at its default: change what you need and leave the rest.
+        Each setting is listed at its default and commented out, so the file changes nothing until edited.
         """
         target = user_config_path() if user else Path.cwd() / DEFAULT_CONFIG_FILENAME
         try:
