@@ -46,7 +46,9 @@ upstream that points back at the proxy itself, ports that collide, and the engin
 rules (the thresholds must leave room for a span to move between levels).
 
 An unknown setting is an error, naming it. A misspelt key in the file never looks
-configured while doing nothing.
+configured while doing nothing. The error also says which section the key belongs in, or
+which known key it is closest to, because the usual cause is a real setting in the wrong
+place: a line added at the end of the file lands in its last section, `[engine]`.
 
 ### Finding the config file
 

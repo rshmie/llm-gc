@@ -13,6 +13,7 @@ Credentials come from `.env` or the environment only. A credential in the TOML f
 refused, because that file is meant to be shared and committed.
 """
 
+import difflib
 import os
 import tomllib
 from collections.abc import Mapping
@@ -34,7 +35,7 @@ from pydantic_settings import (
 from llm_gc.config import GCConfig
 from llm_gc.config.constants import DEFAULT_DASHBOARD_PORT, DEFAULT_PROXY_CONTEXT_WINDOW
 from llm_gc.exceptions import ConfigError
-from llm_gc.llm.factory import PROVIDER_NAMES, create_provider
+from llm_gc.llm.factory import DEFAULT_MODELS, PROVIDER_NAMES, create_provider
 from llm_gc.llm.provider import LLMProvider
 from llm_gc.proxy.server import ANTHROPIC_UPSTREAM, DEFAULT_PROXY_PORT
 
@@ -364,9 +365,37 @@ def _describe_problems(err: ValidationError, config_path: Path | None) -> str:
     lines = [f"invalid configuration{f' ({config_path})' if config_path else ''}:"]
     for problem in err.errors(include_input=False):
         name = ".".join(str(part) for part in problem["loc"]) or "settings"
-        # pydantic prefixes a validator's own message with its mechanism, which says nothing to a user.
-        lines.append(f"  {name}: {problem['msg'].removeprefix('Value error, ')}")
+        if problem["type"] == "extra_forbidden":
+            message = _describe_unknown_setting(tuple(str(part) for part in problem["loc"]))
+        else:
+            # pydantic prefixes a validator's own message with its mechanism, which says nothing to a user.
+            message = problem["msg"].removeprefix("Value error, ")
+        lines.append(f"  {name}: {message}")
     return "\n".join(lines)
+
+
+def _describe_unknown_setting(loc: tuple[str, ...]) -> str:
+    """Name the section an unknown key belongs in, or the known key it is closest to.
+
+    The usual cause is a real setting in the wrong TOML section: a line added at the end
+    of the file lands in the last section, `[engine]`, whatever it is.
+    """
+    *section_path, key = loc
+    section = ".".join(section_path)
+    homes = _setting_sections()
+    home = homes.get(key)
+    if home is not None and home != section:
+        return f"unknown setting here: `{key}` goes {f'under [{home}]' if home else 'at the top, before any [section]'}"
+    close = difflib.get_close_matches(key, [name for name, at in homes.items() if at == section], n=1)
+    return f"unknown setting: did you mean `{close[0]}`?" if close else "unknown setting"
+
+
+def _setting_sections() -> dict[str, str]:
+    """Every setting's key, mapped to the section it belongs in ("" for the top level)."""
+    top = {name: "" for name in ProxySettings.model_fields
+           if name not in ("summary", "engine") and name not in credential_fields()}
+    return {**top, **dict.fromkeys(SummarySettings.model_fields, "summary"),
+            **dict.fromkeys(EngineSettings.model_fields, "engine")}
 
 
 def summary_base_url(settings: ProxySettings) -> str | None:
@@ -374,6 +403,11 @@ def summary_base_url(settings: ProxySettings) -> str | None:
     chosen = settings.summary
     # Only a provider speaking the proxy's own protocol can share its upstream.
     return chosen.base_url or (settings.upstream if chosen.provider == "anthropic" else None)
+
+
+def summary_model(settings: ProxySettings) -> str:
+    """The model the summary calls use: the setting, else the chosen vendor's default."""
+    return settings.summary.model or DEFAULT_MODELS[settings.summary.provider]
 
 
 def create_summary_provider(settings: ProxySettings) -> LLMProvider:

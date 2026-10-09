@@ -9,15 +9,18 @@ from llm_gc.cli.main import build_cli
 from llm_gc.cli.settings import ProxySettings
 from llm_gc.exceptions import LLMAuthError
 from llm_gc.llm import FakeProvider
+from llm_gc.llm.factory import DEFAULT_MODELS
 
 
 class Recorder:
     """Stands in for `serve_proxy` and the provider factory, and remembers what it was given."""
 
-    def __init__(self, provider_script=None):
+    def __init__(self, provider_script=None, busy_port=None):
         self.served: list[tuple[object, ProxySettings]] = []
         self.providers: list[FakeProvider] = []
+        self.probed: list[list[int]] = []
         self._script = provider_script
+        self._busy_port = busy_port
 
     def serve(self, service, settings):
         self.served.append((service, settings))
@@ -26,6 +29,10 @@ class Recorder:
         provider = FakeProvider(responses=list(self._script) if self._script is not None else None)
         self.providers.append(provider)
         return provider
+
+    def find_busy(self, ports):
+        self.probed.append(ports)
+        return self._busy_port if self._busy_port in ports else None
 
 
 @pytest.fixture(autouse=True)
@@ -40,8 +47,17 @@ def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
+def _value(output: str, label: str) -> str:
+    """The text of the banner row with this label, after the label."""
+    for line in output.splitlines():
+        if line.strip().startswith(f"{label} "):
+            return line.strip()[len(label):].strip()
+    raise AssertionError(f"no {label} row in:\n{output}")
+
+
 def _run(recorder: Recorder, *args: str):
-    return CliRunner().invoke(build_cli(serve=recorder.serve, make_provider=recorder.make_provider), ["start", *args])
+    cli = build_cli(serve=recorder.serve, make_provider=recorder.make_provider, find_busy=recorder.find_busy)
+    return CliRunner().invoke(cli, ["start", *args])
 
 
 def test_the_noop_compactor_starts_with_no_credential_and_calls_no_model():
@@ -108,7 +124,7 @@ def test_the_banner_says_which_config_file_was_used(isolated):
 
 
 def test_the_banner_says_when_no_file_was_used():
-    assert "none, built-in defaults" in _run(Recorder(), "--compactor", "noop").output
+    assert _value(_run(Recorder(), "--compactor", "noop").output, "Config") == "none: built-in defaults"
 
 
 def test_a_bad_setting_stops_startup_with_the_setting_named(isolated):
@@ -129,14 +145,66 @@ def test_no_credential_value_reaches_the_output(monkeypatch):
     assert "key-that-must-not-print" not in _run(Recorder()).output
 
 
-def test_a_passed_check_says_so_and_where(monkeypatch):
+def test_a_passed_check_says_so_beside_the_upstream_and_model_it_used(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
-    result = _run(Recorder(), "--upstream", "https://gateway.example.com", "--summary-model", "gw-sonnet")
-    assert "check:     gw-sonnet answered at https://gateway.example.com" in result.output
+    output = _run(Recorder(), "--upstream", "https://gateway.example.com", "--summary-model", "gw-sonnet").output
+    assert _value(output, "Upstream") == "https://gateway.example.com"
+    assert _value(output, "Summaries") == "gw-sonnet"
+    assert _value(output, "Check") == "✓ the upstream accepted LLM-GC's key and model"
 
 
 def test_the_banner_comes_before_the_check_so_a_refusal_reads_in_context(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
     recorder = Recorder(provider_script=[LLMAuthError("invalid x-api-key")])
     output = _run(recorder).output
-    assert output.index("upstream:") < output.index("refused LLM-GC's credential")
+    assert output.index("Upstream") < output.index("refused LLM-GC's credential")
+
+
+def test_the_banner_names_the_default_model_rather_than_saying_default(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    output = _run(Recorder()).output
+    assert _value(output, "Summaries") == f"{DEFAULT_MODELS['anthropic']} (the default)"
+
+
+def test_a_busy_port_stops_startup_naming_the_port_and_the_flag_before_any_model_call(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    recorder = Recorder(busy_port=9900)
+    result = _run(recorder)
+    assert result.exit_code == 1
+    assert "port 9900 is already in use" in result.output and "--port" in result.output
+    assert recorder.providers == [] and recorder.served == []
+
+
+def test_a_busy_dashboard_port_names_its_own_flag():
+    result = _run(Recorder(busy_port=9901), "--compactor", "noop", "--dashboard")
+    assert result.exit_code == 1 and "--dashboard-port" in result.output
+
+
+def test_the_dashboard_port_is_probed_only_when_the_dashboard_runs():
+    recorder = Recorder()
+    _run(recorder, "--compactor", "noop")
+    assert recorder.probed == [[9900]]
+
+
+def test_the_dashboard_row_gives_its_address_or_says_how_to_turn_it_on():
+    """Off is the default, so the banner must not leave a reader looking for an address that isn't there."""
+    assert _value(_run(Recorder(), "--compactor", "noop", "--dashboard").output, "Dashboard") == "http://127.0.0.1:9901"
+    assert "--dashboard" in _value(_run(Recorder(), "--compactor", "noop").output, "Dashboard")
+
+
+def test_summaries_name_where_they_go_only_when_it_is_not_the_upstream(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+    output = _run(Recorder(), "--summary-provider", "openai").output
+    assert _value(output, "Summaries").endswith("(the default), at openai's own API")
+
+
+def test_the_noop_compactor_says_summaries_are_off_and_runs_no_check():
+    output = _run(Recorder(), "--compactor", "noop").output
+    assert _value(output, "Summaries").startswith("off")
+    assert "Check" not in output
+
+
+def test_a_refusal_after_the_banner_is_set_apart_from_it(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    output = _run(Recorder(busy_port=9900)).output
+    assert "\n\nError: port 9900 is already in use" in output

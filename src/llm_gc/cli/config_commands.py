@@ -43,10 +43,10 @@ def add_config_commands(cli: click.Group) -> None:
             write_config_file(target, read_config_template(), overwrite=force)
         except ConfigError as err:
             raise click.ClickException(str(err)) from err
-        click.echo(f"wrote {target}\n"
-                   f"Settings go in it. LLM-GC's own credential goes in {Path.cwd() / ENV_FILENAME} or the "
-                   "environment, never in this file (see .env.example).\n"
-                   "Then run `llm-gc start`.")
+        click.echo(f"wrote {target}: LLM-GC's settings, each one commented.\n"
+                   f"LLM-GC's own key goes in {Path.cwd() / ENV_FILENAME}, never in {target.name}: "
+                   "copy .env.example to start one.\n"
+                   "Then run `llm-gc start --dashboard`.")
 
     @config.command()
     @config_file_option

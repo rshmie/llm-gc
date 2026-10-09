@@ -8,6 +8,7 @@ stubbed is the socket.
 import asyncio
 import hashlib
 import json
+import logging
 import time
 
 import httpx2
@@ -497,6 +498,61 @@ class TestItNeverLeaksCredentials:
         state = service.session_manager.store.get("s")
         assert state is not None
         assert API_KEY not in repr(state)
+
+
+class TestEachAnswerIsLogged:
+    """One line per conversation request, written once the upstream has answered."""
+
+    @staticmethod
+    def _answers(caplog) -> list[logging.LogRecord]:
+        return [record for record in caplog.records
+                if record.name == "llm_gc.proxy.server" and hasattr(record, "status")]
+
+    def test_a_success_says_the_model_the_status_and_the_tokens_in_against_out(self, caplog):
+        caplog.set_level(logging.INFO, logger="llm_gc.proxy.server")
+        client, _, _, _ = _proxy()
+        _post(client, _body(("user", "which database are we using?")))
+
+        [record] = self._answers(caplog)
+        assert record.levelno == logging.INFO
+        message = record.getMessage()
+        assert message.startswith("claude-sonnet-5 -> 200: client sent ")
+        assert "LLM-GC forwarded" in message
+        assert record.tokens_from_client >= record.tokens_forwarded > 0
+
+    def test_a_refused_credential_is_a_warning_that_says_so(self, caplog):
+        """A request the upstream refused must not read like one that went through."""
+        error = {"type": "error", "error": {"type": "authentication_error", "message": "invalid x-api-key"}}
+        client, _, _, _ = _proxy(lambda request: httpx2.Response(401, json=error))
+        _post(client, _body(("user", "hello")))
+
+        [record] = self._answers(caplog)
+        assert record.levelno == logging.WARNING
+        assert "-> 401" in record.getMessage() and "refused the client's credential" in record.getMessage()
+
+    def test_a_refused_stream_is_logged_too(self, caplog):
+        client, _, _, _ = _proxy(lambda request: httpx2.Response(429, json={"type": "error"}))
+        _post(client, _body(("user", "hello"), stream=True))
+
+        [record] = self._answers(caplog)
+        assert record.status == 429 and "upstream's error unchanged" in record.getMessage()
+
+    def test_a_model_name_that_could_forge_a_log_line_is_not_written(self, caplog):
+        caplog.set_level(logging.INFO, logger="llm_gc.proxy.server")
+        client, _, _, _ = _proxy()
+        payload = _body(("user", "hello"))
+        payload["model"] = "x\nINFO llm_gc: forged"
+        _post(client, payload)
+
+        [record] = self._answers(caplog)
+        assert record.getMessage().startswith("? -> 200")
+
+    def test_the_client_key_never_reaches_the_log(self, caplog):
+        caplog.set_level(logging.DEBUG)
+        client, _, _, _ = _proxy(lambda request: httpx2.Response(401, json={"type": "error"}))
+        _post(client, _body(("user", "hello")))
+
+        assert API_KEY not in caplog.text
 
 
 class TestHeaderHygiene:

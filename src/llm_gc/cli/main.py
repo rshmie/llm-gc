@@ -9,12 +9,11 @@ from pathlib import Path
 import click
 
 from llm_gc import __version__
+from llm_gc.cli.banner import StartupRefused, render_addresses, render_check, render_header
 from llm_gc.cli.config_commands import add_config_commands
 from llm_gc.cli.options import config_file_option
-from llm_gc.cli.serve import serve_proxy
-from llm_gc.cli.settings import (
-    ENV_FILENAME, ProxySettings, create_summary_provider, find_config_file, load_settings, summary_base_url,
-)
+from llm_gc.cli.serve import find_busy_port, serve_proxy
+from llm_gc.cli.settings import ENV_FILENAME, ProxySettings, create_summary_provider, find_config_file, load_settings
 from llm_gc.engine import GcService, build_gc_service
 from llm_gc.cli.stats import ProxyStats, fetch_proxy_stats, render_stats
 from llm_gc.exceptions import ConfigError, ProxyUnavailableError
@@ -24,12 +23,13 @@ from llm_gc.proxy.startup_checks import check_summariser
 ServeFn = Callable[[GcService, ProxySettings], None]
 ProviderFactory = Callable[[ProxySettings], LLMProvider]
 StatsFetcher = Callable[[str], ProxyStats]
+PortProbe = Callable[[list[int]], int | None]
 
 _LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
 
 def build_cli(*, serve: ServeFn = serve_proxy, make_provider: ProviderFactory = create_summary_provider,
-              fetch_stats: StatsFetcher = fetch_proxy_stats) -> click.Group:
+              fetch_stats: StatsFetcher = fetch_proxy_stats, find_busy: PortProbe = find_busy_port) -> click.Group:
     """The command group, with its side effects passed in.
 
     Binding ports, calling a model and calling a running proxy are what a test must not
@@ -83,17 +83,14 @@ def build_cli(*, serve: ServeFn = serve_proxy, make_provider: ProviderFactory = 
         logging.getLogger("httpx2").setLevel(logging.WARNING)
 
         # Said before the check, so a refusal reads against what was being tried.
-        click.echo(f"config:    {f'{location.path} ({location.origin})' if location else 'none, built-in defaults'}")
-        click.echo(f"upstream:  {settings.upstream}")
-        click.echo(f"compactor: {_describe_compactor(settings)}")
+        click.echo(render_header(settings, location, __version__))
+        # Before the check, which spends a model call: a taken port needs no upstream to report.
+        _refuse_busy_ports(settings, find_busy)
         try:
             engine_provider = _prepare_summariser(settings, make_provider)
         except ConfigError as err:
-            raise click.ClickException(str(err)) from err
-        click.echo(f"\nproxy      http://127.0.0.1:{settings.port}   (stats: /stats)")
-        if settings.dashboard:
-            click.echo(f"dashboard  http://127.0.0.1:{settings.dashboard_port}")
-        click.echo("")
+            raise StartupRefused(str(err)) from err
+        click.echo(render_addresses(settings))
         serve(build_gc_service(settings.engine, summary_provider=engine_provider), settings)
 
     @cli.command()
@@ -115,6 +112,18 @@ def build_cli(*, serve: ServeFn = serve_proxy, make_provider: ProviderFactory = 
     return cli
 
 
+def _refuse_busy_ports(settings: ProxySettings, find_busy: PortProbe) -> None:
+    ports = {settings.port: "--port"}
+    if settings.dashboard:
+        ports[settings.dashboard_port] = "--dashboard-port"
+    busy = find_busy(list(ports))
+    if busy is not None:
+        raise StartupRefused(
+            f"port {busy} is already in use, perhaps by another llm-gc. Stop that one (Ctrl-C in its terminal), "
+            f"or choose another port with {ports[busy]}."
+        )
+
+
 def _prepare_summariser(settings: ProxySettings, make_provider: ProviderFactory) -> LLMProvider | None:
     """The engine's summary client, after asking the upstream to accept it; None for the noop compactor.
 
@@ -127,16 +136,16 @@ def _prepare_summariser(settings: ProxySettings, make_provider: ProviderFactory)
         names = " or ".join(settings.summary_credential_names)
         raise ConfigError(
             f"no credential for LLM-GC's own summary calls. Set {names} in {Path.cwd() / ENV_FILENAME}, "
-            "or export it. LLM-GC never reuses your client's credential (Claude Code's, say). "
+            "or export it. LLM-GC never reuses your client's credential. "
             "Or pass --compactor noop to run without summaries."
         )
-    _check_summariser(make_provider(settings), settings)
+    _check_summariser(make_provider(settings))
     # A second client for the engine: the check's was closed on its own event loop, and the
     # engine's first use is on the servers'.
     return make_provider(settings)
 
 
-def _check_summariser(probe: LLMProvider, settings: ProxySettings) -> None:
+def _check_summariser(probe: LLMProvider) -> None:
     async def check() -> str | None:
         try:
             return await check_summariser(probe)
@@ -145,20 +154,7 @@ def _check_summariser(probe: LLMProvider, settings: ProxySettings) -> None:
             if close is not None:
                 await close()
 
-    warning = asyncio.run(check())
-    if warning:
-        click.echo(f"check:     WARNING: {warning}")
-    else:
-        chosen = settings.summary
-        click.echo(f"check:     {chosen.model or 'the default model'} answered at "
-                   f"{summary_base_url(settings) or chosen.provider}")
-
-
-def _describe_compactor(settings: ProxySettings) -> str:
-    if settings.compactor == "noop":
-        return "noop (no summaries: exchanges are kept or archived, never condensed)"
-    chosen = settings.summary
-    return f"{chosen.provider}, model {chosen.model or 'default'}"
+    click.echo(render_check(asyncio.run(check())))
 
 
 main = build_cli()

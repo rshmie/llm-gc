@@ -87,6 +87,22 @@ def test_an_unknown_key_is_refused_and_named(isolated):
         load_settings(path)
 
 
+@pytest.mark.parametrize(("text", "expected"), [
+    # Appended at the end of the starter file, a line lands in its last section, [engine].
+    ('[engine]\nmodel = "gw-sonnet"\n', "engine.model: unknown setting here: `model` goes under [summary]"),
+    ('model = "gw-sonnet"\n', "model: unknown setting here: `model` goes under [summary]"),
+    ("[summary]\nport = 9100\n", "summary.port: unknown setting here: `port` goes at the top, before any [section]"),
+    ("[engine]\nmin_cut_token = 2000\n", "engine.min_cut_token: unknown setting: did you mean `min_cut_tokens`?"),
+    ("[engine]\nflux_capacitor = 1\n", "engine.flux_capacitor: unknown setting"),
+])
+def test_an_unknown_key_says_where_it_belongs_or_what_it_resembles(isolated, text, expected):
+    path = _write(isolated, "c.toml", text)
+    with pytest.raises(ConfigError) as caught:
+        load_settings(path)
+    assert expected in str(caught.value)
+    assert "Extra inputs" not in str(caught.value)
+
+
 def test_every_bad_setting_is_reported_at_once(isolated):
     path = _write(isolated, "c.toml", "port = 0\n[engine]\nkeep_threshold = 2\n")
     with pytest.raises(ConfigError) as caught:

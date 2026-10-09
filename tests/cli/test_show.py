@@ -8,6 +8,7 @@ from click.testing import CliRunner
 from llm_gc.cli.main import build_cli
 from llm_gc.cli.settings import flatten_settings, load_settings, settings_origins
 from llm_gc.cli.show import render_settings
+from llm_gc.llm.factory import DEFAULT_MODELS
 
 
 @pytest.fixture(autouse=True)
@@ -52,9 +53,9 @@ def test_a_blank_credential_copied_from_the_example_shows_as_not_set(isolated):
     # `start` refuses without a credential, so `show` must not claim one is set.
     (isolated / ".env").write_text("ANTHROPIC_API_KEY=\nANTHROPIC_AUTH_TOKEN=tok\nOPENAI_API_KEY=\n")
     output = _show()
-    assert "anthropic_api_key: not set" in output
-    assert "anthropic_auth_token: set, from .env" in output
-    assert "openai_api_key: not set" in output
+    assert "ANTHROPIC_API_KEY: not set" in output
+    assert "ANTHROPIC_AUTH_TOKEN: set, from .env" in output
+    assert "OPENAI_API_KEY: not set" in output
 
 
 def test_the_highest_layer_is_the_one_named_when_several_supply_a_value(isolated, monkeypatch):
@@ -71,14 +72,22 @@ def test_a_credential_is_reported_as_set_with_its_layer_and_its_value_never_appe
     monkeypatch.setenv("ANTHROPIC_API_KEY", "key-that-must-not-print")
     (isolated / ".env").write_text("OPENAI_API_KEY=other-secret-value\n")
     output = _show()
-    assert "anthropic_api_key: set, from environment" in output
-    assert "openai_api_key: set, from .env" in output
-    assert "anthropic_auth_token: not set" in output
+    assert "ANTHROPIC_API_KEY: set, from environment" in output
+    assert "OPENAI_API_KEY: set, from .env" in output
+    assert "ANTHROPIC_AUTH_TOKEN: not set" in output
     assert "key-that-must-not-print" not in output and "other-secret-value" not in output
 
 
 def test_an_unset_value_is_a_comment_because_toml_has_no_null():
     assert "# model: not set" in _show()
+
+
+def test_an_unset_summary_setting_says_what_is_used_instead():
+    """"not set" alone reads as a fault; for these two, leaving them out is the normal setup."""
+    output = _show(upstream="https://gateway.example.com")
+    assert f"# model: not set: the provider's default, {DEFAULT_MODELS['anthropic']}" in output
+    assert "# base_url: not set: follows upstream, https://gateway.example.com" in output
+    assert "# base_url: not set: the provider's own address" in _show(summary={"provider": "openai"})
 
 
 def test_the_output_loads_back_as_the_same_settings(isolated, monkeypatch):
