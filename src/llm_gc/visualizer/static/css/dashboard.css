@@ -128,6 +128,12 @@ main > * + * , .view > * + * { margin-top: 16px; }
 
 /* ================================================================ the prompt: cost, holdings, window, and the map */
 .prompt-card { padding: 20px 22px 18px; display: grid; gap: 22px; }
+/* A grid item will not shrink below its content by default, so a map wider than the card would widen the
+   card and the page. Letting it shrink is what makes the map scroll inside itself. */
+.prompt-card > div { min-width: 0; }
+/* Cards fade from a lighter top to the surface colour over 160px. The map's row labels are painted in the
+   surface colour to hide bars sliding under them, so here the fade ends above the map and they match. */
+.card.map-card { background-image: linear-gradient(180deg, var(--surface-hi), var(--surface) 64px); }
 .prompt-top { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr); }
 .prompt-top > section { padding: 0 22px; min-width: 0; }
 .prompt-top > section:first-child { padding-left: 0; }
@@ -171,10 +177,20 @@ main > * + * , .view > * + * { margin-top: 16px; }
    still has. The Sent row beneath uses the same scale, so the recap and the saving sit
    under the messages they came from. Cells carry no padding or border, so the three rows'
    boundaries line up exactly; spacing lives on the marks inside them. */
-.pmap { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 6px 10px; margin-top: 14px; align-items: end; }
-@media (max-width: 560px) { .pmap { grid-template-columns: 50px minmax(0, 1fr); } }
-.an-rowlab { font-size: 11.5px; color: var(--ink-3); text-align: right; align-self: center; }
-.an-labels, .an-bars, .an-ledger { display: flex; min-width: 0; }
+/* Each row carries its own label and is at least as wide as every message at its minimum (--track, set
+   by the script). Wider than the card, the whole map scrolls sideways as one: a single scroller, so the
+   rows cannot drift apart, and each label sticks to the left edge of its row. */
+.pmap { --lab: 74px; display: flex; flex-direction: column; gap: 6px; margin-top: 14px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; }
+.an-row { display: flex; align-items: flex-end; min-width: calc(var(--lab) + var(--track, 0px)); }
+@media (max-width: 560px) { .pmap { --lab: 60px; } }
+/* The label spans its row's full height, so bars sliding under it are hidden whole, not only behind its text. */
+.an-rowlab { flex: 0 0 var(--lab); box-sizing: border-box; padding-right: 10px; position: sticky; left: 0; z-index: 2; background: var(--surface);
+  font-size: 11.5px; color: var(--ink-3); align-self: stretch; display: flex; align-items: center; justify-content: flex-end; }
+.an-labels, .an-bars, .an-ledger, .an-axis { flex: 1 1 0; display: flex; min-width: 0; }
+/* Fades the edge the map scrolls on, as the facts columns do; the label column is left clear. */
+.pmap[data-more="right"] { mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent); }
+.pmap[data-more="left"] { mask-image: linear-gradient(to right, #000 var(--lab), transparent var(--lab), #000 calc(var(--lab) + 36px)); }
+.pmap[data-more="both"] { mask-image: linear-gradient(to right, #000 var(--lab), transparent var(--lab), #000 calc(var(--lab) + 36px), #000 calc(100% - 36px), transparent); }
 .an-l, .an-c, .an-s { min-width: 0; flex-basis: 0; flex-shrink: 1; }
 .an-l span { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; color: var(--ink-3); padding: 0 3px 5px; margin: 0 1.5px; border-bottom: 1px solid var(--baseline); min-height: 22px; }
 .an-l span b { color: var(--ink-2); font-weight: 650; }

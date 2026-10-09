@@ -3,7 +3,7 @@
 // Every value comes from an endpoint; this view formats and explains, and derives
 // nothing beyond grouping, counting, and sums and differences of numbers it was given.
 
-import { BECOMES, CATS, CLAMP_CHARS, CREDENTIAL_REFUSED_TEXT, CREDENTIAL_REFUSED_TITLE, EARLIER_SHOWN, GLOSSARY, HEIGHT, MIN_BAR_PX, ORDER, RUN_MIN, FACT_STATUS, categoryOf, describeOutcome, swatch } from "./vocabulary.js";
+import { BECOMES, CATS, CLAMP_CHARS, MAP_PX_PER_MESSAGE, EARLIER_SHOWN, GLOSSARY, HEIGHT, MIN_BAR_PX, ORDER, RUN_MIN, FACT_STATUS, categoryOf, describeOutcome, swatch } from "./vocabulary.js";
 import { $, agoTs, countEl, fill, fmt, h, meterBar, percent, plural, ranges, reducedMotion, setChildren, storeGet, storeSet, svg } from "./dom.js";
 import { collecting, countCats, credentialRefusal, factsByTurn, has, instructionTokens, marked, newestReply, pendingTurns, preview, query, recapLimit, state, turnMatches, ui, writtenTokens } from "./state.js";
 import { hideTooltip, info, showTooltip, tipAction, tipQuote, hoverTip } from "./tooltip.js";
@@ -171,6 +171,28 @@ function ledger() {
   return ledgerSegs;
 }
 
+// The smallest size, in tokens, a bar is drawn at so that none is narrower than MIN_BAR_PX on a track this
+// wide. Raising the floor widens the small bars and so narrows the rest a little, which raises the floor
+// needed: the loop settles within a few passes, because the track always holds every message at
+// MAP_PX_PER_MESSAGE, which is more than MIN_BAR_PX. On a track too narrow for that (a hidden tab) it
+// does not settle and the bars come out equal, which is the honest limit.
+function floorTokens(sizes, total, trackPx) {
+  let floor = (total * MIN_BAR_PX) / trackPx;
+  for (let pass = 0; pass < 24; pass++) {
+    const drawn = sizes.reduce((n, size) => n + Math.max(size ?? floor, floor), 0);
+    floor = (drawn * MIN_BAR_PX) / trackPx;
+  }
+  return floor;
+}
+
+// Fades the edge the map scrolls on, so bars out of view don't read as the start or end of the conversation.
+function markMoreSideways(el) {
+  const left = el.scrollLeft > 1;
+  const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+  if (left || right) el.dataset.more = left && right ? "both" : left ? "left" : "right";
+  else delete el.dataset.more;
+}
+
 export function renderMap(k) {
   const facts = factsByTurn(k);
   const items = [
@@ -178,9 +200,18 @@ export function renderMap(k) {
     ...pendingTurns(k).map((p) => ({ pending: true, i: p.turn_index, cat: "pending", tok: p.tokens, role: p.role, text: p.text })),
   ];
   const barsHost = $("an-bars");
-  // Widths are tokens, with a floor of about MIN_BAR_PX so a one-token message stays visible and clickable.
+  const scroller = $("map");
+  // Read before anything changes: a map the reader had scrolled to its newest end follows new messages.
+  const atNewest = scroller.scrollLeft + scroller.clientWidth >= scroller.scrollWidth - 24;
+  // Room for every message, however many: past the card's width the map scrolls sideways as one.
+  scroller.style.setProperty("--track", `${items.length * MAP_PX_PER_MESSAGE}px`);
+  if (!scroller.dataset.wired) {
+    scroller.dataset.wired = "1";
+    scroller.addEventListener("scroll", () => markMoreSideways(scroller), { passive: true });
+  }
+  // Widths are tokens, with a floor so a one-token message stays at least MIN_BAR_PX wide and clickable.
   const total = items.reduce((n, x) => n + (x.tok ?? 0), 0) || items.length || 1;
-  const floor = (total * MIN_BAR_PX) / Math.max(240, barsHost.clientWidth || 900);
+  const floor = floorTokens(items.map((x) => x.tok), total, Math.max(240, barsHost.clientWidth || 900));
   const width = (x) => Math.max(x.tok ?? floor, floor);
   barsHost.classList.toggle("dense", items.length > 80);
   barsHost.classList.toggle("searching", !!query());
@@ -261,6 +292,13 @@ export function renderMap(k) {
     seg.onpointerleave = () => { hideTooltip(); trace(null); };
   }
   renderKey(k, items, { saved, recent, pendTok });
+
+  // A new conversation opens at its newest end, where the live action is; after that the reader's place is
+  // kept, unless they were already at the newest end, so new messages stay in view.
+  if (ui.mapSession !== state.selected || atNewest) scroller.scrollLeft = scroller.scrollWidth;
+  ui.mapSession = state.selected;
+  markMoreSideways(scroller);
+  $("an-hint").textContent = scroller.scrollWidth > scroller.clientWidth + 1 ? " · scrolls sideways" : "";
 }
 
 // The key mirrors the map's two rows: what a bar means, then what the Sent row is made of.

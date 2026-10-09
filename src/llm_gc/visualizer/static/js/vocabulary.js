@@ -8,6 +8,7 @@ export const RUN_MIN = 4;              // consecutive archived exchanges folded 
 export const EARLIER_SHOWN = 8;        // newest rows shown before "Show N older messages" folds the rest
 export const CHECKS_SHOWN = 5;         // rows of "Every check" before "Show all"
 export const MOVES_SHOWN = 3;          // collections listed in "What moved" and "What fell short" before "Show all"
+export const MAP_PX_PER_MESSAGE = 14; // room the map keeps per message, so a long conversation scrolls sideways instead of shrinking to slivers
 export const MIN_BAR_PX = 10;          // narrowest a message's bar gets on the map, so a one-token message stays clickable
 export const CELL_MAX_PX = 46;         // widest a message gets on the map
 export const CLAMP_CHARS = 420;        // longer messages start collapsed
