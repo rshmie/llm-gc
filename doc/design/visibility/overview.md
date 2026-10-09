@@ -644,6 +644,37 @@ read, not things to open, and a panel that rose under the pointer would promise 
 click that does nothing, which teaches the reader to stop trusting the lift where it
 does mean something.
 
+### The map gives every message room
+
+The map draws one bar per message, its width the message's size in tokens, so what the
+model holds is drawn to scale. Squeezed into the card's width, a long conversation turns
+its bars into slivers that cannot be told apart, hovered or clicked. So each message is
+given a minimum, about 14 pixels of track and never a bar under 10, and past the card's
+width the map scrolls sideways.
+
+- **One scroller moves every row.** The group labels, the bars, the Sent row under them and
+  the axis share a single scroll area, so they cannot drift apart. Each row's name sticks to
+  the left edge, and the label covers its row's full height so bars sliding under it are
+  hidden whole.
+- **It opens at the newest end**, where the live action is, and a conversation opened
+  afterwards does the same. After that the reader's place is kept, except that a reader
+  already at the newest end stays there as messages arrive.
+- **The edges fade, and the header says it scrolls**, so bars out of view are not read as
+  the start or end of the conversation. Nothing else on the page changes when it scrolls.
+- **The floor is solved, not applied once.** Widening the small bars narrows the rest a
+  little, which raises the floor they need, so it is found by repeating the step until it
+  settles. Done once, the smallest bars still came out near 6 pixels.
+
+Widths stay proportional to tokens above the floor, so one huge pasted message still shows
+as the wide bar it is. *Rejected: merging small messages into one bar,* which loses a bar per
+message and its hover and click, the thing the map is for; the exchange list below already
+folds runs where folding helps. *Rejected: giving every message the same width,* which
+loses the scale that shows a one-line reply beside a pasted file. *Rejected: a zoom
+control,* another thing to learn while the default stays unreadable. *Rejected: a scrollbar
+per row kept in step by script,* which drifts and stutters. *Accepted cost:* a very long
+conversation is a long strip, and only part of it is in view at once; the group labels say
+where the collected messages end and the recent ones begin.
+
 ### The conversation view keeps no collection log
 
 Collections are what LLM-GC did, and the Engine view is where that is shown: what

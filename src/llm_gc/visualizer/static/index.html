@@ -83,17 +83,17 @@
       </div>
     </section>
 
-    <section class="card prompt-card" aria-labelledby="hero-title">
+    <section class="card prompt-card map-card" aria-labelledby="hero-title">
       <div>
         <div class="map-head">
           <h2 id="hero-title">What the model has of each message</h2>
-          <span class="muted">Width: size in tokens · height: how much the model still has · hover to trace · click to open</span>
+          <span class="muted">Width: size in tokens · height: how much the model still has · hover to trace · click to open<span id="an-hint"></span></span>
         </div>
-        <div class="pmap" id="map">
-          <div></div><div class="an-labels" id="an-labels"></div>
-          <div class="an-rowlab">Messages</div><div class="an-bars" id="an-bars"></div>
-          <div class="an-rowlab">Sent</div><div class="an-ledger" id="an-ledger"></div>
-          <div></div><div class="an-axis" aria-hidden="true"><span>first message</span><span>newest · widths to scale</span></div>
+        <div class="pmap" id="map" tabindex="0">
+          <div class="an-row"><div class="an-rowlab"></div><div class="an-labels" id="an-labels"></div></div>
+          <div class="an-row"><div class="an-rowlab">Messages</div><div class="an-bars" id="an-bars"></div></div>
+          <div class="an-row"><div class="an-rowlab">Sent</div><div class="an-ledger" id="an-ledger"></div></div>
+          <div class="an-row"><div class="an-rowlab"></div><div class="an-axis" aria-hidden="true"><span>first message</span><span>newest · widths to scale</span></div></div>
         </div>
         <div class="an-key" id="an-key"></div>
       </div>

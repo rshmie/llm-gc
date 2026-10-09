@@ -6,7 +6,7 @@ import { $, h } from "./dom.js";
 
 export const state = { config: null, proxy: null, sessions: [], selected: null, version: null, knowledge: null, transcript: null, activity: null };
 export const ui = { tab: "conversation", filter: "all", query: "", promptView: false, open: new Set(), chartKey: null, earlierOpen: false, listOpen: true,
-  stayOpen: false, allChecks: false, allMoves: false, allProblems: false };
+  stayOpen: false, allChecks: false, allMoves: false, allProblems: false, mapSession: null };
 
 export const keepLast = () => (state.config ? state.config.last_n_turns_to_keep : 5);
 // What the recap may spend on older exchanges: its token budget, a share of the model's window.
