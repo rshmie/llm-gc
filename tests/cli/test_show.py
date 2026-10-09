@@ -48,6 +48,15 @@ def test_each_layer_is_named_for_the_values_it_supplied(isolated, monkeypatch):
     assert _line(output, "keep_threshold").endswith("# default")
 
 
+def test_a_blank_credential_copied_from_the_example_shows_as_not_set(isolated):
+    # `start` refuses without a credential, so `show` must not claim one is set.
+    (isolated / ".env").write_text("ANTHROPIC_API_KEY=\nANTHROPIC_AUTH_TOKEN=tok\nOPENAI_API_KEY=\n")
+    output = _show()
+    assert "anthropic_api_key: not set" in output
+    assert "anthropic_auth_token: set, from .env" in output
+    assert "openai_api_key: not set" in output
+
+
 def test_the_highest_layer_is_the_one_named_when_several_supply_a_value(isolated, monkeypatch):
     file = isolated / "c.toml"
     file.write_text("port = 9100\n")

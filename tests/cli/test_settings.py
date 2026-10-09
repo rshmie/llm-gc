@@ -122,6 +122,24 @@ def test_credentials_can_come_from_dotenv_beside_unrelated_variables(isolated):
     assert load_settings().anthropic_api_key.get_secret_value() == "key-from-dotenv"
 
 
+def test_an_empty_credential_line_is_not_a_credential(isolated, monkeypatch):
+    # .env.example ships `ANTHROPIC_API_KEY=` blank; a copy of it must not count as a key.
+    _write(isolated, ".env", "ANTHROPIC_API_KEY=\nANTHROPIC_AUTH_TOKEN=\nOPENAI_API_KEY=\n")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "")
+    settings = load_settings()
+    assert settings.anthropic_api_key is None and settings.anthropic_auth_token is None
+    assert not settings.has_summary_credential
+
+
+def test_an_empty_value_does_not_override_a_lower_layer(isolated, monkeypatch):
+    path = _write(isolated, "c.toml", 'upstream = "https://gateway.example.com"\n')
+    _write(isolated, ".env", "LLM_GC_UPSTREAM=\n")
+    monkeypatch.setenv("LLM_GC_PORT", "")
+    settings = load_settings(path)
+    assert settings.upstream == "https://gateway.example.com"
+    assert settings.port == 9900
+
+
 @pytest.mark.parametrize("line", ["ANTHROPIC_API_KEY = \"k\"", "anthropic_api_key = \"k\""])
 def test_a_credential_in_the_config_file_is_refused_without_echoing_it(isolated, line):
     path = _write(isolated, "c.toml", line + "\n")

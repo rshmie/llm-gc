@@ -56,7 +56,14 @@ def test_no_credential_refuses_to_start_and_names_the_ways_out():
     result = _run(recorder)
     assert result.exit_code == 1
     assert "no credential" in result.output and "--compactor noop" in result.output
+    assert "ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN" in result.output
     assert recorder.served == []
+
+
+def test_no_credential_names_the_chosen_providers_variable_and_the_env_file_it_reads(isolated):
+    result = _run(Recorder(), "--summary-provider", "openai")
+    assert "OPENAI_API_KEY" in result.output and "ANTHROPIC" not in result.output
+    assert str(isolated / ".env") in result.output.replace("\n", "")
 
 
 def test_a_credential_starts_it_after_the_upstream_answers_the_check(monkeypatch):

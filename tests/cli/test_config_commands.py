@@ -36,6 +36,7 @@ def test_init_writes_a_starter_file_in_this_directory(isolated):
     assert result.exit_code == 0, result.output
     assert (isolated / "llm-gc.toml").read_text() == read_config_template()
     assert "llm-gc.toml" in result.output
+    assert str(isolated / ".env") in result.output  # where the credential goes instead
 
 
 def test_a_file_init_wrote_is_then_found_and_loadable(isolated):

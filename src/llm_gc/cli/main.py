@@ -13,7 +13,7 @@ from llm_gc.cli.config_commands import add_config_commands
 from llm_gc.cli.options import config_file_option
 from llm_gc.cli.serve import serve_proxy
 from llm_gc.cli.settings import (
-    ProxySettings, create_summary_provider, find_config_file, load_settings, summary_base_url,
+    ENV_FILENAME, ProxySettings, create_summary_provider, find_config_file, load_settings, summary_base_url,
 )
 from llm_gc.engine import GcService, build_gc_service
 from llm_gc.cli.stats import ProxyStats, fetch_proxy_stats, render_stats
@@ -124,9 +124,11 @@ def _prepare_summariser(settings: ProxySettings, make_provider: ProviderFactory)
     if settings.compactor == "noop":
         return None
     if not settings.has_summary_credential:
+        names = " or ".join(settings.summary_credential_names)
         raise ConfigError(
-            f"no credential for the {settings.summary.provider} summariser. Set it in the environment or .env "
-            "(see .env.example), or pass --compactor noop to run without summaries."
+            f"no credential for LLM-GC's own summary calls. Set {names} in {Path.cwd() / ENV_FILENAME}, "
+            "or export it. LLM-GC never reuses your client's credential (Claude Code's, say). "
+            "Or pass --compactor noop to run without summaries."
         )
     _check_summariser(make_provider(settings), settings)
     # A second client for the engine: the check's was closed on its own event loop, and the

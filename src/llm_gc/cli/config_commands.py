@@ -7,7 +7,7 @@ import click
 from llm_gc.cli.config_file import read_config_template, write_config_file
 from llm_gc.cli.options import config_file_option
 from llm_gc.cli.settings import (
-    DEFAULT_CONFIG_FILENAME, find_config_file, load_settings, settings_origins, user_config_path,
+    DEFAULT_CONFIG_FILENAME, ENV_FILENAME, find_config_file, load_settings, settings_origins, user_config_path,
 )
 from llm_gc.cli.show import render_settings
 from llm_gc.exceptions import ConfigError
@@ -43,7 +43,10 @@ def add_config_commands(cli: click.Group) -> None:
             write_config_file(target, read_config_template(), overwrite=force)
         except ConfigError as err:
             raise click.ClickException(str(err)) from err
-        click.echo(f"wrote {target}\nEdit it, then run `llm-gc start`.")
+        click.echo(f"wrote {target}\n"
+                   f"Settings go in it. LLM-GC's own credential goes in {Path.cwd() / ENV_FILENAME} or the "
+                   "environment, never in this file (see .env.example).\n"
+                   "Then run `llm-gc start`.")
 
     @config.command()
     @config_file_option
