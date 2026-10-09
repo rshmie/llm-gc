@@ -16,6 +16,20 @@ export const captured = () => !!(state.transcript && state.transcript.captured);
 // Read from the session list, polled every time: the conversation itself is refetched only when it changes,
 // and a collection starts and runs without changing it.
 export const collecting = () => !!state.sessions.find((s) => s.session_id === state.selected && s.aging_in_flight);
+// The upstream's refusal of LLM-GC's own credential, while it still stands: the newest refusal that no
+// later collection has got past. `error_code` is the engine's, set when a summary or a facts read is
+// refused with a 401 or 403; the credential is read once at startup, so it persists until a restart.
+// A later collection that finished with nothing falling short means a call went through, and clears it.
+export const CREDENTIAL_REFUSED = "LLM_AUTH_FAILED";
+export function credentialRefusal() {
+  if (!state.activity) return null;
+  const refusals = state.activity.recent_degradations.filter((r) => r.degradation.error_code === CREDENTIAL_REFUSED);
+  if (!refusals.length) return null;
+  const latest = refusals.at(-1);
+  const recovered = state.activity.recent_passes.some((p) => p.gc_status === "completed" && !p.degradations.length
+    && p.gc_completed_at > latest.occurred_at);
+  return recovered ? null : latest;
+}
 export const preview = (text, n = 150) => !text ? null : text.length > n ? `“${text.slice(0, n).trim()}…”` : `“${text}”`;
 
 export async function getJSON(path) {

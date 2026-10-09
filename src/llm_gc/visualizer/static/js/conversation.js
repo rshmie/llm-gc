@@ -3,9 +3,9 @@
 // Every value comes from an endpoint; this view formats and explains, and derives
 // nothing beyond grouping, counting, and sums and differences of numbers it was given.
 
-import { BECOMES, CATS, CLAMP_CHARS, EARLIER_SHOWN, GLOSSARY, HEIGHT, MIN_BAR_PX, ORDER, RUN_MIN, FACT_STATUS, categoryOf, describeOutcome, swatch } from "./vocabulary.js";
+import { BECOMES, CATS, CLAMP_CHARS, CREDENTIAL_REFUSED_TEXT, CREDENTIAL_REFUSED_TITLE, EARLIER_SHOWN, GLOSSARY, HEIGHT, MIN_BAR_PX, ORDER, RUN_MIN, FACT_STATUS, categoryOf, describeOutcome, swatch } from "./vocabulary.js";
 import { $, agoTs, countEl, fill, fmt, h, meterBar, percent, plural, ranges, reducedMotion, setChildren, storeGet, storeSet, svg } from "./dom.js";
-import { collecting, countCats, factsByTurn, has, instructionTokens, marked, newestReply, pendingTurns, preview, query, recapLimit, state, turnMatches, ui, writtenTokens } from "./state.js";
+import { collecting, countCats, credentialRefusal, factsByTurn, has, instructionTokens, marked, newestReply, pendingTurns, preview, query, recapLimit, state, turnMatches, ui, writtenTokens } from "./state.js";
 import { hideTooltip, info, showTooltip, tipAction, tipQuote, hoverTip } from "./tooltip.js";
 import { offerReturn, showTab } from "./shell.js";
 import { openCard, showWhy, whyText } from "./engine.js";
@@ -75,6 +75,9 @@ export function renderStatus() {
     dismissal ? h("button", { class: "x", type: "button", "aria-label": "Dismiss", title: "Hide until there is more of this",
       onclick: () => dismiss(...dismissal) }, "×") : null);
   const items = [];
+  // First, and with no way to hide it: unlike the others, it does not pass until someone acts.
+  if (credentialRefusal()) items.push(line("critical", "✕", CREDENTIAL_REFUSED_TITLE, CREDENTIAL_REFUSED_TEXT,
+    ["See why", () => { showTab("engine"); openCard("notmoved", true); }]));
   if (unseen > (hidden.out_of_view ?? 0)) items.push(line("warn", "!", `The model can no longer see ${plural(unseen, "message")}.`,
     `The recap reached its budget of ${recapLimit()} with every exchange at its least detail, so the oldest ${plural(folded, "exchange")} were folded into one line saying they exist. Their words are stored, not lost.`,
     ["Show them", toMessages("out_of_view")], ["out_of_view", unseen]));

@@ -383,8 +383,132 @@ import anthropic
 client = anthropic.Anthropic(base_url="http://127.0.0.1:9900")
 ```
 
-`python scripts/chat.py` is exactly that, as a terminal chat. It needs the Anthropic SDK
-(`uv sync --extra dev`), and the client's credential exported in its terminal.
+`python scripts/chat.py` is exactly that, as a terminal chat.
+
+### With Claude Code
+
+```bash
+llm-gc start --dashboard                          # with ANTHROPIC_API_KEY set
+ANTHROPIC_BASE_URL=http://127.0.0.1:9900 claude   # in the project you are working on
+```
+
+If your `~/.claude/settings.json` already sets `ANTHROPIC_BASE_URL`, because your
+company routes Claude through its own proxy, that setting wins over the command line:
+follow [Behind your organisation's proxy](#behind-your-organisations-proxy) instead.
+
+Claude Code's own credentials are forwarded to Anthropic, never stored; the proxy's
+`ANTHROPIC_API_KEY` pays only for summaries and fact reads. Without it, the proxy runs
+with canned summaries, which is only useful for trying the dashboard. With an agent's conversation, LLM-GC:
+
+- reads tool calls and results as text, so they are summarised and quoted like words;
+- sends Claude Code's instructions (its system prompt, its tools, and the
+  `<system-reminder>` blocks that carry CLAUDE.md and memory) word for word with every
+  request, never condensed;
+- passes its other calls, such as token counting, through untouched;
+- shows its side requests (after each reply it asks the model to suggest your next
+  prompt) as the *newest request*, never as something you said.
+
+Sessions live in memory: restarting the proxy starts each conversation again from what
+Claude Code sends, at the cost of one request sent whole and one collection. The first
+collection of a long conversation can take a couple of minutes, and requests meanwhile
+go whole — never worse than without LLM-GC.
+
+### Behind your organisation's proxy
+
+Use this if your company sends Claude's traffic through its own proxy: your
+`~/.claude/settings.json` has an `env` block with `ANTHROPIC_BASE_URL` (the company
+proxy's address) and a token or key. LLM-GC goes in the middle:
+
+```
+Claude Code  ──►  LLM-GC  ──►  your company's proxy  ──►  Anthropic
+```
+
+#### 1. Start LLM-GC
+
+LLM-GC needs three values. All three are usually in `~/.claude/settings.json`, under
+`env`, because Claude Code needs them too:
+
+| Value | Where to find it | How you give it |
+|---|---|---|
+| The company proxy's URL | `ANTHROPIC_BASE_URL` | `--upstream` (or `upstream` in the [config file](#configuration)) |
+| A model name the company proxy offers | an entry ending in `_MODEL`, such as `ANTHROPIC_DEFAULT_SONNET_MODEL`; if there is none, ask your proxy team | `--summary-model` (or `model` under `[summary]`) |
+| Your token | `ANTHROPIC_AUTH_TOKEN` (or `ANTHROPIC_API_KEY`) | an environment variable, never a flag |
+
+LLM-GC uses the model and the token for its own summaries, which go through the company
+proxy too. Company proxies often name models their own way, so LLM-GC's default,
+`claude-sonnet-5`, may be refused. Choose a Sonnet model: summaries need to be good, and
+they are short.
+
+In a terminal, from the LLM-GC folder:
+
+```bash
+read -s ANTHROPIC_AUTH_TOKEN && export ANTHROPIC_AUTH_TOKEN    # paste your token, press Enter
+llm-gc start --dashboard \
+  --upstream https://your-company-proxy.example.com \
+  --summary-model your-sonnet-model-name
+```
+
+`read -s` takes the token without showing it, so it never appears on screen or in your
+shell history. (If your company uses `ANTHROPIC_API_KEY` instead, use that name in both
+places.)
+
+Before it serves, LLM-GC asks the company proxy for one token with that model and
+credential, so a wrong one stops it straight away rather than failing later:
+
+```
+config:    none, built-in defaults
+upstream:  https://your-company-proxy.example.com
+compactor: anthropic, model your-sonnet-model-name
+check:     your-sonnet-model-name answered at https://your-company-proxy.example.com
+
+proxy      http://127.0.0.1:9900   (stats: /stats)
+dashboard  http://127.0.0.1:9901
+```
+
+If it stops instead, it prints the company proxy's own reason, such as *invalid model
+specified*: fix that value and start again. Leave this terminal open while you work.
+
+#### 2. Point Claude Code at LLM-GC
+
+Claude Code takes `ANTHROPIC_BASE_URL` from its settings files, and a value typed before
+`claude` on the command line is overridden by them. So set LLM-GC's address in a settings
+file. In the project you want to use, put this in `.claude/settings.local.json`:
+
+```json
+{ "env": { "ANTHROPIC_BASE_URL": "http://127.0.0.1:9900" } }
+```
+
+If that file already exists (Claude Code saves your permission choices there), add the
+`env` entry to it rather than replacing the file. Then start Claude in that project as
+usual: `claude`.
+
+A project's settings take priority over `~/.claude/settings.json`, so only this project
+goes through LLM-GC; your other projects still use the company proxy directly. To stop,
+remove the entry.
+
+> **Every project instead?** Set `ANTHROPIC_BASE_URL` to `http://127.0.0.1:9900` in
+> `~/.claude/settings.json` itself. Write down the company proxy's URL first: step 1 can
+> no longer read it from that file, so pass it yourself, as `--upstream https://…`.
+
+#### 3. Check that it works
+
+Send Claude a message. LLM-GC's terminal prints a line for every request, and the
+dashboard shows the conversation from its second message. Once the conversation has
+grown, the dashboard says *Last collection …* and the prompt it sends gets smaller.
+
+| What you see | What to do |
+|---|---|
+| Nothing new in LLM-GC's terminal | Claude isn't using LLM-GC: check step 2, and that you started `claude` in that project |
+| Claude shows an error from the company proxy | `--upstream` is wrong: it must be exactly the company proxy's URL from your settings |
+| LLM-GC stops at startup: *the upstream refused LLM-GC's summary request … invalid model* | The company proxy doesn't offer that model: pass one it does with `--summary-model` |
+| LLM-GC stops at startup: *refused LLM-GC's credential* | Check the credential exported in step 1 |
+| Both tabs: *The upstream is refusing LLM-GC's credential* | The company proxy accepted LLM-GC's credential at startup and refuses it now, for example a revoked or expired token. Both tabs show the proxy's own reason. Fix the credential and restart LLM-GC; what was already condensed stays |
+| Engine tab: *Summary request failed*, later on, without that message | The company proxy refused a summary for another reason; the Engine tab shows it. It may need headers LLM-GC doesn't send yet |
+
+**Other clients** work the same way: point them at `http://127.0.0.1:9900` with the
+credential they already use for the company proxy. With the SDK, that is
+`anthropic.Anthropic(base_url="http://127.0.0.1:9900")`; for `scripts/chat.py`, export
+the same token in its terminal.
 
 ### As a library
 
