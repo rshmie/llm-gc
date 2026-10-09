@@ -17,12 +17,22 @@ def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     for name in ("XDG_CONFIG_HOME", "LLM_GC_CONFIG", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY"):
         monkeypatch.delenv(name, raising=False)
+    # Plain text, so assertions read the words; one test below checks the styling itself.
+    monkeypatch.setenv("NO_COLOR", "1")
     return tmp_path
 
 
 def _show(path: Path | None = None, **flags) -> str:
     settings = load_settings(path, **flags)
     return render_settings(settings, settings_origins(path, **flags))
+
+
+def _credential(output: str, name: str) -> str | None:
+    """A credential's status in the report, or None when it is not listed."""
+    for line in output.splitlines():
+        if line.startswith(f"#   {name} "):
+            return line[len(f"#   {name} "):].strip()
+    return None
 
 
 def _line(output: str, key: str) -> str:
@@ -53,9 +63,10 @@ def test_a_blank_credential_copied_from_the_example_shows_as_not_set(isolated):
     # `start` refuses without a credential, so `show` must not claim one is set.
     (isolated / ".env").write_text("ANTHROPIC_API_KEY=\nANTHROPIC_AUTH_TOKEN=tok\nOPENAI_API_KEY=\n")
     output = _show()
-    assert "ANTHROPIC_API_KEY: not set" in output
-    assert "ANTHROPIC_AUTH_TOKEN: set, from .env" in output
-    assert "OPENAI_API_KEY: not set" in output
+    assert _credential(output, "ANTHROPIC_API_KEY") == "not set"
+    assert _credential(output, "ANTHROPIC_AUTH_TOKEN") == "set, from .env"
+    # Another vendor's variable, blank and unused, is not worth a line.
+    assert _credential(output, "OPENAI_API_KEY") is None
 
 
 def test_the_highest_layer_is_the_one_named_when_several_supply_a_value(isolated, monkeypatch):
@@ -72,9 +83,9 @@ def test_a_credential_is_reported_as_set_with_its_layer_and_its_value_never_appe
     monkeypatch.setenv("ANTHROPIC_API_KEY", "key-that-must-not-print")
     (isolated / ".env").write_text("OPENAI_API_KEY=other-secret-value\n")
     output = _show()
-    assert "ANTHROPIC_API_KEY: set, from environment" in output
-    assert "OPENAI_API_KEY: set, from .env" in output
-    assert "ANTHROPIC_AUTH_TOKEN: not set" in output
+    assert _credential(output, "ANTHROPIC_API_KEY") == "set, from environment"
+    assert _credential(output, "OPENAI_API_KEY") == "set, from .env (not used: provider is anthropic)"
+    assert _credential(output, "ANTHROPIC_AUTH_TOKEN") == "not set"
     assert "key-that-must-not-print" not in output and "other-secret-value" not in output
 
 
@@ -123,3 +134,42 @@ def test_the_command_is_also_a_validity_check(isolated):
     (isolated / "llm-gc.toml").write_text("[engine]\nmin_cut_token = 2000\n")
     result = CliRunner().invoke(build_cli(), ["config", "show"])
     assert result.exit_code == 1 and "engine.min_cut_token" in result.output
+
+
+def test_a_missing_key_says_start_will_stop_and_where_to_put_one():
+    assert "# ! No key for anthropic, so `llm-gc start` will stop" in _show()
+    assert "ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN" in _show()
+
+
+def test_a_key_present_says_so(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    assert "# ✓ LLM-GC has its own key for anthropic." in _show()
+
+
+def test_the_noop_compactor_needs_no_key():
+    assert "no key is needed" in _show(compactor="noop")
+
+
+def test_a_value_that_only_repeats_the_default_says_so(isolated):
+    """`config init` writes every default into the file, so "file" alone would hide what was changed."""
+    file = isolated / "c.toml"
+    file.write_text("port = 9900\ndashboard_port = 9500\n")
+    output = _show(file)
+    assert _line(output, "port").endswith("# file, the default")
+    assert _line(output, "dashboard_port").endswith("# file")
+
+
+def test_a_changed_value_is_styled_apart_from_one_at_its_default(isolated, monkeypatch):
+    monkeypatch.delenv("NO_COLOR")
+    file = isolated / "c.toml"
+    file.write_text("port = 9900\ndashboard_port = 9500\n")
+    output = _show(file)
+    dim = "\x1b[2m"
+    assert dim + "# file, the default" in _line(output, "port")
+    assert dim not in _line(output, "dashboard_port")
+
+
+def test_the_command_names_the_file_it_read(isolated):
+    (isolated / "llm-gc.toml").write_text("port = 9100\n")
+    result = CliRunner().invoke(build_cli(), ["config", "show"])
+    assert f"# LLM-GC settings in effect, from {isolated / 'llm-gc.toml'} (working directory)." in result.output

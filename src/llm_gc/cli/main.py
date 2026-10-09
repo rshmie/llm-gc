@@ -9,13 +9,14 @@ from pathlib import Path
 import click
 
 from llm_gc import __version__
-from llm_gc.cli.banner import StartupRefused, render_addresses, render_check, render_header
+from llm_gc.cli.banner import render_addresses, render_check, render_header
 from llm_gc.cli.config_commands import add_config_commands
 from llm_gc.cli.options import config_file_option
 from llm_gc.cli.serve import find_busy_port, serve_proxy
 from llm_gc.cli.settings import ENV_FILENAME, ProxySettings, create_summary_provider, find_config_file, load_settings
 from llm_gc.engine import GcService, build_gc_service
 from llm_gc.cli.stats import ProxyStats, fetch_proxy_stats, render_stats
+from llm_gc.cli.styled_commands import CommandError, StyledGroup
 from llm_gc.exceptions import ConfigError, ProxyUnavailableError
 from llm_gc.llm.provider import LLMProvider
 from llm_gc.proxy.startup_checks import check_summariser
@@ -36,10 +37,17 @@ def build_cli(*, serve: ServeFn = serve_proxy, make_provider: ProviderFactory = 
     do, so they arrive as arguments: `main` uses the real ones, and a test hands in fakes.
     """
 
-    @click.group()
-    @click.version_option(__version__, prog_name="llm-gc")
+    @click.group(cls=StyledGroup)
+    @click.version_option(__version__, prog_name="llm-gc", message="%(prog)s %(version)s")
     def cli() -> None:
-        """LLM-GC: context garbage collection for LLM conversations, as a proxy."""
+        """LLM-GC: context garbage collection for LLM conversations, as a proxy.
+
+        \b
+        First run, in the LLM-GC folder:
+          llm-gc config init         write llm-gc.toml, LLM-GC's settings
+          cp .env.example .env       then put LLM-GC's own key in .env
+          llm-gc start --dashboard   start the proxy and the dashboard
+        """
 
     @cli.command()
     @config_file_option
@@ -53,12 +61,13 @@ def build_cli(*, serve: ServeFn = serve_proxy, make_provider: ProviderFactory = 
     @click.option("--min-cut-tokens", type=int, help="Tokens a collection must condense.")
     @click.option("--keep-last", type=int, help="Newest turns always sent word for word.")
     @click.option("--context-window", type=int, help="The proxied model's window; sets the recap budget.")
-    @click.option("--log-level", type=click.Choice(_LOG_LEVELS, case_sensitive=False))
+    @click.option("--log-level", type=click.Choice(_LOG_LEVELS, case_sensitive=False),
+                  help="How much LLM-GC logs; info prints a line per request.")
     def start(config_path: Path | None, port: int | None, dashboard: bool | None, dashboard_port: int | None,
               upstream: str | None, compactor: str | None, summary_provider: str | None,
               summary_model: str | None, min_cut_tokens: int | None, keep_last: int | None,
               context_window: int | None, log_level: str | None) -> None:
-        """Start the proxy (and the dashboard, with --dashboard).
+        """Start the proxy, and the dashboard with --dashboard.
 
         Every option is also a setting: a flag you leave out takes its value from the
         environment, then .env, then the config file, then the built-in default.
@@ -74,7 +83,7 @@ def build_cli(*, serve: ServeFn = serve_proxy, make_provider: ProviderFactory = 
                         "context_window": context_window},
             )
         except ConfigError as err:
-            raise click.ClickException(str(err)) from err
+            raise CommandError(str(err)) from err
 
         # The application chooses how the library's logs are shown. They name sessions and
         # counts, never conversation content.
@@ -89,7 +98,7 @@ def build_cli(*, serve: ServeFn = serve_proxy, make_provider: ProviderFactory = 
         try:
             engine_provider = _prepare_summariser(settings, make_provider)
         except ConfigError as err:
-            raise StartupRefused(str(err)) from err
+            raise CommandError(str(err)) from err
         click.echo(render_addresses(settings))
         serve(build_gc_service(settings.engine, summary_provider=engine_provider), settings)
 
@@ -98,14 +107,17 @@ def build_cli(*, serve: ServeFn = serve_proxy, make_provider: ProviderFactory = 
     @click.option("--port", type=int, help="The proxy's port (default: from the settings).")
     @click.option("--json", "as_json", is_flag=True, help="Print the raw counters as JSON.")
     def stats(config_path: Path | None, port: int | None, as_json: bool) -> None:
-        """Show a running proxy's counters: requests, and tokens in against tokens sent."""
+        """Show a running proxy's requests and token savings.
+
+        Asks the proxy on the port the settings name; pass --port for one started with --port.
+        """
         try:
             location = find_config_file(config_path)
             settings = load_settings(location.path if location else None, port=port)
             base_url = f"http://127.0.0.1:{settings.port}"
             counters = fetch_stats(f"{base_url}/stats")
         except (ConfigError, ProxyUnavailableError) as err:
-            raise click.ClickException(str(err)) from err
+            raise CommandError(str(err)) from err
         click.echo(json.dumps(counters.model_dump(), indent=2) if as_json else render_stats(counters, base_url))
 
     add_config_commands(cli)
@@ -118,7 +130,7 @@ def _refuse_busy_ports(settings: ProxySettings, find_busy: PortProbe) -> None:
         ports[settings.dashboard_port] = "--dashboard-port"
     busy = find_busy(list(ports))
     if busy is not None:
-        raise StartupRefused(
+        raise CommandError(
             f"port {busy} is already in use, perhaps by another llm-gc. Stop that one (Ctrl-C in its terminal), "
             f"or choose another port with {ports[busy]}."
         )

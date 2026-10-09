@@ -170,7 +170,9 @@ the early ones where nothing has been condensed yet; "bypassed" counts requests
 forwarded untouched because they could not be read or the engine failed on the request
 path. Tokens are LLM-GC's own count, not what the provider bills, so the savings figure is
 an estimate of size, not of cost. With no requests it says so instead of printing zeros,
-because a ratio with nothing behind it is not a measurement.
+because a ratio with nothing behind it is not a measurement. Rewinds and restarts appear
+only once they have happened: only a client sending the session header can cause them, so
+for Claude Code they would be a permanent row of zeros. `--json` always has every counter.
 
 ## Why it exists
 

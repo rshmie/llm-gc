@@ -3,9 +3,12 @@
 import httpx2
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from llm_gc.cli.style import INDENT, style
 from llm_gc.exceptions import ProxyUnavailableError
 
 STATS_TIMEOUT_S = 5.0
+# Wide enough for the longest section title, "Conversations", and the gap after it.
+_SECTION_WIDTH = 15
 
 
 class ProxyStats(BaseModel):
@@ -46,21 +49,51 @@ def fetch_proxy_stats(url: str, *, transport: httpx2.BaseTransport | None = None
 
 
 def render_stats(stats: ProxyStats, base_url: str) -> str:
-    """The counters as a short report. With no requests behind them there is nothing to measure."""
-    lines = [f"LLM-GC proxy at {base_url}"]
+    """The counters as a short report, savings first. With no requests behind them there is nothing to measure."""
+    lines = ["", INDENT + style("LLM-GC stats", bold=True) + "  " + style(base_url, fg="cyan"), ""]
     if stats.requests == 0:
-        return "\n".join([*lines, "  no requests yet"])
-    share = "" if stats.ratio is None else f"   ({stats.ratio:.0%} of it)"
-    rows = [
-        ("requests", f"{stats.requests:,}"),
-        ("  through LLM-GC", f"{stats.gc_applied:,}"),
-        ("  forwarded untouched", f"{stats.gc_bypassed:,}   (unreadable, or an error on the request path)"),
-        ("client history", f"{stats.tokens_in_client_history:,} tokens"),
-        ("forwarded", f"{stats.tokens_forwarded:,} tokens{share}"),
-        ("history rewinds", f"{stats.history_rewinds:,}"),
-        ("restarts", f"{stats.history_restarts:,}"),
-        ("sessions seeded", f"{stats.sessions_seeded:,}"),
+        return "\n".join([*lines, INDENT + "No requests yet: point a client at this address and send a message.", ""])
+
+    share = "" if stats.ratio is None else f" ({stats.ratio:.0%})"
+    sections: list[tuple[str, list[tuple[int, str]]]] = [
+        ("Tokens", [
+            (stats.tokens_in_client_history, "the client sent"),
+            (stats.tokens_forwarded, f"LLM-GC forwarded{share}"),
+            (stats.tokens_saved, _describe_saving(stats)),
+        ]),
+        ("Requests", [
+            (stats.requests, "received"),
+            (stats.gc_applied, "through LLM-GC"),
+            (stats.gc_bypassed, "passed on as sent " + _note("unreadable, or an error in LLM-GC")),
+        ]),
+        ("Conversations", [
+            (stats.sessions_seeded, "tracked " + _note("new, or picked up again after a restart or an edit")),
+            # Only a client sending LLM-GC's session header can rewind; Claude Code never does,
+            # so these show only once they have happened.
+            *([(stats.history_rewinds, "rewound " + _note("an edit or a retry went back to an earlier point"))]
+              if stats.history_rewinds else []),
+            *([(stats.history_restarts, "started over " + _note("an edit reached a condensed part: one request "
+                                                                 "went whole"))]
+              if stats.history_restarts else []),
+        ]),
     ]
-    lines += [f"  {label:<22}{value}" for label, value in rows]
-    lines.append("Counted with LLM-GC's own tokenizer, not what the provider bills.")
+    width = max(len(f"{count:,}") for _, rows in sections for count, _ in rows)
+    for title, rows in sections:
+        for index, (count, text) in enumerate(rows):
+            # Padded before styling: escape codes would count towards the width.
+            label = style((title if index == 0 else "").ljust(_SECTION_WIDTH), bold=True)
+            lines.append(f"{INDENT}{label}{count:>{width},}  {text}")
+        lines.append("")
+    lines += [INDENT + style("Counted with LLM-GC's own tokenizer, not what the provider bills.", dim=True), ""]
     return "\n".join(lines)
+
+
+def _describe_saving(stats: ProxyStats) -> str:
+    if stats.tokens_saved == 0:
+        return "saved " + _note("nothing condensed yet")
+    share = "" if stats.ratio is None else f" ({1 - stats.ratio:.0%})"
+    return f"saved{share}"
+
+
+def _note(text: str) -> str:
+    return style(f"({text})", dim=True)

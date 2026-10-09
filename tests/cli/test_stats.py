@@ -1,6 +1,7 @@
 """`llm-gc stats`: asking a running proxy for its counters, and not overstating them."""
 
 import json
+import re
 from pathlib import Path
 
 import httpx2
@@ -31,16 +32,46 @@ def test_the_proxys_real_counters_validate_as_proxy_stats():
     assert ProxyStats.model_validate(ProxyMetrics().as_dict()).requests == 0
 
 
+@pytest.fixture
+def no_color(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+
+
+def _report(**overrides) -> str:
+    return render_stats(ProxyStats(**_counters(**overrides)), "http://127.0.0.1:9900")
+
+
 def test_a_proxy_that_has_seen_nothing_reports_that_instead_of_zeros():
     output = render_stats(ProxyStats.model_validate(ProxyMetrics().as_dict()), "http://127.0.0.1:9900")
-    assert "no requests yet" in output and "tokens" not in output
+    assert "No requests yet" in output and "tokens" not in output.lower()
 
 
-def test_the_report_gives_each_counter_and_what_it_does_not_claim():
-    output = render_stats(ProxyStats(**_counters()), "http://127.0.0.1:9900")
-    assert "21,666 tokens" in output and "4,310 tokens   (20% of it)" in output
-    assert "forwarded untouched" in output and "unreadable, or an error" in output
+def test_the_report_gives_each_counter_and_what_it_does_not_claim(no_color):
+    output = _report()
+    assert "21,666  the client sent" in output
+    assert "4,310  LLM-GC forwarded (20%)" in output and "17,356  saved (80%)" in output
+    assert "passed on as sent (unreadable, or an error in LLM-GC)" in output
     assert "not what the provider bills" in output
+
+
+def test_no_saving_yet_says_so_rather_than_showing_a_bare_zero(no_color):
+    assert "0  saved (nothing condensed yet)" in _report(tokens_forwarded=21_666, tokens_saved=0, ratio=1.0)
+
+
+def test_rewinds_and_restarts_show_only_once_they_have_happened(no_color):
+    """Only a client sending the session header can cause them, so zeros would be noise for Claude Code."""
+    quiet = _report(history_rewinds=0, history_restarts=0)
+    assert "rewound" not in quiet and "started over" not in quiet
+    busy = _report(history_rewinds=2, history_restarts=1)
+    assert "2  rewound" in busy and "1  started over" in busy
+
+
+def test_every_count_ends_in_the_same_column(no_color):
+    """Right-aligned, so magnitudes compare at a glance: 1,843,210 against 702,115."""
+    output = _report(tokens_in_client_history=1_843_210, tokens_forwarded=702_115, tokens_saved=1_141_095,
+                     requests=9, history_rewinds=3)
+    ends = {match.end(1) for line in output.splitlines() if (match := re.search(r"(\d[\d,]*)  \D", line))}
+    assert len(ends) == 1
 
 
 def test_a_valid_answer_is_parsed():
@@ -97,7 +128,7 @@ class TestCommand:
     def test_it_asks_the_default_port_on_localhost_and_prints_the_report(self):
         result, asked = self._run()
         assert result.exit_code == 0, result.output
-        assert asked == [URL] and "requests" in result.output
+        assert asked == [URL] and "Requests" in result.output
 
     def test_the_port_follows_the_config_file(self, isolated):
         (isolated / "llm-gc.toml").write_text("port = 9100\n")
@@ -116,4 +147,4 @@ class TestCommand:
             raise ProxyUnavailableError(f"nothing is answering at {url}: is `llm-gc start` running?")
 
         result, _ = self._run(fetch=down)
-        assert result.exit_code == 1 and result.output.startswith("Error: nothing is answering")
+        assert result.exit_code == 1 and result.output.strip().startswith("Error: nothing is answering")

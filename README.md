@@ -165,10 +165,10 @@ instead.
 llm-gc config show
 ```
 
-It prints every setting LLM-GC will use and where each came from, and whether each
-credential is set, never its value. Look for `ANTHROPIC_API_KEY: set, from .env` (or
-`ANTHROPIC_AUTH_TOKEN`). Behind a gateway, also check `upstream` and `model`. Step 3 then
-tests the key for real.
+It prints every setting LLM-GC will use and where each came from. A value you changed
+stands out; one that only repeats its default is dimmed. It ends with LLM-GC's key, never
+its value. The last line should read `✓ LLM-GC has its own key for anthropic.` Behind a
+gateway, also check `upstream` and `model`. Step 3 then tests the key for real.
 
 ### 3. Start LLM-GC
 
