@@ -28,12 +28,11 @@ doc/internal/
 # Not ready to track yet
 benchmarks/
 
-# UV
-uv.lock
 # macOS
 .DS_Store
 
-# A deployment's own config (gateway URL, ports); the committed template is llm-gc.example.toml
+# A deployment's own config (gateway URL, ports); `llm-gc config init` writes it from
+# src/llm_gc/cli/config_template.toml
 llm-gc.toml
 
 # Decision-survival check results; a run cited as evidence is committed on purpose

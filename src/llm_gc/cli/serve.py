@@ -1,6 +1,8 @@
 """Run the proxy, and the dashboard beside it, on one event loop. Application code."""
 
 import asyncio
+import socket
+from collections.abc import Iterable
 
 import httpx2
 import uvicorn
@@ -11,10 +13,26 @@ from llm_gc.monitoring import ContextHealthMonitor
 from llm_gc.proxy import create_app
 from llm_gc.visualizer import TranscriptRecorder, create_dashboard_app
 
-# Localhost only, with no authentication. Binding wider needs authentication first
-# (CLAUDE.md §10): the client's provider key passes through this process, and the
-# dashboard shows every conversation it holds.
+
 BIND_HOST = "127.0.0.1"
+
+
+def find_busy_port(ports: Iterable[int]) -> int | None:
+    """The first of `ports` that cannot be bound on `BIND_HOST`, or None when all are free.
+
+    It is checked before startup: uvicorn reports a taken port only once serving has begun, as a
+    bare OS error after the banner has already promised the address. The probe binds the
+    way uvicorn does, with `SO_REUSEADDR` - so a port left in TIME_WAIT by a stopped proxy
+    is not mistaken for one in use.
+    """
+    for port in ports:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                probe.bind((BIND_HOST, port))
+            except OSError:
+                return port
+    return None
 
 
 def serve_proxy(service: GcService, settings: ProxySettings, *, http_client: httpx2.AsyncClient | None = None) -> None:
@@ -42,8 +60,11 @@ def serve_proxy(service: GcService, settings: ProxySettings, *, http_client: htt
 
     # No access log: the dashboard polls, and a line per poll buried the proxy's own lines,
     # which already record each request. uvicorn's access logger is shared by the process,
-    # so it cannot be kept for the proxy alone.
-    servers = [uvicorn.Server(uvicorn.Config(app, host=BIND_HOST, port=port, log_level="info", access_log=False))
+    # so it cannot be kept for the proxy alone. Its startup lines are dropped too, below
+    # DEBUG: the banner already names each address, and two servers print every line twice.
+    uvicorn_level = "debug" if settings.log_level == "DEBUG" else "warning"
+    servers = [uvicorn.Server(uvicorn.Config(app, host=BIND_HOST, port=port, log_level=uvicorn_level,
+                                             access_log=False))
                for app, port in apps]
 
     async def run_all() -> None:

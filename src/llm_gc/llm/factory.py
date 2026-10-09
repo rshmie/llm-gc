@@ -11,6 +11,8 @@ from llm_gc.llm.openai_client import DEFAULT_OPENAI_MODEL, OPENAI_BASE_URL, Open
 from llm_gc.llm.provider import LLMProvider
 
 PROVIDER_NAMES = ("anthropic", "openai")
+# The model each vendor's client uses when none is named.
+DEFAULT_MODELS = {"anthropic": DEFAULT_ANTHROPIC_MODEL, "openai": DEFAULT_OPENAI_MODEL}
 
 
 def create_provider(
@@ -35,11 +37,11 @@ def create_provider(
         ConfigError: An unknown vendor, a credential the vendor cannot take, or a missing one.
     """
     if name == "anthropic":
-        return AnthropicClient(api_key=api_key, auth_token=auth_token, model=model or DEFAULT_ANTHROPIC_MODEL,
+        return AnthropicClient(api_key=api_key, auth_token=auth_token, model=model or DEFAULT_MODELS["anthropic"],
                                base_url=base_url or ANTHROPIC_BASE_URL)
     if name == "openai":
         if auth_token:
             raise ConfigError("openai authenticates with an API key, which it sends as a bearer token; "
                               "auth_token applies to anthropic only")
-        return OpenAIClient(api_key or "", model=model or DEFAULT_OPENAI_MODEL, base_url=base_url or OPENAI_BASE_URL)
+        return OpenAIClient(api_key or "", model=model or DEFAULT_MODELS["openai"], base_url=base_url or OPENAI_BASE_URL)
     raise ConfigError(f"unknown provider {name!r}: choose one of {', '.join(PROVIDER_NAMES)}")

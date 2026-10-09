@@ -70,6 +70,17 @@ _RESPONSE_HOP_BY_HOP = frozenset({
     "keep-alive", "upgrade", "trailer",
 })
 
+# What the log says about a failed answer. The client sees the upstream's own error; these
+# point whoever runs LLM-GC at the usual cause on its side.
+_ERROR_STATUS_HINT = "the client gets the upstream's error unchanged"
+_CREDENTIAL_REFUSED_HINT = ("the upstream refused the client's credential. Behind a gateway, check that "
+                            "`upstream` is the gateway's address")
+_ERROR_STATUS_HINTS = {
+    401: _CREDENTIAL_REFUSED_HINT,
+    403: _CREDENTIAL_REFUSED_HINT,
+    502: "the upstream failed or could not be reached",
+}
+
 
 class ProxyMetrics:
     """Aggregate counters for `GET /stats`. No conversation content."""
@@ -249,27 +260,49 @@ async def _handle(app: FastAPI, request: Request) -> Response:
             _observe_history(app, session_id, client_messages)
         forward_body, forwarded_tokens = await _apply_gc(app, session_id, history, new_turn, payload, body,
                                                          instructions)
-        logger.info("proxying", extra={"session_id": session_id, "turns_from_client": len(client_messages),
-                                       "tokens_from_client": client_history_tokens,
-                                       "tokens_forwarded": forwarded_tokens})
     except Exception as err:
         logger.exception("GC failed on the request path; forwarding the original",
                          extra={"session_id": session_id, "error_type": type(err).__name__})
         metrics.gc_bypassed += 1
         # Counted as forwarded, so a bypass does not look free in /stats.
         metrics.tokens_forwarded += client_history_tokens
-        return await _send(app, body, headers, streaming, target)
+        response = await _send(app, body, headers, streaming, target)
+        _log_answer(response.status_code, payload, client_history_tokens, client_history_tokens, session_id)
+        return response
 
     metrics.gc_applied += 1
     metrics.tokens_forwarded += forwarded_tokens
     response = await _send(app, forward_body, headers, streaming, target,
                            on_complete=_reply_observer(app, session_id, new_turn, streaming))
+    _log_answer(response.status_code, payload, client_history_tokens, forwarded_tokens, session_id)
 
     # Aging prepares the next request from the conversation recorded so far; it
     # never depends on this reply, which the next request will show us exactly.
     if session_id is not None:
         _never_blocking(lambda: app.state.schedule(_age(app, session_id)))
     return response
+
+
+def _log_answer(status: int, payload: dict[str, Any], from_client: int, forwarded: int,
+                session_id: str | None) -> None:
+    """One line per conversation request, logged once the upstream has answered.
+
+    After forwarding rather than before, so the line says whether the request worked: one
+    the upstream refused must not read like one that went through. The text carries the
+    counts, because the console format shows only the message; `extra` carries them for a
+    structured handler.
+    """
+    model = payload.get("model")
+    # The model name comes from the client, so only a printable string reaches the log.
+    name = model if isinstance(model, str) and model.isprintable() else "?"
+    extra = {"session_id": session_id, "status": status, "model": name,
+             "tokens_from_client": from_client, "tokens_forwarded": forwarded}
+    if status < 400:
+        share = f"{forwarded / from_client:.0%}" if from_client else "-"
+        logger.info("%s -> %d: client sent %s tokens, LLM-GC forwarded %s (%s)",
+                    name, status, f"{from_client:,}", f"{forwarded:,}", share, extra=extra)
+    else:
+        logger.warning("%s -> %d: %s", name, status, _ERROR_STATUS_HINTS.get(status, _ERROR_STATUS_HINT), extra=extra)
 
 
 def _record_client_history(app: FastAPI, history: list[Message], header_value: str | None) -> str | None:

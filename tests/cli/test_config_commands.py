@@ -37,11 +37,18 @@ def test_init_writes_a_starter_file_in_this_directory(isolated):
     assert (isolated / "llm-gc.toml").read_text() == read_config_template()
     assert "llm-gc.toml" in result.output
     assert str(isolated / ".env") in result.output  # where the credential goes instead
+    assert "llm-gc start --dashboard" in result.output
+
+
+def test_init_s_next_step_follows_whether_env_exists(isolated):
+    assert "copy .env.example" in _run("init").output
+    (isolated / ".env").write_text("ANTHROPIC_API_KEY=k\n")
+    assert "llm-gc config show" in _run("init", "--force").output
 
 
 def test_a_file_init_wrote_is_then_found_and_loadable(isolated):
     _run("init")
-    assert "llm-gc.toml  (working directory)" in _run("path").output
+    assert "llm-gc.toml (working directory)" in _run("path").output
     load_settings(isolated / "llm-gc.toml")
 
 
@@ -64,16 +71,19 @@ def test_init_user_writes_the_per_user_file_and_creates_its_directory(isolated):
     assert not (isolated / "llm-gc.toml").exists()
 
 
-def test_path_says_when_there_is_no_file():
+def test_path_says_when_there_is_no_file_and_where_it_looked_in_order():
     result = _run("path")
-    assert result.exit_code == 0 and "no config file" in result.output and "config init" in result.output
+    assert result.exit_code == 0 and "No config file" in result.output and "config init" in result.output
+    output = result.output
+    assert output.index("--config PATH") < output.index("LLM_GC_CONFIG") < output.index("./llm-gc.toml") \
+        < output.index(".config/llm-gc/config.toml")
 
 
 def test_path_names_the_file_and_why(isolated):
     named = isolated / "named.toml"
     named.write_text("")
     result = _run("path", "--config", str(named))
-    assert f"{named}  (--config)" in result.output
+    assert f"{named} (--config)" in result.output
 
 
 def test_path_reports_a_missing_named_file_as_an_error(isolated):

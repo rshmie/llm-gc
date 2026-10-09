@@ -33,95 +33,144 @@ minutes.
 
 ## Get started
 
-LLM-GC runs as a small server on your machine. Claude Code sends its requests to LLM-GC
-instead of to Anthropic, and LLM-GC passes them on:
+LLM-GC is a small server that runs on your machine. You point Claude Code at it, and it
+passes each request on to Anthropic, or to your company's gateway, with the conversation
+condensed:
 
 ```
- Claude Code ──── Claude Code's token ───►  LLM-GC  ──── Claude Code's token ────►  Anthropic,
- (each project                              :9900        (passed through)           or your
-  pointed at it)                              │     ──── LLM-GC's own token ─────►  company's
-                                              │          (summaries, fact reads)    gateway
-                                              └──► dashboard :9901
+ Claude Code ─────────────────►  LLM-GC  ─────────────────►  Anthropic, or your
+             ANTHROPIC_BASE_URL   :9900   upstream           company's gateway
+             in Claude Code's       │     in llm-gc.toml
+             settings (step 4)      │     (step 2)
+                                    └──►  dashboard :9901, in your browser
 ```
 
-**LLM-GC needs a credential of its own.** It does more than forward: it calls the model
-itself, to summarise old exchanges and read their facts. Those calls belong to no Claude
-Code request, so they cannot use Claude Code's token, and LLM-GC never reads Claude Code's
-settings files. You give LLM-GC its own credential. It is often the very same token value
-Claude Code uses.
+Each arrow is set in its own place. `upstream` is where LLM-GC sends requests on:
+Anthropic by default, or your gateway, set in step 2. `ANTHROPIC_BASE_URL` is where Claude
+Code sends them, and step 4 sets it to LLM-GC. Until then, in either setup, Claude Code
+doesn't know LLM-GC exists.
 
-Setup touches three files, each with one job:
+**Two credentials, two jobs:**
 
-| File | Holds | Why there |
+| | Used for | Where it lives |
 |---|---|---|
-| `llm-gc.toml` | LLM-GC's settings: where to forward, which model summarises, ports | Not secret, so you can keep and share it |
-| `.env` | LLM-GC's credential | Secret and git-ignored. A credential in `llm-gc.toml` is refused |
-| Claude Code's settings | `ANTHROPIC_BASE_URL`, set to LLM-GC's address | It is how Claude Code knows to send its requests to LLM-GC |
+| **Claude Code's login** | Your conversation. Passed on untouched, never stored | In Claude Code, as now. You change nothing |
+| **LLM-GC's own key** | Only LLM-GC's own short calls: summarising old exchanges and reading their facts. Never your conversation. Billed to that key | LLM-GC's `.env` file, set up in step 2 |
 
-`llm-gc` reads `llm-gc.toml` and `.env` from the folder you run it in. Keep both in the
-LLM-GC folder and always start it from there.
+LLM-GC can't borrow Claude Code's login, so you give it a key of its own. Behind a company
+gateway, it can be the same token Claude Code uses. The model LLM-GC calls is its own
+choice too, separate from the one you talk to: `model` under `[summary]` in `llm-gc.toml`
+(see [Configuration](#configuration)).
+
+> **Just want to look first?** [Without a key](#without-a-key) runs the dashboard on
+> scripted conversations, with no key and no Claude Code.
+
+### Which setup are you?
+
+Run this. It prints a line only if Claude Code is pointed at a gateway:
+
+```bash
+grep ANTHROPIC_BASE_URL ~/.claude/settings.json
+```
+
+| It prints | Your setup | What LLM-GC needs |
+|---|---|---|
+| Nothing, or *No such file* | **Direct.** Claude Code talks to Anthropic, with a Claude Pro or Max login or with an API key | An Anthropic API key from [console.anthropic.com](https://console.anthropic.com). A Pro or Max subscription doesn't include one: the Console bills it separately |
+| A line with a URL | **Gateway.** Your company routes Claude through its own address | That address, a model name and a token, all copied from `~/.claude/settings.json` in step 2 |
+
+If Claude Code runs on Amazon Bedrock or Google Vertex AI, LLM-GC can't sit in front of it
+yet.
 
 ### 1. Install
 
-You need Python 3.13+ and [uv](https://docs.astral.sh/uv/getting-started/installation/)
-(`brew install uv`, or `curl -LsSf https://astral.sh/uv/install.sh | sh`).
+You need [uv](https://docs.astral.sh/uv/getting-started/installation/) (`brew install uv`,
+or `curl -LsSf https://astral.sh/uv/install.sh | sh`). It installs Python 3.13 for you if
+you don't have it.
 
 ```bash
 git clone https://github.com/rshmie/llm-gc.git
 cd llm-gc
 uv sync                      # creates .venv and installs LLM-GC into it
 source .venv/bin/activate    # puts the llm-gc command on this terminal's PATH
-llm-gc --version
+llm-gc --version             # prints its version: the install worked
 ```
 
-Every new terminal needs `source .venv/bin/activate`, from the LLM-GC folder, before
+Every new terminal needs `source .venv/bin/activate`, run in the LLM-GC folder, before
 `llm-gc` works.
 
-### 2. Configure
+### 2. Configure LLM-GC
+
+In the LLM-GC folder:
 
 ```bash
-llm-gc config init       # writes llm-gc.toml: every setting, commented, at its default
-cp .env.example .env     # where LLM-GC's credential goes
+llm-gc config init       # writes llm-gc.toml: LLM-GC's settings, each one commented
+cp .env.example .env     # .env holds LLM-GC's key
 ```
 
-**Put LLM-GC's credential in `.env`**, on one of these two lines:
+Both files stay in this folder, and git ignores both. `llm-gc` reads them from the folder
+you start it in, so always start it from here.
+
+#### Direct
+
+Claude Code calls Anthropic's API itself, with your Pro or Max login or an API key.
+LLM-GC forwards to Anthropic by default, so all it needs is its own key.
+
+Open `.env` and put your API key on the `ANTHROPIC_API_KEY` line:
 
 ```bash
-ANTHROPIC_API_KEY=sk-ant-...   # a key from console.anthropic.com
-ANTHROPIC_AUTH_TOKEN=...       # or a bearer token, which company gateways usually take
+ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-Leave the other line blank: a blank value counts as not set.
+Leave `llm-gc.toml` as it is, and go on to [check the setup](#check-the-setup).
 
-**Then edit `llm-gc.toml`, only if one of these applies:**
+#### Gateway
 
-- **You go straight to Anthropic** and are happy with the default summary model,
-  `claude-sonnet-5`: change nothing.
-- **You want another summary model:** set `model` under `[summary]`. A Sonnet model is
-  the right size: summaries need to be good, and they are short.
-- **You are behind your company's gateway:** copy these values from the `env` block of
-  your `~/.claude/settings.json`:
+Claude Code calls your company's own address, which passes requests on to Anthropic.
+LLM-GC goes between Claude Code and that gateway, and sends its own calls there too:
 
-  | In `~/.claude/settings.json` | Goes in | As |
-  |---|---|---|
-  | `ANTHROPIC_BASE_URL`, the gateway's address | `llm-gc.toml` | `upstream = "https://…"` |
-  | A model name, in an entry ending `_MODEL` such as `ANTHROPIC_DEFAULT_SONNET_MODEL` (if there is none, ask your gateway team) | `llm-gc.toml` | `model = "…"` under `[summary]` |
-  | `ANTHROPIC_AUTH_TOKEN` (or `ANTHROPIC_API_KEY`) | `.env` | the same name |
+```
+Claude Code ──►  LLM-GC  ──►  your company's gateway  ──►  Anthropic
+```
 
-  Gateways often name models their own way and refuse the default, so set the model.
-  The edited lines look like this:
+Open `~/.claude/settings.json` and copy three values from its `env` block:
 
-  ```toml
-  upstream = "https://your-gateway.example.com"
+| Copy from `~/.claude/settings.json` | Into | Like this |
+|---|---|---|
+| `ANTHROPIC_BASE_URL`, the gateway's address | `llm-gc.toml`: the `upstream` line near the top | `upstream = "https://…"` |
+| A model name, from an entry ending in `_MODEL` such as `ANTHROPIC_DEFAULT_SONNET_MODEL` | `llm-gc.toml`: the `model` line under `[summary]`. Delete the `#` in front of it | `model = "…"` |
+| `ANTHROPIC_AUTH_TOKEN` (or `ANTHROPIC_API_KEY`) | `.env`: the line with the same name | `ANTHROPIC_AUTH_TOKEN=…` |
 
-  [summary]
-  provider = "anthropic"
-  model = "your-gateway-sonnet-name"
-  ```
+Gateways sometimes name models their own way and refuse LLM-GC's default, so set the model name accordingly.
+The edited lines in `llm-gc.toml` look like this:
 
-To check, run `llm-gc config show`. It prints every setting with where it came from
-(`file`, `.env`, `environment`, `flag` or `default`), and each credential as set or not
-set, never its value.
+```toml
+upstream = "https://your-gateway.example.com"
+
+[summary]
+provider = "anthropic"
+model = "your-gateway-sonnet-name"
+```
+
+Edit the lines that are already there rather than adding new ones at the end of the file:
+a line added there lands in the last section, `[engine]`, and `llm-gc start` refuses it.
+
+No `_MODEL` entry, or no token in the `env` block (some gateways hand tokens out through a
+helper script, `apiKeyHelper`)? Ask your gateway team for a model name and a token that
+LLM-GC can use.
+
+Leave `~/.claude/settings.json` as it is. Step 4 sets LLM-GC's address in your project
+instead.
+
+#### Check the setup
+
+```bash
+llm-gc config show
+```
+
+It prints every setting LLM-GC will use and where each came from. A value you changed
+stands out; one that only repeats its default is dimmed. It ends with LLM-GC's key, never
+its value. The last line should read `✓ LLM-GC has its own key for anthropic.` Behind a
+gateway, also check `upstream` and `model`. Step 3 then tests the key for real.
 
 ### 3. Start LLM-GC
 
@@ -129,73 +178,145 @@ set, never its value.
 llm-gc start --dashboard
 ```
 
-Before it serves, LLM-GC asks the upstream for one token, with the summary model and
-credential. A wrong value stops it now, with the upstream's own reason, instead of
-failing quietly later:
+Before it serves anything, LLM-GC sends one tiny request to the upstream (Anthropic, or
+your gateway) with its own key and model. A wrong key or model stops it here, with the
+upstream's own reason, instead of failing quietly later. When all is well, it prints something like:
 
 ```
-config:    /…/llm-gc/llm-gc.toml (working directory)
-upstream:  https://your-gateway.example.com
-compactor: anthropic, model your-gateway-sonnet-name
-check:     your-gateway-sonnet-name answered at https://your-gateway.example.com
+  LLM-GC 0.1.0
 
-proxy      http://127.0.0.1:9900   (stats: /stats)
-dashboard  http://127.0.0.1:9901
+  Config     ~/…/llm-gc/llm-gc.toml (working directory)
+  Upstream   https://api.anthropic.com
+  Summaries  claude-sonnet-5 (the default)
+  Check      ✓ the upstream accepted LLM-GC's key and model
+
+  Proxy      http://127.0.0.1:9900
+  Dashboard  http://127.0.0.1:9901
+  Stats      llm-gc stats (in another terminal)
+
+  Leave this terminal open while you work. Ctrl-C stops LLM-GC.
 ```
 
-Leave this terminal open while you work. Ctrl-C stops LLM-GC.
+Behind a gateway, `Upstream` and `Summaries` show the gateway's address and your model.
+The dashboard runs only with `--dashboard`, because it shows your conversations. Without
+the flag its row says *off*. To have it every time, set `dashboard = true` in
+`llm-gc.toml`.
+
+Leave LLM-GC running, and open a **second terminal** for the next steps.
 
 ### 4. Point Claude Code at LLM-GC
 
-Claude Code sends its requests to `ANTHROPIC_BASE_URL`. Set it to LLM-GC's address in a
-Claude Code settings file, with this entry:
+**Both setups need this step.** Claude Code sends each request to the address in its
+`ANTHROPIC_BASE_URL` setting, or straight to Anthropic when that isn't set. Until it names
+LLM-GC's address, LLM-GC receives nothing, whatever `llm-gc.toml` says.
 
-```json
-{ "env": { "ANTHROPIC_BASE_URL": "http://127.0.0.1:9900" } }
+Start with one project: a folder you work in with Claude Code, not the LLM-GC folder.
+
+In that project, the setting goes in `.claude/settings.local.json`:
+
+```bash
+cd ~/path/to/your-project
+mkdir -p .claude
 ```
 
-Typing `ANTHROPIC_BASE_URL=… claude` on the command line is not enough when a settings
-file also sets it, as it does behind a company gateway: the file wins.
+If `.claude/settings.local.json` doesn't exist yet, create it with this:
 
-Choose where the entry goes:
+```json
+{
+  "env": { "ANTHROPIC_BASE_URL": "http://127.0.0.1:9900" }
+}
+```
 
-| | One project | Every project |
-|---|---|---|
-| File | `.claude/settings.local.json` in that project | `~/.claude/settings.json` |
-| What goes through LLM-GC | That project only. Each other project needs the same entry | Every project |
-| While LLM-GC is not running | Other projects are unaffected | Claude Code can't connect anywhere, until you start LLM-GC or remove the entry |
-| Behind a gateway | Leave `~/.claude/settings.json` as it is | The entry replaces the gateway's address there, so first check that `upstream` in `llm-gc.toml` holds it |
+If it does exist (Claude Code keeps your permission choices there), add the `env` entry
+beside what is there, with a comma between the two. If it already has an `env` block, add
+the `ANTHROPIC_BASE_URL` line inside it instead.
 
-Start with one project. If its `.claude/settings.local.json` already exists (Claude Code
-keeps your permission choices there), add the `env` entry to it instead of replacing the
-file. Leave your token where it is: Claude Code still sends it, and LLM-GC passes it on.
+```json
+{
+  "permissions": { "allow": ["…what is already there…"] },
+  "env": { "ANTHROPIC_BASE_URL": "http://127.0.0.1:9900" }
+}
+```
+
 Then start `claude` in that project. A session that was already running keeps its old
 address, so restart it.
 
+What this changes, and what it doesn't:
+
+- **Only this project goes through LLM-GC.** Its setting overrides `~/.claude/settings.json`,
+  so your other projects don't change. To stop, delete the `env` entry.
+- **Your login stays where it is.** Claude Code still sends it, and LLM-GC passes it on.
+- **The file is yours alone, so keep it out of git.** `git check-ignore .claude/settings.local.json`
+  prints the path if git already ignores it. If it prints nothing, add that path to the
+  project's `.gitignore`. Committed, it would point your teammates' Claude Code at an
+  address where nothing answers.
+
+> **Just one session?** In the direct setup, `ANTHROPIC_BASE_URL=http://127.0.0.1:9900 claude`
+> points that one session at LLM-GC, with no file to edit. Behind a gateway it has no
+> effect: the address in `~/.claude/settings.json` wins over the command line.
+>
+> **Want LLM-GC in all your projects?** Put the same `env` entry in
+> `~/.claude/settings.json` instead of in each project. The catch: every Claude Code
+> session then depends on LLM-GC, so none can connect while it is stopped. Behind a
+> gateway, that file already sets `ANTHROPIC_BASE_URL` to the gateway's address. Change
+> that value to LLM-GC's address, after copying the gateway's address into `upstream` in
+> step 2.
+
 ### 5. Check that it works
 
-Send Claude a message. LLM-GC's terminal prints a line for each request, and the
-dashboard at http://127.0.0.1:9901 shows the conversation from its second message. Once
-the conversation has grown, the dashboard says *Last collection …*, and the prompt LLM-GC
-sends gets smaller. `llm-gc stats` prints the counts in a terminal.
+Send Claude a message. LLM-GC's terminal prints a line for each request it passes on:
 
-**If something is wrong:**
+```
+14:02:11 INFO llm_gc.proxy.server: claude-sonnet-5 -> 200: client sent 18,240 tokens, LLM-GC forwarded 18,240 (100%)
+```
+
+`200` means the upstream answered. Claude Code makes small requests of its own too, so one
+message can print several lines. A refused request prints a `WARNING` line with its status
+(such as `401`) and the likely cause.
+
+Open the dashboard at http://127.0.0.1:9901. A conversation appears there from its second
+message: the first has no history yet for LLM-GC to recognise it by.
+
+At first every message is sent whole, so the line says `(100%)`. Once older turns that LLM-GC
+could condense add up (1,000 tokens' worth, by default), it runs a *collection*: the dashboard
+says *Last collection …*, and the percentage drops. With Claude Code, file reads and command
+output get there within a few messages. To see one sooner, press **Run GC now** on the
+dashboard, or restart with `llm-gc start --dashboard --min-cut-tokens 300`.
+
+`llm-gc stats`, in a terminal with the environment activated, prints the totals so far.
+
+### If something is wrong
+
+**Setting up**
 
 | What you see | Why, and what to do |
 |---|---|
 | `uv sync` fails with a certificate error, on a company network | Your company inspects HTTPS traffic with its own certificate. `uv sync --native-tls` makes uv trust the certificates your system trusts |
-| `llm-gc: command not found` | This terminal hasn't activated the environment: run `source .venv/bin/activate` in the LLM-GC folder |
-| `start` stops: *no credential for LLM-GC's own summary calls* | `.env` has no credential, or you started LLM-GC from another folder. The message names the `.env` it looked for |
-| `start` stops: *the upstream refused LLM-GC's credential* | The credential in `.env` is wrong or has expired |
-| `start` stops: *the upstream refused LLM-GC's summary request*, then a reason such as *invalid model* | The upstream doesn't offer that summary model. Set one it does, as `model` under `[summary]` |
-| Nothing appears in LLM-GC's terminal when you message Claude | Claude Code isn't using LLM-GC. Check step 4: the entry is in this project's `.claude/settings.local.json` (or in `~/.claude/settings.json`), and `claude` was started after you added it |
-| It works in one project but not in another | The entry is per project. Add it to the other project too, or put it in `~/.claude/settings.json` (step 4) |
-| Claude Code shows an error from your gateway | `upstream` isn't exactly the gateway's address from `~/.claude/settings.json` |
-| Claude Code can't connect at all | LLM-GC isn't running. Start it (step 3), or remove the entry from step 4 |
-| Engine tab: *Summary request failed*, later on | The upstream refused a summary after startup, and the Engine tab shows its reason. A gateway may need headers LLM-GC doesn't send yet |
+| `llm-gc: command not found` | This terminal hasn't activated the environment. Run `source .venv/bin/activate` in the LLM-GC folder |
+| `start` stops: *no credential for LLM-GC's own summary calls* | `.env` has no key, or you started LLM-GC from another folder. The message names the `.env` it looked for |
+| `start` stops: *the upstream refused LLM-GC's credential* | The key in `.env` is wrong or has expired |
+| `start` stops: *the upstream refused LLM-GC's summary request*, then a reason such as *invalid model* | The upstream doesn't offer that model. Set one it does, as `model` under `[summary]` |
+| `start` stops: *unknown setting here: `model` goes under [summary]* | A line in `llm-gc.toml` is in the wrong section. Move it where the message says |
+| `start` stops: *port 9900 is already in use* | Another LLM-GC is running, perhaps in a terminal you forgot. Stop it with Ctrl-C, or start this one with `--port` |
 
-**To stop using LLM-GC**, press Ctrl-C in its terminal and remove the entry you added in
-step 4. Otherwise Claude Code keeps sending requests to an address where nothing answers.
+**Using Claude Code**
+
+| What you see | Why, and what to do |
+|---|---|
+| Nothing appears in LLM-GC's terminal when you message Claude | Claude Code isn't using LLM-GC. Check step 4: the entry is in this project's `.claude/settings.local.json`, and `claude` was restarted after you added it |
+| It works in one project but not in another | The entry is per project. Add it to the other project too, or to `~/.claude/settings.json` |
+| A `WARNING` line with `-> 401`, and Claude Code shows an authentication error | The upstream refused Claude Code's own login. Behind a gateway, `upstream` in `llm-gc.toml` must be exactly the gateway's address from `~/.claude/settings.json` |
+| Claude Code can't connect at all | LLM-GC isn't running. Start it (step 3), or remove the entry from step 4 |
+
+**Later, on the dashboard**
+
+| What you see | Why, and what to do |
+|---|---|
+| *The upstream is refusing LLM-GC's credential* | The upstream accepted LLM-GC's key at startup and refuses it now, for example because it was revoked or expired. Collections are skipped, and what was already condensed stays in use. Fix the key in `.env`, then restart LLM-GC |
+| *Summary request failed*, on the Engine tab, without that message | The upstream refused a summary for another reason, shown on the Engine tab. A gateway may need headers LLM-GC doesn't send yet |
+
+**To stop using LLM-GC**, press Ctrl-C in its terminal and delete the `env` entry you added
+in step 4. Otherwise Claude Code keeps sending requests to an address where nothing answers.
 
 ## The problem
 
@@ -358,17 +479,20 @@ conversation without waiting for the minimum. `llm-gc start --dashboard
 
 To look around without an API key or a conversation of your own, rehearse the
 decision-survival check with its dashboard. It plays five scripted conversations
-through the same engine, offline, each as its own session:
+through the same engine, offline, each as its own session. After step 1 of
+[Get started](#get-started), in the LLM-GC folder with the environment activated:
 
 ```bash
 python -m evals.decision_survival.run --rehearse --dashboard
 # open http://localhost:9911: it fills in as the check runs, and stays open after its report until Ctrl-C
 ```
 
+Its dashboard has a port of its own, 9911, so it can run beside a real LLM-GC.
+
 Rehearsal shows the page's shape, not a real model's work: its stand-in summaries
 state nothing, and its facts are read by simple patterns from your messages only, so
 the assistant's column stays empty. `python scripts/run_proxy.py --serve --dashboard`
-does the same for a conversation of your own, with canned replies.
+does the same for a conversation of your own, with pre-written responses.
 
 `llm-gc start --compactor noop` runs with real replies but no credential of LLM-GC's
 own: it makes no model calls, so exchanges are kept or archived but never summarised.
@@ -383,132 +507,8 @@ import anthropic
 client = anthropic.Anthropic(base_url="http://127.0.0.1:9900")
 ```
 
-`python scripts/chat.py` is exactly that, as a terminal chat.
-
-### With Claude Code
-
-```bash
-llm-gc start --dashboard                          # with ANTHROPIC_API_KEY set
-ANTHROPIC_BASE_URL=http://127.0.0.1:9900 claude   # in the project you are working on
-```
-
-If your `~/.claude/settings.json` already sets `ANTHROPIC_BASE_URL`, because your
-company routes Claude through its own proxy, that setting wins over the command line:
-follow [Behind your organisation's proxy](#behind-your-organisations-proxy) instead.
-
-Claude Code's own credentials are forwarded to Anthropic, never stored; the proxy's
-`ANTHROPIC_API_KEY` pays only for summaries and fact reads. Without it, the proxy runs
-with canned summaries, which is only useful for trying the dashboard. With an agent's conversation, LLM-GC:
-
-- reads tool calls and results as text, so they are summarised and quoted like words;
-- sends Claude Code's instructions (its system prompt, its tools, and the
-  `<system-reminder>` blocks that carry CLAUDE.md and memory) word for word with every
-  request, never condensed;
-- passes its other calls, such as token counting, through untouched;
-- shows its side requests (after each reply it asks the model to suggest your next
-  prompt) as the *newest request*, never as something you said.
-
-Sessions live in memory: restarting the proxy starts each conversation again from what
-Claude Code sends, at the cost of one request sent whole and one collection. The first
-collection of a long conversation can take a couple of minutes, and requests meanwhile
-go whole — never worse than without LLM-GC.
-
-### Behind your organisation's proxy
-
-Use this if your company sends Claude's traffic through its own proxy: your
-`~/.claude/settings.json` has an `env` block with `ANTHROPIC_BASE_URL` (the company
-proxy's address) and a token or key. LLM-GC goes in the middle:
-
-```
-Claude Code  ──►  LLM-GC  ──►  your company's proxy  ──►  Anthropic
-```
-
-#### 1. Start LLM-GC
-
-LLM-GC needs three values. All three are usually in `~/.claude/settings.json`, under
-`env`, because Claude Code needs them too:
-
-| Value | Where to find it | How you give it |
-|---|---|---|
-| The company proxy's URL | `ANTHROPIC_BASE_URL` | `--upstream` (or `upstream` in the [config file](#configuration)) |
-| A model name the company proxy offers | an entry ending in `_MODEL`, such as `ANTHROPIC_DEFAULT_SONNET_MODEL`; if there is none, ask your proxy team | `--summary-model` (or `model` under `[summary]`) |
-| Your token | `ANTHROPIC_AUTH_TOKEN` (or `ANTHROPIC_API_KEY`) | an environment variable, never a flag |
-
-LLM-GC uses the model and the token for its own summaries, which go through the company
-proxy too. Company proxies often name models their own way, so LLM-GC's default,
-`claude-sonnet-5`, may be refused. Choose a Sonnet model: summaries need to be good, and
-they are short.
-
-In a terminal, from the LLM-GC folder:
-
-```bash
-read -s ANTHROPIC_AUTH_TOKEN && export ANTHROPIC_AUTH_TOKEN    # paste your token, press Enter
-llm-gc start --dashboard \
-  --upstream https://your-company-proxy.example.com \
-  --summary-model your-sonnet-model-name
-```
-
-`read -s` takes the token without showing it, so it never appears on screen or in your
-shell history. (If your company uses `ANTHROPIC_API_KEY` instead, use that name in both
-places.)
-
-Before it serves, LLM-GC asks the company proxy for one token with that model and
-credential, so a wrong one stops it straight away rather than failing later:
-
-```
-config:    none, built-in defaults
-upstream:  https://your-company-proxy.example.com
-compactor: anthropic, model your-sonnet-model-name
-check:     your-sonnet-model-name answered at https://your-company-proxy.example.com
-
-proxy      http://127.0.0.1:9900   (stats: /stats)
-dashboard  http://127.0.0.1:9901
-```
-
-If it stops instead, it prints the company proxy's own reason, such as *invalid model
-specified*: fix that value and start again. Leave this terminal open while you work.
-
-#### 2. Point Claude Code at LLM-GC
-
-Claude Code takes `ANTHROPIC_BASE_URL` from its settings files, and a value typed before
-`claude` on the command line is overridden by them. So set LLM-GC's address in a settings
-file. In the project you want to use, put this in `.claude/settings.local.json`:
-
-```json
-{ "env": { "ANTHROPIC_BASE_URL": "http://127.0.0.1:9900" } }
-```
-
-If that file already exists (Claude Code saves your permission choices there), add the
-`env` entry to it rather than replacing the file. Then start Claude in that project as
-usual: `claude`.
-
-A project's settings take priority over `~/.claude/settings.json`, so only this project
-goes through LLM-GC; your other projects still use the company proxy directly. To stop,
-remove the entry.
-
-> **Every project instead?** Set `ANTHROPIC_BASE_URL` to `http://127.0.0.1:9900` in
-> `~/.claude/settings.json` itself. Write down the company proxy's URL first: step 1 can
-> no longer read it from that file, so pass it yourself, as `--upstream https://…`.
-
-#### 3. Check that it works
-
-Send Claude a message. LLM-GC's terminal prints a line for every request, and the
-dashboard shows the conversation from its second message. Once the conversation has
-grown, the dashboard says *Last collection …* and the prompt it sends gets smaller.
-
-| What you see | What to do |
-|---|---|
-| Nothing new in LLM-GC's terminal | Claude isn't using LLM-GC: check step 2, and that you started `claude` in that project |
-| Claude shows an error from the company proxy | `--upstream` is wrong: it must be exactly the company proxy's URL from your settings |
-| LLM-GC stops at startup: *the upstream refused LLM-GC's summary request … invalid model* | The company proxy doesn't offer that model: pass one it does with `--summary-model` |
-| LLM-GC stops at startup: *refused LLM-GC's credential* | Check the credential exported in step 1 |
-| Both tabs: *The upstream is refusing LLM-GC's credential* | The company proxy accepted LLM-GC's credential at startup and refuses it now, for example a revoked or expired token. Both tabs show the proxy's own reason. Fix the credential and restart LLM-GC; what was already condensed stays |
-| Engine tab: *Summary request failed*, later on, without that message | The company proxy refused a summary for another reason; the Engine tab shows it. It may need headers LLM-GC doesn't send yet |
-
-**Other clients** work the same way: point them at `http://127.0.0.1:9900` with the
-credential they already use for the company proxy. With the SDK, that is
-`anthropic.Anthropic(base_url="http://127.0.0.1:9900")`; for `scripts/chat.py`, export
-the same token in its terminal.
+`python scripts/chat.py` is exactly that, as a terminal chat: export the client's key
+(`ANTHROPIC_API_KEY`) in its terminal first.
 
 ### As a library
 
@@ -659,6 +659,14 @@ setting is an error that names it, so it never looks configured when it isn't.
 | Where summary calls go, if not the upstream | `[summary] base_url` | | `LLM_GC_SUMMARY__BASE_URL` | the upstream for `anthropic`; the vendor's address otherwise |
 | Log level | `log_level` | `--log-level` | `LLM_GC_LOG_LEVEL` | `INFO` |
 
+**The summary model is LLM-GC's own,** separate from the model your client talks to:
+For instance, Claude Code can converse with Opus while LLM-GC summarises with Sonnet. A cheaper model
+lowers LLM-GC's own bill, but its summaries and facts are what the conversation model reads
+in place of the old turns, so a weaker one can leave the model remembering less well. The
+saving is also smaller than it looks, because LLM-GC calls its model only when it runs a
+collection, not on every request. Currently, [decision-survival check](evals/decision_survival/README.md) is measured
+with the default model that is configured.
+
 **The engine** is what the library takes as a `GCConfig`. These are the settings worth
 turning while you watch the dashboard; in the file they go under `[engine]`, and in the
 environment they take `LLM_GC_ENGINE__`:
@@ -717,7 +725,7 @@ Two others were considered and rejected, for different reasons:
 ## Developing LLM-GC
 
 ```bash
-uv sync --extra dev   # adds pytest, ruff, mypy, hypothesis and the Anthropic SDK
+uv sync --extra dev   # adds pytest, ruff, mypy, hypothesis and the Anthropic SDK; a plain `uv sync` removes them
 pytest                # the test suite: no network, no key
 ruff check .          # lint
 mypy                  # type-check the library
