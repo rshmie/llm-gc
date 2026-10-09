@@ -55,10 +55,12 @@ doesn't know LLM-GC exists.
 | | Used for | Where it lives |
 |---|---|---|
 | **Claude Code's login** | Your conversation. Passed on untouched, never stored | In Claude Code, as now. You change nothing |
-| **LLM-GC's own key** | Only LLM-GC's own short calls: summarising old exchanges and reading their facts. Billed to that key | LLM-GC's `.env` file, set up in step 2 |
+| **LLM-GC's own key** | Only LLM-GC's own short calls: summarising old exchanges and reading their facts. Never your conversation. Billed to that key | LLM-GC's `.env` file, set up in step 2 |
 
 LLM-GC can't borrow Claude Code's login, so you give it a key of its own. Behind a company
-gateway, it can be the same token Claude Code uses.
+gateway, it can be the same token Claude Code uses. The model LLM-GC calls is its own
+choice too, separate from the one you talk to: `model` under `[summary]` in `llm-gc.toml`
+(see [Configuration](#configuration)).
 
 > **Just want to look first?** [Without a key](#without-a-key) runs the dashboard on
 > scripted conversations, with no key and no Claude Code.
@@ -656,6 +658,14 @@ setting is an error that names it, so it never looks configured when it isn't.
 | The model it summarises and reads facts with, as that vendor (or a gateway) names it. Checked at startup | `[summary] model` | `--summary-model` | `LLM_GC_SUMMARY__MODEL` | the vendor's own |
 | Where summary calls go, if not the upstream | `[summary] base_url` | | `LLM_GC_SUMMARY__BASE_URL` | the upstream for `anthropic`; the vendor's address otherwise |
 | Log level | `log_level` | `--log-level` | `LLM_GC_LOG_LEVEL` | `INFO` |
+
+**The summary model is LLM-GC's own,** separate from the model your client talks to:
+For instance, Claude Code can converse with Opus while LLM-GC summarises with Sonnet. A cheaper model
+lowers LLM-GC's own bill, but its summaries and facts are what the conversation model reads
+in place of the old turns, so a weaker one can leave the model remembering less well. The
+saving is also smaller than it looks, because LLM-GC calls its model only when it runs a
+collection, not on every request. Currently, [decision-survival check](evals/decision_survival/README.md) is measured
+with the default model that is configured.
 
 **The engine** is what the library takes as a `GCConfig`. These are the settings worth
 turning while you watch the dashboard; in the file they go under `[engine]`, and in the
