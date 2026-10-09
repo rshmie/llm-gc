@@ -13,18 +13,16 @@ from llm_gc.monitoring import ContextHealthMonitor
 from llm_gc.proxy import create_app
 from llm_gc.visualizer import TranscriptRecorder, create_dashboard_app
 
-# Localhost only, with no authentication. Binding wider needs authentication first
-# (CLAUDE.md §10): the client's provider key passes through this process, and the
-# dashboard shows every conversation it holds.
+
 BIND_HOST = "127.0.0.1"
 
 
 def find_busy_port(ports: Iterable[int]) -> int | None:
     """The first of `ports` that cannot be bound on `BIND_HOST`, or None when all are free.
 
-    Checked before startup: uvicorn reports a taken port only once serving has begun, as a
+    It is checked before startup: uvicorn reports a taken port only once serving has begun, as a
     bare OS error after the banner has already promised the address. The probe binds the
-    way uvicorn does, with `SO_REUSEADDR`, so a port left in TIME_WAIT by a stopped proxy
+    way uvicorn does, with `SO_REUSEADDR` - so a port left in TIME_WAIT by a stopped proxy
     is not mistaken for one in use.
     """
     for port in ports:
