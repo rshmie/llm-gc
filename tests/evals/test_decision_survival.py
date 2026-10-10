@@ -91,6 +91,17 @@ class TestAnswers:
         graded as a second answer, a right one was scored unclear in both arms."""
         assert grade(answer, DATABASE) is verdict
 
+    @pytest.mark.parametrize("answer, verdict", [
+        ("Unknown. The user proposed MySQL 8, but no final decision was stated.", Verdict.UNKNOWN),
+        ("**Unknown** - MySQL 8 was only suggested", Verdict.UNKNOWN),
+        ("MySQL 8; the minor version is unknown", Verdict.RIGHT),
+        ("Unknowns remain, but MySQL 8", Verdict.RIGHT),
+    ])
+    def test_an_answer_that_opens_with_unknown_is_unknown(self, answer, verdict):
+        """The model declined to choose; naming the right value in its reasoning is not
+        answering with it. Graded right, one such reply hid a loss behind 19/19."""
+        assert grade(answer, DATABASE) is verdict
+
     def test_the_questions_go_in_one_numbered_message(self):
         message = question_message([DATABASE, Probe(id="r", question="Retention?", accept=("30 days",), established_at=0)])
         assert message.endswith("1. Which database?\n2. Retention?")

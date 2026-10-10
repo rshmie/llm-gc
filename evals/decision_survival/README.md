@@ -98,13 +98,16 @@ next.
 Each answer gets one verdict, by whole-word matching against the probe's `accept`
 and `reject` lists. Parenthetical asides are read as history, not as a second
 answer: "MySQL 8 (changed from Postgres 16)" is right, while "MySQL or Postgres"
-is unclear. Models add such asides even when asked for the current value only.
+is unclear. Models add such asides even when asked for the current value only. An
+answer that opens with "unknown" is unknown, whatever it goes on to say: "Unknown.
+The user proposed 9 shards, but…" declined to answer, and the 9 in its reasoning is
+not its answer.
 
 | Verdict | Meaning |
 |---|---|
 | right | names an accepted value |
 | wrong | names something else, or only a replaced value |
-| unknown | says the conversation does not say |
+| unknown | opens with "unknown", or says the conversation does not say |
 | unclear | names the current value *and* a replaced one |
 | missing | no numbered line for this question |
 
@@ -165,7 +168,7 @@ it.
 |---|---|---|---|
 | [size-budget-2026-10-05](evidence/size-budget-2026-10-05.json) | 18/18, prompts 17–24% smaller | 12/19, prompts 64% smaller | The recap's facts limited by size alone. On the long conversations every fact the user stated survives (11/11), and 1 of 8 details stated only inside an assistant answer does: each of the seven was in an excerpt of an archived summary, sent only up to its first 180 characters. |
 | [detail-levels-2026-10-06](evidence/detail-levels-2026-10-06.json) | 18/18, prompts 11–15% smaller | 19/19, prompts 42% smaller | Every span kept with its original turns and shown at the level its score earns, levels nested. Every answer reaches the model; summaries are 95% of the front on the long conversations, so the saving is the summaries' size - tuning the summary target and how readily old spans are archived is what can win it back. |
-| [model-facts-2026-10-06](evidence/model-facts-2026-10-06.json) | 18/18, prompts 11–13% smaller | 19/19, prompts 27–44% smaller | Facts read by the model once per collection, each filed with who stated it; a value the assistant states on a topic the user decided is not filed. Every answer reaches the model, and the recap's "Replaced later" notes mark only changes the user made. During ticketing-platform the provider timed out on 20 summaries and failed 5 fact reads: those spans were kept whole, so its prompt was 27% smaller rather than about 45%, and no answer was lost. |
+| [model-facts-2026-10-06](evidence/model-facts-2026-10-06.json) | 18/18, prompts 11–13% smaller | 18/19, prompts 27–44% smaller | Facts read by the model once per collection, each filed with who stated it; a value the assistant states on a topic the user decided is not filed. Every answer reaches the model, and the recap's "Replaced later" notes mark only changes the user made. One is still lost: asked for the shard count, the model replied "Unknown. The user proposed 9 shards, but the assistant recommended 3 primaries and no final decision was stated", reading the assistant's recommendation as an open question. Sent the whole conversation, it answered 9. The file grades that answer right (19/19), because the grader then looked for an accepted value before "unknown"; graded unknown, it is the only verdict in any stored run that the rule changes. During ticketing-platform the provider timed out on 20 summaries and failed 5 fact reads: those spans were kept whole, so its prompt was 27% smaller rather than about 45%, and none of its answers was lost. |
 | [aligned-cuts-2026-10-06](evidence/aligned-cuts-2026-10-06.json) | 18/18, prompts 12–15% smaller | 19/19, prompts 44–45% smaller | A cut falls only where a span may begin, so a question stays with its answer: no summary was refused, against several every run before, and no part of any collection fell short. A recommendation that disagrees with the user's decision is filed under the decision's topic and kept out of the notes; the shard count the earlier runs lost reads "index shards: 9", the user's value. |
 | [facts-room-2026-10-06](evidence/facts-room-2026-10-06.json) | 18/18, prompts 12–17% smaller | 19/19, prompts 42–43% smaller | The engine as it serves Claude Code: tool rounds read as text, the client's instructions set aside, and the facts read given room to think. These text conversations lose nothing to those changes, and no clean-up degraded: every summary and every facts read finished. The file grades shard-count wrong (36/37), but the answer was "9 primaries", the recap's own words for the user's value. `accept` now includes them, with the reply that argues against 9 as `also_in`. The stored answers regrade to 37/37, no other verdict in any stored run changes, and "3 primary shards" is still wrong. |
 

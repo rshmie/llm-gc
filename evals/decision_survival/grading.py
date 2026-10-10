@@ -24,6 +24,8 @@ class Presence(StrEnum):
 
 _NUMBERED_LINE = re.compile(r"^\s*(\d+)\s*[.):]\s*(.*\S)")
 _ASIDE = re.compile(r"\([^()]*\)")
+# Leading punctuation is skipped, so "**Unknown**" and "\"unknown\"" count.
+_OPENS_UNKNOWN = re.compile(r"^\W*unknown(?!\w)", re.IGNORECASE)
 
 
 def question_message(probes: Sequence[Probe]) -> str:
@@ -51,11 +53,15 @@ def grade(answer: str | None, probe: Probe) -> Verdict:
     """The verdict on one answer, read without its parenthetical asides.
 
     "MySQL 8 (changed from Postgres)" answers MySQL; the aside is history, not a
-    second answer. An answer that is only an aside is read whole.
+    second answer. An answer that is only an aside is read whole. An answer that
+    opens with "unknown" is unknown whatever follows: the values in its reasoning
+    are what it declined to choose between, not its answer.
     """
     if answer is None:
         return Verdict.MISSING
     answer = _ASIDE.sub(" ", answer).strip() or answer
+    if _OPENS_UNKNOWN.match(answer):
+        return Verdict.UNKNOWN
     right = any(mentions(answer, value) for value in probe.accept)
     replaced = any(mentions(answer, value) for value in probe.reject)
     if right and replaced:
