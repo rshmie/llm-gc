@@ -33,6 +33,7 @@ class TranscriptTurn:
     text: str     # the turn's text; empty for a turn that is only tool calls or attachments
     tokens: int
     instruction_tokens: int = 0   # the client's instructions inside the turn as it sends them now
+    relayed: bool = False         # another agent's report, relayed under the user role
 
 
 class TranscriptRecorder:
@@ -55,7 +56,8 @@ class TranscriptRecorder:
         self._transcripts[session_id] = tuple(
             TranscriptTurn(turn_index=message.turn_index, role=message.role, text=message.content,
                            tokens=message.token_count,
-                           instruction_tokens=sum(count_tokens(text) for text in message.instructions))
+                           instruction_tokens=sum(count_tokens(text) for text in message.instructions),
+                           relayed=message.relayed)
             for message in messages
         )
         if origin is not None:

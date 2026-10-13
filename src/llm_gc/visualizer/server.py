@@ -208,7 +208,8 @@ def _reply_index(transcripts: TranscriptRecorder | None, session_id: str) -> int
 
 def _opening_words(turns: Sequence[TranscriptTurn] | None) -> str | None:
     """How a person recognises a conversation: its first user message, on one line and shortened."""
-    first = next((turn.text for turn in turns or () if turn.role == "user" and turn.text.strip()), None)
+    first = next((turn.text for turn in turns or () if turn.role == "user" and not turn.relayed and turn.text.strip()),
+                 None)
     if first is None:
         return None
     line = " ".join(first.split())

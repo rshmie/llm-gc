@@ -26,7 +26,7 @@ from llm_gc.events import Event, EventBus, EventType
 from llm_gc.exceptions import CompactionRefused, LLMGCError
 from llm_gc.llm.metering import measure_model_usage
 from llm_gc.models import KnowledgeEntry, Message
-from llm_gc.models.message import tool_result_ids
+from llm_gc.models.message import said_by_user
 from llm_gc.models.generation_snapshot import (
     AgingDelta,
     AppliedAging,
@@ -412,7 +412,7 @@ class GcService:
         knowledge, _ = file_knowledge(base.knowledge, new_facts)
         annotated = KnowledgeIndex(knowledge)
 
-        now = [turn for turn in young[cut:] if turn.role == "user" and not tool_result_ids(turn)]
+        now = [turn for turn in young[cut:] if said_by_user(turn)]
         newest_turn = base.recorded_turn_count - 1
         scores = [score.combined for score in self.span_scorer.score([span.turns for span in spans], now, newest_turn)]
 

@@ -13,6 +13,7 @@ from dataclasses import dataclass, replace
 from itertools import groupby
 
 from llm_gc.models import KnowledgeEntry, Message
+from llm_gc.models.message import speaker_label
 from llm_gc.models.generation_snapshot import DetailLevel, Span
 from llm_gc.models.knowledge_entry import GENERAL_TOPIC, KnowledgeStatus
 from llm_gc.utils import count_tokens
@@ -88,7 +89,7 @@ def span_text(span: Span, annotations: Annotations) -> str:
     if span.level is DetailLevel.OUT_OF_VIEW:
         raise ValueError("a folded span has no line of its own")
     if span.level is DetailLevel.KEPT:
-        lines = [f"{QUOTE_PREFIX} (turn {turn.turn_index}, {turn.role}) {turn.content}" for turn in span.turns]
+        lines = [f"{QUOTE_PREFIX} (turn {turn.turn_index}, {speaker_label(turn)}) {turn.content}" for turn in span.turns]
     elif span.level is DetailLevel.COMPACTED:
         if span.summary is None:
             raise ValueError(f"span at turn {span.first_turn} is compacted but has no summary")

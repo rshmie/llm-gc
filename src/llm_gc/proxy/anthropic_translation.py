@@ -42,6 +42,10 @@ _BLANK_RUN = re.compile(r"\n{3,}")
 # Claude Code adds its environment and its tools' instructions after a user turn.
 _INSTRUCTION_ROLE = "system"
 
+# Claude Code relays a background subagent's report into the main conversation as a user
+# turn opening with this element: another agent's findings, not words the person wrote.
+_RELAYED = re.compile(r"\s*<agent-message\b")
+
 # Distinct system prompts and tool lists whose token counts are remembered: one per client
 # setup in use (a main conversation, each kind of subagent), with room to spare.
 _REPEATED_TEXTS_CACHED = 64
@@ -104,6 +108,7 @@ def extract_messages(payload: dict[str, Any]) -> list[Message]:
                 content=content,
                 token_count=count_tokens(content),
                 instructions=lifted,
+                relayed=role == "user" and _RELAYED.match(content) is not None,
                 # Its place in the conversation, instructions not counted, so a turn's
                 # index does not depend on where the client puts its instructions.
                 turn_index=len(messages),

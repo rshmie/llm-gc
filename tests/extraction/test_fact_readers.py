@@ -15,6 +15,7 @@ from llm_gc.extraction import LLMFactReader, PatternFactReader
 from llm_gc.llm import FakeProvider, LLMResponse, StopReason
 from llm_gc.llm.prompts import FACTS_CLOSE, FACTS_OPEN, FACTS_PROMPT, TRANSCRIPT_CLOSE, TRANSCRIPT_OPEN, load_prompt
 from llm_gc.models import KnowledgeEntry, Message
+from llm_gc.models.generation_snapshot import file_knowledge
 from llm_gc.models.knowledge_entry import KnowledgeStatus, KnowledgeType
 
 
@@ -143,3 +144,35 @@ class TestReadingByPatterns:
 
         assert [(f.message_turn, f.topic_label, f.content, f.speaker) for f in facts] == [
             (0, "database", "Postgres", "user")]
+
+
+class TestARelayedReportIsTheAssistantsSide:
+    """A background subagent's report arrives under the user role; reading it as the user would let
+    another agent's finding replace a decision the user made."""
+
+    REPORT = Message(role="user", content="<agent-message>The config uses MySQL.</agent-message>", token_count=12,
+                     turn_index=10, relayed=True)
+
+    def test_the_model_is_shown_it_as_a_report_and_its_facts_are_not_the_users(self):
+        provider = FakeProvider(responses=[_answer([{"turn": 10, "topic": "database", "value": "MySQL",
+                                                     "kind": "decision"}])])
+
+        [fact] = _read(provider, [(self.REPORT,)])
+
+        assert "[turn 10] subagent report: <agent-message>" in provider.calls[0].messages[0].content
+        assert fact.speaker == "assistant"
+
+    def test_it_never_replaces_the_users_decision(self):
+        """The failing case found in a live trace: the user chose Postgres, a subagent reported MySQL."""
+        decided = KnowledgeEntry(message_turn=2, content="Postgres", topic_label="database",
+                                 knowledge_type=KnowledgeType.DECISION, speaker="user")
+        provider = FakeProvider(responses=[_answer([{"turn": 10, "topic": "database", "value": "MySQL",
+                                                     "kind": "decision"}])])
+
+        filed, _ = file_knowledge((decided,), tuple(_read(provider, [(self.REPORT,)], [decided])))
+
+        assert [(f.content, f.knowledge_status) for f in filed] == [("Postgres", KnowledgeStatus.ACTIVE)]
+
+    def test_patterns_do_not_read_it_as_the_user(self):
+        report = self.REPORT.model_copy(update={"content": "<agent-message>The database is MySQL.</agent-message>"})
+        assert asyncio.run(PatternFactReader().read([(report,)], [])) == []

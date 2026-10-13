@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from llm_gc.models import KnowledgeEntry, Message
-from llm_gc.models.message import tool_result_ids
+from llm_gc.models.message import said_by_user, tool_result_ids
 
 # An exchange larger than this is split between tool rounds, so one long agentic
 # exchange becomes several summaries rather than a single call over all of it.
@@ -57,7 +57,7 @@ class OpeningWordsIndexWriter:
 
     def write(self, turns: Sequence[Message]) -> str:
         """See `IndexWriter.write`."""
-        asked = next((turn for turn in turns if _says_something(turn) and turn.role == "user"), None)
+        asked = next((turn for turn in turns if _says_something(turn) and said_by_user(turn)), None)
         opener = asked or next((turn for turn in turns if _says_something(turn)), None)
         return _first_sentence(opener.content) if opener is not None else ""
 
@@ -66,15 +66,15 @@ def group_exchanges(turns: Sequence[Message], max_span_tokens: int = DEFAULT_MAX
                     ) -> list[tuple[Message, ...]]:
     """Split consecutive turns into spans: one exchange each, divided again when an exchange is too large.
 
-    An exchange opens at a user turn that is not only tool results and runs to the
-    next one. A large exchange is divided only before an assistant turn that follows
+    An exchange opens at a turn the user wrote (`said_by_user`) and runs to the next
+    one: tool results and relayed reports join the exchange they answer. A large exchange is divided only before an assistant turn that follows
     another assistant turn in the span: a tool call stays with its result, and a
     question with its first answer.
     """
     groups: list[list[Message]] = []
     size = 0
     for turn in turns:
-        opens_exchange = turn.role == "user" and not tool_result_ids(turn)
+        opens_exchange = said_by_user(turn)
         overflows = (bool(groups) and turn.role == "assistant" and size + turn.token_count > max_span_tokens
                      and any(earlier.role == "assistant" for earlier in groups[-1]))
         if not groups or opens_exchange or overflows:

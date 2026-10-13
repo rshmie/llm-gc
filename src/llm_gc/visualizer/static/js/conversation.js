@@ -14,12 +14,15 @@ const smooth = () => (reducedMotion() ? "auto" : "smooth");
 export const speakerName = (role) => role === "user" ? "You" : role ? role[0].toUpperCase() + role.slice(1) : "—";
 const avatarText = (role) => role === "user" ? "You" : role === "assistant" ? "AI" : (role || "?").slice(0, 2).toUpperCase();
 const avatar = (role) => h("div", { class: `av ${role === "user" ? "user" : "assistant"}`, "aria-hidden": "true" }, avatarText(role));
-// A turn of tool results is the client reporting what its tools returned, under the user role.
-const speakerOf = (turn) => turn.tool_results ? "Tool results" : speakerName(turn.role);
-const avatarOf = (turn) => turn.tool_results ? h("div", { class: "av user", "aria-hidden": "true" }, "Tool") : avatar(turn.role);
+// A turn of tool results is the client reporting what its tools returned, and a relayed turn another
+// agent's report; both come under the user role, and neither is the user's words.
+const speakerOf = (turn) => turn.relayed ? "Subagent report" : turn.tool_results ? "Tool results" : speakerName(turn.role);
+const avatarOf = (turn) => turn.relayed ? h("div", { class: "av assistant", "aria-hidden": "true" }, "Agent")
+  : turn.tool_results ? h("div", { class: "av user", "aria-hidden": "true" }, "Tool") : avatar(turn.role);
 const toolTip = () => hoverTip(GLOSSARY.tools[0], GLOSSARY.tools[1]);
-// The speaker, explained when it is the client reporting tool output; a tag when the assistant calls a tool.
-const who = (turn) => h("span", { class: "who", ...(turn.tool_results ? toolTip() : {}) }, speakerOf(turn));
+const relayedTip = () => hoverTip(GLOSSARY.relayed[0], GLOSSARY.relayed[1]);
+// The speaker, explained when it is the client reporting tool output or relaying a report; a tag when the assistant calls a tool.
+const who = (turn) => h("span", { class: "who", ...(turn.relayed ? relayedTip() : turn.tool_results ? toolTip() : {}) }, speakerOf(turn));
 const toolTag = (label) => h("span", { class: "tag", ...toolTip() }, label);
 const callsTag = (turn) => turn.tool_calls ? toolTag("calls a tool") : null;
 // Instructions the client puts inside the message: never condensed, so their size stands apart.
