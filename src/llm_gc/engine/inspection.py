@@ -64,6 +64,8 @@ class SessionInspection:
     next_cut: CutPreview
     aging_in_flight: bool
     last_activity: datetime
+    context_window: int       # the window the recap is sized for
+    recap_budget: int
 
     @property
     def context(self) -> list[Message]:

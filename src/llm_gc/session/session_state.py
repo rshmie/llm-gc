@@ -26,6 +26,8 @@ class SessionState:
     created_at: datetime = field(default_factory=_now)
     last_updated_at: datetime = field(default_factory=_now)
     aging_in_flight: bool = False
+    # The window of the model its newest request named, when known; the configured one otherwise.
+    context_window: int | None = None
 
     def touch(self) -> None:
         """Reset the idle clock; the sweeper measures idleness from here."""

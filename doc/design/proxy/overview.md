@@ -182,24 +182,175 @@ A malformed body is forwarded untouched, because the provider is the authority o
 its own API. Guards catch `Exception`, never `BaseException`, so cancellation on
 client disconnect still propagates and the upstream connection is closed.
 
-### What `/stats` reports
+### What is measured
 
-Aggregate counters only, never conversation content: requests, GC applied and
-bypassed, tokens in client histories and tokens forwarded, and the
-reconciliations — `history_rewinds`, `history_restarts`, `sessions_seeded`. A
-restart or a seed costs one uncompressed request, so each is counted rather than
-hidden.
+Every request is counted where it belongs: its conversation, the client session that ran
+it, and the proxy as a whole. Counts, ids and model names only, never conversation
+content. Each figure happened — a request sent, a reply's reported usage, a collection's
+own model calls. What the *next* request will carry is the engine's forecast, shown as
+one, never added in.
+
+```
+The proxy                          every request, from every client
+└─ Claude Code session 6d84277c    every request that named it
+   ├─ Main                         requests · tokens sent and forwarded · the provider's usage
+   ├─ Subagent 1                     · LLM-GC's own calls · collections, and those not yet sent
+   ├─ Earlier main                   · the model, and its window
+   └─ Other requests               first messages no conversation claimed; side requests
+```
+
+Each number comes from one place, at one moment in a request's life:
+
+```
+ client ──► request ──► count it whole ───────────────────────► requests,
+            system,     system + tools + instructions + messages  tokens sent,
+            tools,      as sent, and again as forwarded           tokens forwarded
+            messages            │
+                                ▼
+                    forward ──► provider ──► reply ──► read its usage ──► the provider's usage
+                                                       (the body, or a      (input, cache read,
+                                                        stream's events      cache write, output)
+                                                        as they pass)
+ after the reply:
+   collection ──► summary and fact calls, metered ──► gc_finished ──► LLM-GC's own calls,
+                                                                       collections, not yet sent
+```
+
+- **The whole request counts, on both sides.** Tokens sent are the system prompt, the
+  tool definitions, the client's instructions and the messages; tokens forwarded are the
+  same request with the recap. GC never changes the system prompt or the tools, but left
+  out, the share saved would be measured against only the part GC can shrink, and read
+  larger than what the model was spared:
+
+  ```
+                      system + tools   conversation        share saved
+  sent                    20,000          40,000
+  forwarded               20,000          10,000
+  counted whole           60,000  →  30,000                  50%   ← what the model was spared
+  conversation only       40,000  →  10,000                  75%   ← overstated
+  ```
+
+  Both sides are counted with LLM-GC's own tokenizer, so the ratio holds while the
+  absolute numbers differ from the provider's. The system prompt and tools repeat on
+  every request, so their count is cached by text.
+- **The provider's own count rides beside it.** Each reply's `usage` — uncached input,
+  cache read, cache write, output — is added wherever its request was counted: from the
+  body of an unstreamed reply, or read from a stream's `message_start` and
+  `message_delta` events as they pass, holding only an unfinished line between chunks. A
+  stream cut short still reports the prompt, which was billed. The provider never sees
+  the uncondensed prompt, so it cannot count a saving: its numbers say what was billed,
+  LLM-GC's compare before and after.
+- **LLM-GC's own model calls are counted per collection.** The summary provider is
+  wrapped in a meter ([the provider layer](../llm-provider.md)), so every call a
+  collection makes — the compactor's and the fact reader's, concurrent or not — is
+  counted against that collection and no other. The result carries the calls and
+  tokens, and the proxy adds them to the conversation. A collection that bought summaries
+  and then abandoned its cut still reports what it spent.
+- **Bounded.** 1,024 conversations, 256 client sessions and 256 unclaimed first requests
+  are kept; above that the least recently active is dropped, and its requests stay
+  counted in the totals above it.
+
+**A conversation's first request is claimed on its second.** With no history, a first
+request belongs to no conversation yet. It is held under its opening turn's hash and the
+client session and agent it named, and the conversation that opens the same way claims
+it — the same object, so a reply to it still on its way lands there too. Two subagents
+given the same task are told apart by their agent. A request nothing claims, such as a
+side request, stays in its client session as *other requests*.
+
+```
+request 1     [m0]            no history: no conversation yet
+                              held as  opens with #m0 · session cc-1 · main
+request 2     [m0, a0, m1]    its history starts conversation s_0676
+                              s_0676   opens with #m0 · session cc-1 · main  → claims request 1
+subagent 1    [task]          held as  opens with #task · session cc-1 · agent afc5
+subagent 2    [task]          held as  opens with #task · session cc-1 · agent a4e4  ← same words,
+                                                                                    another agent
+side request  [x]             held as  opens with #x · session cc-1 · main
+                              never claimed → "other requests" of cc-1
+```
+
+**A collection not yet sent is said to be.** A collection is made after a reply, for
+the conversation's *next* request, so a request must come after it before it saves
+anything. Until one does, the conversation counts it as *not yet sent*. A finished
+subagent, or a main conversation `/compact` replaced, keeps it for good: that collection
+cost its model calls and saved nothing. Whether such collections are frequent enough to
+change when a collection runs is measured here before it is decided.
+
+```
+main conversation   … req 9 ─► reply ─► collection ─► req 10 carries the recap
+                                         not yet sent 1    not yet sent 0, saved grows
+
+subagent            … req 5 ─► reply ─► collection ─► (the subagent has answered:
+                                         not yet sent 1    no request 6) saved stays 0
+```
+
+*Rejected: keeping the counts in each session's state* — sessions close when idle, and
+their requests would vanish from the client session's total. *Rejected: asking the
+provider to count each request (`count_tokens`)* — a network call per request for a
+number the reply's `usage` already gives, and the uncondensed prompt is never sent, so
+it could not count the saving either. *Rejected: one process-wide counter for LLM-GC's
+own calls* — two conversations collected at once would each be credited with the
+other's. *Accepted cost:* grouping by client session relies on Claude Code's headers; a
+client that names no session has each conversation listed on its own.
+
+`/stats` returns the proxy's totals — requests, GC applied and bypassed,
+`tokens_from_client`, `tokens_forwarded`, `tokens_saved` and their ratio, the provider's
+reported usage, LLM-GC's own calls, and the reconciliations `history_rewinds`,
+`history_restarts` and `sessions_seeded` (a restart or a seed costs one uncompressed
+request, so each is counted rather than hidden) — then `client_sessions`, each with its
+conversations: their part (main, subagent, earlier main), model, window and counts; and
+`other_conversations`, for those no client session named.
 
 `llm-gc stats` reads these from a running proxy, on the port the settings name, and
 validates the answer before using it, since whatever is on that port may not be an
-LLM-GC proxy. "Applied" counts requests that went through LLM-GC's path, which includes
-the early ones where nothing has been condensed yet; "bypassed" counts requests
-forwarded untouched because they could not be read or the engine failed on the request
-path. Tokens are LLM-GC's own count, not what the provider bills, so the savings figure is
-an estimate of size, not of cost. With no requests it says so instead of printing zeros,
-because a ratio with nothing behind it is not a measurement. Rewinds and restarts appear
-only once they have happened: only a client sending the session header can cause them, so
-for Claude Code they would be a permanent row of zeros. `--json` always has every counter.
+LLM-GC proxy. It prints the totals, what the provider reported and what LLM-GC's own calls
+spent, then one table per client session: each conversation's requests, tokens sent and
+saved, collections (and those not yet sent) and window. "Applied" counts requests that
+went through LLM-GC's path, which includes the early ones where nothing has been
+condensed yet; "bypassed" counts requests forwarded untouched because they could not be
+read or the engine failed on the request path. With no requests it says so instead of
+printing zeros, because a ratio with nothing behind it is not a measurement. Rewinds and
+restarts appear only once they have happened: only a client sending the session header
+can cause them, so for Claude Code they would be a permanent row of zeros. `--json`
+always has every counter.
+
+### Each conversation's window
+
+Each conversation names its model on every request, and one session runs several — a
+main conversation on one model, its subagents on another. The window of each model is
+asked of the upstream's Models API (`GET /v1/models/{model}`, its `max_input_tokens`)
+with LLM-GC's own Anthropic credential: once per model, in the background, never on the
+request path. Until the answer arrives, or when there is none — a gateway that lists no
+models, a model it names its own way, no Anthropic credential — the configured
+`context_window` is used, and the dashboard and `llm-gc stats` say it is assumed. The
+conversation's recap budget is its share of that window
+([detail levels](../generational-memory/detail-levels.md)), read at its next collection.
+At most 64 model names are asked about, so a client cannot make LLM-GC call the upstream
+without end.
+
+```
+request names model M
+        │
+        ▼
+ window of M known? ──── yes: the upstream reported it ─────► M's window           "1M"
+        │
+        ├─────────────── yes: asked, and none came back ─────► configured window   "200k assumed"
+        │
+        └─ no ─► configured window for now ──────────────────► configured window   "200k assumed"
+                 and, once, in the background:
+                 GET /v1/models/M ─► max_input_tokens ─► remembered for M
+
+the conversation's recap budget = its share (30%) of that window, read at its next collection
+```
+
+A larger window cannot push a request past the model's: the recap is the conversation's
+own older turns, condensed or quoted, so even with every span restored it is about the
+size of the turns it stands for, which the client would send anyway. A larger budget
+only means a long conversation's recap is squeezed later. *Rejected: a table of windows
+in code* — stale with each model release, and blind to a gateway's names. *Rejected:
+asking on the request path* — the first request of every new model would wait on it.
+*Accepted cost:* a model whose larger window needs a header the client did not send is
+sized for the larger window; the bound above still holds.
 
 ## Why it exists
 

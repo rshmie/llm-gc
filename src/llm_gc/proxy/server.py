@@ -19,6 +19,7 @@ import logging
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from typing import Any
 
 import httpx2
@@ -26,21 +27,30 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import StreamingResponse
 
 from llm_gc.config.constants import APP_VERSION
+from llm_gc.engine.gc_result import GCResult
 from llm_gc.engine.gc_service import GcService
+from llm_gc.engine.gc_status import GCStatus
+from llm_gc.events import Event, EventType
 from llm_gc.exceptions import ConfigError
+from llm_gc.llm.metering import ModelUsage
 from llm_gc.models import ClientOrigin, Message
 from llm_gc.models.generation_snapshot import GenerationSnapshot
 from llm_gc.proxy.anthropic_translation import (
     Instruction,
     carry_instructions,
     extract_instructions,
+    StreamUsageReader,
     extract_messages,
+    fixed_prompt_tokens,
     forwardable_headers,
     instruction_tokens,
     reply_text,
+    reply_usage,
     rewrite_messages,
 )
+from llm_gc.proxy.model_windows import ModelWindow, ModelWindows, WindowLookup
 from llm_gc.proxy.session_identity import SESSION_HEADER, chain_hashes, client_origin
+from llm_gc.proxy.traffic import ProviderUsage, RequestTargets, TrafficLedger
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +71,9 @@ MAX_REQUEST_BYTES = 32 * 1024 * 1024
 # A streamed reply longer than this is relayed whole but not kept to show on the
 # dashboard: the copy is held until the stream ends, once per request in flight.
 _REPLY_KEPT_MAX_BYTES = 4 * 1024 * 1024
+
+# A model name longer than this is not a model name; it is not kept or shown.
+_MODEL_NAME_MAX_CHARS = 128
 
 # Response headers that describe the upstream connection, not its content.
 # Returning them would have us promise an encoding or a length that no longer
@@ -83,38 +96,36 @@ _ERROR_STATUS_HINTS = {
 
 
 class ProxyMetrics:
-    """Aggregate counters for `GET /stats`. No conversation content."""
+    """Counters for `GET /stats`, and the measured traffic behind them. No conversation content."""
 
     def __init__(self) -> None:
         self.requests = 0
         self.gc_applied = 0
         self.gc_bypassed = 0
-        self.tokens_in_client_history = 0
-        self.tokens_forwarded = 0
         # Reconciliations with the client's history. Each restart or seed costs one
         # uncompressed request, so they are counted rather than hidden.
         self.history_rewinds = 0
         self.history_restarts = 0
         self.sessions_seeded = 0
+        self.traffic = TrafficLedger()
 
     def as_dict(self) -> dict[str, Any]:
-        saved = self.tokens_in_client_history - self.tokens_forwarded
+        total = self.traffic.total
         return {
             "requests": self.requests,
             "gc_applied": self.gc_applied,
             "gc_bypassed": self.gc_bypassed,
-            "tokens_in_client_history": self.tokens_in_client_history,
-            "tokens_forwarded": self.tokens_forwarded,
-            "tokens_saved": saved,
+            "tokens_from_client": total.tokens_from_client,
+            "tokens_forwarded": total.tokens_forwarded,
+            "tokens_saved": total.tokens_saved,
+            # None, not 1.0: a ratio with no requests behind it is not a measurement.
+            "ratio": round(total.tokens_forwarded / total.tokens_from_client, 3) if total.tokens_from_client else None,
+            "provider_usage": asdict(total.provider),
+            "summaries": asdict(total.summaries),
             "history_rewinds": self.history_rewinds,
             "history_restarts": self.history_restarts,
             "sessions_seeded": self.sessions_seeded,
-            # None, not 1.0: a ratio with no requests behind it is not a measurement.
-            "ratio": (
-                round(self.tokens_forwarded / self.tokens_in_client_history, 3)
-                if self.tokens_in_client_history
-                else None
-            ),
+            **self.traffic.as_dict(),
         }
 
 
@@ -127,6 +138,7 @@ def create_app(
     schedule: Callable[[Awaitable[None]], None] | None = None,
     on_client_history: Callable[[str, list[Message], ClientOrigin | None], None] | None = None,
     on_reply: Callable[[str, Message, str], None] | None = None,
+    window_lookup: WindowLookup | None = None,
 ) -> FastAPI:
     """Wire the proxy around an already-built engine.
 
@@ -147,6 +159,9 @@ def create_app(
             text, once a reply has finished reaching the client. How the dashboard
             shows the newest reply before the next request records it; the same
             rules apply.
+        window_lookup: Asks the upstream for a model's context window, with LLM-GC's
+            own credential. Without it, every conversation's recap is sized for the
+            configured window.
     """
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -175,7 +190,8 @@ def create_app(
     app.state.schedule = schedule if schedule is not None else _default_schedule
     app.state.on_client_history = on_client_history
     app.state.on_reply = on_reply
-
+    app.state.model_windows = ModelWindows(gc_service.gc_config.context_window, window_lookup, app.state.schedule)
+    gc_service.event_bus.subscribe(EventType.GC_FINISHED, lambda event: _count_collection(app, event))
 
     @app.get("/health")
     def health() -> dict[str, Any]:
@@ -246,37 +262,46 @@ async def _handle(app: FastAPI, request: Request) -> Response:
 
     streaming = payload.get("stream") is True
     history, new_turn = client_messages[:-1], client_messages[-1]
-    # Instructions count on both sides of the ratio: they are sent, whole, either way.
-    client_history_tokens = (sum(message.token_count for message in client_messages)
-                             + instruction_tokens(client_messages)
-                             + sum(instruction.token_count for instruction in instructions))
-    metrics.tokens_in_client_history += client_history_tokens
+    # The system prompt, the tools and the instructions count on both sides of the ratio:
+    # they are sent, whole, either way.
+    fixed_tokens = fixed_prompt_tokens(payload)
+    client_tokens = (sum(message.token_count for message in client_messages)
+                     + instruction_tokens(client_messages)
+                     + sum(instruction.token_count for instruction in instructions) + fixed_tokens)
 
     # Everything LLM-GC does before forwarding sits inside this one guard, so no
     # failure of ours can stop the conversation: the worst case is no GC.
     session_id: str | None = None
+    origin: ClientOrigin | None = None
+    window: ModelWindow | None = None
     try:
         origin = client_origin(request.headers)
         session_id = _record_client_history(app, history, request.headers.get(SESSION_HEADER), origin)
+        window = app.state.model_windows.window_for(_model_name(payload))
         if session_id is not None:
             _observe_history(app, session_id, client_messages, origin)
-        forward_body, forwarded_tokens = await _apply_gc(app, session_id, history, new_turn, payload, body,
-                                                         instructions)
+            app.state.gc_service.use_context_window(session_id, window.tokens)
+        forward_body, conversation_tokens = await _apply_gc(app, session_id, history, new_turn, payload, body,
+                                                            instructions)
     except Exception as err:
         logger.exception("GC failed on the request path; forwarding the original",
                          extra={"session_id": session_id, "error_type": type(err).__name__})
         metrics.gc_bypassed += 1
-        # Counted as forwarded, so a bypass does not look free in /stats.
-        metrics.tokens_forwarded += client_history_tokens
-        response = await _send(app, body, headers, streaming, target)
-        _log_answer(response.status_code, payload, client_history_tokens, client_history_tokens, session_id)
+        # Counted as forwarded whole, so a bypass does not look free in /stats.
+        counted = _count_request(app, session_id, origin, payload, client_messages, client_tokens, client_tokens,
+                                 window)
+        response = await _send(app, body, headers, streaming, target, on_usage=_usage_recorder(counted))
+        _log_answer(response.status_code, payload, client_tokens, client_tokens, session_id)
         return response
 
     metrics.gc_applied += 1
-    metrics.tokens_forwarded += forwarded_tokens
+    forwarded_tokens = conversation_tokens + fixed_tokens
+    counted = _count_request(app, session_id, origin, payload, client_messages, client_tokens, forwarded_tokens,
+                             window)
     response = await _send(app, forward_body, headers, streaming, target,
-                           on_complete=_reply_observer(app, session_id, new_turn, streaming))
-    _log_answer(response.status_code, payload, client_history_tokens, forwarded_tokens, session_id)
+                           on_complete=_reply_observer(app, session_id, new_turn, streaming),
+                           on_usage=_usage_recorder(counted))
+    _log_answer(response.status_code, payload, client_tokens, forwarded_tokens, session_id)
 
     # Aging prepares the next request from the conversation recorded so far; it
     # never depends on this reply, which the next request will show us exactly.
@@ -294,9 +319,7 @@ def _log_answer(status: int, payload: dict[str, Any], from_client: int, forwarde
     counts, because the console format shows only the message; `extra` carries them for a
     structured handler.
     """
-    model = payload.get("model")
-    # The model name comes from the client, so only a printable string reaches the log.
-    name = model if isinstance(model, str) and model.isprintable() else "?"
+    name = _model_name(payload) or "?"
     extra = {"session_id": session_id, "status": status, "model": name,
              "tokens_from_client": from_client, "tokens_forwarded": forwarded}
     # Names the conversation, as the dashboard's picker does; a first turn belongs to none yet.
@@ -308,6 +331,43 @@ def _log_answer(status: int, payload: dict[str, Any], from_client: int, forwarde
     else:
         logger.warning("%s -> %d%s: %s", name, status, where, _ERROR_STATUS_HINTS.get(status, _ERROR_STATUS_HINT),
                        extra=extra)
+
+
+def _model_name(payload: dict[str, Any]) -> str | None:
+    """The model the request names. It comes from the client, so only a short printable string is taken."""
+    model = payload.get("model")
+    return model if isinstance(model, str) and model.isprintable() and len(model) <= _MODEL_NAME_MAX_CHARS else None
+
+
+def _count_request(app: FastAPI, session_id: str | None, origin: ClientOrigin | None, payload: dict[str, Any],
+                   client_messages: Sequence[Message], from_client: int, forwarded: int,
+                   window: ModelWindow | None) -> RequestTargets:
+    """Count a request where it belongs: its conversation, its client session, the proxy. Never fails the request."""
+    try:
+        traffic: TrafficLedger = app.state.metrics.traffic
+        return traffic.record_request(conversation_id=session_id, origin=origin, model=_model_name(payload),
+                                      opening=chain_hashes(client_messages[:1])[0],
+                                      tokens_from_client=from_client, tokens_forwarded=forwarded,
+                                      context_window=window)
+    except Exception:
+        logger.exception("counting the request failed; the request is unaffected", extra={"session_id": session_id})
+        return ()
+
+
+def _usage_recorder(counted: RequestTargets) -> Callable[[ProviderUsage], None] | None:
+    """What to do with the usage a reply reports: add it wherever its request was counted."""
+    if not counted:
+        return None
+    return lambda usage: _never_blocking(TrafficLedger.record_usage, counted, usage)
+
+
+def _count_collection(app: FastAPI, event: Event) -> None:
+    """Count a collection, and what its own model calls spent, against its conversation."""
+    result: GCResult = event.data["gc_result"]
+    traffic: TrafficLedger = app.state.metrics.traffic
+    traffic.record_collection(event.data["session_id"], completed=result.status is GCStatus.COMPLETED,
+                              spent=ModelUsage(calls=result.summary_calls, input_tokens=result.summary_input_tokens,
+                                               output_tokens=result.summary_output_tokens))
 
 
 def _record_client_history(app: FastAPI, history: list[Message], header_value: str | None,
@@ -475,10 +535,11 @@ def _target(request: Request) -> str:
 
 
 async def _send(app: FastAPI, body: bytes, headers: dict[str, str], streaming: bool, target: str,
-                on_complete: Callable[[bytes], None] | None = None) -> Response:
+                on_complete: Callable[[bytes], None] | None = None,
+                on_usage: Callable[[ProviderUsage], None] | None = None) -> Response:
     if streaming:
-        return await _forward_stream(app, body, headers, target, on_complete)
-    return await _forward(app, body, headers, target, on_complete=on_complete)
+        return await _forward_stream(app, body, headers, target, on_complete, on_usage)
+    return await _forward(app, body, headers, target, on_complete=on_complete, on_usage=on_usage)
 
 
 def _reply_observer(app: FastAPI, session_id: str | None, answering: Message,
@@ -504,7 +565,8 @@ def _reply_observer(app: FastAPI, session_id: str | None, answering: Message,
 
 
 async def _forward(app: FastAPI, body: bytes, headers: dict[str, str], target: str, *,
-                   method: str = "POST", on_complete: Callable[[bytes], None] | None = None) -> Response:
+                   method: str = "POST", on_complete: Callable[[bytes], None] | None = None,
+                   on_usage: Callable[[ProviderUsage], None] | None = None) -> Response:
     """Send the request upstream and hand the answer back verbatim.
 
     Status codes and error bodies pass through unchanged: the client's error
@@ -515,17 +577,23 @@ async def _forward(app: FastAPI, body: bytes, headers: dict[str, str], target: s
         upstream = await client.send(_upstream_request(app, body, headers, target, method))
     except httpx2.RequestError as err:
         return _unreachable(err)
-    if on_complete is not None and upstream.status_code == 200:
-        on_complete(upstream.content)
+    if upstream.status_code == 200:
+        if on_complete is not None:
+            on_complete(upstream.content)
+        if on_usage is not None and (usage := reply_usage(upstream.content)) is not None:
+            on_usage(usage)
     return _verbatim(upstream, upstream.content)
 
 
 async def _forward_stream(app: FastAPI, body: bytes, headers: dict[str, str], target: str,
-                          on_complete: Callable[[bytes], None] | None = None) -> Response:
+                          on_complete: Callable[[bytes], None] | None = None,
+                          on_usage: Callable[[ProviderUsage], None] | None = None) -> Response:
     """Relay a streamed reply chunk by chunk, as it arrives.
 
     With `on_complete`, each chunk is also kept, and the whole stream is handed
     over once the client has it all: one append per chunk on the way through.
+    With `on_usage`, the usage the stream reports is read as it passes, and handed
+    over when it ends - also when it ends early, since the prompt was billed anyway.
     """
     client: httpx2.AsyncClient = app.state.http_client
     try:
@@ -543,11 +611,14 @@ async def _forward_stream(app: FastAPI, body: bytes, headers: dict[str, str], ta
 
     async def relay() -> AsyncIterator[bytes]:
         kept: list[bytes] | None = [] if on_complete is not None else None
+        usage_reader = StreamUsageReader() if on_usage is not None else None
         size = 0
         try:
             # Decoded bytes: we strip `content-encoding`, so relaying raw gzip would
             # hand the client compressed bytes labelled as plain text.
             async for chunk in upstream.aiter_bytes():
+                if usage_reader is not None:
+                    usage_reader.feed(chunk)
                 yield chunk
                 if kept is not None:
                     size += len(chunk)
@@ -562,6 +633,8 @@ async def _forward_stream(app: FastAPI, body: bytes, headers: dict[str, str], ta
             raise
         finally:
             # Also runs on client disconnect, when the server closes this generator.
+            if on_usage is not None and usage_reader is not None and (usage := usage_reader.usage()) is not None:
+                on_usage(usage)
             await upstream.aclose()
 
     return StreamingResponse(

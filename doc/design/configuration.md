@@ -158,12 +158,21 @@ way would be replaced by the library's whenever any engine key was set. A subcla
 changes the window's default and inherits everything else, so each setting is
 defaulted independently.
 
-**The proxy's default window is 200,000.** It is the smallest of the current models'.
-Guessing too small costs a little compression. Guessing too large lets a recap, whose
-budget is a share of the window, outgrow the model's real window, and requests fail. A
-larger model is an explicit opt-in. The window is not read from the model being called,
-because the model arrives with each request and changes within a session, and a gateway
-may name models its own way.
+**The configured window is the fallback.**
+
+```
+the window a conversation is sized for
+  1. what the provider reports for its model     shown as the window
+  2. otherwise, context_window (200,000)         shown as assumed
+```
+
+Each conversation is sized for the window the provider reports for the model its
+requests name ([the proxy](proxy/overview.md)). `context_window` (default 200,000, the
+smallest of the current models') is used until that answer arrives, and for a model the
+provider does not report, and it is shown as assumed wherever it is used. Guessing too small costs a little compression; guessing too
+large only lets a long conversation's recap grow longer before it is squeezed. *Rejected:
+the setting alone* — one session runs models with different windows, and a 1M-token
+model sized as 200,000 reads five times fuller than it is.
 
 **No credential means no start, unless the compactor is `noop`.** The alternative is to
 run on canned summaries, which look like compaction working while nothing real is

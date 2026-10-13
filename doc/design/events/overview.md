@@ -39,8 +39,9 @@ the data. This is what the project calls *instrument from the inside out*.
   PRODUCERS                    BUS                   SUBSCRIBERS
  ┌──────────────┐  emit, fire  ┌──────────┐         ┌────────────────────────┐
  │ GcService    │ ───────────► │ EventBus │ ──────► │ Health Monitor         │
- │ compactors   │  and forget  └──────────┘         │ logger        (planned)│
- └──────────────┘                                   │ benchmarks    (planned)│
+ │ compactors   │  and forget  └──────────┘         │ the proxy's ledger     │
+ └──────────────┘                                   │ logger        (planned)│
+                                                    │ benchmarks    (planned)│
                                                     └───────────┬────────────┘
                                                                 ▼
                                                      the dashboard reads the monitor
@@ -59,6 +60,9 @@ the data. This is what the project calls *instrument from the inside out*.
 The GcService emits only **after a collection commits**, and every event names its
 session, so an event always describes a change that happened, to one conversation. A
 pass discarded because its session closed announces nothing but its `gc_finished`.
+`gc_finished` carries the pass's result, which includes the calls and tokens its own
+model calls spent; the proxy subscribes to it to count them, and each collection, against
+the conversation.
 
 ## Why This Shape — Design Rationale
 

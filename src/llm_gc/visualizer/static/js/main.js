@@ -5,9 +5,10 @@ import { $, clearMotionCaches, fill, h, plural, setChildren, storeGet, storeSet 
 import { collecting, getJSON, sessionPath, state, ui } from "./state.js";
 import { hideTooltip } from "./tooltip.js";
 import { THEMES, applyTheme, fillConfigValues, setGuide, setLive, showCleanupNotice, showTab } from "./shell.js";
-import { celebrateCleanup, clearMapCache, renderChips, renderFacts, renderFactsGuide, renderHero, renderLastCollection, renderMap, renderMessages, renderPrompt, renderStatus, renderTimeline, setPromptView } from "./conversation.js";
+import { celebrateCleanup, clearMapCache, renderChips, renderFacts, renderFactsGuide, renderHero, renderLastCollection, renderMap, renderMessages, renderPrompt, renderSize, renderStatus, renderTimeline, renderWindow, setPromptView } from "./conversation.js";
 import { initCards, renderChart, renderChecks, renderEngineStatus, renderGenerations, renderHistory, renderNext, renderProblems, renderProxy, renderRelevance, renderSettings } from "./engine.js";
 import { renderRunGcButton, runGcNow } from "./run-gc.js";
+import { renderSessionCard } from "./session.js";
 
 let shownCollecting = false;
 
@@ -73,7 +74,7 @@ function renderOrigin(groups) {
     group.agents ? plural(group.agents, "subagent") : null, group.earlier ? plural(group.earlier, "earlier main conversation") : null].filter(Boolean);
   const count = group.entries.length === 1 ? " It is the only conversation the session has here."
     : ` The session has ${plural(group.entries.length, "conversation")} here: ${parts.join(", ")}.`;
-  fill("origin-line", ...what, count, " LLM-GC collects each conversation on its own; the Engine tab's totals add up every conversation since the proxy started.");
+  fill("origin-line", ...what, count, " LLM-GC collects each conversation on its own. The session's table on the Conversation tab adds up its conversations; the Engine tab's totals, every conversation since the proxy started.");
 }
 
 function renderConversation() {
@@ -103,6 +104,7 @@ async function refresh() {
       clearMotionCaches();
     }
     renderSessions();
+    renderSessionCard(selectConversation);
     renderSettings();
     $("no-session").hidden = !!state.selected;
     showTab(ui.tab);
@@ -129,7 +131,8 @@ async function refresh() {
         }
       }
       state.activity = await getJSON(sessionPath("/activity"));
-      if (state.knowledge) { renderStatus(); renderLastCollection(); renderNext(state.knowledge); renderGenerations(state.knowledge); }
+      // The measured counts and the window's source change with every request, not only with the conversation.
+      if (state.knowledge) { renderStatus(); renderLastCollection(); renderSize(state.knowledge); renderWindow(state.knowledge); renderNext(state.knowledge); renderGenerations(state.knowledge); }
       // The facts panel is otherwise drawn only when the conversation changes; it says when a collection is running.
       if (state.knowledge && !state.knowledge.facts.length && collecting() !== shownCollecting) renderFacts(state.knowledge);
       shownCollecting = collecting();
@@ -164,13 +167,14 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && $("guide").classList.contains("open")) setGuide(false);
   if (e.key === "/" && document.activeElement.tagName !== "INPUT" && ui.tab === "conversation" && state.selected) { e.preventDefault(); $("search").focus(); }
 });
-$("session-select").addEventListener("change", (e) => {
-  state.selected = e.target.value; state.version = null; state.knowledge = null;
+function selectConversation(sessionId) {
+  state.selected = sessionId; state.version = null; state.knowledge = null;
   ui.open.clear(); ui.filter = "all"; ui.query = ""; $("search").value = ""; ui.earlierOpen = false;
   clearMapCache();
   clearMotionCaches();
   refresh();
-});
+}
+$("session-select").addEventListener("change", (e) => selectConversation(e.target.value));
 let searchTimer = null;
 $("search").addEventListener("input", (e) => {
   clearTimeout(searchTimer);

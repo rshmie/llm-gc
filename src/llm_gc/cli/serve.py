@@ -7,7 +7,7 @@ from collections.abc import Iterable
 import httpx2
 import uvicorn
 
-from llm_gc.cli.settings import ProxySettings
+from llm_gc.cli.settings import ProxySettings, create_model_window_lookup
 from llm_gc.engine import GcService
 from llm_gc.monitoring import ContextHealthMonitor
 from llm_gc.proxy import create_app
@@ -47,7 +47,8 @@ def serve_proxy(service: GcService, settings: ProxySettings, *, http_client: htt
     transcripts = TranscriptRecorder() if settings.dashboard else None
     proxy_app = create_app(service, upstream_base_url=settings.upstream, http_client=http_client,
                            on_client_history=transcripts.record if transcripts is not None else None,
-                           on_reply=transcripts.record_reply if transcripts is not None else None)
+                           on_reply=transcripts.record_reply if transcripts is not None else None,
+                           window_lookup=create_model_window_lookup(settings, http_client=http_client))
     apps = [(proxy_app, settings.port)]
     if transcripts is not None:
         store = service.session_manager.store

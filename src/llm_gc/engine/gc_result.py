@@ -64,6 +64,10 @@ class GCResult(BaseModel):
     compacted_tokens: int = Field(default=0, ge=0)
     archived_tokens: int = Field(default=0, ge=0)
     duration_ms: float = Field(ge=0)
+    # LLM-GC's own model calls this pass made - summaries and fact reads - as the provider reported them.
+    summary_calls: int = Field(default=0, ge=0)
+    summary_input_tokens: int = Field(default=0, ge=0)
+    summary_output_tokens: int = Field(default=0, ge=0)
 
     degradations: list[AgingDegradation] = Field(default_factory=list)
     """What this pass intended and did not manage - see `AgingDegradation`.

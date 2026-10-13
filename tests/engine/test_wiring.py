@@ -6,7 +6,7 @@ from llm_gc.config import GCConfig
 from llm_gc.engine import build_gc_service
 from llm_gc.engine.compaction import LLMCompactor, NoOpCompactor
 from llm_gc.extraction import LLMFactReader, PatternFactReader
-from llm_gc.llm import FakeProvider, LLMResponse, StopReason
+from llm_gc.llm import FakeProvider, LLMResponse, MeteredProvider, StopReason
 from llm_gc.llm.prompts import FACTS_PROMPT, load_prompt
 from llm_gc.models import Message
 from llm_gc.scoring import RelevanceType
@@ -19,14 +19,14 @@ def test_without_a_summary_provider_turns_are_kept_whole():
     assert isinstance(service.generational_memory.compactor, NoOpCompactor)
 
 
-def test_a_summary_provider_is_what_the_compactor_calls():
+def test_a_summary_provider_is_what_the_compactor_calls_through_a_meter():
     provider = FakeProvider(responses=[])
 
     service = build_gc_service(GCConfig(), summary_provider=provider)
 
     compactor = service.generational_memory.compactor
     assert isinstance(compactor, LLMCompactor)
-    assert compactor.provider is provider
+    assert isinstance(compactor.provider, MeteredProvider) and compactor.provider.inner is provider
 
 
 def test_facts_are_read_by_the_model_that_summarises_or_by_patterns_without_one():
@@ -35,7 +35,8 @@ def test_facts_are_read_by_the_model_that_summarises_or_by_patterns_without_one(
     assert isinstance(build_gc_service(GCConfig(), summary_provider=None).generational_memory.fact_reader,
                       PatternFactReader)
     reader = build_gc_service(GCConfig(), summary_provider=provider).generational_memory.fact_reader
-    assert isinstance(reader, LLMFactReader) and reader.provider is provider
+    assert isinstance(reader, LLMFactReader) and isinstance(reader.provider, MeteredProvider)
+    assert reader.provider.inner is provider
 
 
 class _Model:

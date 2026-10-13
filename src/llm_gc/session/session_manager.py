@@ -84,7 +84,7 @@ class SessionManager:
         one finds it no longer live and discards its result instead of committing
         changes planned against a conversation that has since been rewound.
         """
-        fresh = SessionState(session_id=state.session_id, snapshot=snapshot)
+        fresh = SessionState(session_id=state.session_id, snapshot=snapshot, context_window=state.context_window)
         self._store.put(fresh)
         self.retip(fresh)
         return fresh

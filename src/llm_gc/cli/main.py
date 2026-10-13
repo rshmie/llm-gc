@@ -118,7 +118,7 @@ def build_cli(*, serve: ServeFn = serve_proxy, make_provider: ProviderFactory = 
             counters = fetch_stats(f"{base_url}/stats")
         except (ConfigError, ProxyUnavailableError) as err:
             raise CommandError(str(err)) from err
-        click.echo(json.dumps(counters.model_dump(), indent=2) if as_json else render_stats(counters, base_url))
+        click.echo(json.dumps(counters.model_dump(mode="json"), indent=2) if as_json else render_stats(counters, base_url))
 
     add_config_commands(cli)
     return cli

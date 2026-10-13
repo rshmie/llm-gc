@@ -13,6 +13,7 @@ the response envelope, the stop-reason vocabulary, and the error taxonomy.
 import logging
 import re
 from typing import TYPE_CHECKING, Any, Self
+from urllib.parse import quote
 
 import httpx2
 from pydantic import BaseModel, ValidationError
@@ -34,6 +35,7 @@ logger = logging.getLogger(__name__)
 PROVIDER_NAME = "anthropic"
 ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 MESSAGES_PATH = "/v1/messages"
+MODELS_PATH = "/v1/models"
 
 # Anthropic pins breaking changes behind this header rather than a URL version, so it
 # is required on every request. Bumping it is a deliberate migration, never a default.
@@ -197,6 +199,36 @@ class AnthropicClient:
             raise self._as_error(http_response)
 
         return self._parse(http_response)
+
+    async def context_window(self, model: str, *, timeout_s: float) -> int | None:
+        """The model's input-token capacity as the Models API reports it, or None when it reports none.
+
+        None for a model the upstream does not know by that name, or an answer without
+        the field; a gateway that names models its own way answers like that.
+
+        Raises:
+            LLMTimeoutError, LLMConnectionError, and the errors a failing status maps to,
+            as for `generate`.
+        """
+        try:
+            http_response = await self._http_client.get(
+                f"{self._base_url}{MODELS_PATH}/{quote(model, safe='')}",
+                headers={**self._auth_headers, "anthropic-version": ANTHROPIC_API_VERSION},
+                timeout=timeout_s,
+            )
+        except httpx2.TimeoutException as err:
+            raise LLMTimeoutError(f"anthropic did not respond within {timeout_s}s", provider=self.name) from err
+        except httpx2.RequestError as err:
+            raise LLMConnectionError(f"could not reach anthropic: {type(err).__name__}", provider=self.name) from err
+        if http_response.status_code == 404:
+            return None
+        if http_response.status_code != 200:
+            raise self._as_error(http_response)
+        try:
+            tokens = http_response.json().get("max_input_tokens")
+        except (ValueError, AttributeError):
+            return None
+        return tokens if isinstance(tokens, int) and tokens > 0 else None
 
     def _build_payload(
         self, messages: list[Message], system: str | None, max_output_tokens: int

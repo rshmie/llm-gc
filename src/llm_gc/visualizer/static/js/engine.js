@@ -98,9 +98,11 @@ export function renderProxy() {
     fill("tiles");
     return;
   }
+  const u = p.provider_usage;
+  const s = p.summaries;
   fill("proxy-line", h("span", { class: "label" }, "All conversations"),
     h("span", {}, h("b", {}, fmt(p.requests)), " requests"), h("span", { class: "sep" }, "·"),
-    h("span", {}, h("b", {}, fmt(p.tokens_forwarded)), ` tokens forwarded since the proxy started${p.ratio !== null ? `, ${Math.round(p.ratio * 100)}% of what your apps sent${p.gc_applied ? "" : " - nothing collected yet"}` : ""}`), h("span", { class: "sep" }, "·"),
+    h("span", {}, h("b", {}, fmt(p.tokens_forwarded)), ` tokens forwarded since the proxy started${p.ratio !== null ? `, ${Math.round(p.ratio * 100)}% of what your clients sent${p.gc_applied ? "" : " - nothing collected yet"}` : ""}`), h("span", { class: "sep" }, "·"),
     p.gc_bypassed ? h("span", {}, h("span", { class: "st warn" }, "⚠ "), `${fmt(p.gc_bypassed)} passed on untouched after an error`) : h("span", {}, "none passed on after an error"),
     h("button", { class: "link-btn", type: "button", onclick: () => $("proxy-details").scrollIntoView({ behavior: smooth(), block: "start" }) }, "Details ↓"));
   const tile = (label, term, value, caption, extra) => h("section", { class: "card tile" },
@@ -110,11 +112,18 @@ export function renderProxy() {
     tile("Requests through the proxy", null, countEl("tile-requests", p.requests),
       [`${fmt(p.gc_applied)} handled by LLM-GC`, p.gc_bypassed ? [" · ", h("span", { class: "st warn" }, "⚠ "), `${fmt(p.gc_bypassed)} passed on untouched after an error`] : " · none passed on after an error"]),
     tile("Total sent since the proxy started", "forwarded", countEl("tile-forwarded", p.tokens_forwarded),
-      `${p.ratio !== null ? `${Math.round(p.ratio * 100)}% of` : "of"} the ${fmt(p.tokens_in_client_history)} your apps sent, all conversations`,
+      `${p.ratio !== null ? `${Math.round(p.ratio * 100)}% of` : "of"} the ${fmt(p.tokens_from_client)} your clients sent, whole requests, all conversations`,
       p.ratio !== null ? h("div", { class: "meter", "aria-hidden": "true" }, meterBar("tile-forwarded-ratio", p.ratio * 100)) : null),
     tile("Conversation tracking", "tracking", null, null,
       h("div", { class: "triple" }, [[p.sessions_seeded, "started fresh"], [p.history_rewinds, "rewound after an edit"], [p.history_restarts, "restarted"]]
-        .map(([n, label]) => h("div", {}, h("b", {}, fmt(n)), h("span", {}, label))))));
+        .map(([n, label]) => h("div", {}, h("b", {}, fmt(n)), h("span", {}, label))))),
+    tile("What the provider reported", "billed", null,
+      u.replies ? `On ${plural(u.replies, "reply", "replies")}, by the provider's own count: what it bills.` : "No reply has reported its usage yet.",
+      u.replies ? h("div", { class: "triple" }, [[u.cache_read_input_tokens, "cache read"], [u.input_tokens + u.cache_creation_input_tokens, "input and cache write"], [u.output_tokens, "output"]]
+        .map(([n, label]) => h("div", {}, h("b", {}, compact(n)), h("span", {}, label)))) : null),
+    tile("LLM-GC's own model calls", null, s.calls ? countEl("tile-summaries", s.calls) : null,
+      s.calls ? `To summarise and read facts: ${fmt(s.input_tokens)} tokens in, ${fmt(s.output_tokens)} out. Not part of any conversation's request.`
+        : "None yet: nothing has been summarised."));
 }
 
 // One line answers "is LLM-GC healthy?": the last check, and any move a collection couldn't make.
@@ -520,12 +529,12 @@ export function renderSettings() {
     ["Keep from", "keep_threshold", c.keep_threshold, "an exchange scoring at or above this is kept, quoted word for word"],
     ["Archive below", "archive_threshold", c.archive_threshold, "an exchange scoring below this is archived, to its opening line and facts"],
     ["Level margin", "level_margin", c.level_margin, "how far past a line a score must move before a span changes level"],
-    ["Recap budget", "max_recap_tokens", c.max_recap_tokens, "most tokens the recap spends on older exchanges; above it, the coldest lose detail first"],
-    ["The model's window", "context_window", c.context_window, "its capacity, in tokens", "--context-window"],
+    ["Recap budget", "max_recap_tokens", c.max_recap_tokens, "most tokens the recap spends on older exchanges, at the configured window; above it, the coldest lose detail first. A conversation whose model's window the provider reports gets the same share of that window"],
+    ["Configured window", "context_window", c.context_window, "tokens assumed for a model whose window the provider has not reported", "--context-window"],
   ];
   fill("settings", rows.map(([label, name, value, desc, flag]) => h("div", { class: "setting" },
     h("div", { class: "name" }, label, h("code", {}, name)), h("div", { class: "value" }, fmt(value)),
-    h("div", { class: "desc" }, desc, flag ? h("div", {}, "change with ", h("code", { class: "flag" }, `run_proxy.py ${flag}`)) : null))));
+    h("div", { class: "desc" }, desc, flag ? h("div", {}, "change with ", h("code", { class: "flag" }, `llm-gc start ${flag}`)) : null))));
 }
 
 // --------------------------------------------------------------- the three generations
@@ -553,7 +562,7 @@ export function renderGenerations(k) {
       links("messages", young.map((t) => t.turn_index))),
     arrow(`collection${k.cuts ? ` ×${fmt(k.cuts)}` : ""}`, "in exchanges, each by its score"),
     box("old", "Old generation", "the recap: every exchange at its level", plural(k.spans.length, "exchange"),
-      `${levels.map((level) => `${at(level).length} ${CATS[level].tag}`).join(" · ") || "none yet"} · ${fmt(k.front_tokens)} of its ${fmt(state.config ? state.config.max_recap_tokens : 0)}-token budget`,
+      `${levels.map((level) => `${at(level).length} ${CATS[level].tag}`).join(" · ") || "none yet"} · ${fmt(k.front_tokens)} of its ${fmt(k.recap_budget)}-token budget`,
       levels.map((level) => h("div", {}, `${CATS[level].tag}: `, exchangeLinks(at(level).map((span) => span.turns))))),
     arrow("facts read once", "as each exchange is made"),
     box("permanent", "Permanent generation", "facts, and what replaced what", plural(active.length, "current fact"),

@@ -10,10 +10,12 @@ import logging
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 
 from llm_gc.exceptions import ConfigError
 from llm_gc.models import Message
+from llm_gc.proxy.traffic import ProviderUsage
 from llm_gc.utils import count_tokens
 
 logger = logging.getLogger(__name__)
@@ -39,6 +41,14 @@ _BLANK_RUN = re.compile(r"\n{3,}")
 # A client can place instructions inside its conversation, as messages of this role:
 # Claude Code adds its environment and its tools' instructions after a user turn.
 _INSTRUCTION_ROLE = "system"
+
+# Distinct system prompts and tool lists whose token counts are remembered: one per client
+# setup in use (a main conversation, each kind of subagent), with room to spare.
+_REPEATED_TEXTS_CACHED = 64
+
+# The longest unfinished stream line held while waiting for its end. Usage events are
+# short; a line longer than this is a content delta, which the usage reader never reads.
+_STREAM_LINE_MAX_BYTES = 64 * 1024
 
 
 @dataclass(frozen=True)
@@ -147,6 +157,29 @@ def extract_instructions(payload: dict[str, Any]) -> list[Instruction]:
     return instructions
 
 
+def fixed_prompt_tokens(payload: dict[str, Any]) -> int:
+    """Tokens of the parts of a request LLM-GC never changes: the system prompt and the tool definitions.
+
+    They go to the model whole on every request, with or without GC, so they count on
+    both sides of every comparison. Left out, a share saved would be measured against
+    only the part GC can shrink, and read larger than what the model was spared.
+    """
+    system = payload.get("system")
+    tools = payload.get("tools")
+    system_text = system if isinstance(system, str) else (
+        "\n".join(block["text"] for block in system if isinstance(block, dict) and isinstance(block.get("text"), str))
+        if isinstance(system, list) else "")
+    tools_text = json.dumps(tools, ensure_ascii=False) if isinstance(tools, list) and tools else ""
+    return _count_repeated(system_text) + _count_repeated(tools_text)
+
+
+@lru_cache(maxsize=_REPEATED_TEXTS_CACHED)
+def _count_repeated(text: str) -> int:
+    # Every request of a conversation repeats the same system prompt and tools, often tens of
+    # thousands of tokens; counted once each, not once per request.
+    return count_tokens(text) if text else 0
+
+
 def _raw_messages(payload: dict[str, Any]) -> list[dict[str, Any]]:
     raw_messages = payload.get("messages")
     if not isinstance(raw_messages, list) or not raw_messages:
@@ -238,6 +271,55 @@ def _streamed_blocks(raw: bytes) -> list[Any] | None:
                 blocks[at]["input"] = json.loads("".join(pieces) or "{}")
             return [blocks[at] for at in sorted(blocks)]
     return None
+
+
+def reply_usage(raw: bytes) -> ProviderUsage | None:
+    """The `usage` an unstreamed reply reports, or None when it reports none."""
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        return None
+    usage = body.get("usage") if isinstance(body, dict) else None
+    return ProviderUsage.from_reported(usage) if isinstance(usage, dict) else None
+
+
+class StreamUsageReader:
+    """Reads the `usage` a streamed reply reports, chunk by chunk as it is relayed.
+
+    `message_start` carries the prompt's usage and `message_delta` the output so far, so
+    only those events are parsed; every other line is passed over unread. Only the
+    unfinished last line of a chunk is held between chunks.
+    """
+
+    def __init__(self) -> None:
+        self._partial = b""
+        self._usage: dict[str, Any] | None = None
+
+    def feed(self, chunk: bytes) -> None:
+        lines = (self._partial + chunk).split(b"\n")
+        self._partial = lines.pop()
+        if len(self._partial) > _STREAM_LINE_MAX_BYTES:
+            # Not an event line this reader needs; a usage event is short.
+            self._partial = b""
+        for line in lines:
+            if line.startswith(b"data:") and (b'"message_start"' in line or b'"message_delta"' in line):
+                self._read(line[len(b"data:"):])
+
+    def usage(self) -> ProviderUsage | None:
+        """What the stream reported so far: the prompt once it began, the output as far as it got."""
+        return ProviderUsage.from_reported(self._usage) if self._usage is not None else None
+
+    def _read(self, data: bytes) -> None:
+        try:
+            event = json.loads(data)
+        except ValueError:
+            return
+        kind = event.get("type") if isinstance(event, dict) else None
+        reported = (event.get("message") or {}).get("usage") if kind == "message_start" else (
+            event.get("usage") if kind == "message_delta" else None)
+        if isinstance(reported, dict):
+            # Later events restate what changed: the output count is a running total, not an increment.
+            self._usage = {**(self._usage or {}), **{k: v for k, v in reported.items() if v is not None}}
 
 
 def rewrite_messages(payload: dict[str, Any], messages: list[Message], strip_thinking_before: int = 0,
