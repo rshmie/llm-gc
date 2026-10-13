@@ -9,8 +9,6 @@ cover, so "abc" is the hash through turns a, b and c.
 
 from datetime import datetime, timedelta, timezone
 
-import pytest
-
 from llm_gc.llm import ModelUsage
 from llm_gc.models import ClientOrigin
 from llm_gc.proxy.anthropic_translation import ReplyOutline, ToolCall
@@ -42,7 +40,7 @@ class _Session:
                                 carries_collections=carries)
         self.log.finish(record, ReplyOutline(
             status=status, finished=status == 200, stop_reason="tool_use" if calls else "end_turn",
-            usage=ProviderUsage(replies=1, cache_read_input_tokens=sent, output_tokens=10),
+            usage=ProviderUsage(replies=1, cache_read_input_tokens=sent, cache_creation_input_tokens=sent, output_tokens=10),
             tool_calls=tuple(ToolCall(name="Agent", call_id=call) for call in calls)))
         return record
 
@@ -167,33 +165,21 @@ def test_only_the_named_client_sessions_requests_are_traced():
     assert s.trace("cc-unknown") is None
 
 
-def test_each_request_turn_and_session_is_priced_at_list_prices():
+def test_the_cache_writes_of_requests_that_carried_a_collection_are_totalled_as_the_provider_counted_them():
+    """A collection changes the recap, so the prompt after it is cached again: the cost a token count hides."""
     s = _Session()
-    plain = s.send("s_1", "abc")
-    collected = s.send("s_1", "abcde", newest="tool_results", carries=1)
-    collected.outline = ReplyOutline(status=200, finished=True, usage=ProviderUsage(
-        replies=1, cache_read_input_tokens=63_000, cache_creation_input_tokens=26_000, output_tokens=500))
-    collected.model = "claude-opus-5-5"
-    plain.model = "claude-opus-5-5"
-    s.send("s_1", "abcdefg", newest="tool_results")                             # model "m": not priced
+    s.send("s_1", "abc", sent=1000)
+    s.send("s_1", "abcde", newest="tool_results", carries=1, sent=1200, forwarded=400)
+    s.send("s_1", "abcdefg", newest="tool_results", sent=1300, forwarded=500)
 
-    trace = build_trace(s.log.records(), "cc-1", summaries=ModelUsage(calls=2, input_tokens=10_000, output_tokens=1_000),
-                        summary_model="claude-sonnet-5")
-
-    [turn] = trace["turns"]
-    rewrite = 26_000 * 1.25 * 4 / 1_000_000
-    assert turn["requests"][1]["cache_write_cost"] == pytest.approx(rewrite)
-    assert turn["requests"][2]["cost"] is None
-    assert turn["totals"]["unpriced"] == 1
-    assert turn["totals"]["collection_cache_cost"] == pytest.approx(rewrite)
-    assert turn["totals"]["cost"] == pytest.approx(turn["requests"][0]["cost"] + turn["requests"][1]["cost"])
-    assert trace["summaries"]["cost"] == pytest.approx(0.02 + 0.01)
+    [turn] = s.trace()["turns"]
+    # The test session reports a cache write of each request's size, so the collection's is 1,200.
+    assert turn["totals"]["collection_cache_write_tokens"] == 1200
 
 
-def test_a_session_whose_models_are_unknown_counts_nothing_as_priced():
-    """So the page can say "not priced" rather than "$0"."""
+def test_llm_gcs_own_calls_for_the_session_are_carried_with_its_trace():
     s = _Session()
     s.send("s_1", "abc")
 
-    totals = s.trace()["totals"]
-    assert (totals["priced"], totals["unpriced"], totals["cost"]) == (0, 1, 0.0)
+    trace = build_trace(s.log.records(), "cc-1", summaries=ModelUsage(calls=2, input_tokens=10_000, output_tokens=900))
+    assert trace["summaries"] == {"calls": 2, "input_tokens": 10_000, "output_tokens": 900}

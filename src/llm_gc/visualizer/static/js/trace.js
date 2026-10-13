@@ -23,10 +23,6 @@ function calls(names) {
 }
 
 const saved = (t) => t.tokens_saved > 0 ? `saved ${fmt(t.tokens_saved)} (${share(t.tokens_saved, t.tokens_from_client)}%)` : "nothing saved";
-// Dollars at list prices: an estimate, and said to be one where the totals are.
-const money = (v) => v === null || v === undefined ? null : v >= 0.01 ? `$${v.toFixed(2)}` : v > 0 ? "<$0.01" : "$0";
-// A total's dollars, or null when none of its requests could be priced: never "$0" for "unknown".
-const priced = (t) => (t.priced ? money(t.cost) : null);
 // What an answer other than 200 means, in words.
 const STATUS_WORDS = { 401: "credential refused", 403: "credential refused", 413: "too large", 429: "rate limited",
   500: "upstream error", 502: "upstream unreachable", 503: "upstream unavailable", 529: "overloaded" };
@@ -54,22 +50,17 @@ function traceHead(trace) {
     h("p", { class: "session-totals" },
       "Claude Code sent ", h("b", {}, fmt(t.tokens_from_client)), " tokens overall · LLM-GC forwarded ", h("b", {}, fmt(t.tokens_forwarded)),
       " · ", h("b", {}, saved(t))),
-    h("p", { class: "session-totals" }, ...costLine(t, spent)),
+    h("p", { class: "session-totals" },
+      `The provider's own count: ${compact(t.cache_read_input_tokens)} cache read · ${compact(t.input_tokens)} input · `,
+      h("b", {}, `${compact(t.cache_creation_input_tokens)} cache write`), ` · ${compact(t.output_tokens)} output.`,
+      t.collection_cache_write_tokens ? [" ", h("span", hoverTip(TRACE_KINDS.collection[0], TRACE_KINDS.collection[1]),
+        h("b", {}, compact(t.collection_cache_write_tokens)), " of the cache writes were on requests that carried a collection.")] : ""),
     h("p", { class: "session-totals secondary" },
-      `The provider's count: ${compact(t.cache_read_input_tokens)} cache read, ${compact(t.input_tokens)} input, ${compact(t.cache_creation_input_tokens)} cache write, ${compact(t.output_tokens)} output. `,
-      "Whether LLM-GC saved money is not measured yet: that needs the same requests sent without it."),
+      "Tokens are not all worth the same: a cache read costs a fraction of sending a token plainly, a cache write more than sending it. ",
+      "The tokens LLM-GC removes would mostly have been cache reads, so set what it saved against the cache writes its collections caused.",
+      spent && spent.calls ? ` LLM-GC's own model calls: ${plural(spent.calls, "call")}, ${compact(spent.input_tokens)} tokens in, ${compact(spent.output_tokens)} out.`
+        : " LLM-GC has made no model calls for this session."),
   ];
-}
-
-// The session's cost, or why it has none: dollars only where the price list knows the model.
-function costLine(t, spent) {
-  const own = [" · LLM-GC's own calls: ", h("b", {}, spent && spent.calls ? (money(spent.cost) || "not priced") : "$0"),
-    spent && spent.calls ? ` (${plural(spent.calls, "call")}${spent.model ? `, ${spent.model}` : ""})` : ""];
-  if (!t.priced) return ["Cost: ", h("b", {}, "not priced"), " — the price list does not know the model these requests named.", ...own];
-  return ["Cost at list prices, estimated (a gateway or discount may bill differently): ", h("b", {}, priced(t)),
-    t.unpriced ? ` (${plural(t.unpriced, "request")} not priced: a model the price list does not know)` : "",
-    t.collection_cache_cost ? [" · ", h("span", hoverTip(TRACE_KINDS.collection[0], TRACE_KINDS.collection[1]),
-      `${money(t.collection_cache_cost)} of it rewrote the cache on requests that carried a collection`)] : "", ...own];
 }
 
 function before(trace, actions) {
@@ -101,9 +92,9 @@ function turnItem(turn, trace, actions) {
       h("span", { class: "turn-meta" },
         h("span", {}, clock(turn.started_at)), h("span", {}, duration), h("span", {}, plural(t.requests, "request")),
         h("span", {}, `${fmt(t.tokens_from_client)} sent overall`), t.tokens_saved > 0 ? h("span", { class: "good" }, `−${fmt(t.tokens_saved)}`) : null,
-        priced(t) ? h("span", { class: "turn-cost" }, priced(t)) : null,
         turn.subagents.length ? h("span", { class: "tbadge" }, plural(turn.subagents.length, "subagent")) : null,
-        collections ? h("span", { class: "tbadge", ...hoverTip(TRACE_KINDS.collection[0], TRACE_KINDS.collection[1]) }, `◆ ${plural(collections, "collection")}`) : null)),
+        collections ? h("span", { class: "tbadge", ...hoverTip(TRACE_KINDS.collection[0], TRACE_KINDS.collection[1]) },
+          `◆ ${plural(collections, "collection")}${t.collection_cache_write_tokens ? ` · ${compact(t.collection_cache_write_tokens)} cache written` : ""}`) : null)),
     open ? h("div", { class: "turn-body" },
       h("p", { class: "turn-open secondary" }, turn.part === "main" ? "In the main conversation. " : "In an earlier main conversation, since replaced. ",
         actions.live(turn.conversation_id)
@@ -159,15 +150,15 @@ function requestLine(row, window, depth) {
         ` · ${fmt(row.tokens_from_client)}`, kept > 0 ? [" → ", h("span", { class: "good" }, fmt(row.tokens_forwarded))] : null),
       row.tool_calls.length ? h("span", { class: "wf-calls" }, ` · then ${calls(row.tool_calls)}`) : null,
       row.carries_collections ? h("span", { class: "wf-mark", ...hoverTip(TRACE_KINDS.collection[0], TRACE_KINDS.collection[1] + rewriteNote(row)) },
-        row.cache_write_cost ? ` ◆ ${money(row.cache_write_cost)} cache rewrite` : " ◆") : null,
+        row.provider && row.provider.cache_creation_input_tokens ? ` ◆ ${fmt(row.provider.cache_creation_input_tokens)} written to the cache` : " ◆") : null,
       status),
     bar(row.forwarded_at, row.ended_at, window, `kind-${row.kind}`, `${clock(row.forwarded_at)} · ${row.ended_at ? seconds(at(row.ended_at) - at(row.forwarded_at)) : "running"}`));
 }
 
-// What a collection's request paid to cache the prompt again, for the ◆'s explanation.
+// What a collection's request wrote to the cache, for the ◆'s explanation.
 function rewriteNote(row) {
-  if (!row.cache_write_cost || !row.provider) return "";
-  return ` This one wrote ${fmt(row.provider.cache_creation_input_tokens)} tokens to the provider's cache, ${money(row.cache_write_cost)} at list prices: the recap changed, so everything after the system prompt was cached again.`;
+  if (!row.provider || !row.provider.cache_creation_input_tokens) return "";
+  return ` The provider wrote ${fmt(row.provider.cache_creation_input_tokens)} tokens of this request to its cache: the recap changed, so everything after the system prompt was cached again. A cache write costs more than sending the tokens plainly.`;
 }
 
 function subagentLines(agent, window, actions) {
@@ -181,7 +172,7 @@ function subagentLines(agent, window, actions) {
         h("span", { class: "chev", "aria-hidden": "true" }, open ? "▼" : "▶"), ` ${agent.label}`),
       actions.live(agent.conversation_id)
         ? h("button", { class: "link-btn wf-open", type: "button", onclick: () => actions.open(agent.conversation_id, null) }, "Open →") : null,
-      h("span", { class: "wf-tokens" }, ` ${plural(t.requests, "request")} · ${fmt(t.tokens_from_client)} sent overall${priced(t) ? ` · ${priced(t)}` : ""}`),
+      h("span", { class: "wf-tokens" }, ` ${plural(t.requests, "request")} · ${fmt(t.tokens_from_client)} sent overall`),
       h("span", { class: "secondary", ...hoverTip(TRACE_KINDS.subagent[0], TRACE_KINDS.subagent[1]) },
         link ? ` · started by ${link.tool}` : " · started by a call not determined", agent.collected ? "" : " · not collected"),
       h("span", { class: "wf-words" }, agent.words ? ` · “${agent.words}”` : "")),

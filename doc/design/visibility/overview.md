@@ -811,24 +811,19 @@ Turn 2 · "Thanks. Which test runner do we use?"
 - **Cost adds up the tree; a window does not.** A turn's totals count its own requests
   and its subagents'. Each conversation's window and recap stay its own: a subagent's
   requests were never in the main conversation's prompt.
-- **Money at list prices, said to be an estimate.** Each request is priced from the
-  usage the provider reported for it, at the list price of the model it named; a cache
-  write at the price for how long it lasts. Dollars are shown where they answer a
-  question - the session, each turn, each subagent, LLM-GC's own model calls, and the
-  cache rewrite on each request that carried a collection, so a collection's price is
-  on the row that paid it - and not on every request, where they would mostly read
-  "<$0.01". A model the price list does not know is counted as not priced, and a total
-  none of whose requests could be priced reads *not priced*, never "$0". Dollars are
-  needed because a token count adds kinds of token whose prices differ a hundredfold:
-  the tokens LLM-GC removes are mostly cache reads, the cheapest, and a collection
-  causes cache writes, among the dearest, so a session can save tokens and cost more. What LLM-GC
-  saved in money is *not* shown: tokens it removed would mostly have been cache reads,
-  the cheapest kind, and a recap that changes is written to the cache again — the
-  difference is only known by sending the same requests without it, and the page says
-  so instead of guessing. *Rejected: a price list in settings* — a value nobody
-  updates, wrong silently; the list is in code, dated, and a new model reads as not
-  priced. *Accepted cost:* a discount, a batch, fast mode or a gateway's own pricing is
-  not seen.
+- **Tokens by kind, as the provider counts them, not dollars.** A token count adds
+  kinds of token whose prices differ a hundredfold: the tokens LLM-GC removes are mostly
+  cache reads, the cheapest, and a collection changes the recap, so the prompt after
+  the system prompt is written to the cache again, among the dearest. A session can save
+  tokens and cost more. So the provider's own count is shown by kind — cache read,
+  input, cache write, output — with the cache writes on requests that carried a
+  collection totalled for the session and each turn, and shown on each such request,
+  beside what LLM-GC saved. LLM-GC's own model calls are shown in tokens too. *Rejected:
+  dollars at list prices* — no provider serves its prices, so a price list would be a
+  table kept by hand for every model of every provider, wrong for a negotiated price or
+  a gateway's own, and silently stale when a price changes. The provider's counts are
+  read from every reply, exact, for any model, with nothing to maintain; turning them
+  into one figure is left to whoever knows what their tokens cost.
 - **Built on read, from the request log.** A record settled since the last read changes
   the trace with it. The words a turn or a subagent is recognised by come from the
   transcripts the dashboard holds, so a closed conversation's turns show without them.

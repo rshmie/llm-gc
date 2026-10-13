@@ -39,7 +39,6 @@ class ProviderUsage:
     input_tokens: int = 0                  # read at the full price
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
-    cache_creation_1h_input_tokens: int = 0   # of those, written to last an hour rather than five minutes
     output_tokens: int = 0
 
     @classmethod
@@ -49,12 +48,9 @@ class ProviderUsage:
             value = usage.get(key)
             return value if isinstance(value, int) and value >= 0 else 0
 
-        by_lifetime = usage.get("cache_creation")
-        hour = by_lifetime.get("ephemeral_1h_input_tokens") if isinstance(by_lifetime, dict) else None
         return cls(replies=1, input_tokens=tokens("input_tokens"),
                    cache_read_input_tokens=tokens("cache_read_input_tokens"),
                    cache_creation_input_tokens=tokens("cache_creation_input_tokens"),
-                   cache_creation_1h_input_tokens=hour if isinstance(hour, int) and hour >= 0 else 0,
                    output_tokens=tokens("output_tokens"))
 
     def add(self, other: "ProviderUsage") -> None:
@@ -62,7 +58,6 @@ class ProviderUsage:
         self.input_tokens += other.input_tokens
         self.cache_read_input_tokens += other.cache_read_input_tokens
         self.cache_creation_input_tokens += other.cache_creation_input_tokens
-        self.cache_creation_1h_input_tokens += other.cache_creation_1h_input_tokens
         self.output_tokens += other.output_tokens
 
 

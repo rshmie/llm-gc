@@ -18,7 +18,6 @@ from dataclasses import asdict
 from typing import Any, Literal
 
 from llm_gc.llm.metering import ModelUsage
-from llm_gc.proxy.pricing import ModelPrice, cache_write_cost, calls_cost, price_of, request_cost
 from llm_gc.proxy.request_log import RequestRecord
 
 RowKind = Literal["turn", "tool_round", "report", "reply", "task", "retry", "replaced", "pending", "unclaimed",
@@ -27,12 +26,11 @@ RowKind = Literal["turn", "tool_round", "report", "reply", "task", "retry", "rep
 _FROM_NEWEST: dict[str, RowKind] = {"tool_results": "tool_round", "relayed": "report", "assistant": "reply"}
 
 
-def build_trace(records: Sequence[RequestRecord], client_session: str, *, summaries: ModelUsage | None = None,
-                summary_model: str | None = None) -> dict[str, Any] | None:
+def build_trace(records: Sequence[RequestRecord], client_session: str, *,
+                summaries: ModelUsage | None = None) -> dict[str, Any] | None:
     """The trace of `client_session`, or None when no request named it.
 
-    `summaries` are LLM-GC's own model calls for the session, made with `summary_model`;
-    each is priced at list prices where the model is known.
+    `summaries` are LLM-GC's own model calls for the session's conversations.
     """
     mine = [r for r in records if r.origin is not None and r.origin.session_id == client_session]
     if not mine:
@@ -84,12 +82,9 @@ def build_trace(records: Sequence[RequestRecord], client_session: str, *, summar
                       "started_at": start.forwarded_at.isoformat(), "ended_at": _ended(everything),
                       "totals": _totals(everything), "requests": [row(r) for r in requests],
                       "subagents": [nodes[agent] for agent, turn in agent_turn.items() if turn == index]})
-    summary_price = price_of(summary_model)
     return {"client_session": client_session, "started_at": mine[0].forwarded_at.isoformat(), "ended_at": _ended(mine),
             "totals": _totals(mine),
-            "summaries": {**asdict(summaries), "model": summary_model,
-                          "cost": calls_cost(summaries, summary_price) if summary_price is not None else None}
-            if summaries is not None else None,
+            "summaries": asdict(summaries) if summaries is not None else None,
             # Requests before the first message the person typed that a conversation kept: checks, titles.
             "before": [row(r) for r in main if turn_of[r.request_id] < 0],
             "turns": turns,
@@ -177,30 +172,19 @@ def _row(record: RequestRecord, kind: RowKind, spawned: list[str]) -> dict[str, 
             "spawned": spawned, "tokens_from_client": record.tokens_from_client,
             "tokens_forwarded": record.tokens_forwarded, "collected": record.collected,
             "carries_collections": record.carries_collections,
-            "provider": asdict(outline.usage) if outline is not None and outline.usage is not None else None,
-            **_costs(record)}
+            "provider": asdict(outline.usage) if outline is not None and outline.usage is not None else None}
 
 
-def _costs(record: RequestRecord) -> dict[str, float | None]:
-    """What the request cost at list prices, and the part of it that wrote the cache; None when not priced."""
-    usage = record.outline.usage if record.outline is not None else None
-    price: ModelPrice | None = price_of(record.model)
-    if usage is None or price is None:
-        return {"cost": None, "cache_write_cost": None}
-    return {"cost": request_cost(usage, price), "cache_write_cost": cache_write_cost(usage, price)}
-
-
-def _totals(records: Sequence[RequestRecord]) -> dict[str, Any]:
+def _totals(records: Sequence[RequestRecord]) -> dict[str, int]:
     usage = [r.outline.usage for r in records if r.outline is not None and r.outline.usage is not None]
     sent = sum(r.tokens_from_client for r in records)
     forwarded = sum(r.tokens_forwarded for r in records)
-    costs = [_costs(r) for r in records if r.outline is not None and r.outline.usage is not None]
-    priced = [c for c in costs if c["cost"] is not None]
     return {"requests": len(records), "tokens_from_client": sent, "tokens_forwarded": forwarded,
-            "cost": sum(c["cost"] or 0.0 for c in priced),
-            # Cache writes on requests that carried a collection: what rewriting the prompt after a recap change cost.
-            "collection_cache_cost": sum(_costs(r)["cache_write_cost"] or 0.0 for r in records if r.carries_collections),
-            "priced": len(priced), "unpriced": len(costs) - len(priced),
+            # Tokens the provider wrote to its cache on requests that carried a collection: the recap changed,
+            # so the prompt after the system prompt was cached again. As the provider counts them.
+            "collection_cache_write_tokens": sum(r.outline.usage.cache_creation_input_tokens for r in records
+                                                 if r.carries_collections and r.outline is not None
+                                                 and r.outline.usage is not None),
             "tokens_saved": sent - forwarded,
             "input_tokens": sum(u.input_tokens for u in usage),
             "cache_read_input_tokens": sum(u.cache_read_input_tokens for u in usage),
