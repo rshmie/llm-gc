@@ -43,8 +43,9 @@ _BLANK_RUN = re.compile(r"\n{3,}")
 _INSTRUCTION_ROLE = "system"
 
 # Claude Code relays a background subagent's report into the main conversation as a user
-# turn opening with this element: another agent's findings, not words the person wrote.
-_RELAYED = re.compile(r"\s*<agent-message\b")
+# turn opening with this element, alone or after the one line it writes before it: another
+# agent's findings, not words the person wrote.
+_RELAYED = re.compile(r"\s*(?:Another Claude session sent a message:\s*)?<agent-message\b")
 
 # Distinct system prompts and tool lists whose token counts are remembered: one per client
 # setup in use (a main conversation, each kind of subagent), with room to spare.

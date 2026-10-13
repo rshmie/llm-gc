@@ -146,6 +146,22 @@ def test_a_subagent_no_call_is_known_to_have_started_falls_in_the_turn_of_its_fi
     assert turns[1]["subagents"][0]["spawned_by"] is None
 
 
+def test_a_tools_own_model_call_inside_a_subagent_is_not_taken_for_its_task():
+    """WebFetch reads a page with a model call of its own, which carries the subagent's id but no conversation."""
+    s = _Session()
+    first = s.send("s_main", "abc", calls=("toolu_0",))
+    opening = s.send(None, "P", origin=_agent("a1"))
+    opening.spawned_by = SpawnRef(first.request_id, "toolu_0", "Agent")
+    s.send(None, "W", origin=_agent("a1"))                                      # WebFetch reads a page
+
+    [turn] = s.trace()["turns"]
+    assert _kinds(turn["subagents"][0]["requests"]) == ["task", "unclaimed"], "the opening is known by its call"
+
+    s.send("s_a1", "PQR", newest="tool_results", origin=_agent("a1"))
+    [turn] = s.trace()["turns"]
+    assert _kinds(turn["subagents"][0]["requests"]) == ["task", "unclaimed", "tool_round"]
+
+
 def test_a_request_that_carried_a_collection_says_so_and_totals_add_the_providers_count():
     s = _Session()
     s.send("s_1", "abc", sent=1000, forwarded=1000)

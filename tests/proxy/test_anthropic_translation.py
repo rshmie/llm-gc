@@ -229,7 +229,13 @@ class TestARelayedReportIsMarked:
                            {"type": "text", "text": "<agent-message>README: three lines.</agent-message>"}])
         assert turn.relayed and turn.instructions and turn.content.startswith("<agent-message")
 
-    @pytest.mark.parametrize("content", ["Please read <agent-message> tags carefully.", "What did the agent find?"])
+    def test_it_is_relayed_after_the_line_claude_code_writes_before_it(self):
+        """The shape seen on a live run, the element's `from` naming the subagent."""
+        assert self._turn('Another Claude session sent a message:\n<agent-message from="a1">\n'
+                          '[Subagent report] Found 42 test files.\n</agent-message>').relayed
+
+    @pytest.mark.parametrize("content", ["Please read <agent-message> tags carefully.", "What did the agent find?",
+                                         'Look at this: <agent-message from="a1">done</agent-message>'])
     def test_a_message_the_user_wrote_is_not(self, content):
         assert not self._turn(content).relayed
 

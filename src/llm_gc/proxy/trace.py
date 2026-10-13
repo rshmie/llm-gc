@@ -127,7 +127,7 @@ def _kinds(records: Sequence[RequestRecord], closing: set[str]) -> dict[str, Row
             kind = "replaced"
         elif record.newest != "typed":
             kind = _FROM_NEWEST[record.newest]
-        elif _agent(record) is not None:
+        elif _agent(record) is not None and (record.conversation_id is not None or record.spawned_by is not None):
             kind = "task"
         elif record.conversation_id is None:
             kind = "unclaimed"
