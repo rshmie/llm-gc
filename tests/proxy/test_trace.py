@@ -9,6 +9,9 @@ cover, so "abc" is the hash through turns a, b and c.
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
+from llm_gc.llm import ModelUsage
 from llm_gc.models import ClientOrigin
 from llm_gc.proxy.anthropic_translation import ReplyOutline, ToolCall
 from llm_gc.proxy.request_log import RequestLog, SpawnRef
@@ -162,3 +165,35 @@ def test_only_the_named_client_sessions_requests_are_traced():
 
     assert len(s.trace()["turns"]) == 1
     assert s.trace("cc-unknown") is None
+
+
+def test_each_request_turn_and_session_is_priced_at_list_prices():
+    s = _Session()
+    plain = s.send("s_1", "abc")
+    collected = s.send("s_1", "abcde", newest="tool_results", carries=1)
+    collected.outline = ReplyOutline(status=200, finished=True, usage=ProviderUsage(
+        replies=1, cache_read_input_tokens=63_000, cache_creation_input_tokens=26_000, output_tokens=500))
+    collected.model = "claude-opus-5-5"
+    plain.model = "claude-opus-5-5"
+    s.send("s_1", "abcdefg", newest="tool_results")                             # model "m": not priced
+
+    trace = build_trace(s.log.records(), "cc-1", summaries=ModelUsage(calls=2, input_tokens=10_000, output_tokens=1_000),
+                        summary_model="claude-sonnet-5")
+
+    [turn] = trace["turns"]
+    rewrite = 26_000 * 1.25 * 4 / 1_000_000
+    assert turn["requests"][1]["cache_write_cost"] == pytest.approx(rewrite)
+    assert turn["requests"][2]["cost"] is None
+    assert turn["totals"]["unpriced"] == 1
+    assert turn["totals"]["collection_cache_cost"] == pytest.approx(rewrite)
+    assert turn["totals"]["cost"] == pytest.approx(turn["requests"][0]["cost"] + turn["requests"][1]["cost"])
+    assert trace["summaries"]["cost"] == pytest.approx(0.02 + 0.01)
+
+
+def test_a_session_whose_models_are_unknown_counts_nothing_as_priced():
+    """So the page can say "not priced" rather than "$0"."""
+    s = _Session()
+    s.send("s_1", "abc")
+
+    totals = s.trace()["totals"]
+    assert (totals["priced"], totals["unpriced"], totals["cost"]) == (0, 1, 0.0)

@@ -37,6 +37,8 @@ export const fill = (id, ...children) => setChildren($(id), ...children);
 export const fmt = (n) => Number(n).toLocaleString();
 export const plural = (n, word, many = `${word}s`) => `${fmt(n)} ${n === 1 ? word : many}`;
 export const percent = (part, whole) => whole > 0 ? Math.round((part / whole) * 100) : 0;
+// A share to show: a part that is not zero never reads as 0%.
+export const share = (part, whole) => (part > 0 && percent(part, whole) === 0 ? "<1" : String(percent(part, whole)));
 export function compact(n) {
   if (n >= 1e6) return `${+(n / 1e6).toFixed(1)}M`;
   if (n >= 1e4) return `${+(n / 1e3).toFixed(0)}k`;

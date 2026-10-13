@@ -1,7 +1,7 @@
 // The picked session's conversations, one row each: what each sent and saved, request by request. Below
 // the trace on the Session tab, which shows the same requests turn by turn.
 
-import { $, fill, fmt, h, percent } from "./dom.js";
+import { $, fill, fmt, h, share } from "./dom.js";
 import { clientSessionOf, state } from "./state.js";
 import { hoverTip } from "./tooltip.js";
 import { NOT_COLLECTED_TEXT } from "./vocabulary.js";
@@ -28,7 +28,7 @@ export function renderSessionCard(select) {
     h("td", {}, h("b", {}, label), title ? h("span", { class: "secondary" }, ` · ${title}`) : null),
     h("td", { class: "num" }, fmt(traffic.requests)),
     h("td", { class: "num" }, fmt(traffic.tokens_from_client)),
-    h("td", { class: "num" }, traffic.tokens_saved ? `${fmt(traffic.tokens_saved)} (${percent(traffic.tokens_saved, traffic.tokens_from_client)}%)` : "0"),
+    h("td", { class: "num" }, traffic.tokens_saved ? `${fmt(traffic.tokens_saved)} (${share(traffic.tokens_saved, traffic.tokens_from_client)}%)` : "0"),
     h("td", { class: "num" }, extra.collections ?? ""),
     h("td", {}, extra.window ?? ""));
   const rows = client.conversations.map((c, i) => {

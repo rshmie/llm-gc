@@ -3,11 +3,12 @@
 import asyncio
 import socket
 from collections.abc import Iterable
+from typing import Any
 
 import httpx2
 import uvicorn
 
-from llm_gc.cli.settings import ProxySettings, create_model_window_lookup
+from llm_gc.cli.settings import ProxySettings, create_model_window_lookup, summary_model
 from llm_gc.engine import GcService
 from llm_gc.monitoring import ContextHealthMonitor
 from llm_gc.proxy import create_app
@@ -59,12 +60,16 @@ def serve_proxy(service: GcService, settings: ProxySettings, *, http_client: htt
             event_bus=service.event_bus, gc_config=settings.engine,
             read_generations=lambda session_id: (state.snapshot if session_id is not None
                                                  and (state := store.get(session_id)) is not None else None))
-        request_log = proxy_app.state.metrics.request_log
-        apps.append((create_dashboard_app(service, monitor, read_proxy_stats=proxy_app.state.metrics.as_dict,
-                                          transcripts=transcripts,
-                                          read_trace=lambda client_session: build_trace(request_log.records(),
-                                                                                        client_session)),
-                     settings.dashboard_port))
+        metrics = proxy_app.state.metrics
+        # LLM-GC's own calls are priced at the summary model's list price; another vendor's is not priced.
+        priced_model = summary_model(settings) if settings.compactor == "llm" else None
+
+        def read_trace(client_session: str) -> dict[str, Any] | None:
+            return build_trace(metrics.request_log.records(), client_session,
+                               summaries=metrics.traffic.session_summaries(client_session), summary_model=priced_model)
+
+        apps.append((create_dashboard_app(service, monitor, read_proxy_stats=metrics.as_dict, transcripts=transcripts,
+                                          read_trace=read_trace), settings.dashboard_port))
 
     # No access log: the dashboard polls, and a line per poll buried the proxy's own lines,
     # which already record each request. uvicorn's access logger is shared by the process,

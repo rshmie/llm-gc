@@ -39,6 +39,7 @@ class ProviderUsage:
     input_tokens: int = 0                  # read at the full price
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
+    cache_creation_1h_input_tokens: int = 0   # of those, written to last an hour rather than five minutes
     output_tokens: int = 0
 
     @classmethod
@@ -48,9 +49,12 @@ class ProviderUsage:
             value = usage.get(key)
             return value if isinstance(value, int) and value >= 0 else 0
 
+        by_lifetime = usage.get("cache_creation")
+        hour = by_lifetime.get("ephemeral_1h_input_tokens") if isinstance(by_lifetime, dict) else None
         return cls(replies=1, input_tokens=tokens("input_tokens"),
                    cache_read_input_tokens=tokens("cache_read_input_tokens"),
                    cache_creation_input_tokens=tokens("cache_creation_input_tokens"),
+                   cache_creation_1h_input_tokens=hour if isinstance(hour, int) and hour >= 0 else 0,
                    output_tokens=tokens("output_tokens"))
 
     def add(self, other: "ProviderUsage") -> None:
@@ -58,6 +62,7 @@ class ProviderUsage:
         self.input_tokens += other.input_tokens
         self.cache_read_input_tokens += other.cache_read_input_tokens
         self.cache_creation_input_tokens += other.cache_creation_input_tokens
+        self.cache_creation_1h_input_tokens += other.cache_creation_1h_input_tokens
         self.output_tokens += other.output_tokens
 
 
@@ -182,6 +187,11 @@ class TrafficLedger:
         """Add what the provider reported for one reply to everything its request was counted in."""
         for target in targets:
             target.provider.add(usage)
+
+    def session_summaries(self, client_session: str) -> ModelUsage | None:
+        """LLM-GC's own model calls for one client session's conversations, or None for a session not counted."""
+        client = self._client_sessions.get(client_session)
+        return client.traffic.summaries if client is not None else None
 
     def collections_waiting(self, conversation_id: str) -> int:
         """Collections made since the conversation's newest request: the next request carries them."""

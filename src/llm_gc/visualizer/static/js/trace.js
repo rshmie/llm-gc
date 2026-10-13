@@ -3,7 +3,7 @@
 // request that happened.
 
 import { TRACE_KINDS } from "./vocabulary.js";
-import { $, fill, fmt, h, percent, plural } from "./dom.js";
+import { $, compact, fill, fmt, h, plural, share } from "./dom.js";
 import { state, ui } from "./state.js";
 import { hoverTip } from "./tooltip.js";
 
@@ -22,7 +22,14 @@ function calls(names) {
   return [...counts].map(([name, n]) => (n > 1 ? `${name} ×${n}` : name)).join(", ");
 }
 
-const saved = (t) => t.tokens_saved > 0 ? `saved ${fmt(t.tokens_saved)} (${percent(t.tokens_saved, t.tokens_from_client)}%)` : "nothing saved";
+const saved = (t) => t.tokens_saved > 0 ? `saved ${fmt(t.tokens_saved)} (${share(t.tokens_saved, t.tokens_from_client)}%)` : "nothing saved";
+// Dollars at list prices: an estimate, and said to be one where the totals are.
+const money = (v) => v === null || v === undefined ? null : v >= 0.01 ? `$${v.toFixed(2)}` : v > 0 ? "<$0.01" : "$0";
+// A total's dollars, or null when none of its requests could be priced: never "$0" for "unknown".
+const priced = (t) => (t.priced ? money(t.cost) : null);
+// What an answer other than 200 means, in words.
+const STATUS_WORDS = { 401: "credential refused", 403: "credential refused", 413: "too large", 429: "rate limited",
+  500: "upstream error", 502: "upstream unreachable", 503: "upstream unavailable", 529: "overloaded" };
 
 // `force` redraws after a toggle; otherwise only when the trace changed, so a poll keeps hover and focus.
 export function renderTrace(actions, force = false) {
@@ -38,20 +45,31 @@ export function renderTrace(actions, force = false) {
 
 function traceHead(trace) {
   const t = trace.totals;
-  const client = state.proxy && state.proxy.client_sessions.find((c) => c.client_session === trace.client_session);
-  const spent = client ? client.traffic.summaries : null;
+  const spent = trace.summaries;
   const subagents = trace.turns.reduce((n, turn) => n + turn.subagents.length, 0) + trace.subagents_before.length;
   return [
     h("div", { class: "card-head" }, h("div", {},
       h("h2", {}, `Claude Code session ${shortId(trace.client_session)}`),
       h("p", { class: "sub" }, `Since ${clock(trace.started_at)} · ${plural(trace.turns.length, "turn")} · ${plural(t.requests, "request")} · ${plural(subagents, "subagent")}. Newest turn first; open one to see every request it made.`))),
     h("p", { class: "session-totals" },
-      "Claude Code sent ", h("b", {}, fmt(t.tokens_from_client)), " tokens · LLM-GC forwarded ", h("b", {}, fmt(t.tokens_forwarded)),
+      "Claude Code sent ", h("b", {}, fmt(t.tokens_from_client)), " tokens overall · LLM-GC forwarded ", h("b", {}, fmt(t.tokens_forwarded)),
       " · ", h("b", {}, saved(t))),
+    h("p", { class: "session-totals" }, ...costLine(t, spent)),
     h("p", { class: "session-totals secondary" },
-      `The provider reported ${fmt(t.cache_read_input_tokens)} cache read, ${fmt(t.input_tokens)} input, ${fmt(t.cache_creation_input_tokens)} cache write and ${fmt(t.output_tokens)} output tokens, by its own count.`,
-      spent && spent.calls ? ` LLM-GC's own model calls: ${plural(spent.calls, "call")}, ${fmt(spent.input_tokens)} tokens in, ${fmt(spent.output_tokens)} out.` : " LLM-GC has made no model calls for this session."),
+      `The provider's count: ${compact(t.cache_read_input_tokens)} cache read, ${compact(t.input_tokens)} input, ${compact(t.cache_creation_input_tokens)} cache write, ${compact(t.output_tokens)} output. `,
+      "Whether LLM-GC saved money is not measured yet: that needs the same requests sent without it."),
   ];
+}
+
+// The session's cost, or why it has none: dollars only where the price list knows the model.
+function costLine(t, spent) {
+  const own = [" · LLM-GC's own calls: ", h("b", {}, spent && spent.calls ? (money(spent.cost) || "not priced") : "$0"),
+    spent && spent.calls ? ` (${plural(spent.calls, "call")}${spent.model ? `, ${spent.model}` : ""})` : ""];
+  if (!t.priced) return ["Cost: ", h("b", {}, "not priced"), " — the price list does not know the model these requests named.", ...own];
+  return ["Cost at list prices, estimated (a gateway or discount may bill differently): ", h("b", {}, priced(t)),
+    t.unpriced ? ` (${plural(t.unpriced, "request")} not priced: a model the price list does not know)` : "",
+    t.collection_cache_cost ? [" · ", h("span", hoverTip(TRACE_KINDS.collection[0], TRACE_KINDS.collection[1]),
+      `${money(t.collection_cache_cost)} of it rewrote the cache on requests that carried a collection`)] : "", ...own];
 }
 
 function before(trace, actions) {
@@ -82,7 +100,8 @@ function turnItem(turn, trace, actions) {
       h("span", { class: "turn-words" }, turn.words ? `“${turn.words}”` : h("i", {}, "its conversation has closed")),
       h("span", { class: "turn-meta" },
         h("span", {}, clock(turn.started_at)), h("span", {}, duration), h("span", {}, plural(t.requests, "request")),
-        h("span", {}, `${fmt(t.tokens_from_client)} sent`), t.tokens_saved > 0 ? h("span", { class: "good" }, `−${fmt(t.tokens_saved)}`) : null,
+        h("span", {}, `${fmt(t.tokens_from_client)} sent overall`), t.tokens_saved > 0 ? h("span", { class: "good" }, `−${fmt(t.tokens_saved)}`) : null,
+        priced(t) ? h("span", { class: "turn-cost" }, priced(t)) : null,
         turn.subagents.length ? h("span", { class: "tbadge" }, plural(turn.subagents.length, "subagent")) : null,
         collections ? h("span", { class: "tbadge", ...hoverTip(TRACE_KINDS.collection[0], TRACE_KINDS.collection[1]) }, `◆ ${plural(collections, "collection")}`) : null)),
     open ? h("div", { class: "turn-body" },
@@ -119,7 +138,7 @@ function waterfall(rows, subagents, window, actions, key) {
   }
   for (const agent of subagents.filter((a) => !placed.has(a.agent))) lines.push(...subagentLines(agent, window, actions));
   return h("div", { class: "waterfall", role: "table", "aria-label": "Requests in time" },
-    h("div", { class: "wf-row wf-axis", role: "row" }, h("span", { role: "columnheader" }, "Request"),
+    h("div", { class: "wf-row wf-axis", role: "row" }, h("span", { role: "columnheader" }, "Request · tokens sent → tokens the model got"),
       h("span", { class: "wf-scale", role: "columnheader" }, h("span", {}, "0"), h("span", {}, seconds(window.end - window.start)))),
     lines,
     side.length ? h("button", { class: "link-btn wf-side", type: "button", onclick: () => toggle(ui.showSide, key, actions) },
@@ -129,18 +148,26 @@ function waterfall(rows, subagents, window, actions, key) {
 function requestLine(row, window, depth) {
   const [label, about] = TRACE_KINDS[row.kind];
   const failed = row.status !== null && row.status !== 200;
-  const status = failed ? h("span", { class: "st critical" }, ` ✕ ${row.status}`)
+  const status = failed ? h("span", { class: "st critical" }, ` ✕ ${row.status} ${STATUS_WORDS[row.status] || "refused"}`)
     : row.ended_at === null ? h("span", { class: "secondary" }, " … running")
     : !row.finished ? h("span", { class: "st warn", ...hoverTip("Cut short", "The reply did not reach its end: the client stopped reading, or the connection dropped.") }, " cut short") : null;
   const kept = row.tokens_from_client - row.tokens_forwarded;
   return h("div", { class: `wf-row kind-${row.kind}${depth ? " nested" : ""}`, role: "row" },
     h("span", { class: "wf-label", role: "cell" },
       h("span", { class: "wf-kind", ...hoverTip(label, about) }, label),
-      row.tool_calls.length ? h("span", { class: "wf-calls" }, ` → ${calls(row.tool_calls)}`) : null,
-      h("span", { class: "wf-tokens" }, ` ${fmt(row.tokens_from_client)}`, kept > 0 ? h("span", { class: "good" }, ` −${fmt(kept)}`) : null),
-      row.carries_collections ? h("span", { class: "wf-mark", ...hoverTip(TRACE_KINDS.collection[0], TRACE_KINDS.collection[1]) }, " ◆") : null,
+      h("span", { class: "wf-tokens", ...(kept > 0 ? hoverTip("Tokens", `Claude Code sent ${fmt(row.tokens_from_client)}; LLM-GC condensed ${fmt(kept)} of them, so the model got ${fmt(row.tokens_forwarded)}.`) : {}) },
+        ` · ${fmt(row.tokens_from_client)}`, kept > 0 ? [" → ", h("span", { class: "good" }, fmt(row.tokens_forwarded))] : null),
+      row.tool_calls.length ? h("span", { class: "wf-calls" }, ` · then ${calls(row.tool_calls)}`) : null,
+      row.carries_collections ? h("span", { class: "wf-mark", ...hoverTip(TRACE_KINDS.collection[0], TRACE_KINDS.collection[1] + rewriteNote(row)) },
+        row.cache_write_cost ? ` ◆ ${money(row.cache_write_cost)} cache rewrite` : " ◆") : null,
       status),
     bar(row.forwarded_at, row.ended_at, window, `kind-${row.kind}`, `${clock(row.forwarded_at)} · ${row.ended_at ? seconds(at(row.ended_at) - at(row.forwarded_at)) : "running"}`));
+}
+
+// What a collection's request paid to cache the prompt again, for the ◆'s explanation.
+function rewriteNote(row) {
+  if (!row.cache_write_cost || !row.provider) return "";
+  return ` This one wrote ${fmt(row.provider.cache_creation_input_tokens)} tokens to the provider's cache, ${money(row.cache_write_cost)} at list prices: the recap changed, so everything after the system prompt was cached again.`;
 }
 
 function subagentLines(agent, window, actions) {
@@ -154,7 +181,7 @@ function subagentLines(agent, window, actions) {
         h("span", { class: "chev", "aria-hidden": "true" }, open ? "▼" : "▶"), ` ${agent.label}`),
       actions.live(agent.conversation_id)
         ? h("button", { class: "link-btn wf-open", type: "button", onclick: () => actions.open(agent.conversation_id, null) }, "Open →") : null,
-      h("span", { class: "wf-tokens" }, ` ${plural(t.requests, "request")} · ${fmt(t.tokens_from_client)} sent`),
+      h("span", { class: "wf-tokens" }, ` ${plural(t.requests, "request")} · ${fmt(t.tokens_from_client)} sent overall${priced(t) ? ` · ${priced(t)}` : ""}`),
       h("span", { class: "secondary", ...hoverTip(TRACE_KINDS.subagent[0], TRACE_KINDS.subagent[1]) },
         link ? ` · started by ${link.tool}` : " · started by a call not determined", agent.collected ? "" : " · not collected"),
       h("span", { class: "wf-words" }, agent.words ? ` · “${agent.words}”` : "")),

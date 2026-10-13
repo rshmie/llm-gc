@@ -4,7 +4,7 @@
 // nothing beyond grouping, counting, and sums and differences of numbers it was given.
 
 import { BECOMES, CATS, CLAMP_CHARS, FAR_JUMP_SCREENS, MAP_PX_PER_MESSAGE, EARLIER_SHOWN, GLOSSARY, HEIGHT, MIN_BAR_PX, NOT_COLLECTED_TEXT, ORDER, RUN_MIN, FACT_STATUS, categoryOf, describeOutcome, swatch } from "./vocabulary.js";
-import { $, agoTs, countEl, fill, fmt, h, meterBar, percent, plural, ranges, reducedMotion, setChildren, storeGet, storeSet, svg } from "./dom.js";
+import { $, agoTs, countEl, fill, fmt, h, meterBar, plural, ranges, reducedMotion, setChildren, share, storeGet, storeSet, svg } from "./dom.js";
 import { collecting, countCats, credentialRefusal, factsByTurn, has, instructionTokens, marked, newestReply, pendingTurns, preview, query, recapLimit, state, trafficOf, turnMatches, ui, writtenTokens } from "./state.js";
 import { hideTooltip, info, showTooltip, tipAction, tipQuote, hoverTip } from "./tooltip.js";
 import { offerReturn, showTab } from "./shell.js";
@@ -100,7 +100,7 @@ export function renderSize(k) {
   // A forecast: what the next request will carry. What requests did carry is measured, below it.
   const [tone, text] = !k.collected ? ["", "Same as written: not collected"]
     : k.cuts === 0 ? ["", "Same as written: nothing collected yet"]
-    : less >= 0 ? ["good", `↓ ${fmt(less)} · ${percent(less, written)}% less than as written`]
+    : less >= 0 ? ["good", `↓ ${fmt(less)} · ${share(less, written)}% less than as written`]
     : ["", `↑ ${fmt(-less)} more than as written: the recap outgrew what it replaced`];
   fill("panel-size",
     h("div", { class: "label" }, "The next request", info("size")),
@@ -115,9 +115,9 @@ function measuredSoFar() {
   const c = trafficOf(state.selected);
   if (!c) return null;
   const t = c.traffic;
-  const saved = t.tokens_saved ? `saved ${fmt(t.tokens_saved)} (${percent(t.tokens_saved, t.tokens_from_client)}%)`
+  const saved = t.tokens_saved ? `saved ${fmt(t.tokens_saved)} (${share(t.tokens_saved, t.tokens_from_client)}% of all it sent)`
     : c.collected === false ? "nothing saved: not collected" : "nothing saved yet";
-  return h("p", { class: "hero-sub measured" }, h("b", {}, "So far: "), `${plural(t.requests, "request")} sent ${fmt(t.tokens_from_client)} tokens whole; ${saved}.`,
+  return h("p", { class: "hero-sub measured" }, h("b", {}, "So far: "), `${plural(t.requests, "request")} sent ${fmt(t.tokens_from_client)} tokens overall, the system prompt and tools included; ${saved}.`,
     c.collections_not_yet_sent ? h("span", { class: "st warn" }, ` ⚠ The newest collection has not reached the model: no request has carried it yet.`) : null);
 }
 
