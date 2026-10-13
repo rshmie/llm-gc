@@ -115,6 +115,28 @@ words* — tied to one client's current text; the headers are structure. *Accept
 the label comes from one client's header names; a client that sends none is shown
 ungrouped, and a renamed header turns the grouping off rather than grouping wrongly.
 
+**A subagent's conversation is recorded, not collected.** It passes through the proxy,
+is counted and shown like any other, and is forwarded exactly as the client sent it, so
+its prompt cache stays whole. It is never collected, unless `collect_subagents` is on.
+
+| | Main conversation | Subagent |
+|---|---|---|
+| After a collection | many more requests, each carrying the saving | often none: it answers and stops ([not yet sent](#what-is-measured)) |
+| What a collection costs | summary calls, and a cache rewrite from the recap on | the same, seldom paid back |
+| If condensing loses a detail | the next reply shows it, to the person reading | the subagent's answer is quietly worse, and only the answer is read |
+
+The client's agent header only turns collection *off*. Without it - another client, or a
+renamed header - a conversation is collected like any other: the worst a wrong reading
+can do is what LLM-GC already does. That is why the header may decide this when it may
+not decide which conversation a request belongs to. The engine holds the choice per
+session, so a collection that will not run is never forecast, and *Run GC now* says so
+instead of collecting. *Rejected: collecting every conversation* — subagent collections
+were measured landing after their last request, paid for and never sent. *Rejected: a
+rule without the header, such as collecting only after a conversation has run N
+requests* — it would still collect the long subagents, whose answers carry the risk.
+*Revisit when* real runs show a subagent near its own window: then collecting above a
+high share of it would be worth its risk.
+
 ### Forwarding
 
 - **Untouched when nothing has aged.** If the collected context is exactly the

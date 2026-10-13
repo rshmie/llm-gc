@@ -761,6 +761,12 @@ the map would show tokens it never carried.
 The model's window is the one the provider reports for the conversation's model, or the
 configured one, said to be assumed.
 
+A subagent's conversation, recorded but not collected, says so wherever a collection
+would be forecast: its Collections cell reads *not collected*, the panels and the
+*Next collection* card name the reason instead of a forecast, and *Run GC now* explains
+rather than collects. Its map and messages are shown as for any conversation, every
+message sent as written.
+
 ### The conversation view keeps no collection log
 
 Collections are what LLM-GC did, and the Engine view is where that is shown: what

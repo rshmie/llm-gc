@@ -66,6 +66,7 @@ class SessionInspection:
     last_activity: datetime
     context_window: int       # the window the recap is sized for
     recap_budget: int
+    collection_enabled: bool  # False: recorded and shown, never collected, so no collection is forecast
 
     @property
     def context(self) -> list[Message]:

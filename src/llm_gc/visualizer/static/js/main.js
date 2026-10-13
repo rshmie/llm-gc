@@ -74,7 +74,7 @@ function renderOrigin(groups) {
     group.agents ? plural(group.agents, "subagent") : null, group.earlier ? plural(group.earlier, "earlier main conversation") : null].filter(Boolean);
   const count = group.entries.length === 1 ? " It is the only conversation the session has here."
     : ` The session has ${plural(group.entries.length, "conversation")} here: ${parts.join(", ")}.`;
-  fill("origin-line", ...what, count, " LLM-GC collects each conversation on its own. The session's table on the Conversation tab adds up its conversations; the Engine tab's totals, every conversation since the proxy started.");
+  fill("origin-line", ...what, count, " LLM-GC collects each main conversation on its own, and records each subagent's without collecting it. The session's table on the Conversation tab adds up its conversations; the Engine tab's totals, every conversation since the proxy started.");
 }
 
 function renderConversation() {

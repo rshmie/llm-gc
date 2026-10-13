@@ -1,6 +1,6 @@
 // Run GC now: the dashboard's one action, and the explanation of its outcome.
 
-import { ACTION_HEADER, STATUS, describeOutcome } from "./vocabulary.js";
+import { ACTION_HEADER, NOT_COLLECTED_TEXT, STATUS, describeOutcome } from "./vocabulary.js";
 import { $, fmt, h, plural, setChildren } from "./dom.js";
 import { keepLast, sessionPath, state } from "./state.js";
 import { showTab } from "./shell.js";
@@ -40,6 +40,7 @@ export function explainResult(r, before) {
       body: [`The ${plural(cut.turns.length, "older message")} would all be kept word for word (they are short, or matter now), so collecting them would save nothing.`] };
   }
   if (r.status === "bypassed_aging_in_flight") return { tone: "muted", title: "– A collection is already running", body: ["LLM-GC is already collecting this conversation. Try again in a moment."] };
+  if (r.status === "bypassed_not_collected") return { tone: "muted", title: "– Not collected", body: [NOT_COLLECTED_TEXT] };
   if (r.status === "bypassed_on_error") return { tone: "critical", title: "✕ The collection failed, and nothing changed", body: ["The conversation is exactly as it was. The error is in the proxy's log."] };
   return { tone: "muted", title: STATUS[r.status]?.text || r.status, body: [] };
 }
@@ -65,7 +66,8 @@ export function renderRunGcButton() {
   const cut = k ? k.next_cut : null;
   const idle = !!cut && cut.turns.length === 0;
   button.setAttribute("aria-disabled", String(idle));
-  button.title = !cut ? "Collect this conversation now, without waiting for the minimum."
+  button.title = k && !k.collected ? "Not collected: a subagent's conversation is recorded and sent as written."
+    : !cut ? "Collect this conversation now, without waiting for the minimum."
     : idle ? (k.cuts ? `Nothing to collect: everything older than the newest ${keepLast()} messages is already collected. Click to see why.`
       : `Nothing to collect yet: the conversation is within its newest ${keepLast()} messages.`)
     : `Collect the ${plural(cut.turns.length, "waiting message")} now: ${fmt(cut.compactable_tokens)} of ${fmt(cut.min_cut_tokens)} tokens ready, without waiting for the minimum.`;

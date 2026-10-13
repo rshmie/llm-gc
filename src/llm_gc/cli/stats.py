@@ -61,6 +61,7 @@ class ConversationStats(_Counters):
     agent: str | None
     model: str | None
     context_window: WindowStats | None
+    collected: bool = True
     first_request_at: datetime
     last_request_at: datetime
     collections: int
@@ -135,6 +136,9 @@ def render_stats(stats: ProxyStats, base_url: str) -> str:
     if any(c.collections_not_yet_sent for c in _all_conversations(stats)):
         notes.append("A collection not yet sent has saved nothing yet: its saving reaches the model with the "
                      "conversation's next request.")
+    if any(not c.collected for c in _all_conversations(stats)):
+        notes.append("Not collected: a subagent's conversation is recorded and sent as written "
+                     "(collect_subagents turns collection on).")
     wrapped = [style(line, dim=True) for note in notes
                for line in textwrap.wrap(note, _NOTE_WIDTH, initial_indent=INDENT, subsequent_indent=INDENT)]
     return "\n".join([*lines, "", *wrapped, ""])
@@ -213,8 +217,8 @@ def _table(rows: list[tuple[str, ConversationStats | TrafficStats]]) -> list[str
     for label, row in rows:
         collections = window = ""
         if isinstance(row, ConversationStats):
-            collections = f"{row.collections}" + (f" ({row.collections_not_yet_sent} not yet sent)"
-                                                  if row.collections_not_yet_sent else "")
+            collections = "not collected" if not row.collected else f"{row.collections}" + (
+                f" ({row.collections_not_yet_sent} not yet sent)" if row.collections_not_yet_sent else "")
             window = _window(row.context_window)
         cells.append((label, row.traffic if isinstance(row, ConversationStats) else row, collections, window))
     width = max(len("Collections"), *(len(collections) for _, _, collections, _ in cells)) + 2

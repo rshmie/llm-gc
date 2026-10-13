@@ -208,16 +208,22 @@ class GcService:
         window = state.context_window or self.gc_config.context_window
         planned = self._plan(snapshot, young, cut, self.generational_memory.draft(young[:cut]),
                              estimate_summaries=True, recap_budget=self.gc_config.recap_budget(window))
+        preview = planned.preview(self.gc_config.min_cut_tokens, front_exists=bool(snapshot.old))
+        if not state.collection_enabled:
+            # Nothing will be collected, so nothing is forecast to change.
+            preview = replace(preview, turns=(), spans=(), levels={}, compactable_tokens=0, estimated_saving=0,
+                              span_levels=tuple(span.level for span in snapshot.old))
         return SessionInspection(
             session_id=session_id,
             snapshot=snapshot,
             front=self._render_front(snapshot),
             tail=tuple(young),
-            next_cut=planned.preview(self.gc_config.min_cut_tokens, front_exists=bool(snapshot.old)),
+            next_cut=preview,
             aging_in_flight=state.aging_in_flight,
             last_activity=state.last_updated_at,
             context_window=window,
             recap_budget=self.gc_config.recap_budget(window),
+            collection_enabled=state.collection_enabled,
         )
 
     def use_context_window(self, session_id: str, context_window: int) -> None:
@@ -228,6 +234,12 @@ class GcService:
         state = self.session_manager.store.get(session_id)
         if state is not None:
             state.context_window = context_window
+
+    def set_collection_enabled(self, session_id: str, enabled: bool) -> None:
+        """Turn collection on or off for one session. Off, it is still recorded and inspected, never collected."""
+        state = self.session_manager.store.get(session_id)
+        if state is not None:
+            state.collection_enabled = enabled
 
     def mark_front_sent(self, session_id: str, history_turns: int) -> int:
         """Note that the current front is being sent after `history_turns` turns of history.
@@ -286,7 +298,9 @@ class GcService:
         state = self.session_manager.get_or_create(session_id)
         base = state.snapshot
 
-        if state.aging_in_flight:
+        if not state.collection_enabled:
+            gc_result = self._unchanged_result(base, gc_run_id, GCStatus.BYPASSED_NOT_COLLECTED, start)
+        elif state.aging_in_flight:
             logger.debug("aging already in flight; skipping this trigger",
                          extra={"session_id": session_id, "gc_run_id": gc_run_id})
             gc_result = self._unchanged_result(base, gc_run_id, GCStatus.BYPASSED_AGING_IN_FLIGHT, start)

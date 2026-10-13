@@ -219,3 +219,15 @@ class TestCommand:
 
         result, _ = self._run(fetch=down)
         assert result.exit_code == 1 and result.output.strip().startswith("Error: nothing is answering")
+
+
+def test_a_conversation_that_is_not_collected_says_so_instead_of_zero_collections(no_color):
+    session = _session()
+    session["conversations"][1]["collected"] = False
+    session["conversations"][1]["collections"] = 0
+    session["conversations"][1]["collections_not_yet_sent"] = 0
+
+    output = _report(client_sessions=[session])
+
+    assert any(line.strip().startswith("Subagent 1") and "not collected" in line for line in output.splitlines())
+    assert "a subagent's conversation is recorded and sent as written" in " ".join(output.split())
