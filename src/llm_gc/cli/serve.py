@@ -49,7 +49,8 @@ def serve_proxy(service: GcService, settings: ProxySettings, *, http_client: htt
                            on_client_history=transcripts.record if transcripts is not None else None,
                            on_reply=transcripts.record_reply if transcripts is not None else None,
                            window_lookup=create_model_window_lookup(settings, http_client=http_client),
-                           collect_subagents=settings.collect_subagents)
+                           collect_subagents=settings.collect_subagents,
+                           link_subagents=settings.dashboard)
     apps = [(proxy_app, settings.port)]
     if transcripts is not None:
         store = service.session_manager.store

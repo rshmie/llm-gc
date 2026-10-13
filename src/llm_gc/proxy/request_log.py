@@ -43,6 +43,15 @@ def newest_kind(message: Message) -> NewestKind:
     return "tool_results" if tool_result_ids(message) else "assistant"
 
 
+@dataclass(frozen=True, slots=True)
+class SpawnRef:
+    """The tool call that started a subagent: the request whose reply made it, and the call."""
+
+    request_id: str
+    call_id: str
+    tool: str
+
+
 @dataclass(slots=True)
 class RequestRecord:
     """One forwarded request: what it carried, and what came back."""
@@ -63,6 +72,8 @@ class RequestRecord:
     kept: bool | None = None
     ended_at: datetime | None = None
     outline: ReplyOutline | None = None
+    # On a subagent conversation's first request: the call that started it, once matched.
+    spawned_by: SpawnRef | None = None
 
 
 class RequestLog:

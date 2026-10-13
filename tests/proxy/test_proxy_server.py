@@ -63,7 +63,8 @@ def _engine(**config_overrides):
     return service, service.generational_memory
 
 
-def _proxy(upstream=None, *, gc_service=None, on_reply=None, window_lookup=None, **engine_kwargs):
+def _proxy(upstream=None, *, gc_service=None, on_reply=None, window_lookup=None, link_subagents=False,
+           **engine_kwargs):
     """A proxy whose upstream is a scripted handler, with aging run synchronously.
 
     `schedule` is injected to run the post-response work to completion inline.
@@ -87,6 +88,7 @@ def _proxy(upstream=None, *, gc_service=None, on_reply=None, window_lookup=None,
         else _run_now(coro),
         on_reply=on_reply,
         window_lookup=window_lookup,
+        link_subagents=link_subagents,
     )
     app.state.seen = seen
     return TestClient(app), service, memory, seen
@@ -1496,3 +1498,40 @@ class TestEachRequestIsRecorded:
 
         [record] = client.app.state.metrics.request_log.records()
         assert record.outline.status == 502 and not record.outline.finished
+
+
+class TestEachSubagentIsLinkedToItsCall:
+    PROMPT_A = "Count the test files under tests/ and report the total."
+    PROMPT_B = "Summarise README.md in three lines for the user."
+    ASK = "Use two subagents: count the test files, and summarise the README."
+
+    def _upstream(self, request: httpx2.Request) -> httpx2.Response:
+        if json.loads(request.content)["messages"][-1]["content"] != self.ASK:
+            return httpx2.Response(200, json=UPSTREAM_OK)
+        return httpx2.Response(200, json={**UPSTREAM_OK, "stop_reason": "tool_use", "content": [
+            {"type": "tool_use", "id": "toolu_a", "name": "Agent", "input": {"prompt": self.PROMPT_A}},
+            {"type": "tool_use", "id": "toolu_b", "name": "Agent", "input": {"prompt": self.PROMPT_B}}]})
+
+    def _run(self, link_subagents: bool):
+        client, _, _, _ = _proxy(self._upstream, link_subagents=link_subagents)
+        main = {CLIENT_SESSION_HEADER: "cc-1"}
+        _post(client, _body(("user", self.ASK)), headers=main)
+        for agent, prompt in (("agent-b", self.PROMPT_B), ("agent-a", self.PROMPT_A)):
+            opening = [{"type": "text", "text": "<system-reminder>Repository context.</system-reminder>"},
+                       {"type": "text", "text": prompt}]
+            _post(client, {"model": "claude-sonnet-5", "max_tokens": 64, "messages": [{"role": "user", "content": opening}]},
+                  headers={**main, CLIENT_AGENT_HEADER: agent})
+        return client.app.state.metrics.request_log.records()
+
+    def test_each_subagents_first_request_names_the_call_that_started_it(self):
+        spawner, readme, count = self._run(link_subagents=True)
+
+        assert (count.spawned_by.request_id, count.spawned_by.call_id, count.spawned_by.tool) == (
+            spawner.request_id, "toolu_a", "Agent")
+        assert readme.spawned_by.call_id == "toolu_b"
+        assert self.PROMPT_A not in repr((spawner, readme, count))
+
+    def test_without_linking_no_prompt_is_read_and_nothing_is_linked(self):
+        records = self._run(link_subagents=False)
+
+        assert all(record.spawned_by is None for record in records)

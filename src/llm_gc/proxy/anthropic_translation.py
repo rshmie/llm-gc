@@ -57,6 +57,12 @@ _STREAM_LINE_MAX_BYTES = 64 * 1024
 _OUTLINE_EVENTS = (b'"message_start"', b'"message_delta"', b'"content_block_start"', b'"message_stop"')
 # A tool's name or id longer than this is not one; it is not kept or shown.
 _OUTLINE_STRING_MAX_CHARS = 128
+# A tool call that starts a subagent gives it a prompt: shorter than this, a string input is a
+# path or a flag; longer, its input is not held while the stream is read.
+SPAWN_PROMPT_MIN_CHARS = 20
+SPAWN_PROMPT_MAX_CHARS = 32_000
+# The stream events a spawned prompt is read from, when prompts are read.
+_PROMPT_EVENTS = (b'"input_json_delta"', b'"content_block_stop"')
 
 
 @dataclass(frozen=True)
@@ -301,20 +307,41 @@ class ReplyOutline:
     tool_calls: tuple[ToolCall, ...] = ()
 
 
-def reply_outline(status: int, raw: bytes) -> ReplyOutline:
-    """The outline of an unstreamed reply. An error body, or one this reader cannot parse, outlines only its status."""
+def read_reply(status: int, raw: bytes, *, read_prompts: bool = False) -> tuple[ReplyOutline, dict[str, str]]:
+    """An unstreamed reply's outline and, when asked, the prompt each of its tool calls gave a subagent, by call id.
+
+    An error body, or one this reader cannot parse, outlines only its status. The
+    prompts are conversation content, kept apart from the outline so that whoever
+    stores an outline never holds them.
+    """
     try:
         body = json.loads(raw)
     except ValueError:
-        return ReplyOutline(status=status)
+        return ReplyOutline(status=status), {}
     if status != 200 or not isinstance(body, dict) or body.get("type") != "message":
-        return ReplyOutline(status=status)
+        return ReplyOutline(status=status), {}
     usage = body.get("usage")
     content = body.get("content")
     blocks: list[Any] = content if isinstance(content, list) else []
-    return ReplyOutline(status=status, finished=True, stop_reason=_plain(body.get("stop_reason")),
-                        usage=ProviderUsage.from_reported(usage) if isinstance(usage, dict) else None,
-                        tool_calls=tuple(call for block in blocks if (call := _tool_call(block)) is not None))
+    calls = [(call, block) for block in blocks if (call := _tool_call(block)) is not None]
+    outline = ReplyOutline(status=status, finished=True, stop_reason=_plain(body.get("stop_reason")),
+                           usage=ProviderUsage.from_reported(usage) if isinstance(usage, dict) else None,
+                           tool_calls=tuple(call for call, _ in calls))
+    prompts = {call.call_id: prompt for call, block in calls
+               if read_prompts and (prompt := spawn_prompt(block.get("input"))) is not None}
+    return outline, prompts
+
+
+def spawn_prompt(tool_input: object) -> str | None:
+    """The prompt a tool call gives a subagent, or None: a `prompt` string of a prompt's length.
+
+    Read by the input's field, not the tool's name, which Claude Code has changed.
+    """
+    prompt = tool_input.get("prompt") if isinstance(tool_input, dict) else None
+    if not isinstance(prompt, str):
+        return None
+    prompt = prompt.strip()
+    return prompt if SPAWN_PROMPT_MIN_CHARS <= len(prompt) <= SPAWN_PROMPT_MAX_CHARS else None
 
 
 class StreamOutlineReader:
@@ -324,14 +351,21 @@ class StreamOutlineReader:
     usage and the stop reason, `content_block_start` for each tool call, `message_stop`
     for the end - and every other line is passed over unread. Only the unfinished last
     line of a chunk is held between chunks.
+
+    With `read_prompts`, a tool call's input is also gathered while it streams, and its
+    prompt for a subagent kept, by call id; an input larger than a prompt can be is let go.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, read_prompts: bool = False) -> None:
         self._partial = b""
         self._usage: dict[str, Any] | None = None
         self._stop_reason: str | None = None
         self._calls: list[ToolCall] = []
         self._finished = False
+        self._events = _OUTLINE_EVENTS + (_PROMPT_EVENTS if read_prompts else ())
+        self._read_prompts = read_prompts
+        self._inputs: dict[int, tuple[str, list[str], int]] = {}   # block index -> call id, input pieces, their size
+        self._prompts: dict[str, str] = {}
 
     def feed(self, chunk: bytes) -> None:
         lines = (self._partial + chunk).split(b"\n")
@@ -340,7 +374,7 @@ class StreamOutlineReader:
             # Not an event line this reader needs: the events it reads are short.
             self._partial = b""
         for line in lines:
-            if line.startswith(b"data:") and any(name in line for name in _OUTLINE_EVENTS):
+            if line.startswith(b"data:") and any(name in line for name in self._events):
                 self._read(line[len(b"data:"):])
 
     def outline(self) -> ReplyOutline:
@@ -348,6 +382,10 @@ class StreamOutlineReader:
         return ReplyOutline(status=200, finished=self._finished, stop_reason=self._stop_reason,
                             usage=ProviderUsage.from_reported(self._usage) if self._usage is not None else None,
                             tool_calls=tuple(self._calls))
+
+    def spawn_prompts(self) -> dict[str, str]:
+        """The prompt each tool call gave a subagent, by call id: conversation content, for linking only."""
+        return dict(self._prompts)
 
     def _read(self, data: bytes) -> None:
         try:
@@ -362,8 +400,33 @@ class StreamOutlineReader:
             self._stop_reason = _plain((event.get("delta") or {}).get("stop_reason")) or self._stop_reason
         elif kind == "content_block_start" and (call := _tool_call(event.get("content_block"))) is not None:
             self._calls.append(call)
+            if self._read_prompts and isinstance(event.get("index"), int):
+                self._inputs[event["index"]] = (call.call_id, [], 0)
+        elif kind == "content_block_delta" and event.get("index") in self._inputs:
+            self._gather(event["index"], event.get("delta"))
+        elif kind == "content_block_stop" and event.get("index") in self._inputs:
+            call_id, pieces, _ = self._inputs.pop(event["index"])
+            try:
+                prompt = spawn_prompt(json.loads("".join(pieces) or "{}"))
+            except ValueError:
+                prompt = None
+            if prompt is not None:
+                self._prompts[call_id] = prompt
         elif kind == "message_stop":
             self._finished = True
+
+    def _gather(self, index: int, delta: object) -> None:
+        piece = delta.get("partial_json") if isinstance(delta, dict) else None
+        if delta is None or not isinstance(piece, str):
+            return
+        call_id, pieces, size = self._inputs[index]
+        size += len(piece)
+        if size > 2 * SPAWN_PROMPT_MAX_CHARS:
+            # Larger than any prompt, even escaped: an edit or a file, not a subagent's task.
+            del self._inputs[index]
+            return
+        pieces.append(piece)
+        self._inputs[index] = (call_id, pieces, size)
 
     def _merge_usage(self, reported: object) -> None:
         if isinstance(reported, dict):

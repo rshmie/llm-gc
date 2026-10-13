@@ -17,7 +17,7 @@ import asyncio
 import contextlib
 import logging
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from typing import Any
@@ -45,13 +45,14 @@ from llm_gc.proxy.anthropic_translation import (
     fixed_prompt_tokens,
     forwardable_headers,
     instruction_tokens,
-    reply_outline,
+    read_reply,
     reply_text,
     rewrite_messages,
 )
 from llm_gc.proxy.model_windows import ModelWindow, ModelWindows, WindowLookup
 from llm_gc.proxy.session_identity import SESSION_HEADER, chain_hashes, client_origin
 from llm_gc.proxy.request_log import RequestLog, newest_kind
+from llm_gc.proxy.subagent_links import SpawnLinker
 from llm_gc.proxy.traffic import TrafficLedger
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,9 @@ _REPLY_KEPT_MAX_BYTES = 4 * 1024 * 1024
 
 # A model name longer than this is not a model name; it is not kept or shown.
 _MODEL_NAME_MAX_CHARS = 128
+
+# What to do with a reply once it ends: its outline, and the prompts its tool calls gave subagents.
+OutlineHandler = Callable[[ReplyOutline, Mapping[str, str]], None]
 
 # Response headers that describe the upstream connection, not its content.
 # Returning them would have us promise an encoding or a length that no longer
@@ -143,6 +147,7 @@ def create_app(
     on_reply: Callable[[str, Message, str], None] | None = None,
     window_lookup: WindowLookup | None = None,
     collect_subagents: bool = False,
+    link_subagents: bool = False,
 ) -> FastAPI:
     """Wire the proxy around an already-built engine.
 
@@ -168,6 +173,9 @@ def create_app(
             configured window.
         collect_subagents: Collect the conversations a client marks as a subagent's.
             Off, they are recorded, shown and forwarded as sent, never collected.
+        link_subagents: Link each subagent's first request to the tool call that
+            started it. Holds each spawned prompt in memory until matched, so it is on
+            only when something will show the link.
     """
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -198,6 +206,7 @@ def create_app(
     app.state.on_reply = on_reply
     app.state.model_windows = ModelWindows(gc_service.gc_config.context_window, window_lookup, app.state.schedule)
     app.state.collect_subagents = collect_subagents
+    app.state.spawn_linker = SpawnLinker() if link_subagents else None
     gc_service.event_bus.subscribe(EventType.GC_FINISHED, lambda event: _count_collection(app, event))
 
     @app.get("/health")
@@ -366,7 +375,7 @@ def _collected(app: FastAPI, origin: ClientOrigin | None) -> bool:
 def _measure_request(app: FastAPI, session_id: str | None, origin: ClientOrigin | None, payload: dict[str, Any],
                      client_messages: Sequence[Message], hashes: Sequence[str] | None, from_client: int,
                      forwarded: int, window: ModelWindow | None, collected: bool
-                     ) -> Callable[[ReplyOutline], None] | None:
+                     ) -> OutlineHandler | None:
     """Count a request in the ledger and open its record; return what to do with its reply's outline.
 
     Never fails the request: a failure here costs the counts, not the answer.
@@ -383,16 +392,22 @@ def _measure_request(app: FastAPI, session_id: str | None, origin: ClientOrigin 
                                            newest=newest_kind(client_messages[-1]), model=model,
                                            tokens_from_client=from_client, tokens_forwarded=forwarded,
                                            collected=collected)
+        linker: SpawnLinker | None = app.state.spawn_linker
+        if linker is not None and origin is not None and origin.agent_id is not None and record.position == 1:
+            first = client_messages[0]
+            linker.offer_opening(origin.session_id, record, "\n".join((first.content, *first.instructions)))
     except Exception:
         logger.exception("counting the request failed; the request is unaffected", extra={"session_id": session_id})
         return None
 
-    def close(outline: ReplyOutline) -> None:
+    def close(outline: ReplyOutline, prompts: Mapping[str, str]) -> None:
         if outline.usage is not None:
             TrafficLedger.record_usage(counted, outline.usage)
         metrics.request_log.finish(record, outline)
+        if linker is not None and origin is not None and prompts:
+            linker.offer_calls(origin.session_id, record, prompts)
 
-    return lambda outline: _never_blocking(close, outline)
+    return lambda outline, prompts: _never_blocking(close, outline, prompts)
 
 
 def _count_collection(app: FastAPI, event: Event) -> None:
@@ -570,7 +585,7 @@ def _target(request: Request) -> str:
 
 async def _send(app: FastAPI, body: bytes, headers: dict[str, str], streaming: bool, target: str,
                 on_complete: Callable[[bytes], None] | None = None,
-                on_outline: Callable[[ReplyOutline], None] | None = None) -> Response:
+                on_outline: OutlineHandler | None = None) -> Response:
     if streaming:
         return await _forward_stream(app, body, headers, target, on_complete, on_outline)
     return await _forward(app, body, headers, target, on_complete=on_complete, on_outline=on_outline)
@@ -600,7 +615,7 @@ def _reply_observer(app: FastAPI, session_id: str | None, answering: Message,
 
 async def _forward(app: FastAPI, body: bytes, headers: dict[str, str], target: str, *,
                    method: str = "POST", on_complete: Callable[[bytes], None] | None = None,
-                   on_outline: Callable[[ReplyOutline], None] | None = None) -> Response:
+                   on_outline: OutlineHandler | None = None) -> Response:
     """Send the request upstream and hand the answer back verbatim.
 
     Status codes and error bodies pass through unchanged: the client's error
@@ -614,13 +629,13 @@ async def _forward(app: FastAPI, body: bytes, headers: dict[str, str], target: s
     if on_complete is not None and upstream.status_code == 200:
         on_complete(upstream.content)
     if on_outline is not None:
-        on_outline(reply_outline(upstream.status_code, upstream.content))
+        on_outline(*read_reply(upstream.status_code, upstream.content, read_prompts=_reads_prompts(app)))
     return _verbatim(upstream, upstream.content)
 
 
 async def _forward_stream(app: FastAPI, body: bytes, headers: dict[str, str], target: str,
                           on_complete: Callable[[bytes], None] | None = None,
-                          on_outline: Callable[[ReplyOutline], None] | None = None) -> Response:
+                          on_outline: OutlineHandler | None = None) -> Response:
     """Relay a streamed reply chunk by chunk, as it arrives.
 
     With `on_complete`, each chunk is also kept, and the whole stream is handed
@@ -641,12 +656,12 @@ async def _forward_stream(app: FastAPI, body: bytes, headers: dict[str, str], ta
         finally:
             await upstream.aclose()
         if on_outline is not None:
-            on_outline(reply_outline(upstream.status_code, content))
+            on_outline(*read_reply(upstream.status_code, content))
         return _verbatim(upstream, content)
 
     async def relay() -> AsyncIterator[bytes]:
         kept: list[bytes] | None = [] if on_complete is not None else None
-        outline_reader = StreamOutlineReader() if on_outline is not None else None
+        outline_reader = StreamOutlineReader(read_prompts=_reads_prompts(app)) if on_outline is not None else None
         size = 0
         try:
             # Decoded bytes: we strip `content-encoding`, so relaying raw gzip would
@@ -669,7 +684,7 @@ async def _forward_stream(app: FastAPI, body: bytes, headers: dict[str, str], ta
         finally:
             # Also runs on client disconnect, when the server closes this generator.
             if on_outline is not None and outline_reader is not None:
-                on_outline(outline_reader.outline())
+                on_outline(outline_reader.outline(), outline_reader.spawn_prompts())
             await upstream.aclose()
 
     return StreamingResponse(
@@ -678,6 +693,10 @@ async def _forward_stream(app: FastAPI, body: bytes, headers: dict[str, str], ta
         headers=_response_headers(upstream),
         media_type=upstream.headers.get("content-type", "text/event-stream"),
     )
+
+
+def _reads_prompts(app: FastAPI) -> bool:
+    return app.state.spawn_linker is not None
 
 
 def _upstream_request(app: FastAPI, body: bytes, headers: dict[str, str], target: str,
@@ -705,11 +724,11 @@ def _response_headers(upstream: httpx2.Response) -> dict[str, str]:
     return {k: v for k, v in upstream.headers.items() if k.lower() not in _RESPONSE_HOP_BY_HOP}
 
 
-def _unreachable(err: httpx2.RequestError, on_outline: Callable[[ReplyOutline], None] | None = None) -> Response:
+def _unreachable(err: httpx2.RequestError, on_outline: OutlineHandler | None = None) -> Response:
     # 502: the failure is upstream of us, not the client's mistake.
     logger.warning("could not reach the provider", extra={"error_type": type(err).__name__})
     if on_outline is not None:
-        on_outline(ReplyOutline(status=502))
+        on_outline(ReplyOutline(status=502), {})
     return Response(
         content=_dump_json_bytes(
             {"error": {"type": "api_error", "message": f"llm-gc could not reach the provider: {type(err).__name__}"}}

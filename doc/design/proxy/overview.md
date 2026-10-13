@@ -350,6 +350,37 @@ a title, a quota check — stays unsettled; the trace shows it as a side request
 *Accepted cost:* only the newest 64 unsettled requests per client session and agent are
 watched, so an old one stays unsettled rather than being compared for ever.
 
+**A subagent's first request names the call that started it.** A tool call that starts a
+subagent gives it a prompt, and the subagent's first message holds that prompt inside the
+context the client adds around it. So each reply's tool calls that carry a `prompt` input
+are offered to a linker, and so is each subagent's first message; a pair is made when the
+prompt is found in the message, and the link is stored on the subagent's first record.
+
+```
+main reply      → Agent toolu_a {prompt: "Count the test files…"}      ┐ offered when the reply ends
+                → Agent toolu_b {prompt: "Summarise README.md…"}       ┘
+subagent a1     first message: [context] "Count the test files…" [context]  → spawned by toolu_a
+subagent a2     first message: [context] "Summarise README.md…" [context]   → spawned by toolu_b
+                (either side may reach the proxy first; each waits for the other)
+```
+
+- **Read by the input's field, not the tool's name.** Claude Code has named the tool
+  `Task` and `Agent`; both take `prompt`. *Rejected: matching every tool input* — in a
+  live trace a subagent's own file path was found inside its opening, a false link.
+- **Either side may come first.** The reply ends and the subagent starts within
+  milliseconds, in no fixed order, so a call and an opening each wait for the other, for
+  up to ten minutes. When several could pair, the longest prompt wins - a short one can
+  sit inside a longer one's subagent by chance - and of equal prompts the earliest call,
+  so two subagents given the same task start in order.
+- **The prompt is content, held only for this.** It is read from the reply as it
+  streams, kept apart from the outline, held in memory only until matched, never
+  logged, and only while the dashboard runs. An input larger than any prompt is let go
+  while it streams. A subagent no call matches is shown as started by a call not
+  determined, never guessed.
+- **Not yet linked: a report to its subagent.** A relayed report is shown as a
+  subagent report, in its place in time; which subagent sent it is not named, because
+  a live trace matched only one report in two by its words.
+
 *Rejected: keeping the counts in each session's state* — sessions close when idle, and
 their requests would vanish from the client session's total. *Rejected: asking the
 provider to count each request (`count_tokens`)* — a network call per request for a
