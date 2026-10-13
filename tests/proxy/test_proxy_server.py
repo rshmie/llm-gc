@@ -1418,3 +1418,81 @@ class TestSubagentsAreRecordedNotCollected:
 
         [session_id] = service.session_manager.store.active_session_ids()
         assert service.session_manager.store.get(session_id).snapshot.cut_count > 0
+
+
+class TestEachRequestIsRecorded:
+    """Shaped like a live Claude Code trace: a first request that spawns two subagents, a side request the
+    conversation never continues, a subagent's relayed report. Structure is recorded, never content."""
+
+    ASK = "Use two subagents: count the test files, and summarise the README."
+    SPAWN = {**UPSTREAM_OK, "stop_reason": "tool_use", "content": [
+        {"type": "tool_use", "id": "toolu_a", "name": "Agent", "input": {"prompt": "count the test files"}},
+        {"type": "tool_use", "id": "toolu_b", "name": "Agent", "input": {"prompt": "summarise the README"}}]}
+
+    def _upstream(self, request: httpx2.Request) -> httpx2.Response:
+        messages = json.loads(request.content)["messages"]
+        return httpx2.Response(200, json=self.SPAWN if messages[-1]["content"] == self.ASK else UPSTREAM_OK)
+
+    def test_a_sessions_requests_are_recorded_and_settled(self):
+        client, _, _, _ = _proxy(self._upstream)
+        main = {CLIENT_SESSION_HEADER: "cc-1"}
+        started = [{"role": "user", "content": self.ASK},
+                   {"role": "assistant", "content": self.SPAWN["content"]},
+                   {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_a", "content": "started"},
+                                                {"type": "tool_result", "tool_use_id": "toolu_b", "content": "started"}]},
+                   {"role": "assistant", "content": "Both are running."}]
+
+        _post(client, {"model": "claude-opus-5-5", "max_tokens": 64, "messages": started[:1]}, headers=main)
+        _post(client, _body(("user", "count the test files"), max_tokens=64),
+              headers={**main, CLIENT_AGENT_HEADER: "agent-a"})
+        _post(client, {"model": "claude-opus-5-5", "max_tokens": 64, "messages": started[:3]}, headers=main)
+        _post(client, {"model": "claude-opus-5-5", "max_tokens": 64,
+                       "messages": [*started, {"role": "user", "content": "Suggest the user's next message."}]},
+              headers=main)
+        reported = [*started, {"role": "user", "content": "<agent-message>42 test files.</agent-message>"}]
+        _post(client, {"model": "claude-opus-5-5", "max_tokens": 64, "messages": reported}, headers=main)
+        log = client.app.state.metrics.request_log
+        # The side request and the report hold the same position: until a later request carries
+        # one of them on, neither is known to be kept.
+        assert (log.records()[3].kept, log.records()[4].kept) == (None, None)
+
+        _post(client, {"model": "claude-opus-5-5", "max_tokens": 64,
+                       "messages": [*reported, {"role": "assistant", "content": "42 test files."},
+                                    {"role": "user", "content": "Thanks."}]}, headers=main)
+
+        first, agent, results, side, report, thanks = log.records()
+        assert [call.name for call in first.outline.tool_calls] == ["Agent", "Agent"]
+        assert len({r.conversation_id for r in (first, results, side, report, thanks)}) == 1
+        assert (first.kept, results.kept, side.kept, report.kept, thanks.kept) == (True, True, False, True, None)
+        assert [r.newest for r in (first, results, side, report)] == ["typed", "tool_results", "typed", "relayed"]
+        assert agent.origin.agent_id == "agent-a" and agent.conversation_id is None
+        assert all(r.outline is not None and r.outline.status == 200 and r.ended_at is not None for r in log.records())
+        recorded = repr(log.records())
+        assert "test files" not in recorded and "Suggest" not in recorded
+
+    def test_a_streamed_replys_tool_calls_and_end_are_recorded(self):
+        def event(payload: dict) -> str:
+            return f"event: {payload['type']}\ndata: {json.dumps(payload)}\n\n"
+
+        body = (event({"type": "message_start", "message": {"usage": {"input_tokens": 7, "output_tokens": 1}}})
+                + event({"type": "content_block_start", "index": 0,
+                         "content_block": {"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {}}})
+                + event({"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 9}})
+                + event({"type": "message_stop"})).encode()
+        client, _, _, _ = _proxy(_streaming_upstream(body))
+
+        _post(client, _body(("user", "read the config"), stream=True))
+
+        [record] = client.app.state.metrics.request_log.records()
+        assert record.outline.finished and record.outline.stop_reason == "tool_use"
+        assert [call.name for call in record.outline.tool_calls] == ["Read"]
+
+    def test_an_unreachable_upstream_closes_the_record_as_a_502(self):
+        def refuse(request):
+            raise httpx2.ConnectError("refused")
+
+        client, _, _, _ = _proxy(refuse)
+        _post(client, _body(("user", "hello")))
+
+        [record] = client.app.state.metrics.request_log.records()
+        assert record.outline.status == 502 and not record.outline.finished

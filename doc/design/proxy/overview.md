@@ -320,6 +320,36 @@ subagent            … req 5 ─► reply ─► collection ─► (the subagen
                                          not yet sent 1    no request 6) saved stays 0
 ```
 
+**Each request is also recorded, on its own.** The ledger keeps sums; the trace needs
+each request as a row. A record opens just before forwarding and closes when the reply
+ends: its conversation, its client session and agent, when it went and came back, the
+tokens it carried, what kind its newest message is — typed by the person, tool results,
+a relayed report, or the assistant's — and the reply's outline: status, stop reason,
+the provider's usage, and the tools it called, by name and call id. Structure only,
+never content: the outline is read from the stream as it passes, and a reply cut short,
+refused or never answered still closes its record. 10,000 records are kept; the oldest
+is dropped first, and its counts stay in the ledger.
+
+A record names its newest message by the conversation's chain hash through it, so a
+later request of the same conversation settles it: *kept* when its history says the
+same through that message, *replaced* when it says something else there. Two requests
+at the same position are not compared with each other: until one is carried on,
+neither is known to be kept.
+
+```
+pos 1..5  [ask][Agent ×2][results][running]
+req A     ……………………………………………………………… + [suggest a next message]   side request      kept? waits
+req B     ……………………………………………………………… + [agent report]            relayed report    kept? waits
+req C     ……………………………………………………………… + [agent report][reply][thanks]
+                                     history through position 6 = req B's → B kept, A replaced
+```
+
+A first request is settled the same way: kept, and claimed by the conversation, when
+that conversation's history carries it. A request no conversation ever carries on —
+a title, a quota check — stays unsettled; the trace shows it as a side request.
+*Accepted cost:* only the newest 64 unsettled requests per client session and agent are
+watched, so an old one stays unsettled rather than being compared for ever.
+
 *Rejected: keeping the counts in each session's state* — sessions close when idle, and
 their requests would vanish from the client session's total. *Rejected: asking the
 provider to count each request (`count_tokens`)* — a network call per request for a

@@ -50,9 +50,13 @@ _RELAYED = re.compile(r"\s*<agent-message\b")
 # setup in use (a main conversation, each kind of subagent), with room to spare.
 _REPEATED_TEXTS_CACHED = 64
 
-# The longest unfinished stream line held while waiting for its end. Usage events are
-# short; a line longer than this is a content delta, which the usage reader never reads.
+# The longest unfinished stream line held while waiting for its end. The events an outline
+# reads are short; a line longer than this is a content delta, which it never reads.
 _STREAM_LINE_MAX_BYTES = 64 * 1024
+# The stream events an outline reads, matched in a line before it is parsed.
+_OUTLINE_EVENTS = (b'"message_start"', b'"message_delta"', b'"content_block_start"', b'"message_stop"')
+# A tool's name or id longer than this is not one; it is not kept or shown.
+_OUTLINE_STRING_MAX_CHARS = 128
 
 
 @dataclass(frozen=True)
@@ -278,41 +282,72 @@ def _streamed_blocks(raw: bytes) -> list[Any] | None:
     return None
 
 
-def reply_usage(raw: bytes) -> ProviderUsage | None:
-    """The `usage` an unstreamed reply reports, or None when it reports none."""
+@dataclass(frozen=True, slots=True)
+class ToolCall:
+    """A tool the reply asked the client to run: its name and the id its result will answer."""
+
+    name: str
+    call_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class ReplyOutline:
+    """What a reply did, never what it said: how it ended, the usage it reported, the tools it called."""
+
+    status: int
+    finished: bool = False                # it reached its end: a whole body, or a stream's message_stop
+    stop_reason: str | None = None
+    usage: ProviderUsage | None = None
+    tool_calls: tuple[ToolCall, ...] = ()
+
+
+def reply_outline(status: int, raw: bytes) -> ReplyOutline:
+    """The outline of an unstreamed reply. An error body, or one this reader cannot parse, outlines only its status."""
     try:
         body = json.loads(raw)
     except ValueError:
-        return None
-    usage = body.get("usage") if isinstance(body, dict) else None
-    return ProviderUsage.from_reported(usage) if isinstance(usage, dict) else None
+        return ReplyOutline(status=status)
+    if status != 200 or not isinstance(body, dict) or body.get("type") != "message":
+        return ReplyOutline(status=status)
+    usage = body.get("usage")
+    content = body.get("content")
+    blocks: list[Any] = content if isinstance(content, list) else []
+    return ReplyOutline(status=status, finished=True, stop_reason=_plain(body.get("stop_reason")),
+                        usage=ProviderUsage.from_reported(usage) if isinstance(usage, dict) else None,
+                        tool_calls=tuple(call for block in blocks if (call := _tool_call(block)) is not None))
 
 
-class StreamUsageReader:
-    """Reads the `usage` a streamed reply reports, chunk by chunk as it is relayed.
+class StreamOutlineReader:
+    """Reads a streamed reply's outline chunk by chunk, as it is relayed.
 
-    `message_start` carries the prompt's usage and `message_delta` the output so far, so
-    only those events are parsed; every other line is passed over unread. Only the
-    unfinished last line of a chunk is held between chunks.
+    Only the events an outline needs are parsed - `message_start` and `message_delta` for
+    usage and the stop reason, `content_block_start` for each tool call, `message_stop`
+    for the end - and every other line is passed over unread. Only the unfinished last
+    line of a chunk is held between chunks.
     """
 
     def __init__(self) -> None:
         self._partial = b""
         self._usage: dict[str, Any] | None = None
+        self._stop_reason: str | None = None
+        self._calls: list[ToolCall] = []
+        self._finished = False
 
     def feed(self, chunk: bytes) -> None:
         lines = (self._partial + chunk).split(b"\n")
         self._partial = lines.pop()
         if len(self._partial) > _STREAM_LINE_MAX_BYTES:
-            # Not an event line this reader needs; a usage event is short.
+            # Not an event line this reader needs: the events it reads are short.
             self._partial = b""
         for line in lines:
-            if line.startswith(b"data:") and (b'"message_start"' in line or b'"message_delta"' in line):
+            if line.startswith(b"data:") and any(name in line for name in _OUTLINE_EVENTS):
                 self._read(line[len(b"data:"):])
 
-    def usage(self) -> ProviderUsage | None:
-        """What the stream reported so far: the prompt once it began, the output as far as it got."""
-        return ProviderUsage.from_reported(self._usage) if self._usage is not None else None
+    def outline(self) -> ReplyOutline:
+        """What the stream showed so far: the prompt's usage once it began, the output as far as it got."""
+        return ReplyOutline(status=200, finished=self._finished, stop_reason=self._stop_reason,
+                            usage=ProviderUsage.from_reported(self._usage) if self._usage is not None else None,
+                            tool_calls=tuple(self._calls))
 
     def _read(self, data: bytes) -> None:
         try:
@@ -320,11 +355,32 @@ class StreamUsageReader:
         except ValueError:
             return
         kind = event.get("type") if isinstance(event, dict) else None
-        reported = (event.get("message") or {}).get("usage") if kind == "message_start" else (
-            event.get("usage") if kind == "message_delta" else None)
+        if kind == "message_start":
+            self._merge_usage((event.get("message") or {}).get("usage"))
+        elif kind == "message_delta":
+            self._merge_usage(event.get("usage"))
+            self._stop_reason = _plain((event.get("delta") or {}).get("stop_reason")) or self._stop_reason
+        elif kind == "content_block_start" and (call := _tool_call(event.get("content_block"))) is not None:
+            self._calls.append(call)
+        elif kind == "message_stop":
+            self._finished = True
+
+    def _merge_usage(self, reported: object) -> None:
         if isinstance(reported, dict):
             # Later events restate what changed: the output count is a running total, not an increment.
             self._usage = {**(self._usage or {}), **{k: v for k, v in reported.items() if v is not None}}
+
+
+def _tool_call(block: object) -> ToolCall | None:
+    if not isinstance(block, dict) or block.get("type") not in _TOOL_CALLS:
+        return None
+    name, call_id = _plain(block.get("name")), _plain(block.get("id"))
+    return ToolCall(name=name, call_id=call_id) if name and call_id else None
+
+
+def _plain(value: object) -> str | None:
+    """A short printable string from the reply, or None: a name or id that is anything else is not shown."""
+    return value if isinstance(value, str) and value.isprintable() and len(value) <= _OUTLINE_STRING_MAX_CHARS else None
 
 
 def rewrite_messages(payload: dict[str, Any], messages: list[Message], strip_thinking_before: int = 0,

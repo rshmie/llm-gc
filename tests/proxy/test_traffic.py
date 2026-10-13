@@ -5,7 +5,8 @@ from datetime import datetime, timedelta, timezone
 
 from llm_gc.llm import ModelUsage
 from llm_gc.models import ClientOrigin
-from llm_gc.proxy.anthropic_translation import StreamUsageReader, fixed_prompt_tokens, reply_usage
+from llm_gc.proxy.anthropic_translation import (ReplyOutline, StreamOutlineReader, ToolCall, fixed_prompt_tokens,
+                                                reply_outline)
 from llm_gc.proxy.traffic import ProviderUsage, TrafficLedger
 from llm_gc.utils import count_tokens
 
@@ -157,39 +158,55 @@ class TestTheWholeRequestIsCounted:
         assert fixed_prompt_tokens({"system": 42, "tools": "not a list"}) == 0
 
 
-class TestReadingUsage:
-    def test_an_unstreamed_replys_usage(self):
-        raw = json.dumps({"type": "message", "usage": {"input_tokens": 3, "cache_read_input_tokens": 2000,
-                                                       "cache_creation_input_tokens": None, "output_tokens": 50}})
-        assert reply_usage(raw.encode()) == ProviderUsage(replies=1, input_tokens=3, cache_read_input_tokens=2000,
-                                                          output_tokens=50)
+class TestReadingTheReplysOutline:
+    def test_an_unstreamed_replys_usage_stop_reason_and_tool_calls(self):
+        raw = json.dumps({"type": "message", "stop_reason": "tool_use",
+                          "content": [{"type": "text", "text": "Checking."},
+                                      {"type": "tool_use", "id": "toolu_1", "name": "Agent", "input": {"prompt": "x"}}],
+                          "usage": {"input_tokens": 3, "cache_read_input_tokens": 2000,
+                                    "cache_creation_input_tokens": None, "output_tokens": 50}})
+        assert reply_outline(200, raw.encode()) == ReplyOutline(
+            status=200, finished=True, stop_reason="tool_use",
+            usage=ProviderUsage(replies=1, input_tokens=3, cache_read_input_tokens=2000, output_tokens=50),
+            tool_calls=(ToolCall(name="Agent", call_id="toolu_1"),))
 
-    def test_an_error_body_or_garbage_reports_none(self):
-        assert reply_usage(b'{"type": "error", "error": {}}') is None
-        assert reply_usage(b"not json") is None
+    def test_an_error_body_or_garbage_outlines_only_its_status(self):
+        assert reply_outline(529, b'{"type": "error", "error": {}}') == ReplyOutline(status=529)
+        assert reply_outline(200, b"not json") == ReplyOutline(status=200)
 
     def test_a_stream_split_anywhere_reads_the_same(self):
-        """A chunk boundary can fall inside a line; a reader that parsed per chunk would lose the usage event."""
+        """A chunk boundary can fall inside a line; a reader that parsed per chunk would lose events."""
         events = [
             {"type": "message_start", "message": {"usage": {"input_tokens": 4, "cache_read_input_tokens": 1500,
                                                             "cache_creation_input_tokens": 60, "output_tokens": 1}}},
             {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta",
                                                                   "text": 'a "message_delta" in the text'}},
-            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 87}},
+            {"type": "content_block_start", "index": 1,
+             "content_block": {"type": "tool_use", "id": "toolu_9", "name": "Bash", "input": {}}},
+            {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 87}},
             {"type": "message_stop"},
         ]
         stream = "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events).encode()
-        expected = ProviderUsage(replies=1, input_tokens=4, cache_read_input_tokens=1500,
-                                 cache_creation_input_tokens=60, output_tokens=87)
+        expected = ReplyOutline(status=200, finished=True, stop_reason="tool_use",
+                                usage=ProviderUsage(replies=1, input_tokens=4, cache_read_input_tokens=1500,
+                                                    cache_creation_input_tokens=60, output_tokens=87),
+                                tool_calls=(ToolCall(name="Bash", call_id="toolu_9"),))
         for size in (1, 7, 64, len(stream)):
-            reader = StreamUsageReader()
+            reader = StreamOutlineReader()
             for start in range(0, len(stream), size):
                 reader.feed(stream[start:start + size])
-            assert reader.usage() == expected, size
+            assert reader.outline() == expected, size
 
-    def test_a_stream_cut_short_reports_the_prompt_it_was_billed_for(self):
-        reader = StreamUsageReader()
+    def test_a_stream_cut_short_is_unfinished_and_reports_the_prompt_it_was_billed_for(self):
+        reader = StreamOutlineReader()
         start = {"type": "message_start", "message": {"usage": {"input_tokens": 900, "output_tokens": 1}}}
         reader.feed(f"data: {json.dumps(start)}\n\n".encode())
 
-        assert reader.usage() == ProviderUsage(replies=1, input_tokens=900, output_tokens=1)
+        assert reader.outline() == ReplyOutline(status=200, finished=False,
+                                                usage=ProviderUsage(replies=1, input_tokens=900, output_tokens=1))
+
+    def test_a_tool_name_that_is_not_a_plain_short_string_is_not_kept(self):
+        raw = json.dumps({"type": "message", "stop_reason": "tool_use", "content": [
+            {"type": "tool_use", "id": "toolu_1", "name": "x" * 500, "input": {}},
+            {"type": "tool_use", "id": "toolu_2", "name": "Read\u0007", "input": {}}]})
+        assert reply_outline(200, raw.encode()).tool_calls == ()

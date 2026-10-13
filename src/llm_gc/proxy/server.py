@@ -39,18 +39,20 @@ from llm_gc.proxy.anthropic_translation import (
     Instruction,
     carry_instructions,
     extract_instructions,
-    StreamUsageReader,
+    ReplyOutline,
+    StreamOutlineReader,
     extract_messages,
     fixed_prompt_tokens,
     forwardable_headers,
     instruction_tokens,
+    reply_outline,
     reply_text,
-    reply_usage,
     rewrite_messages,
 )
 from llm_gc.proxy.model_windows import ModelWindow, ModelWindows, WindowLookup
 from llm_gc.proxy.session_identity import SESSION_HEADER, chain_hashes, client_origin
-from llm_gc.proxy.traffic import ProviderUsage, RequestTargets, TrafficLedger
+from llm_gc.proxy.request_log import RequestLog, newest_kind
+from llm_gc.proxy.traffic import TrafficLedger
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +110,7 @@ class ProxyMetrics:
         self.history_restarts = 0
         self.sessions_seeded = 0
         self.traffic = TrafficLedger()
+        self.request_log = RequestLog()
 
     def as_dict(self) -> dict[str, Any]:
         total = self.traffic.total
@@ -279,9 +282,13 @@ async def _handle(app: FastAPI, request: Request) -> Response:
     origin: ClientOrigin | None = None
     window: ModelWindow | None = None
     collected = True
+    hashes: list[str] | None = None
     try:
         origin = client_origin(request.headers)
-        session_id = _record_client_history(app, history, request.headers.get(SESSION_HEADER), origin)
+        # One pass serves the session lookup, the claim of a first request and the request log.
+        hashes = chain_hashes(client_messages)
+        session_id = _record_client_history(app, history, hashes[:-1], request.headers.get(SESSION_HEADER),
+                                            origin)
         window = app.state.model_windows.window_for(_model_name(payload))
         collected = _collected(app, origin)
         if session_id is not None:
@@ -295,19 +302,18 @@ async def _handle(app: FastAPI, request: Request) -> Response:
                          extra={"session_id": session_id, "error_type": type(err).__name__})
         metrics.gc_bypassed += 1
         # Counted as forwarded whole, so a bypass does not look free in /stats.
-        counted = _count_request(app, session_id, origin, payload, client_messages, client_tokens, client_tokens,
-                                 window, collected)
-        response = await _send(app, body, headers, streaming, target, on_usage=_usage_recorder(counted))
+        on_outline = _measure_request(app, session_id, origin, payload, client_messages, hashes, client_tokens,
+                                      client_tokens, window, collected)
+        response = await _send(app, body, headers, streaming, target, on_outline=on_outline)
         _log_answer(response.status_code, payload, client_tokens, client_tokens, session_id)
         return response
 
     metrics.gc_applied += 1
     forwarded_tokens = conversation_tokens + fixed_tokens
-    counted = _count_request(app, session_id, origin, payload, client_messages, client_tokens, forwarded_tokens,
-                             window, collected)
+    on_outline = _measure_request(app, session_id, origin, payload, client_messages, hashes, client_tokens,
+                                  forwarded_tokens, window, collected)
     response = await _send(app, forward_body, headers, streaming, target,
-                           on_complete=_reply_observer(app, session_id, new_turn, streaming),
-                           on_usage=_usage_recorder(counted))
+                           on_complete=_reply_observer(app, session_id, new_turn, streaming), on_outline=on_outline)
     _log_answer(response.status_code, payload, client_tokens, forwarded_tokens, session_id)
 
     # Aging prepares the next request from the conversation recorded so far; it
@@ -357,26 +363,36 @@ def _collected(app: FastAPI, origin: ClientOrigin | None) -> bool:
     return origin is None or origin.agent_id is None or app.state.collect_subagents
 
 
-def _count_request(app: FastAPI, session_id: str | None, origin: ClientOrigin | None, payload: dict[str, Any],
-                   client_messages: Sequence[Message], from_client: int, forwarded: int,
-                   window: ModelWindow | None, collected: bool) -> RequestTargets:
-    """Count a request where it belongs: its conversation, its client session, the proxy. Never fails the request."""
+def _measure_request(app: FastAPI, session_id: str | None, origin: ClientOrigin | None, payload: dict[str, Any],
+                     client_messages: Sequence[Message], hashes: Sequence[str] | None, from_client: int,
+                     forwarded: int, window: ModelWindow | None, collected: bool
+                     ) -> Callable[[ReplyOutline], None] | None:
+    """Count a request in the ledger and open its record; return what to do with its reply's outline.
+
+    Never fails the request: a failure here costs the counts, not the answer.
+    """
+    metrics: ProxyMetrics = app.state.metrics
     try:
-        traffic: TrafficLedger = app.state.metrics.traffic
-        return traffic.record_request(conversation_id=session_id, origin=origin, model=_model_name(payload),
-                                      opening=chain_hashes(client_messages[:1])[0],
-                                      tokens_from_client=from_client, tokens_forwarded=forwarded,
-                                      context_window=window, collected=collected)
+        hashes = hashes if hashes is not None else chain_hashes(client_messages)
+        model = _model_name(payload)
+        counted = metrics.traffic.record_request(conversation_id=session_id, origin=origin, model=model,
+                                                 opening=hashes[0], tokens_from_client=from_client,
+                                                 tokens_forwarded=forwarded, context_window=window,
+                                                 collected=collected)
+        record = metrics.request_log.begin(conversation_id=session_id, origin=origin, hashes=hashes,
+                                           newest=newest_kind(client_messages[-1]), model=model,
+                                           tokens_from_client=from_client, tokens_forwarded=forwarded,
+                                           collected=collected)
     except Exception:
         logger.exception("counting the request failed; the request is unaffected", extra={"session_id": session_id})
-        return ()
-
-
-def _usage_recorder(counted: RequestTargets) -> Callable[[ProviderUsage], None] | None:
-    """What to do with the usage a reply reports: add it wherever its request was counted."""
-    if not counted:
         return None
-    return lambda usage: _never_blocking(TrafficLedger.record_usage, counted, usage)
+
+    def close(outline: ReplyOutline) -> None:
+        if outline.usage is not None:
+            TrafficLedger.record_usage(counted, outline.usage)
+        metrics.request_log.finish(record, outline)
+
+    return lambda outline: _never_blocking(close, outline)
 
 
 def _count_collection(app: FastAPI, event: Event) -> None:
@@ -388,14 +404,15 @@ def _count_collection(app: FastAPI, event: Event) -> None:
                                                output_tokens=result.summary_output_tokens))
 
 
-def _record_client_history(app: FastAPI, history: list[Message], header_value: str | None,
+def _record_client_history(app: FastAPI, history: list[Message], hashes: Sequence[str], header_value: str | None,
                            origin: ClientOrigin | None) -> str | None:
     """Find the session this history belongs to and record what it has not seen.
 
     The client's history is the truth: it holds every earlier reply exactly as the
     user saw it, and nothing the user never saw. So the session is reconciled to
     it on every request - continued, rewound, or started over - rather than built
-    from responses. Returns None for a first turn, which has no history to keep.
+    from responses. `hashes` are the history's chain hashes. Returns None for a first
+    turn, which has no history to keep.
     """
     if not history:
         return None
@@ -403,7 +420,6 @@ def _record_client_history(app: FastAPI, history: list[Message], header_value: s
     gc_service: GcService = app.state.gc_service
     manager = gc_service.session_manager
     metrics: ProxyMetrics = app.state.metrics
-    hashes = chain_hashes(history)
 
     if header_value and header_value.strip():
         state = manager.get_or_create(header_value.strip())
@@ -554,10 +570,10 @@ def _target(request: Request) -> str:
 
 async def _send(app: FastAPI, body: bytes, headers: dict[str, str], streaming: bool, target: str,
                 on_complete: Callable[[bytes], None] | None = None,
-                on_usage: Callable[[ProviderUsage], None] | None = None) -> Response:
+                on_outline: Callable[[ReplyOutline], None] | None = None) -> Response:
     if streaming:
-        return await _forward_stream(app, body, headers, target, on_complete, on_usage)
-    return await _forward(app, body, headers, target, on_complete=on_complete, on_usage=on_usage)
+        return await _forward_stream(app, body, headers, target, on_complete, on_outline)
+    return await _forward(app, body, headers, target, on_complete=on_complete, on_outline=on_outline)
 
 
 def _reply_observer(app: FastAPI, session_id: str | None, answering: Message,
@@ -584,7 +600,7 @@ def _reply_observer(app: FastAPI, session_id: str | None, answering: Message,
 
 async def _forward(app: FastAPI, body: bytes, headers: dict[str, str], target: str, *,
                    method: str = "POST", on_complete: Callable[[bytes], None] | None = None,
-                   on_usage: Callable[[ProviderUsage], None] | None = None) -> Response:
+                   on_outline: Callable[[ReplyOutline], None] | None = None) -> Response:
     """Send the request upstream and hand the answer back verbatim.
 
     Status codes and error bodies pass through unchanged: the client's error
@@ -594,30 +610,29 @@ async def _forward(app: FastAPI, body: bytes, headers: dict[str, str], target: s
     try:
         upstream = await client.send(_upstream_request(app, body, headers, target, method))
     except httpx2.RequestError as err:
-        return _unreachable(err)
-    if upstream.status_code == 200:
-        if on_complete is not None:
-            on_complete(upstream.content)
-        if on_usage is not None and (usage := reply_usage(upstream.content)) is not None:
-            on_usage(usage)
+        return _unreachable(err, on_outline)
+    if on_complete is not None and upstream.status_code == 200:
+        on_complete(upstream.content)
+    if on_outline is not None:
+        on_outline(reply_outline(upstream.status_code, upstream.content))
     return _verbatim(upstream, upstream.content)
 
 
 async def _forward_stream(app: FastAPI, body: bytes, headers: dict[str, str], target: str,
                           on_complete: Callable[[bytes], None] | None = None,
-                          on_usage: Callable[[ProviderUsage], None] | None = None) -> Response:
+                          on_outline: Callable[[ReplyOutline], None] | None = None) -> Response:
     """Relay a streamed reply chunk by chunk, as it arrives.
 
     With `on_complete`, each chunk is also kept, and the whole stream is handed
     over once the client has it all: one append per chunk on the way through.
-    With `on_usage`, the usage the stream reports is read as it passes, and handed
-    over when it ends - also when it ends early, since the prompt was billed anyway.
+    With `on_outline`, the reply's outline is read as it passes, and handed over when
+    it ends - also when it ends early, since the prompt was billed anyway.
     """
     client: httpx2.AsyncClient = app.state.http_client
     try:
         upstream = await client.send(_upstream_request(app, body, headers, target, "POST"), stream=True)
     except httpx2.RequestError as err:
-        return _unreachable(err)
+        return _unreachable(err, on_outline)
 
     # An error status arrives as a JSON body, not a stream; pass it through whole.
     if upstream.status_code != 200:
@@ -625,18 +640,20 @@ async def _forward_stream(app: FastAPI, body: bytes, headers: dict[str, str], ta
             content = await upstream.aread()
         finally:
             await upstream.aclose()
+        if on_outline is not None:
+            on_outline(reply_outline(upstream.status_code, content))
         return _verbatim(upstream, content)
 
     async def relay() -> AsyncIterator[bytes]:
         kept: list[bytes] | None = [] if on_complete is not None else None
-        usage_reader = StreamUsageReader() if on_usage is not None else None
+        outline_reader = StreamOutlineReader() if on_outline is not None else None
         size = 0
         try:
             # Decoded bytes: we strip `content-encoding`, so relaying raw gzip would
             # hand the client compressed bytes labelled as plain text.
             async for chunk in upstream.aiter_bytes():
-                if usage_reader is not None:
-                    usage_reader.feed(chunk)
+                if outline_reader is not None:
+                    outline_reader.feed(chunk)
                 yield chunk
                 if kept is not None:
                     size += len(chunk)
@@ -651,8 +668,8 @@ async def _forward_stream(app: FastAPI, body: bytes, headers: dict[str, str], ta
             raise
         finally:
             # Also runs on client disconnect, when the server closes this generator.
-            if on_usage is not None and usage_reader is not None and (usage := usage_reader.usage()) is not None:
-                on_usage(usage)
+            if on_outline is not None and outline_reader is not None:
+                on_outline(outline_reader.outline())
             await upstream.aclose()
 
     return StreamingResponse(
@@ -688,9 +705,11 @@ def _response_headers(upstream: httpx2.Response) -> dict[str, str]:
     return {k: v for k, v in upstream.headers.items() if k.lower() not in _RESPONSE_HOP_BY_HOP}
 
 
-def _unreachable(err: httpx2.RequestError) -> Response:
+def _unreachable(err: httpx2.RequestError, on_outline: Callable[[ReplyOutline], None] | None = None) -> Response:
     # 502: the failure is upstream of us, not the client's mistake.
     logger.warning("could not reach the provider", extra={"error_type": type(err).__name__})
+    if on_outline is not None:
+        on_outline(ReplyOutline(status=502))
     return Response(
         content=_dump_json_bytes(
             {"error": {"type": "api_error", "message": f"llm-gc could not reach the provider: {type(err).__name__}"}}
