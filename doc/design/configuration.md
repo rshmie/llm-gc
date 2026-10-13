@@ -158,6 +158,12 @@ way would be replaced by the library's whenever any engine key was set. A subcla
 changes the window's default and inherits everything else, so each setting is
 defaulted independently.
 
+**Subagents are not collected unless asked.** `collect_subagents` (default false) is
+the one setting about a client's conversations rather than the engine: a subagent's
+conversation is recorded and sent as written, for the reasons in
+[the proxy](proxy/overview.md). It is a setting because a long-running subagent is the
+case where collecting could pay, and only the person running it knows they have one.
+
 **The configured window is the fallback.**
 
 ```

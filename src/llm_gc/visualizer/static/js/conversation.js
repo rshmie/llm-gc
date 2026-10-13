@@ -3,7 +3,7 @@
 // Every value comes from an endpoint; this view formats and explains, and derives
 // nothing beyond grouping, counting, and sums and differences of numbers it was given.
 
-import { BECOMES, CATS, CLAMP_CHARS, FAR_JUMP_SCREENS, MAP_PX_PER_MESSAGE, EARLIER_SHOWN, GLOSSARY, HEIGHT, MIN_BAR_PX, ORDER, RUN_MIN, FACT_STATUS, categoryOf, describeOutcome, swatch } from "./vocabulary.js";
+import { BECOMES, CATS, CLAMP_CHARS, FAR_JUMP_SCREENS, MAP_PX_PER_MESSAGE, EARLIER_SHOWN, GLOSSARY, HEIGHT, MIN_BAR_PX, NOT_COLLECTED_TEXT, ORDER, RUN_MIN, FACT_STATUS, categoryOf, describeOutcome, swatch } from "./vocabulary.js";
 import { $, agoTs, countEl, fill, fmt, h, meterBar, percent, plural, ranges, reducedMotion, setChildren, storeGet, storeSet, svg } from "./dom.js";
 import { collecting, countCats, credentialRefusal, factsByTurn, has, instructionTokens, marked, newestReply, pendingTurns, preview, query, recapLimit, state, trafficOf, turnMatches, ui, writtenTokens } from "./state.js";
 import { hideTooltip, info, showTooltip, tipAction, tipQuote, hoverTip } from "./tooltip.js";
@@ -95,7 +95,8 @@ export function renderSize(k) {
   const sent = k.context_tokens;
   const less = written - sent;
   // A forecast: what the next request will carry. What requests did carry is measured, below it.
-  const [tone, text] = k.cuts === 0 ? ["", "Same as written: nothing collected yet"]
+  const [tone, text] = !k.collected ? ["", "Same as written: not collected"]
+    : k.cuts === 0 ? ["", "Same as written: nothing collected yet"]
     : less >= 0 ? ["good", `↓ ${fmt(less)} · ${percent(less, written)}% less than as written`]
     : ["", `↑ ${fmt(-less)} more than as written: the recap outgrew what it replaced`];
   fill("panel-size",
@@ -111,7 +112,8 @@ function measuredSoFar() {
   const c = trafficOf(state.selected);
   if (!c) return null;
   const t = c.traffic;
-  const saved = t.tokens_saved ? `saved ${fmt(t.tokens_saved)} (${percent(t.tokens_saved, t.tokens_from_client)}%)` : "nothing saved yet";
+  const saved = t.tokens_saved ? `saved ${fmt(t.tokens_saved)} (${percent(t.tokens_saved, t.tokens_from_client)}%)`
+    : c.collected === false ? "nothing saved: not collected" : "nothing saved yet";
   return h("p", { class: "hero-sub measured" }, h("b", {}, "So far: "), `${plural(t.requests, "request")} sent ${fmt(t.tokens_from_client)} tokens whole; ${saved}.`,
     c.collections_not_yet_sent ? h("span", { class: "st warn" }, ` ⚠ The newest collection has not reached the model: no request has carried it yet.`) : null);
 }
@@ -129,7 +131,8 @@ export function renderHolds(k) {
     h("div", { class: "label" }, "How each message is sent", info("holds")),
     h("ul", { class: "holds" }, rows),
     h("div", { class: "note" }, sofar, h("div", { id: "last-collection" }),
-      next ? h("div", {}, k.next_cut.batch_ready ? `A collection runs after your next reply: ${changes(next)}. ` : `${changes(next)} at the next collection. `, why) : null));
+      !k.collected ? h("div", { ...hoverTip("Not collected", NOT_COLLECTED_TEXT) }, "Not collected: a subagent's conversation is recorded and sent as written.")
+        : next ? h("div", {}, k.next_cut.batch_ready ? `A collection runs after your next reply: ${changes(next)}. ` : `${changes(next)} at the next collection. `, why) : null));
   renderLastCollection();
 }
 

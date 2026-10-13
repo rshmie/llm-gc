@@ -61,7 +61,10 @@ export const STATUS = {
   bypassed_aging_in_flight: { tone: "", icon: "–", text: "skipped: a collection was already running" },
   bypassed_on_error:        { tone: "critical", icon: "✕", text: "failed: nothing changed" },
   discarded_session_closed: { tone: "", icon: "–", text: "discarded: the conversation had closed" },
+  bypassed_not_collected:   { tone: "", icon: "–", text: "not collected: recorded and sent as written" },
 };
+// Why a conversation is recorded but never collected: today, only a subagent's.
+export const NOT_COLLECTED_TEXT = "LLM-GC records this conversation and shows it, but sends it as written: it is a subagent's, which usually ends before a collection could pay for itself, and whose answer is only as good as what it read. The collect_subagents setting turns collection on.";
 // What a collection did. Always from the engine's outcome, which names every message it moved: a
 // collection re-plans every exchange, so it can move earlier ones too, in either direction.
 export const OUTCOME_LINES = [

@@ -14,3 +14,5 @@ class GCStatus(Enum):
     # The session was closed while this pass was running; its result was dropped
     # so a closed session stays closed.
     DISCARDED_SESSION_CLOSED = "discarded_session_closed"
+    # Collection is turned off for this session: it is recorded and shown, never collected.
+    BYPASSED_NOT_COLLECTED = "bypassed_not_collected"

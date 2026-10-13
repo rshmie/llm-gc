@@ -389,3 +389,47 @@ class TestTheRecapIsSizedForTheModelsWindow:
         fresh = service.session_manager.replace(state, state.snapshot)
 
         assert fresh.context_window == 1_000_000
+
+
+class TestASessionCanBeRecordedWithoutBeingCollected:
+    def test_with_collection_off_a_pass_changes_nothing_and_buys_nothing(self):
+        service, _, provider = make_service(default_score=COMPACTED_SCORE)
+        service.session_manager.get_or_create("s")
+        service.set_collection_enabled("s", False)
+
+        results = _converse(service, 4)
+
+        assert {result.status for result in results} == {GCStatus.BYPASSED_NOT_COLLECTED}
+        assert _snapshot(service).old == () and provider.calls == []
+        assert _young(service) == [0, 1, 2, 3]
+
+    def test_with_collection_off_no_collection_is_forecast(self):
+        """The page draws its forecasts from the preview: one that will not run must forecast nothing."""
+        service, _, _ = make_service(default_score=COMPACTED_SCORE)
+        service.session_manager.get_or_create("s")
+        service.set_collection_enabled("s", False)
+        _converse(service, 4)
+
+        inspection = service.inspect("s")
+        assert not inspection.collection_enabled
+        assert inspection.next_cut.turns == () and not inspection.next_cut.batch_ready
+        assert inspection.next_cut.levels == {}
+
+    def test_turned_back_on_the_same_session_is_collected(self):
+        service, _, _ = make_service(default_score=COMPACTED_SCORE)
+        service.session_manager.get_or_create("s")
+        service.set_collection_enabled("s", False)
+        _converse(service, 3)
+        service.set_collection_enabled("s", True)
+
+        [result] = _converse(service, 1, start=3)
+
+        assert result.status is GCStatus.COMPLETED
+
+    def test_a_rewound_session_keeps_its_choice(self):
+        service, _, _ = make_service()
+        _converse(service, 2)
+        service.set_collection_enabled("s", False)
+        state = service.session_manager.store.get("s")
+
+        assert service.session_manager.replace(state, state.snapshot).collection_enabled is False

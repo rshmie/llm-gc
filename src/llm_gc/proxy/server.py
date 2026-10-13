@@ -139,6 +139,7 @@ def create_app(
     on_client_history: Callable[[str, list[Message], ClientOrigin | None], None] | None = None,
     on_reply: Callable[[str, Message, str], None] | None = None,
     window_lookup: WindowLookup | None = None,
+    collect_subagents: bool = False,
 ) -> FastAPI:
     """Wire the proxy around an already-built engine.
 
@@ -162,6 +163,8 @@ def create_app(
         window_lookup: Asks the upstream for a model's context window, with LLM-GC's
             own credential. Without it, every conversation's recap is sized for the
             configured window.
+        collect_subagents: Collect the conversations a client marks as a subagent's.
+            Off, they are recorded, shown and forwarded as sent, never collected.
     """
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -191,6 +194,7 @@ def create_app(
     app.state.on_client_history = on_client_history
     app.state.on_reply = on_reply
     app.state.model_windows = ModelWindows(gc_service.gc_config.context_window, window_lookup, app.state.schedule)
+    app.state.collect_subagents = collect_subagents
     gc_service.event_bus.subscribe(EventType.GC_FINISHED, lambda event: _count_collection(app, event))
 
     @app.get("/health")
@@ -274,13 +278,16 @@ async def _handle(app: FastAPI, request: Request) -> Response:
     session_id: str | None = None
     origin: ClientOrigin | None = None
     window: ModelWindow | None = None
+    collected = True
     try:
         origin = client_origin(request.headers)
         session_id = _record_client_history(app, history, request.headers.get(SESSION_HEADER), origin)
         window = app.state.model_windows.window_for(_model_name(payload))
+        collected = _collected(app, origin)
         if session_id is not None:
             _observe_history(app, session_id, client_messages, origin)
             app.state.gc_service.use_context_window(session_id, window.tokens)
+            app.state.gc_service.set_collection_enabled(session_id, collected)
         forward_body, conversation_tokens = await _apply_gc(app, session_id, history, new_turn, payload, body,
                                                             instructions)
     except Exception as err:
@@ -289,7 +296,7 @@ async def _handle(app: FastAPI, request: Request) -> Response:
         metrics.gc_bypassed += 1
         # Counted as forwarded whole, so a bypass does not look free in /stats.
         counted = _count_request(app, session_id, origin, payload, client_messages, client_tokens, client_tokens,
-                                 window)
+                                 window, collected)
         response = await _send(app, body, headers, streaming, target, on_usage=_usage_recorder(counted))
         _log_answer(response.status_code, payload, client_tokens, client_tokens, session_id)
         return response
@@ -297,7 +304,7 @@ async def _handle(app: FastAPI, request: Request) -> Response:
     metrics.gc_applied += 1
     forwarded_tokens = conversation_tokens + fixed_tokens
     counted = _count_request(app, session_id, origin, payload, client_messages, client_tokens, forwarded_tokens,
-                             window)
+                             window, collected)
     response = await _send(app, forward_body, headers, streaming, target,
                            on_complete=_reply_observer(app, session_id, new_turn, streaming),
                            on_usage=_usage_recorder(counted))
@@ -305,7 +312,7 @@ async def _handle(app: FastAPI, request: Request) -> Response:
 
     # Aging prepares the next request from the conversation recorded so far; it
     # never depends on this reply, which the next request will show us exactly.
-    if session_id is not None:
+    if session_id is not None and collected:
         _never_blocking(lambda: app.state.schedule(_age(app, session_id)))
     return response
 
@@ -339,16 +346,27 @@ def _model_name(payload: dict[str, Any]) -> str | None:
     return model if isinstance(model, str) and model.isprintable() and len(model) <= _MODEL_NAME_MAX_CHARS else None
 
 
+def _collected(app: FastAPI, origin: ClientOrigin | None) -> bool:
+    """Whether this request's conversation is collected: every one, except a subagent's unless asked.
+
+    A subagent usually ends soon after a collection could first help it, so the
+    collection is paid for and seldom sent; and its answer is only as good as what it
+    read, which no reader of the main conversation sees. The client's header only
+    turns collection off: without it, a conversation is collected as any other.
+    """
+    return origin is None or origin.agent_id is None or app.state.collect_subagents
+
+
 def _count_request(app: FastAPI, session_id: str | None, origin: ClientOrigin | None, payload: dict[str, Any],
                    client_messages: Sequence[Message], from_client: int, forwarded: int,
-                   window: ModelWindow | None) -> RequestTargets:
+                   window: ModelWindow | None, collected: bool) -> RequestTargets:
     """Count a request where it belongs: its conversation, its client session, the proxy. Never fails the request."""
     try:
         traffic: TrafficLedger = app.state.metrics.traffic
         return traffic.record_request(conversation_id=session_id, origin=origin, model=_model_name(payload),
                                       opening=chain_hashes(client_messages[:1])[0],
                                       tokens_from_client=from_client, tokens_forwarded=forwarded,
-                                      context_window=window)
+                                      context_window=window, collected=collected)
     except Exception:
         logger.exception("counting the request failed; the request is unaffected", extra={"session_id": session_id})
         return ()

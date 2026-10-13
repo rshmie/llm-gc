@@ -106,6 +106,7 @@ class KnowledgeState(BaseModel):
     last_activity: datetime
     context_window: int                   # the window of the model being called, as the recap is sized for it
     recap_budget: int
+    collected: bool                       # False: recorded and shown, never collected
 
 
 def project_knowledge_state(inspection: SessionInspection) -> KnowledgeState:
@@ -133,6 +134,7 @@ def project_knowledge_state(inspection: SessionInspection) -> KnowledgeState:
         last_activity=inspection.last_activity,
         context_window=inspection.context_window,
         recap_budget=inspection.recap_budget,
+        collected=inspection.collection_enabled,
     )
 
 

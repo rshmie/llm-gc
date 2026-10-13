@@ -94,6 +94,7 @@ class ConversationTraffic:
     origin: ClientOrigin | None
     model: str | None                  # as its newest request named it
     context_window: ModelWindow | None  # that model's window, as its recap is sized for it
+    collected: bool                    # False: recorded and shown, never collected
     first_request_at: datetime
     last_request_at: datetime
     traffic: Traffic = field(default_factory=Traffic)
@@ -106,6 +107,7 @@ class ConversationTraffic:
                 "agent": self.origin.agent_id if self.origin is not None else None,
                 "model": self.model,
                 "context_window": asdict(self.context_window) if self.context_window is not None else None,
+                "collected": self.collected,
                 "first_request_at": self.first_request_at.isoformat(),
                 "last_request_at": self.last_request_at.isoformat(), "collections": self.collections,
                 "collections_not_yet_sent": self.collections_not_yet_sent, "traffic": self.traffic.as_dict()}
@@ -145,7 +147,7 @@ class TrafficLedger:
 
     def record_request(self, *, conversation_id: str | None, origin: ClientOrigin | None, model: str | None,
                        opening: str, tokens_from_client: int, tokens_forwarded: int,
-                       context_window: ModelWindow | None = None) -> RequestTargets:
+                       context_window: ModelWindow | None = None, collected: bool = True) -> RequestTargets:
         """Count one forwarded request. Returns where its reply's usage is to be added.
 
         `opening` identifies the conversation's first turn. A request with no conversation
@@ -159,6 +161,7 @@ class TrafficLedger:
         if conversation_id is not None:
             conversation = self._conversation(conversation_id, origin, model, opening, now)
             conversation.context_window = context_window or conversation.context_window
+            conversation.collected = collected
             # This request carries every collection made so far.
             conversation.collections_not_yet_sent = 0
             targets.append(conversation.traffic)
@@ -220,7 +223,7 @@ class TrafficLedger:
         if conversation is None:
             claimed = self._unclaimed.pop((opening, origin), None)
             conversation = ConversationTraffic(
-                conversation_id=conversation_id, origin=origin, model=model, context_window=None,
+                conversation_id=conversation_id, origin=origin, model=model, context_window=None, collected=True,
                 first_request_at=claimed.first_request_at if claimed is not None else now, last_request_at=now,
                 # The same object, so a reply to the first request still on its way lands here too.
                 traffic=claimed.traffic if claimed is not None else Traffic())

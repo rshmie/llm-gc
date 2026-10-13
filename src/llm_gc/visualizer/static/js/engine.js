@@ -2,7 +2,7 @@
 // runs and why each message gets what it gets, what collections did and couldn't do, every check,
 // and last the proxy's totals and settings, which apply to every conversation.
 
-import { BECOMES, CARD_INFO, CATS, CHART_HEIGHT, CHECKS_SHOWN, CREDENTIAL_REFUSED_TEXT, CREDENTIAL_REFUSED_TITLE, MAX_EXCHANGE_LINKS, MOVES_SHOWN, NOT_MOVED, OUTCOME_LINES, STATUS, describeOutcome, swatch } from "./vocabulary.js";
+import { BECOMES, CARD_INFO, CATS, CHART_HEIGHT, CHECKS_SHOWN, CREDENTIAL_REFUSED_TEXT, CREDENTIAL_REFUSED_TITLE, MAX_EXCHANGE_LINKS, MOVES_SHOWN, NOT_COLLECTED_TEXT, NOT_MOVED, OUTCOME_LINES, STATUS, describeOutcome, swatch } from "./vocabulary.js";
 import { $, agoTs, compact, countEl, fill, fmt, h, meterBar, plural, reducedMotion, setChildren, storeGet, storeSet, svg } from "./dom.js";
 import { credentialRefusal, keepLast, preview, state, ui } from "./state.js";
 import { hideTooltip, info, placeTooltip, showTooltip, tipQuote, tooltipContent, hoverTip } from "./tooltip.js";
@@ -135,7 +135,8 @@ export function renderEngineStatus() {
   const failed = !!last && last.gc_status === "bypassed_on_error";
   const refusal = credentialRefusal();
   const tone = failed || refusal ? "critical" : problems ? "warn" : "good";
-  const lastText = last ? `Last check ${agoTs(last.gc_completed_at)}: ${STATUS[last.gc_status]?.text || last.gc_status}, ${last.duration_ms.toFixed(0)} ms.`
+  const lastText = state.knowledge && !state.knowledge.collected ? "This conversation is a subagent's: recorded and sent as written, never checked for a collection."
+    : last ? `Last check ${agoTs(last.gc_completed_at)}: ${STATUS[last.gc_status]?.text || last.gc_status}, ${last.duration_ms.toFixed(0)} ms.`
     : "No checks yet. LLM-GC checks after every reply.";
   fill("eng-status", h("div", { class: `status-line tone-${tone}` },
     h("span", { class: "badge", "aria-hidden": "true" }, failed || refusal ? "✕" : problems ? "!" : "✓"),
@@ -157,6 +158,12 @@ function lastAttempt() {
 // A collection has two conditions to meet, so they are shown as a checklist, each with its state,
 // beside what the collection would do to which messages - and which of those count toward the first.
 export function renderNext(k) {
+  // A conversation that is never collected has no next collection to show the conditions of.
+  if (!k.collected) {
+    fill("panel-next", h("p", { class: "next-lede" }, "Not collected: a subagent's conversation is recorded and sent as written."),
+      h("p", { class: "secondary" }, NOT_COLLECTED_TEXT));
+    return;
+  }
   const cut = k.next_cut;
   const taking = k.turns.filter((t) => t.fidelity === "verbatim" && t.becomes);
   const moving = k.spans.filter((s) => s.becomes);

@@ -26,6 +26,12 @@
 # request.
 # log_level = "INFO"
 
+# Claude Code's subagents each work in a conversation of their own. LLM-GC records and
+# shows them but sends them as written: a subagent usually ends before a collection
+# could pay for itself, and its answer is only as good as what it read. true collects
+# them like any other conversation.
+# collect_subagents = false
+
 
 # ── Summaries ──────────────────────────────────────────────────────────────────────────
 

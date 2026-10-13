@@ -159,6 +159,8 @@ class ProxySettings(BaseSettings):
     compactor: Literal["llm", "noop"] = "llm"
     summary: SummarySettings = Field(default_factory=SummarySettings)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    # A subagent's conversation is recorded and shown, never collected, unless this is on.
+    collect_subagents: bool = False
     engine: EngineSettings = Field(default_factory=EngineSettings)
 
     # `SecretStr` keeps a value out of repr(), logs and error messages. The alias

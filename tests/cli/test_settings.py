@@ -272,3 +272,10 @@ def test_the_proxy_window_default_survives_setting_any_other_engine_key(isolated
         settings = load_settings(engine={"min_cut_tokens": 2000})
     assert settings.engine.min_cut_tokens == 2000
     assert settings.engine.context_window == DEFAULT_PROXY_CONTEXT_WINDOW
+
+
+def test_subagents_are_not_collected_unless_asked(isolated, monkeypatch):
+    assert load_settings().collect_subagents is False
+    assert load_settings(_write(isolated, "c.toml", "collect_subagents = true\n")).collect_subagents is True
+    monkeypatch.setenv("LLM_GC_COLLECT_SUBAGENTS", "true")
+    assert load_settings().collect_subagents is True

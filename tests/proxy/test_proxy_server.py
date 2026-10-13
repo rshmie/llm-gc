@@ -1375,3 +1375,46 @@ class TestEachConversationIsSizedForItsModel:
 
         [conversation_stats] = client.get("/stats").json()["client_sessions"][0]["conversations"]
         assert conversation_stats["context_window"] == {"tokens": service.gc_config.context_window, "reported": False}
+
+
+class TestSubagentsAreRecordedNotCollected:
+    """A subagent usually ends before a collection pays for itself, and its answer is only as good as what it read."""
+
+    @staticmethod
+    def _converse(client, headers, turns: int = 10) -> list[dict]:
+        sent = []
+        conversation: list[tuple[str, str]] = []
+        for index in range(turns):
+            conversation.append(("user", f"turn {index}: we discussed the storage layer at length today"))
+            payload = _body(*conversation)
+            _post(client, payload, headers=headers)
+            sent.append(payload)
+            conversation.append(("assistant", UPSTREAM_OK["content"][0]["text"]))
+        return sent
+
+    def test_a_subagents_conversation_is_forwarded_as_sent_and_never_collected(self):
+        client, service, _, seen = _proxy()
+        sent = self._converse(client, {CLIENT_SESSION_HEADER: "cc-1", CLIENT_AGENT_HEADER: "agent-a"})
+
+        assert [json.loads(request.content) for request in seen] == sent
+        [session_id] = service.session_manager.store.active_session_ids()
+        assert service.session_manager.store.get(session_id).snapshot.cut_count == 0
+        [conversation] = client.get("/stats").json()["client_sessions"][0]["conversations"]
+        assert conversation["collected"] is False and conversation["collections"] == 0
+
+    def test_the_main_conversation_beside_it_is_collected(self):
+        client, service, _, _ = _proxy()
+        self._converse(client, {CLIENT_SESSION_HEADER: "cc-1"})
+
+        [session_id] = service.session_manager.store.active_session_ids()
+        assert service.session_manager.store.get(session_id).snapshot.cut_count > 0
+
+    def test_asked_to_the_proxy_collects_subagents_too(self):
+        service, _ = _engine()
+        app = create_app(service, http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(
+            lambda request: httpx2.Response(200, json=UPSTREAM_OK))), schedule=_run_now, collect_subagents=True)
+        client = TestClient(app)
+        self._converse(client, {CLIENT_SESSION_HEADER: "cc-1", CLIENT_AGENT_HEADER: "agent-a"})
+
+        [session_id] = service.session_manager.store.active_session_ids()
+        assert service.session_manager.store.get(session_id).snapshot.cut_count > 0

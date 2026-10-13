@@ -5,6 +5,7 @@
 import { $, fill, fmt, h, percent, plural } from "./dom.js";
 import { clientSessionOf, state } from "./state.js";
 import { hoverTip } from "./tooltip.js";
+import { NOT_COLLECTED_TEXT } from "./vocabulary.js";
 
 const shortId = (id) => id.slice(0, 8);
 const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -40,8 +41,11 @@ export function renderSessionCard(select) {
     const unsent = c.collections_not_yet_sent ? h("span", { class: "st warn", ...hoverTip("Not yet sent",
       "This collection was made after the conversation's newest request, so no request has carried it: it has saved nothing yet. Its saving reaches the model with the next request, and a conversation that has finished never sends one.") },
       ` ⚠ ${fmt(c.collections_not_yet_sent)} not yet sent`) : null;
+    const collections = c.collected === false
+      ? h("span", { class: "secondary", ...hoverTip("Not collected", NOT_COLLECTED_TEXT) }, "not collected")
+      : [fmt(c.collections), unsent];
     return row(labels[i], session ? session.title : "closed", c.traffic, {
-      collections: [fmt(c.collections), unsent],
+      collections,
       window: windowLabel(c.context_window),
       attrs: { class: `${c.conversation_id === state.selected ? "selected" : ""}${session ? " pickable" : ""}`,
         title: session ? "Show this conversation" : "Closed once idle: its counts stay, its messages are gone",
@@ -57,7 +61,7 @@ export function renderSessionCard(select) {
   fill("session-card",
     h("div", { class: "card-head" }, h("div", {},
       h("h2", {}, `Claude Code session ${shortId(client.client_session)}`),
-      h("p", { class: "sub" }, `Since ${clock(client.first_request_at)}. Measured request by request: what was sent, and what LLM-GC saved. Each conversation is collected on its own.`))),
+      h("p", { class: "sub" }, `Since ${clock(client.first_request_at)}. Measured request by request: what was sent, and what LLM-GC saved. Each main conversation is collected on its own; a subagent's is recorded and sent as written.`))),
     h("p", { class: "session-totals" },
       h("span", {}, h("b", {}, plural(t.requests, "request"))), " · ",
       h("span", {}, "Claude Code sent ", h("b", {}, fmt(t.tokens_from_client))), " · ",
