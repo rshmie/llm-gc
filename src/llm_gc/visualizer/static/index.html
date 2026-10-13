@@ -17,15 +17,15 @@
       LLM-GC
     </span>
     <nav class="tabs" role="tablist" aria-label="Views">
-      <button role="tab" id="tab-conversation" aria-selected="true" aria-controls="view-conversation">Conversation</button>
+      <button role="tab" id="tab-session" aria-selected="true" aria-controls="view-session">Session</button>
+      <button role="tab" id="tab-conversation" aria-selected="false" aria-controls="view-conversation">Conversation</button>
       <button role="tab" id="tab-engine" aria-selected="false" aria-controls="view-engine">Engine</button>
     </nav>
     <span class="spacer"></span>
     <div class="picker">
-      <label for="session-select">Conversation</label>
-      <select id="session-select"><option>none yet</option></select>
+      <label for="client-select">Session</label>
+      <select id="client-select"><option>none yet</option></select>
     </div>
-    <button class="run-gc" id="run-gc" disabled title="Collect this conversation now, without waiting for enough messages to compact or archive.">Run GC now</button>
     <span class="live" id="live" data-state="connecting" role="status"><span class="dot"></span><span id="live-text">connecting…</span></span>
     <button class="icon-btn" id="theme" type="button" title="Theme: follow the system">◐</button>
     <button class="icon-btn" id="open-guide" type="button" title="How LLM-GC works, and what the words mean" aria-label="How it works">?</button>
@@ -43,7 +43,15 @@
 
   <section class="card result" id="result" hidden aria-live="polite"></section>
 
-  <p class="origin-line secondary" id="origin-line" hidden></p>
+  <!-- On the Conversation and Engine tabs: which of the session's conversations is shown, and the one action on it. -->
+  <section class="conv-bar" id="conv-bar" hidden>
+    <div class="picker">
+      <label for="session-select">Conversation</label>
+      <select id="session-select"><option>none yet</option></select>
+    </div>
+    <button class="run-gc" id="run-gc" disabled title="Collect this conversation now, without waiting for enough messages to compact or archive.">Run GC now</button>
+    <p class="origin-line secondary" id="origin-line" hidden></p>
+  </section>
 
   <section class="card no-session" id="no-session">
     <h2>No conversation yet</h2>
@@ -56,11 +64,16 @@
     </ol>
   </section>
 
+  <!-- ===================================================== the session: turn by turn, as it happened -->
+  <div id="view-session" class="view" role="tabpanel" aria-labelledby="tab-session" hidden>
+    <section class="card trace-card" id="trace-card" aria-label="The session, turn by turn" hidden></section>
+    <section class="card other-card" id="other-card" aria-label="Conversations no client session named" hidden></section>
+    <section class="card session-card" id="session-card" aria-label="This session's conversations" hidden></section>
+  </div>
+
   <!-- ===================================================== the conversation: what the model knows -->
   <div id="view-conversation" class="view" role="tabpanel" aria-labelledby="tab-conversation" hidden>
     <div class="status-stack" id="status" role="status"></div>
-
-    <section class="card session-card" id="session-card" aria-label="This conversation's client session" hidden></section>
 
     <section class="card prompt-card" aria-label="What is sent with each request">
       <div class="prompt-top">

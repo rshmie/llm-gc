@@ -19,7 +19,8 @@ from typing import Any, Literal
 
 from llm_gc.proxy.request_log import RequestRecord
 
-RowKind = Literal["turn", "tool_round", "report", "reply", "task", "retry", "replaced", "pending", "unclaimed"]
+RowKind = Literal["turn", "tool_round", "report", "reply", "task", "retry", "replaced", "pending", "unclaimed",
+                  "closing"]
 # What a request was, by its newest message, when that is not a message the person typed.
 _FROM_NEWEST: dict[str, RowKind] = {"tool_results": "tool_round", "relayed": "report", "assistant": "reply"}
 
@@ -29,10 +30,10 @@ def build_trace(records: Sequence[RequestRecord], client_session: str) -> dict[s
     mine = [r for r in records if r.origin is not None and r.origin.session_id == client_session]
     if not mine:
         return None
-    kinds = _kinds(mine)
     main = [r for r in mine if _agent(r) is None]
-    starts = [r for r in main if kinds[r.request_id] == "turn"]
     mains = list(dict.fromkeys(r.conversation_id for r in main if r.conversation_id is not None))
+    kinds = _kinds(mine, _closing(main, mains))
+    starts = [r for r in main if kinds[r.request_id] == "turn"]
     at = [start.forwarded_at for start in starts]
 
     def by_time(record: RequestRecord) -> int:
@@ -88,7 +89,22 @@ def _agent(record: RequestRecord) -> str | None:
     return record.origin.agent_id if record.origin is not None else None
 
 
-def _kinds(records: Sequence[RequestRecord]) -> dict[str, RowKind]:
+def _closing(main: Sequence[RequestRecord], mains: Sequence[str]) -> set[str]:
+    """The last request of each main conversation a newer one replaced, when nothing carried its message on.
+
+    After /compact it is the client asking for the summary the new conversation opens
+    with; after an edited message, the message the new conversation no longer carries.
+    Either way the person is not known to have typed it, so it begins no turn.
+    """
+    closing = set()
+    for conversation in mains[:-1]:
+        last = [r for r in main if r.conversation_id == conversation][-1]
+        if last.kept is None and last.newest == "typed":
+            closing.add(last.request_id)
+    return closing
+
+
+def _kinds(records: Sequence[RequestRecord], closing: set[str]) -> dict[str, RowKind]:
     """What each request was, from its newest message and how its conversation settled it."""
     contested = _contested(records)
     kinds: dict[str, RowKind] = {}
@@ -109,6 +125,8 @@ def _kinds(records: Sequence[RequestRecord]) -> dict[str, RowKind]:
             kind = "task"
         elif record.conversation_id is None:
             kind = "unclaimed"
+        elif record.request_id in closing:
+            kind = "closing"
         elif record.kept is None and record.request_id in contested:
             kind = "pending"
         else:

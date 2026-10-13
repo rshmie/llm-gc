@@ -100,11 +100,13 @@ def test_a_new_main_conversation_after_compact_is_marked_and_the_old_one_is_earl
     s = _Session()
     s.send("s_old", "abc")
     s.send("s_old", "abcde")
+    s.send("s_old", "abcdeSU")                                                 # /compact asks for a summary
     s.send("s_new", "xyz")
 
     turns = s.trace()["turns"]
     assert [(t["part"], t["new_conversation"]) for t in turns] == [
         ("earlier_main", False), ("earlier_main", False), ("main", True)]
+    assert _kinds(turns[1]["requests"]) == ["turn", "closing"], "the summary request was not typed by the person"
 
 
 def test_a_typed_message_whose_place_another_request_took_is_not_a_turn_until_settled():

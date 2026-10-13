@@ -279,11 +279,13 @@ monitor into the bus — free of any web-framework code. The doc area
 implementation.
 
 The dashboard runs inside the proxy process, beside it rather than within it:
-the same engine and the same event loop, on its own localhost port. It has two
-views, one per question, and the transparency view opens first:
+the same engine and the same event loop, on its own localhost port. It has three
+views, one per question. The picker at the top chooses a client session; the session's
+view opens first, and the other two show one of its conversations:
 
 | View | Answers | Shows |
 |---|---|---|
+| **The session** | What did this piece of work do, and what did it cost? | The session turn by turn: each turn's requests on a waterfall in time, each subagent under the request that started it, side requests folded away; the session's totals and the provider's count; one row per conversation |
 | **The conversation** | What does the model know, at what fidelity, and what has it lost? | Every exchange with exactly what the model reads for it — quoted word for word, its summary, its opening line and facts, or one shared line when folded out of view — every message as it was said, and every fact, by who stated it, with how it reaches the model |
 | **LLM-GC at work** | What did LLM-GC do, and did it work? | What the next collection would take; why every exchange is at its level, in the planner's own steps (the band its score earns, the margin, a level no cheaper than a richer one, the budget); every pass and its outcome, degradations, transitions, the proxy's counters, and the settings in effect |
 
@@ -689,31 +691,42 @@ per row kept in step by script,* which drifts and stutters. *Accepted cost:* a v
 conversation is a long strip, and only part of it is in view at once; the group labels say
 where the collected messages end and the recent ones begin.
 
-### The picker groups a client session's conversations
+### The page opens on the session, and a conversation is one part of it
 
 One Claude Code session reaches the proxy as several conversations — its main one, one
-per sub-agent, and a new main one after `/compact` or an edited message — each
-collected on its own (see [the proxy](../proxy/overview.md)). Listed flat by opening
-words, they could not be told apart: two sub-agents of one session open with the same
-words. So the picker groups conversations under the client session they came from, the
-most recently active session first, and names each one's part:
+per subagent, and a new main one after `/compact` or an edited message — each collected
+on its own (see [the proxy](../proxy/overview.md)). The person thinks of the session as
+one piece of work, so that is what the page is organised by:
 
 ```
-Claude Code session 6d84277c · since 10:56
-   Main · This session is being continued from…      ← the newest main conversation
-   Subagent 1 · In /private/tmp/…                     ← by start order
-   Subagent 2 · In /private/tmp/…
-   Earlier main · Use the Agent tool to launch…      ← replaced; closes once idle
-Claude Code session bb0fff8d · since 10:56
-   Main · Read utils.py and tell me…
+top bar     Session ▾ Claude Code session 6d84277c · since 10:56 · 30 requests
+            [ Session | Conversation | Engine ]
+Session     the session's totals → its turns, newest first → its conversations, one row each
+Conversation / Engine
+            Conversation ▾ Main · Subagent 1 · Subagent 2 · Earlier main      [Run GC now]
+            one conversation: what the model receives, and what LLM-GC did to it
 ```
 
-The newest main conversation is the one in use: an older one in the same session was
-replaced, and nothing will continue it. A line above both tabs says where the selected
-conversation sits. Conversations whose client names no session are listed as before,
-under "Other conversations" when grouped ones are present. *Rejected: hiding sub-agent
-conversations* — they are prompts LLM-GC forwards and collects, and hiding them would
-hide what it does.
+- **The picker chooses a session.** Each Claude Code session the proxy counted or a live
+  conversation names, the most recently active first; conversations whose client names
+  no session are one more entry, listed without a trace.
+- **The conversation bar names its part.** Above the Conversation and Engine tabs, a
+  switcher lists only the picked session's conversations, by their part: the newest main
+  conversation is *Main*, the one in use; subagents by the order they started; a
+  replaced main conversation is *Earlier main*. *Run GC now* sits beside it, because it
+  acts on the conversation shown, not on the session.
+- **The main conversation is followed.** Until the person picks a conversation, the one
+  shown is the session's main conversation, and when `/compact` replaces it the page
+  moves to the new one. A conversation the person picked stays shown.
+- **The trace opens a conversation where it matters.** *Open this message* shows the
+  turn's message in its conversation, and a subagent's *Open* shows its conversation,
+  each with a way back to the session.
+
+*Rejected: a dropdown of every conversation, grouped by session* — it was the only place
+a session's shape appeared, and a list cannot show which call started which subagent.
+*Rejected: the trace as a third tab beside a conversation dropdown* — two pickers with
+two scopes on one page. *Rejected: hiding subagent conversations* — they are prompts
+LLM-GC forwards and records, and hiding them would hide what it does.
 
 ### Measured and forecast are never one number
 
@@ -723,33 +736,32 @@ mixed:
 | Scope | Where | Measured: what requests carried | Forecast: what the next request will |
 |---|---|---|---|
 | One conversation | Conversation tab, top panels | *So far*: its requests, sent whole, and saved | *The next request*: the recap and recent messages, against the conversation as written |
-| One client session | Conversation tab, the session table | Each conversation's requests, sent, saved, collections, window; the provider's usage; LLM-GC's own calls | — |
+| One client session | Session tab: its totals, its turns, its conversations | Every request it made, by turn and by conversation; the provider's usage; LLM-GC's own calls | — |
 | The proxy | Engine tab, *across all conversations* | Every request since the proxy started, the provider's usage, LLM-GC's own calls | — |
 
 Where each sits on the page:
 
 ```
+┌ Session tab ──────────────────────────────────────── MEASURED · the session ──────┐
+│ Claude Code session 6d84277c · 30 requests · sent 146,108 · saved 32,655 (22%)    │
+│ ▼ Turn 3 "This session is being continued…" · 3 requests     ← newest, open       │
+│     Your message ▕█▏  Tool results  ▕▏  Tool results     ▕▏                       │
+│ ▶ Turn 2 "Good. Add a regression test…" · 5 requests · −27,556 · ◆ 2 collections  │
+│ ▶ Turn 1 "The checkout tests fail…" · 18 requests · 2 subagents                   │
+│ Conversations in this session: Main · Subagent 1 · Subagent 2 · Earlier main      │
+└───────────────────────────────────────────────────────────────────────────────────┘
 ┌ Conversation tab ─────────────────────────────────────────────────────────────────┐
-│ Claude Code session 6d84277c                          MEASURED · the session      │
-│   26 requests · sent 146,028 · forwarded 113,373 · saved 32,655 (22%)             │
-│   the provider's usage · LLM-GC's own calls                                       │
-│   Conversation       Requests     Sent     Saved   Collections           Window   │
-│   Main                      3    7,183         0   0                     1M       │
-│   Subagent 1                6   27,465         0   1 ⚠ 1 not yet sent    1M       │
-│   Earlier main             12   86,224    32,655   5 ⚠ 1 not yet sent    1M       │
-├───────────────────────────────────────────────────────────────────────────────────┤
 │ THE NEXT REQUEST      FORECAST │ HOW EACH MESSAGE IS SENT │ THE MODEL'S WINDOW    │
 │ 3,647 tokens                   │ recent 5 · compacted 5   │ 0.4% of 1,000,000     │
 │ ↓ 2,818 · 44% less than written│                          │ as the provider       │
 │ So far: 6 requests,  MEASURED  │                          │ reports it            │
-│ nothing saved yet ⚠            │                          │                       │
 └───────────────────────────────────────────────────────────────────────────────────┘
 ┌ Engine tab ───────────────────────── MEASURED · every conversation, since start ──┐
 │ requests · total sent · what the provider reported · LLM-GC's own model calls     │
 └───────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-The session table is the answer to "what did this session cost and save": the
+The session's table is the answer to "which conversation cost and saved what": the
 conversations a reader thinks of as one session, counted request by request, each a row
 that opens it. A collection made after a conversation's newest request is marked *not
 yet sent*: a finished subagent's last collection saved nothing, and a forecast of the

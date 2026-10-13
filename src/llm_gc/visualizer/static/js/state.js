@@ -4,9 +4,16 @@
 import { ORDER, categoryOf } from "./vocabulary.js";
 import { $, h } from "./dom.js";
 
-export const state = { config: null, proxy: null, sessions: [], selected: null, version: null, knowledge: null, transcript: null, activity: null };
-export const ui = { tab: "conversation", filter: "all", query: "", promptView: false, open: new Set(), chartKey: null, earlierOpen: false, listOpen: true,
-  stayOpen: false, allChecks: false, allMoves: false, allProblems: false, mapSession: null };
+// `clientSession` is the session picked at the top - a Claude Code session's id, or OTHER for conversations no
+// client session named - and `selected` the conversation shown on the Conversation and Engine tabs.
+export const OTHER = "__other__";
+export const state = { config: null, proxy: null, sessions: [], clientSession: null, trace: null, selected: null, version: null,
+  knowledge: null, transcript: null, activity: null };
+export const ui = { tab: "session", filter: "all", query: "", promptView: false, open: new Set(), chartKey: null, earlierOpen: false, listOpen: true,
+  stayOpen: false, allChecks: false, allMoves: false, allProblems: false, mapSession: null,
+  turnOpen: new Map(), openAgents: new Set(), showSide: new Set(), pendingJump: null,
+  // Whether the shown conversation follows the session's main one: true until the person picks another.
+  followMain: true };
 
 export const keepLast = () => (state.config ? state.config.last_n_turns_to_keep : 5);
 // What the recap may spend on older exchanges: its token budget, a share of the window of the model being called.
@@ -18,9 +25,9 @@ export function trafficOf(sessionId) {
   const all = [...state.proxy.client_sessions.flatMap((c) => c.conversations), ...state.proxy.other_conversations];
   return all.find((c) => c.conversation_id === sessionId) || null;
 }
-export function clientSessionOf(sessionId) {
+export function clientSessionOf(clientSession) {
   if (!state.proxy) return null;
-  return state.proxy.client_sessions.find((c) => c.conversations.some((m) => m.conversation_id === sessionId)) || null;
+  return state.proxy.client_sessions.find((c) => c.client_session === clientSession) || null;
 }
 export const captured = () => !!(state.transcript && state.transcript.captured);
 // Read from the session list, polled every time: the conversation itself is refetched only when it changes,

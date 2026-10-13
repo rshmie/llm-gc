@@ -55,6 +55,23 @@ export const CATS = {
 export const ORDER = ["verbatim", "kept", "compacted", "archived", "out_of_view"];
 export const BECOMES = { kept: "kept (quoted word for word)", compacted: "compacted (summarised)",
   archived: "archived (opening line and facts)", out_of_view: "out of view (folded)" };
+// The Session tab's names for what each request was, and what each means.
+export const TRACE_KINDS = {
+  turn: ["Your message", "A message you typed, which the conversation kept: it begins this turn."],
+  tool_round: ["Tool results", "Claude Code ran the tools the last reply asked for and sent their output back. Each round is a request, carrying the whole conversation again."],
+  report: ["Subagent report", "A background subagent finished, and Claude Code added its findings to the main conversation under your role. LLM-GC reads them as the subagent's, not yours."],
+  reply: ["Continuation", "A request whose newest message is the assistant's own: a continued or prefilled reply."],
+  task: ["Task", "A subagent's first request: the task the spawning call gave it, inside the context Claude Code adds."],
+  retry: ["Retry", "The same request again: the one before it failed or was abandoned. It does not begin a new turn."],
+  replaced: ["Side request", "A request the conversation never continued: Claude Code asking for a suggested next message, say. It costs tokens, but nothing in it reaches the conversation."],
+  pending: ["Pending", "A message whose place another request took. Until the conversation carries one of them on, neither is known to be kept."],
+  unclaimed: ["Not part of a conversation", "A request no conversation has continued: a title, a quota check, or a conversation's first message that nothing has followed yet."],
+  closing: ["Last request of a replaced conversation", "The last request of a main conversation a new one replaced. After /compact, it is Claude Code asking for the summary the new conversation opens with; after an edited message, the message the new conversation no longer carries. It begins no turn."],
+  subagent: ["A subagent", "A conversation of its own, started by a tool call in a reply. It has its own window; only its report reaches the main conversation. LLM-GC records it and sends it as written."],
+  collection: ["Carried a collection", "This request was the first to carry a collection made after the request before it: from here on, the conversation is sent condensed."],
+  boundary: ["A new main conversation", "Claude Code started a new main conversation - after /compact, or after a message was edited. The one before it is listed as an earlier main conversation, and closes once idle."],
+};
+
 export const STATUS = {
   completed:                { tone: "good", icon: "✓", text: "collection made" },
   bypassed_batch_too_small: { tone: "", icon: "–", text: "nothing to collect yet" },

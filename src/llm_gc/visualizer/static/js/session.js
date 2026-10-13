@@ -1,14 +1,10 @@
-// The selected conversation's client session, measured request by request: every conversation it
-// ran through the proxy, and what each sent and saved. The panels below it describe the next request;
-// this table describes the requests that happened.
+// The picked session's conversations, one row each: what each sent and saved, request by request. Below
+// the trace on the Session tab, which shows the same requests turn by turn.
 
-import { $, fill, fmt, h, percent, plural } from "./dom.js";
+import { $, fill, fmt, h, percent } from "./dom.js";
 import { clientSessionOf, state } from "./state.js";
 import { hoverTip } from "./tooltip.js";
 import { NOT_COLLECTED_TEXT } from "./vocabulary.js";
-
-const shortId = (id) => id.slice(0, 8);
-const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 export function windowLabel(window) {
   if (!window) return "";
@@ -23,10 +19,9 @@ function partLabels(conversations) {
 }
 
 export function renderSessionCard(select) {
-  const client = clientSessionOf(state.selected);
+  const client = clientSessionOf(state.clientSession);
   $("session-card").hidden = !client;
   if (!client) return;
-  const t = client.traffic;
   const labels = partLabels(client.conversations);
   const live = new Map(state.sessions.map((s) => [s.session_id, s]));
   const row = (label, title, traffic, extra = {}) => h("tr", extra.attrs || {},
@@ -49,29 +44,17 @@ export function renderSessionCard(select) {
       window: windowLabel(c.context_window),
       attrs: { class: `${c.conversation_id === state.selected ? "selected" : ""}${session ? " pickable" : ""}`,
         title: session ? "Show this conversation" : "Closed once idle: its counts stay, its messages are gone",
-        onclick: session && c.conversation_id !== state.selected ? () => select(c.conversation_id) : null },
+        onclick: session ? () => select(c.conversation_id) : null },
     });
   });
   if (client.outside_conversations.requests) {
     rows.push(row("Other requests", "a conversation's first message before it was recognised, and side requests",
       client.outside_conversations));
   }
-  const usage = t.provider;
-  const spent = t.summaries;
   fill("session-card",
     h("div", { class: "card-head" }, h("div", {},
-      h("h2", {}, `Claude Code session ${shortId(client.client_session)}`),
-      h("p", { class: "sub" }, `Since ${clock(client.first_request_at)}. Measured request by request: what was sent, and what LLM-GC saved. Each main conversation is collected on its own; a subagent's is recorded and sent as written.`))),
-    h("p", { class: "session-totals" },
-      h("span", {}, h("b", {}, plural(t.requests, "request"))), " · ",
-      h("span", {}, "Claude Code sent ", h("b", {}, fmt(t.tokens_from_client))), " · ",
-      h("span", {}, "LLM-GC forwarded ", h("b", {}, fmt(t.tokens_forwarded))), " · ",
-      h("span", {}, "saved ", h("b", {}, `${fmt(t.tokens_saved)} (${percent(t.tokens_saved, t.tokens_from_client)}%)`))),
-    h("p", { class: "session-totals secondary" },
-      usage.replies ? `The provider reported ${fmt(usage.cache_read_input_tokens)} cache read, ${fmt(usage.input_tokens)} input, ${fmt(usage.cache_creation_input_tokens)} cache write and ${fmt(usage.output_tokens)} output tokens on ${plural(usage.replies, "reply", "replies")}, by its own count. `
-        : "No reply has reported the provider's own count yet. ",
-      spent.calls ? `LLM-GC's own model calls: ${plural(spent.calls, "call")}, ${fmt(spent.input_tokens)} tokens in, ${fmt(spent.output_tokens)} out.`
-        : "LLM-GC has made no model calls for this session."),
+      h("h2", {}, "Conversations in this session"),
+      h("p", { class: "sub" }, "One row per conversation: what each sent and saved. Each main conversation is collected on its own; a subagent's is recorded and sent as written. Click a row to open it."))),
     h("div", { class: "table-wrap" }, h("table", { class: "session-table" },
       h("thead", {}, h("tr", {}, ...["Conversation", "Requests", "Sent", "Saved", "Collections", "Window"].map((label, i) =>
         h("th", { class: i && i < 5 ? "num" : "" }, label)))),

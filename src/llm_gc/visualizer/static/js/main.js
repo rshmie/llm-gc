@@ -2,13 +2,14 @@
 
 import { CATS, GLOSSARY, GUIDE_TERMS, ORDER, swatch } from "./vocabulary.js";
 import { $, clearMotionCaches, fill, h, plural, setChildren, storeGet, storeSet } from "./dom.js";
-import { collecting, getJSON, sessionPath, state, ui } from "./state.js";
+import { OTHER, collecting, getJSON, sessionPath, state, ui } from "./state.js";
 import { hideTooltip } from "./tooltip.js";
-import { THEMES, applyTheme, fillConfigValues, setGuide, setLive, showCleanupNotice, showTab } from "./shell.js";
-import { celebrateCleanup, clearMapCache, renderChips, renderFacts, renderFactsGuide, renderHero, renderLastCollection, renderMap, renderMessages, renderPrompt, renderSize, renderStatus, renderTimeline, renderWindow, setPromptView } from "./conversation.js";
+import { THEMES, applyTheme, fillConfigValues, offerReturn, setGuide, setLive, showCleanupNotice, showTab } from "./shell.js";
+import { celebrateCleanup, clearMapCache, jumpTo, renderChips, renderFacts, renderFactsGuide, renderHero, renderLastCollection, renderMap, renderMessages, renderPrompt, renderSize, renderStatus, renderTimeline, renderWindow, setPromptView } from "./conversation.js";
 import { initCards, renderChart, renderChecks, renderEngineStatus, renderGenerations, renderHistory, renderNext, renderProblems, renderProxy, renderRelevance, renderSettings } from "./engine.js";
 import { renderRunGcButton, runGcNow } from "./run-gc.js";
 import { renderSessionCard } from "./session.js";
+import { renderTrace } from "./trace.js";
 
 let shownCollecting = false;
 
@@ -41,22 +42,109 @@ function groupSessions(sessions) {
 const shortId = (id) => id.slice(0, 8);
 const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-function renderSessions() {
-  const select = $("session-select");
+// The sessions the picker offers, the most recently active first: each Claude Code session the proxy has
+// counted or that a live conversation names, then the conversations no client session named, as one entry.
+function clientSessions() {
+  const counted = state.proxy ? state.proxy.client_sessions : [];
+  const named = new Map(counted.map((c) => [c.client_session, { id: c.client_session, since: Date.parse(c.first_request_at), requests: c.traffic.requests }]));
+  for (const s of state.sessions) {
+    if (s.client_session && !named.has(s.client_session)) named.set(s.client_session, { id: s.client_session, since: Date.parse(s.started_at), requests: null });
+  }
+  const entries = [...named.values()];
+  if (state.sessions.some((s) => !s.client_session)) entries.push({ id: OTHER, since: null, requests: null });
+  return entries;
+}
+
+function chooseClientSession(entries) {
+  if (entries.some((e) => e.id === state.clientSession)) return;
+  state.clientSession = entries.length ? entries[0].id : null;
+  state.trace = null;
+}
+
+function renderClientPicker(entries) {
+  const select = $("client-select");
+  setChildren(select, entries.length ? entries.map((e) => h("option", { value: e.id, title: e.id === OTHER ? "" : e.id },
+    e.id === OTHER ? "Other conversations (no client session named)"
+      : `Claude Code session ${shortId(e.id)} · since ${clock(e.since)}${e.requests !== null ? ` · ${plural(e.requests, "request")}` : ""}`))
+    : h("option", {}, "none yet"));
+  select.disabled = !entries.length;
+  if (state.clientSession) select.value = state.clientSession;
+}
+
+// The conversations of the picked session, as its own parts; the conversation shown stays one of them.
+function sessionEntries() {
   const groups = groupSessions(state.sessions);
+  const group = groups.find((g) => (state.clientSession === OTHER ? !g.clientSession : g.clientSession === state.clientSession));
+  return group ? group.entries : [];
+}
+
+// The session's main conversation first: it is the one the person is in. Followed when a newer one replaces
+// it - after /compact - unless the person picked a conversation themselves.
+function chooseConversation(entries) {
+  const main = entries.find((e) => e.part && e.part.kind === "main");
+  const shown = entries.some((e) => e.s.session_id === state.selected);
+  if (shown && !(ui.followMain && main && main.s.session_id !== state.selected)) return;
+  resetConversation((main || entries[0] || { s: { session_id: null } }).s.session_id);
+  ui.followMain = true;
+}
+
+// A conversation the person picked: followed as the main one only if it is the main one.
+function pickConversation(sessionId) {
+  const entry = sessionEntries().find((e) => e.s.session_id === sessionId);
+  ui.followMain = !!(entry && entry.part && entry.part.kind === "main");
+}
+
+function resetConversation(sessionId) {
+  state.selected = sessionId; state.version = null; state.knowledge = null;
+  ui.open.clear(); ui.filter = "all"; ui.query = ""; $("search").value = ""; ui.earlierOpen = false;
+  clearMapCache();
+  clearMotionCaches();
+}
+
+function renderSessions(entries) {
+  const select = $("session-select");
   const option = ({ s, part }) => h("option", { value: s.session_id, title: s.session_id },
     `${part ? `${part.label} · ` : ""}${s.title ? s.title : s.session_id} · ${plural(s.recorded_turns, "message")} · ${plural(s.cuts, "collection")}${s.aging_in_flight ? " · collecting…" : ""}`);
-  // Flat, as before, until some client names its session.
-  const options = !groups.some((g) => g.clientSession) ? groups.flatMap((g) => g.entries.map(option))
-    : groups.map((g) => h("optgroup", { label: g.clientSession ? `Claude Code session ${shortId(g.clientSession)} · since ${clock(g.since)}` : "Other conversations" },
-      g.entries.map(option)));
-  setChildren(select, options.length ? options : h("option", {}, "none yet"));
-  select.disabled = !options.length;
+  setChildren(select, entries.length ? entries.map(option) : h("option", {}, "none live: closed once idle"));
+  select.disabled = !entries.length;
   if (state.selected) select.value = state.selected;
   const button = $("run-gc");
   button.disabled = !state.selected || button.dataset.running === "1";
-  renderOrigin(groups);
+  renderOrigin(groupSessions(state.sessions));
 }
+
+// Conversations no client session named have no trace: the Session tab lists them instead.
+function renderOther(entries) {
+  $("other-card").hidden = state.clientSession !== OTHER;
+  if (state.clientSession !== OTHER) return;
+  fill("other-card",
+    h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "Other conversations"),
+      h("p", { class: "sub" }, "Their client names no session, so they are listed on their own, without a trace. Open one to see what the model receives."))),
+    h("ul", { class: "other-list" }, entries.map(({ s }) => h("li", {},
+      h("button", { class: "link-btn", type: "button", onclick: () => openConversation(s.session_id, null) }, s.title || s.session_id),
+      h("span", { class: "secondary" }, ` · ${plural(s.recorded_turns, "message")} · ${plural(s.cuts, "collection")}`)))));
+}
+
+// From the Session tab to one conversation, at a message when one is named, with a way back.
+function openConversation(sessionId, turnIndex) {
+  offerReturn("session", window.scrollY);
+  pickConversation(sessionId);
+  if (sessionId === state.selected && state.knowledge) {
+    // Already shown: nothing will be fetched, so jump now.
+    showTab("conversation");
+    if (turnIndex !== null) jumpTo(turnIndex);
+    return;
+  }
+  resetConversation(sessionId);
+  ui.pendingJump = turnIndex;
+  showTab("conversation");
+  refresh();
+}
+
+const traceActions = {
+  live: (sessionId) => !!sessionId && state.sessions.some((s) => s.session_id === sessionId),
+  open: openConversation,
+};
 
 // Where the selected conversation sits in its Claude Code session, so its numbers are read as its own.
 function renderOrigin(groups) {
@@ -74,7 +162,7 @@ function renderOrigin(groups) {
     group.agents ? plural(group.agents, "subagent") : null, group.earlier ? plural(group.earlier, "earlier main conversation") : null].filter(Boolean);
   const count = group.entries.length === 1 ? " It is the only conversation the session has here."
     : ` The session has ${plural(group.entries.length, "conversation")} here: ${parts.join(", ")}.`;
-  fill("origin-line", ...what, count, " LLM-GC collects each main conversation on its own, and records each subagent's without collecting it. The session's table on the Conversation tab adds up its conversations; the Engine tab's totals, every conversation since the proxy started.");
+  fill("origin-line", ...what, count, " LLM-GC collects each main conversation on its own, and records each subagent's without collecting it. The Session tab shows the whole session; the Engine tab's totals, every conversation since the proxy started.");
 }
 
 function renderConversation() {
@@ -94,19 +182,22 @@ async function refresh() {
     fillConfigValues(state.config);
     state.proxy = overview.proxy;
     state.sessions = overview.sessions;
-    if (!state.sessions.some((s) => s.session_id === state.selected)) {
-      state.selected = state.sessions.length ? state.sessions[0].session_id : null;
-      state.version = null;
-      state.knowledge = null;
-      ui.open.clear();
-      ui.earlierOpen = false;
-      clearMapCache();
-      clearMotionCaches();
+    const picks = clientSessions();
+    chooseClientSession(picks);
+    renderClientPicker(picks);
+    const entries = sessionEntries();
+    chooseConversation(entries);
+    renderSessions(entries);
+    if (state.clientSession && state.clientSession !== OTHER) {
+      state.trace = await getJSON(`/api/trace/${encodeURIComponent(state.clientSession)}`);
+    } else {
+      state.trace = null;
     }
-    renderSessions();
-    renderSessionCard(selectConversation);
+    renderTrace(traceActions);
+    renderOther(entries);
+    renderSessionCard((sessionId) => openConversation(sessionId, null));
     renderSettings();
-    $("no-session").hidden = !!state.selected;
+    $("no-session").hidden = !!state.clientSession;
     showTab(ui.tab);
 
     if (state.selected) {
@@ -122,6 +213,11 @@ async function refresh() {
           state.transcript = transcript;
           state.version = k.version;
           renderConversation();
+          if (ui.pendingJump !== null && ui.tab === "conversation") {
+            const turnIndex = ui.pendingJump;
+            ui.pendingJump = null;
+            jumpTo(turnIndex);
+          }
           if (previousCuts !== null && k.cuts > previousCuts) {
             showCleanupNotice(k.cuts - previousCuts > 1
               ? `${plural(k.cuts - previousCuts, "collection")} just ran: older messages left the young generation.`
@@ -152,7 +248,11 @@ async function refresh() {
 
 // ----------------------------------------------------------------- wiring
 
-ui.tab = (location.hash === "#engine" || (location.hash !== "#conversation" && storeGet("llmgc.tab") === "engine")) ? "engine" : "conversation";
+// The tab in the address wins, then the one last used; the Session tab otherwise.
+const TABS = ["session", "conversation", "engine"];
+const hashed = location.hash.slice(1);
+ui.tab = TABS.includes(hashed) ? hashed : TABS.includes(storeGet("llmgc.tab")) ? storeGet("llmgc.tab") : "session";
+$("tab-session").addEventListener("click", () => { showTab("session"); renderTrace(traceActions, true); });
 $("tab-conversation").addEventListener("click", () => showTab("conversation"));
 $("tab-engine").addEventListener("click", () => showTab("engine"));
 $("view-timeline").addEventListener("click", () => setPromptView(false));
@@ -167,14 +267,14 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && $("guide").classList.contains("open")) setGuide(false);
   if (e.key === "/" && document.activeElement.tagName !== "INPUT" && ui.tab === "conversation" && state.selected) { e.preventDefault(); $("search").focus(); }
 });
-function selectConversation(sessionId) {
-  state.selected = sessionId; state.version = null; state.knowledge = null;
-  ui.open.clear(); ui.filter = "all"; ui.query = ""; $("search").value = ""; ui.earlierOpen = false;
-  clearMapCache();
-  clearMotionCaches();
+$("session-select").addEventListener("change", (e) => { pickConversation(e.target.value); resetConversation(e.target.value); refresh(); });
+$("client-select").addEventListener("change", (e) => {
+  state.clientSession = e.target.value; state.trace = null;
+  ui.turnOpen.clear(); ui.openAgents.clear(); ui.showSide.clear();
+  ui.followMain = true;
+  resetConversation(null);
   refresh();
-}
-$("session-select").addEventListener("change", (e) => selectConversation(e.target.value));
+});
 let searchTimer = null;
 $("search").addEventListener("input", (e) => {
   clearTimeout(searchTimer);
