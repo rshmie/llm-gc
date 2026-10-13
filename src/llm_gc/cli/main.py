@@ -3,6 +3,8 @@
 import asyncio
 import json
 import logging
+import shutil
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -92,7 +94,8 @@ def build_cli(*, serve: ServeFn = serve_proxy, make_provider: ProviderFactory = 
         logging.getLogger("httpx2").setLevel(logging.WARNING)
 
         # Said before the check, so a refusal reads against what was being tried.
-        click.echo(render_header(settings, location, __version__))
+        columns = shutil.get_terminal_size().columns if sys.stdout.isatty() else None
+        click.echo(render_header(settings, location, __version__, columns))
         # Before the check, which spends a model call: a taken port needs no upstream to report.
         _refuse_busy_ports(settings, find_busy)
         try:

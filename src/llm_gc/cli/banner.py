@@ -3,17 +3,29 @@
 from llm_gc.cli.serve import BIND_HOST
 from llm_gc.cli.settings import ConfigLocation, ProxySettings, summary_base_url, summary_model
 from llm_gc.cli.style import INDENT, style, tidy_path
+from llm_gc.cli.wordmark import render_wordmark
 from llm_gc.proxy.server import DEFAULT_PROXY_PORT
 
 # Wide enough for the longest label, "Dashboard", and the gap after it.
 _LABEL_WIDTH = 11
 
 
-def render_header(settings: ProxySettings, location: ConfigLocation | None, version: str) -> str:
-    """What this run loaded: the file, where requests go, and what summarises them."""
+def render_header(settings: ProxySettings, location: ConfigLocation | None, version: str,
+                  columns: int | None = None) -> str:
+    """What this run loaded: the file, where requests go, and what summarises them.
+
+    `columns` is the terminal's width, or None when output is not a terminal; the wordmark is
+    drawn only when it fits, and a plain title line stands in for it otherwise.
+    """
+    wordmark = render_wordmark(columns)
+    if wordmark:
+        tagline = style("  ·  garbage collection for LLM context", dim=True)
+        title = [*wordmark, "", INDENT + style(f"v{version}", bold=True) + tagline]
+    else:
+        title = [INDENT + style(f"LLM-GC {version}", bold=True)]
     return "\n".join([
         "",
-        INDENT + style(f"LLM-GC {version}", bold=True),
+        *title,
         "",
         _row("Config", _describe_config(location)),
         _row("Upstream", settings.upstream),
