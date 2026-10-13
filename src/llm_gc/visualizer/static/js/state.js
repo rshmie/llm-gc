@@ -9,9 +9,19 @@ export const ui = { tab: "conversation", filter: "all", query: "", promptView: f
   stayOpen: false, allChecks: false, allMoves: false, allProblems: false, mapSession: null };
 
 export const keepLast = () => (state.config ? state.config.last_n_turns_to_keep : 5);
-// What the recap may spend on older exchanges: its token budget, a share of the model's window.
-export const recapLimit = () => !state.config ? "a share of the model's window"
-  : `${Number(state.config.max_recap_tokens).toLocaleString()} tokens`;
+// What the recap may spend on older exchanges: its token budget, a share of the window of the model being called.
+export const recapLimit = () => state.knowledge ? `${Number(state.knowledge.recap_budget).toLocaleString()} tokens`
+  : !state.config ? "a share of the model's window" : `${Number(state.config.max_recap_tokens).toLocaleString()} tokens`;
+// The proxy's measured traffic for one conversation, and for the client session it ran in; null without a proxy.
+export function trafficOf(sessionId) {
+  if (!state.proxy) return null;
+  const all = [...state.proxy.client_sessions.flatMap((c) => c.conversations), ...state.proxy.other_conversations];
+  return all.find((c) => c.conversation_id === sessionId) || null;
+}
+export function clientSessionOf(sessionId) {
+  if (!state.proxy) return null;
+  return state.proxy.client_sessions.find((c) => c.conversations.some((m) => m.conversation_id === sessionId)) || null;
+}
 export const captured = () => !!(state.transcript && state.transcript.captured);
 // Read from the session list, polled every time: the conversation itself is refetched only when it changes,
 // and a collection starts and runs without changing it.

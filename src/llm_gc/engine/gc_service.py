@@ -24,6 +24,7 @@ from llm_gc.engine.generations.planning import Bands, LevelOptions, Plan, plan_l
 from llm_gc.engine.inspection import CutPreview, SessionInspection, batch_worth_cutting
 from llm_gc.events import Event, EventBus, EventType
 from llm_gc.exceptions import CompactionRefused, LLMGCError
+from llm_gc.llm.metering import measure_model_usage
 from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.message import tool_result_ids
 from llm_gc.models.generation_snapshot import (
@@ -204,8 +205,9 @@ class GcService:
         snapshot = state.snapshot
         young = _in_order(snapshot.young)
         cut = find_cut_point(young, self.gc_config.last_n_turns_to_keep)
+        window = state.context_window or self.gc_config.context_window
         planned = self._plan(snapshot, young, cut, self.generational_memory.draft(young[:cut]),
-                             estimate_summaries=True)
+                             estimate_summaries=True, recap_budget=self.gc_config.recap_budget(window))
         return SessionInspection(
             session_id=session_id,
             snapshot=snapshot,
@@ -214,7 +216,18 @@ class GcService:
             next_cut=planned.preview(self.gc_config.min_cut_tokens, front_exists=bool(snapshot.old)),
             aging_in_flight=state.aging_in_flight,
             last_activity=state.last_updated_at,
+            context_window=window,
+            recap_budget=self.gc_config.recap_budget(window),
         )
+
+    def use_context_window(self, session_id: str, context_window: int) -> None:
+        """Size this session's recap for the window of the model its requests name now.
+
+        Read at the next collection. A session that never hears of one uses the configured window.
+        """
+        state = self.session_manager.store.get(session_id)
+        if state is not None:
+            state.context_window = context_window
 
     def mark_front_sent(self, session_id: str, history_turns: int) -> int:
         """Note that the current front is being sent after `history_turns` turns of history.
@@ -281,7 +294,12 @@ class GcService:
             state.aging_in_flight = True
             try:
                 min_cut_tokens = 0 if ignore_batch_minimum else self.gc_config.min_cut_tokens
-                gc_result = await self._age(state, base, gc_run_id, start, min_cut_tokens)
+                # Every path counts what it spent, including a cut abandoned after its summaries were bought.
+                with measure_model_usage() as spent:
+                    gc_result = await self._age(state, base, gc_run_id, start, min_cut_tokens)
+                gc_result = gc_result.model_copy(update={"summary_calls": spent.calls,
+                                                         "summary_input_tokens": spent.input_tokens,
+                                                         "summary_output_tokens": spent.output_tokens})
             finally:
                 state.aging_in_flight = False
 
@@ -307,7 +325,9 @@ class GcService:
             young = _in_order(base.young)
             cut = find_cut_point(young, self.gc_config.last_n_turns_to_keep)
             drafts = self.generational_memory.draft(young[:cut])
-            estimated = self._plan(base, young, cut, drafts, estimate_summaries=True)
+            # Sized for the window of the model this conversation's requests name now.
+            recap_budget = self.gc_config.recap_budget(state.context_window)
+            estimated = self._plan(base, young, cut, drafts, estimate_summaries=True, recap_budget=recap_budget)
             if not batch_worth_cutting(cut, estimated.compactable_tokens, min_cut_tokens):
                 return self._unchanged_result(base, gc_run_id, GCStatus.BYPASSED_BATCH_TOO_SMALL, start)
             if (saving := estimated.cut_saving(front_exists=bool(base.old))) <= 0:
@@ -321,12 +341,12 @@ class GcService:
             degradations.extend(self._report_failures(session_id, condensed))
 
             current_stage = "plan"
-            planned = self._plan(base, young, cut, condensed, estimate_summaries=False)
+            planned = self._plan(base, young, cut, condensed, estimate_summaries=False, recap_budget=recap_budget)
             if planned.plan.over_budget:
                 degradations.append(self._record_degradation(
                     session_id, DegradationReason.RECAP_OVER_BUDGET, [turn.turn_index for turn in young[:cut]],
                     LLMGCError(f"the folded front needs {planned.plan.tokens} tokens of a "
-                               f"{self.gc_config.max_recap_tokens}-token recap budget")))
+                               f"{recap_budget}-token recap budget")))
             delta = planned.delta()
             # The cut must pay for itself: its new spans, measured on the context
             # they would produce, against the turns they replace - a quote's marker
@@ -362,7 +382,7 @@ class GcService:
                                       start)
 
     def _plan(self, base: GenerationSnapshot, young: Sequence[Message], cut: int, condensed: Sequence[Condensed],
-              *, estimate_summaries: bool) -> _Planned:
+              *, estimate_summaries: bool, recap_budget: int) -> _Planned:
         """Score every span against what is being discussed now, and give each its level.
 
         "Now" is what the user said in the tail. With `estimate_summaries`, a new
@@ -394,7 +414,7 @@ class GcService:
                                         compacted_tokens=compacted, archived_tokens=archived))
 
         fold = count_tokens(folded_line(spans[0].first_turn, spans[-1].turns[-1].turn_index, len(spans))) if spans else 0
-        plan = plan_levels(options, self._bands, self.gc_config.max_recap_tokens - FRONT_OVERHEAD_TOKENS, fold)
+        plan = plan_levels(options, self._bands, recap_budget - FRONT_OVERHEAD_TOKENS, fold)
         return _Planned(spans=tuple(spans), new_from=len(base.old), scores=tuple(scores), options=tuple(options),
                         plan=plan, new_facts=new_facts)
 

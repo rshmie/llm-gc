@@ -104,6 +104,8 @@ class KnowledgeState(BaseModel):
     next_cut: NextCutState
     aging_in_flight: bool
     last_activity: datetime
+    context_window: int                   # the window of the model being called, as the recap is sized for it
+    recap_budget: int
 
 
 def project_knowledge_state(inspection: SessionInspection) -> KnowledgeState:
@@ -129,6 +131,8 @@ def project_knowledge_state(inspection: SessionInspection) -> KnowledgeState:
                               estimated_saving=inspection.next_cut.estimated_saving),
         aging_in_flight=inspection.aging_in_flight,
         last_activity=inspection.last_activity,
+        context_window=inspection.context_window,
+        recap_budget=inspection.recap_budget,
     )
 
 

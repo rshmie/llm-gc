@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
+import httpx2
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
@@ -35,8 +36,10 @@ from pydantic_settings import (
 from llm_gc.config import GCConfig
 from llm_gc.config.constants import DEFAULT_DASHBOARD_PORT, DEFAULT_PROXY_CONTEXT_WINDOW
 from llm_gc.exceptions import ConfigError
+from llm_gc.llm import AnthropicClient
 from llm_gc.llm.factory import DEFAULT_MODELS, PROVIDER_NAMES, create_provider
 from llm_gc.llm.provider import LLMProvider
+from llm_gc.proxy.model_windows import WindowLookup
 from llm_gc.proxy.server import ANTHROPIC_UPSTREAM, DEFAULT_PROXY_PORT
 
 # Looked for in the working directory when nothing asks for a file; absent is fine.
@@ -53,12 +56,15 @@ ENV_NESTED_DELIMITER = "__"
 # LLM-GC's own credentials keep the names every Anthropic tool uses, not LLM_GC_*.
 _CREDENTIAL_ENV_NAMES = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY")
 # Which settings fields hold each provider's credentials, as (api key, bearer token). A new
-# provider adds a row here and its field below. The one other place that names a vendor is
-# `create_summary_provider`'s rule that only anthropic follows the proxy's upstream.
+# provider adds a row here and its field below. The other places that name a vendor are
+# `create_summary_provider`'s rule that only anthropic follows the proxy's upstream, and
+# `create_model_window_lookup`, which asks that upstream in its own protocol.
 _CREDENTIAL_FIELDS: dict[str, tuple[str, str | None]] = {
     "anthropic": ("anthropic_api_key", "anthropic_auth_token"),
     "openai": ("openai_api_key", None),
 }
+# How long the upstream has to report a model's window. Asked off the request path, once per model.
+MODEL_WINDOW_TIMEOUT_S = 10.0
 # Hosts that reach this machine: an upstream on one of them, at our own port, is a loop.
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
@@ -427,6 +433,22 @@ def create_summary_provider(settings: ProxySettings) -> LLMProvider:
         api_key=_reveal(getattr(settings, api_key_field)),
         auth_token=_reveal(getattr(settings, token_field)) if token_field else None,
     )
+
+
+def create_model_window_lookup(settings: ProxySettings, *, http_client: httpx2.AsyncClient | None = None
+                               ) -> WindowLookup | None:
+    """How the proxy asks the upstream for a model's context window: with LLM-GC's own Anthropic
+    credential, when it has one. None without one, and every recap is sized for the configured window.
+
+    The upstream speaks Anthropic's protocol whichever vendor summarises, so the Anthropic
+    credential is the one to ask with.
+    """
+    api_key, auth_token = _reveal(settings.anthropic_api_key), _reveal(settings.anthropic_auth_token)
+    if not (api_key or auth_token):
+        return None
+    client = AnthropicClient(api_key=api_key, auth_token=auth_token, base_url=settings.upstream,
+                             http_client=http_client)
+    return lambda model: client.context_window(model, timeout_s=MODEL_WINDOW_TIMEOUT_S)
 
 
 def _reveal(secret: SecretStr | None) -> str | None:

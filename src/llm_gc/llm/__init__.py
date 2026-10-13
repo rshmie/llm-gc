@@ -1,5 +1,6 @@
 from llm_gc.llm.anthropic_client import DEFAULT_ANTHROPIC_MODEL, AnthropicClient
 from llm_gc.llm.fake_provider import FakeProvider, FakeProviderExhausted, GenerateCall
+from llm_gc.llm.metering import MeteredProvider, ModelUsage, measure_model_usage
 from llm_gc.llm.openai_client import DEFAULT_OPENAI_MODEL, OpenAIClient
 from llm_gc.llm.provider import LLMProvider, LLMResponse, StopReason, validate_generate_request
 
@@ -12,7 +13,10 @@ __all__ = [
     "GenerateCall",
     "LLMProvider",
     "LLMResponse",
+    "MeteredProvider",
+    "ModelUsage",
     "OpenAIClient",
+    "measure_model_usage",
     "StopReason",
     "validate_generate_request",
 ]

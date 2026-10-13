@@ -454,3 +454,43 @@ class TestConnectionLifetime:
             return inner.is_closed
 
         assert asyncio.run(scenario()) is True
+
+
+class TestContextWindow:
+    """The Models API's `max_input_tokens`, asked with LLM-GC's own credential."""
+
+    def test_the_reported_window_of_a_model_by_its_exact_name(self):
+        seen: list[httpx2.Request] = []
+
+        def handler(request: httpx2.Request) -> httpx2.Response:
+            seen.append(request)
+            return httpx2.Response(200, json={"id": "claude-opus-5-5", "max_input_tokens": 1_000_000})
+
+        tokens = asyncio.run(_client(handler).context_window("claude-opus-5-5", timeout_s=5.0))
+
+        assert tokens == 1_000_000
+        assert seen[0].method == "GET" and seen[0].url.path == "/v1/models/claude-opus-5-5"
+        assert seen[0].headers["x-api-key"] == "sk-test"
+        assert seen[0].headers["anthropic-version"] == ANTHROPIC_API_VERSION
+
+    def test_a_name_is_sent_as_one_path_segment(self):
+        seen: list[httpx2.Request] = []
+
+        def handler(request: httpx2.Request) -> httpx2.Response:
+            seen.append(request)
+            return httpx2.Response(404, json={"type": "error", "error": {"type": "not_found_error"}})
+
+        assert asyncio.run(_client(handler).context_window("team/model?x=1", timeout_s=5.0)) is None
+        assert seen[0].url.raw_path == b"/v1/models/team%2Fmodel%3Fx%3D1"
+
+    def test_an_answer_without_the_field_reports_none(self):
+        handler = lambda request: httpx2.Response(200, json={"id": "renamed-by-a-gateway"})  # noqa: E731
+
+        assert asyncio.run(_client(handler).context_window("renamed-by-a-gateway", timeout_s=5.0)) is None
+
+    def test_a_refused_credential_raises_as_generate_would(self):
+        handler = lambda request: httpx2.Response(  # noqa: E731
+            401, json={"type": "error", "error": {"type": "authentication_error", "message": "invalid x-api-key"}})
+
+        with pytest.raises(LLMAuthError):
+            asyncio.run(_client(handler).context_window("claude-opus-5-5", timeout_s=5.0))

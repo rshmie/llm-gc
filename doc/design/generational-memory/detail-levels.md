@@ -159,9 +159,18 @@ archived.
 ### The recap budget
 
 One budget covers everything the front shows for its spans: `max_recap_ratio` of
-the model's window (30% by default; 60,000 tokens of a 200k window), less the
-front's own header. A share, never an absolute: 200 tokens is nothing to a 128k
-window and everything to a 200-token one.
+the window of the model the conversation's requests name (30% by default; 60,000
+tokens of a 200k window, 300,000 of a 1M one), less the front's own header. A share,
+never an absolute: 200 tokens is nothing to a 128k window and everything to a
+200-token one. A session that has not learned its model's window uses the configured
+one.
+
+```
+the conversation's model        its window              recap budget (30%)
+claude-opus-5-5                 1,000,000 (reported)          300,000
+claude-haiku-4-5                  200,000 (reported)           60,000
+a name the gateway made up        200,000 (assumed)            60,000
+```
 
 ### The front, rendered
 

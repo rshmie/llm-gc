@@ -284,7 +284,7 @@ says *Last collection …*, and the percentage drops. With Claude Code, file rea
 output get there within a few messages. To see one sooner, press **Run GC now** on the
 dashboard, or restart with `llm-gc start --dashboard --min-cut-tokens 300`.
 
-`llm-gc stats`, in a terminal with the environment activated, prints the totals so far.
+`llm-gc stats`, in a terminal with the environment activated, prints the totals so far, what the provider reported, and each Claude Code session's conversations with what each sent and saved.
 
 ### If something is wrong
 

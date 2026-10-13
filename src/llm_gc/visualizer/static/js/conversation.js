@@ -5,7 +5,7 @@
 
 import { BECOMES, CATS, CLAMP_CHARS, FAR_JUMP_SCREENS, MAP_PX_PER_MESSAGE, EARLIER_SHOWN, GLOSSARY, HEIGHT, MIN_BAR_PX, ORDER, RUN_MIN, FACT_STATUS, categoryOf, describeOutcome, swatch } from "./vocabulary.js";
 import { $, agoTs, countEl, fill, fmt, h, meterBar, percent, plural, ranges, reducedMotion, setChildren, storeGet, storeSet, svg } from "./dom.js";
-import { collecting, countCats, credentialRefusal, factsByTurn, has, instructionTokens, marked, newestReply, pendingTurns, preview, query, recapLimit, state, turnMatches, ui, writtenTokens } from "./state.js";
+import { collecting, countCats, credentialRefusal, factsByTurn, has, instructionTokens, marked, newestReply, pendingTurns, preview, query, recapLimit, state, trafficOf, turnMatches, ui, writtenTokens } from "./state.js";
 import { hideTooltip, info, showTooltip, tipAction, tipQuote, hoverTip } from "./tooltip.js";
 import { offerReturn, showTab } from "./shell.js";
 import { openCard, showWhy, whyText } from "./engine.js";
@@ -93,15 +93,27 @@ export function renderStatus() {
 export function renderSize(k) {
   const written = writtenTokens(k);
   const sent = k.context_tokens;
-  const saved = written - sent;
+  const less = written - sent;
+  // A forecast: what the next request will carry. What requests did carry is measured, below it.
   const [tone, text] = k.cuts === 0 ? ["", "Same as written: nothing collected yet"]
-    : saved >= 0 ? ["good", `↓ ${fmt(saved)} saved · ${percent(saved, written)}% less than as written`]
-    : ["", `↑ ${fmt(-saved)} more than as written: the recap outgrew what it replaced`];
+    : less >= 0 ? ["good", `↓ ${fmt(less)} · ${percent(less, written)}% less than as written`]
+    : ["", `↑ ${fmt(-less)} more than as written: the recap outgrew what it replaced`];
   fill("panel-size",
-    h("div", { class: "label" }, "Sent with each request", info("size")),
+    h("div", { class: "label" }, "The next request", info("size")),
     h("div", { class: "hero-row" }, h("span", { class: "hero" }, countEl("size-sent", sent)), h("span", { class: "hero-unit" }, "tokens"),
       h("span", { class: `delta${tone ? ` ${tone}` : ""}` }, text)),
-    h("p", { class: "hero-sub" }, "The recap, then the recent messages as written. Your next message is added on top."));
+    h("p", { class: "hero-sub" }, "Of this conversation: the recap, then the recent messages as written. Your next message is added on top, and the system prompt and tools go with it unchanged."),
+    measuredSoFar());
+}
+
+// What this conversation's requests carried, as the proxy counted them: the record behind the forecast above.
+function measuredSoFar() {
+  const c = trafficOf(state.selected);
+  if (!c) return null;
+  const t = c.traffic;
+  const saved = t.tokens_saved ? `saved ${fmt(t.tokens_saved)} (${percent(t.tokens_saved, t.tokens_from_client)}%)` : "nothing saved yet";
+  return h("p", { class: "hero-sub measured" }, h("b", {}, "So far: "), `${plural(t.requests, "request")} sent ${fmt(t.tokens_from_client)} tokens whole; ${saved}.`,
+    c.collections_not_yet_sent ? h("span", { class: "st warn" }, ` ⚠ The newest collection has not reached the model: no request has carried it yet.`) : null);
 }
 
 export function renderHolds(k) {
@@ -135,14 +147,18 @@ export function renderLastCollection() {
 }
 
 export function renderWindow(k) {
-  const w = state.config ? state.config.context_window : null;
+  const w = k.context_window;
+  const measured = trafficOf(state.selected);
+  const window = measured && measured.context_window;
+  const source = !window ? "the configured window" : window.reported ? `the window of ${measured.model || "this model"}, as the provider reports it`
+    : "the configured window, as the provider has not reported this model's";
   const share = w ? k.context_tokens / w : 0;
   fill("panel-window",
     h("div", { class: "label" }, "The model's window", info("window")),
     h("div", { class: "tile-big" }, w ? [countEl("window-pct", share * 100, { format: (v) => (v < 0.1 && v > 0 ? "<0.1" : v.toFixed(v < 10 ? 1 : 0)) }), "%"] : "—", h("small", {}, " used")),
     h("div", { class: "meter", role: "meter", "aria-valuemin": "0", "aria-valuemax": String(w || 0), "aria-valuenow": String(k.context_tokens), "aria-label": "Share of the model's window" },
       meterBar("window-share", share * 100)),
-    h("div", { class: "note" }, w ? `${fmt(k.context_tokens)} of ${fmt(w)} tokens, before your next message` : "window size not reported"));
+    h("div", { class: "note" }, `${fmt(k.context_tokens)} of ${fmt(w)} tokens before your next message, in ${source}.`));
 }
 
 // ----------------------------------------------------------------- the map: what the model has of each message

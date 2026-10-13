@@ -1,0 +1,76 @@
+// The selected conversation's client session, measured request by request: every conversation it
+// ran through the proxy, and what each sent and saved. The panels below it describe the next request;
+// this table describes the requests that happened.
+
+import { $, fill, fmt, h, percent, plural } from "./dom.js";
+import { clientSessionOf, state } from "./state.js";
+import { hoverTip } from "./tooltip.js";
+
+const shortId = (id) => id.slice(0, 8);
+const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+export function windowLabel(window) {
+  if (!window) return "";
+  const t = window.tokens;
+  const size = t % 1_000_000 === 0 ? `${t / 1_000_000}M` : t % 1000 === 0 ? `${t / 1000}k` : fmt(t);
+  return window.reported ? size : `${size} assumed`;
+}
+
+function partLabels(conversations) {
+  let subagents = 0;
+  return conversations.map((c) => c.part === "subagent" ? `Subagent ${++subagents}` : c.part === "earlier_main" ? "Earlier main" : "Main");
+}
+
+export function renderSessionCard(select) {
+  const client = clientSessionOf(state.selected);
+  $("session-card").hidden = !client;
+  if (!client) return;
+  const t = client.traffic;
+  const labels = partLabels(client.conversations);
+  const live = new Map(state.sessions.map((s) => [s.session_id, s]));
+  const row = (label, title, traffic, extra = {}) => h("tr", extra.attrs || {},
+    h("td", {}, h("b", {}, label), title ? h("span", { class: "secondary" }, ` · ${title}`) : null),
+    h("td", { class: "num" }, fmt(traffic.requests)),
+    h("td", { class: "num" }, fmt(traffic.tokens_from_client)),
+    h("td", { class: "num" }, traffic.tokens_saved ? `${fmt(traffic.tokens_saved)} (${percent(traffic.tokens_saved, traffic.tokens_from_client)}%)` : "0"),
+    h("td", { class: "num" }, extra.collections ?? ""),
+    h("td", {}, extra.window ?? ""));
+  const rows = client.conversations.map((c, i) => {
+    const session = live.get(c.conversation_id);
+    const unsent = c.collections_not_yet_sent ? h("span", { class: "st warn", ...hoverTip("Not yet sent",
+      "This collection was made after the conversation's newest request, so no request has carried it: it has saved nothing yet. Its saving reaches the model with the next request, and a conversation that has finished never sends one.") },
+      ` ⚠ ${fmt(c.collections_not_yet_sent)} not yet sent`) : null;
+    return row(labels[i], session ? session.title : "closed", c.traffic, {
+      collections: [fmt(c.collections), unsent],
+      window: windowLabel(c.context_window),
+      attrs: { class: `${c.conversation_id === state.selected ? "selected" : ""}${session ? " pickable" : ""}`,
+        title: session ? "Show this conversation" : "Closed once idle: its counts stay, its messages are gone",
+        onclick: session && c.conversation_id !== state.selected ? () => select(c.conversation_id) : null },
+    });
+  });
+  if (client.outside_conversations.requests) {
+    rows.push(row("Other requests", "a conversation's first message before it was recognised, and side requests",
+      client.outside_conversations));
+  }
+  const usage = t.provider;
+  const spent = t.summaries;
+  fill("session-card",
+    h("div", { class: "card-head" }, h("div", {},
+      h("h2", {}, `Claude Code session ${shortId(client.client_session)}`),
+      h("p", { class: "sub" }, `Since ${clock(client.first_request_at)}. Measured request by request: what was sent, and what LLM-GC saved. Each conversation is collected on its own.`))),
+    h("p", { class: "session-totals" },
+      h("span", {}, h("b", {}, plural(t.requests, "request"))), " · ",
+      h("span", {}, "Claude Code sent ", h("b", {}, fmt(t.tokens_from_client))), " · ",
+      h("span", {}, "LLM-GC forwarded ", h("b", {}, fmt(t.tokens_forwarded))), " · ",
+      h("span", {}, "saved ", h("b", {}, `${fmt(t.tokens_saved)} (${percent(t.tokens_saved, t.tokens_from_client)}%)`))),
+    h("p", { class: "session-totals secondary" },
+      usage.replies ? `The provider reported ${fmt(usage.cache_read_input_tokens)} cache read, ${fmt(usage.input_tokens)} input, ${fmt(usage.cache_creation_input_tokens)} cache write and ${fmt(usage.output_tokens)} output tokens on ${plural(usage.replies, "reply", "replies")}, by its own count. `
+        : "No reply has reported the provider's own count yet. ",
+      spent.calls ? `LLM-GC's own model calls: ${plural(spent.calls, "call")}, ${fmt(spent.input_tokens)} tokens in, ${fmt(spent.output_tokens)} out.`
+        : "LLM-GC has made no model calls for this session."),
+    h("div", { class: "table-wrap" }, h("table", { class: "session-table" },
+      h("thead", {}, h("tr", {}, ...["Conversation", "Requests", "Sent", "Saved", "Collections", "Window"].map((label, i) =>
+        h("th", { class: i && i < 5 ? "num" : "" }, label)))),
+      h("tbody", {}, rows))),
+    h("p", { class: "note" }, "Sent and Saved count every request whole, system prompt and tools included, with LLM-GC's own tokenizer; the provider's own count is the line above. A window marked assumed is the configured one: the provider has not reported that model's."));
+}

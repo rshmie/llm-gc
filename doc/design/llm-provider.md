@@ -75,6 +75,33 @@ These differences only affect the call that *produces* a summary. The summary
 that comes back is plain text, wrapped in an ordinary LLM-GC `Message` that goes
 into the conversation like any other turn, whichever vendor wrote it.
 
+**What LLM-GC's own calls spend is metered.** The engine wraps its provider in a
+`MeteredProvider`, which adds each finished call's tokens to the measurement open in the
+calling task's context. A collection opens one around everything it does, so the calls
+it makes — several summaries and fact reads, some at once — are counted against that
+collection and no other, even while another conversation is collected concurrently.
+The measurement lives in a `contextvar` because tasks copy their context when they
+start: a counter on the provider would mix two collections running at once.
+
+```
+collection of s_A ── opens measurement A ─┬─ summary ──┐
+   (one task)                             ├─ summary ──┼──► A: 3 calls, its tokens
+                                          └─ facts   ──┘    (tasks it starts copy its context,
+                                                             so their calls find A too)
+collection of s_B ── opens measurement B ─── summary ─────► B: 1 call, its tokens
+   (another task, at the same time)
+
+          all four calls go through the one MeteredProvider;
+          each adds to the measurement its own context holds
+```
+*Rejected: threading a counter through the compactor and the fact reader* — every caller
+would have to pass it on, and one that forgot would undercount silently.
+
+**The Anthropic adapter also reports a model's window.** `context_window(model)` asks
+the Models API for `max_input_tokens`, with the same credential and base URL as its
+summaries; the proxy uses it to size each conversation's recap. It is outside the
+`LLMProvider` interface: a provider that cannot answer is simply not asked.
+
 **A fake for tests.** `FakeProvider` implements the same interface from a script
 of responses and errors. It records every call. Unit tests run against it, so
 they make no network calls and can simulate a timeout on exactly the second

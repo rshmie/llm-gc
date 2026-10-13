@@ -10,7 +10,7 @@ from llm_gc.engine.gc_service import GcService
 from llm_gc.engine.generations import GenerationalMemory
 from llm_gc.events import EventBus
 from llm_gc.extraction import FactReader, LLMFactReader, PatternFactReader
-from llm_gc.llm import LLMProvider
+from llm_gc.llm import LLMProvider, MeteredProvider
 from llm_gc.scoring import DecisionScorer, DensityScorer, SpanScorer
 from llm_gc.session import SessionManager
 
@@ -31,6 +31,8 @@ def build_gc_service(config: GCConfig, *, summary_provider: LLMProvider | None,
             model call for them, such as an offline rehearsal.
     """
     bus = EventBus()
+    # Metered, so each collection can report what its own model calls spent.
+    summary_provider = MeteredProvider(summary_provider) if summary_provider is not None else None
     compactor: BaseCompactor = (NoOpCompactor(event_bus=bus) if summary_provider is None
                                 else LLMCompactor(event_bus=bus, provider=summary_provider))
     return GcService(

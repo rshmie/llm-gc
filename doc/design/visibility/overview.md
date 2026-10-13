@@ -709,12 +709,57 @@ Claude Code session bb0fff8d · since 10:56
 
 The newest main conversation is the one in use: an older one in the same session was
 replaced, and nothing will continue it. A line above both tabs says where the selected
-conversation sits and that its numbers are its own, while the Engine tab's totals add
-up every conversation since the proxy started — the two scopes on the page, named where
-they are read. Conversations whose client names no session are listed as before, under
-"Other conversations" when grouped ones are present. *Rejected: hiding sub-agent
+conversation sits. Conversations whose client names no session are listed as before,
+under "Other conversations" when grouped ones are present. *Rejected: hiding sub-agent
 conversations* — they are prompts LLM-GC forwards and collects, and hiding them would
 hide what it does.
+
+### Measured and forecast are never one number
+
+The page holds three scopes, each named where it is read, and two kinds of number, never
+mixed:
+
+| Scope | Where | Measured: what requests carried | Forecast: what the next request will |
+|---|---|---|---|
+| One conversation | Conversation tab, top panels | *So far*: its requests, sent whole, and saved | *The next request*: the recap and recent messages, against the conversation as written |
+| One client session | Conversation tab, the session table | Each conversation's requests, sent, saved, collections, window; the provider's usage; LLM-GC's own calls | — |
+| The proxy | Engine tab, *across all conversations* | Every request since the proxy started, the provider's usage, LLM-GC's own calls | — |
+
+Where each sits on the page:
+
+```
+┌ Conversation tab ─────────────────────────────────────────────────────────────────┐
+│ Claude Code session 6d84277c                          MEASURED · the session      │
+│   26 requests · sent 146,028 · forwarded 113,373 · saved 32,655 (22%)             │
+│   the provider's usage · LLM-GC's own calls                                       │
+│   Conversation       Requests     Sent     Saved   Collections           Window   │
+│   Main                      3    7,183         0   0                     1M       │
+│   Subagent 1                6   27,465         0   1 ⚠ 1 not yet sent    1M       │
+│   Earlier main             12   86,224    32,655   5 ⚠ 1 not yet sent    1M       │
+├───────────────────────────────────────────────────────────────────────────────────┤
+│ THE NEXT REQUEST      FORECAST │ HOW EACH MESSAGE IS SENT │ THE MODEL'S WINDOW    │
+│ 3,647 tokens                   │ recent 5 · compacted 5   │ 0.4% of 1,000,000     │
+│ ↓ 2,818 · 44% less than written│                          │ as the provider       │
+│ So far: 6 requests,  MEASURED  │                          │ reports it            │
+│ nothing saved yet ⚠            │                          │                       │
+└───────────────────────────────────────────────────────────────────────────────────┘
+┌ Engine tab ───────────────────────── MEASURED · every conversation, since start ──┐
+│ requests · total sent · what the provider reported · LLM-GC's own model calls     │
+└───────────────────────────────────────────────────────────────────────────────────┘
+```
+
+The session table is the answer to "what did this session cost and save": the
+conversations a reader thinks of as one session, counted request by request, each a row
+that opens it. A collection made after a conversation's newest request is marked *not
+yet sent*: a finished subagent's last collection saved nothing, and a forecast of the
+next request's size, shown as "saved", would have claimed it did. *Rejected: summing the
+conversations' next-request sizes* — each is one request's forecast, and a session's
+spending is every request it made. *Rejected: drawing subagents inside the main
+conversation's map* — their messages were never in the main conversation's prompt, so
+the map would show tokens it never carried.
+
+The model's window is the one the provider reports for the conversation's model, or the
+configured one, said to be assumed.
 
 ### The conversation view keeps no collection log
 

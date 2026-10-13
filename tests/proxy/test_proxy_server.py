@@ -18,9 +18,11 @@ from fastapi.testclient import TestClient
 from llm_gc.config import GCConfig
 from llm_gc.engine import build_gc_service
 from llm_gc.engine.generations.front import FRONT_HEADER
+from llm_gc.events import EventBus
 from llm_gc.llm import FakeProvider, LLMResponse, StopReason
 from llm_gc.models import ClientOrigin
 from llm_gc.proxy import SESSION_HEADER, create_app
+from llm_gc.proxy.anthropic_translation import fixed_prompt_tokens
 from llm_gc.proxy.session_identity import CLIENT_AGENT_HEADER, CLIENT_SESSION_HEADER
 from llm_gc.session import SessionManager
 
@@ -61,7 +63,7 @@ def _engine(**config_overrides):
     return service, service.generational_memory
 
 
-def _proxy(upstream=None, *, gc_service=None, on_reply=None, **engine_kwargs):
+def _proxy(upstream=None, *, gc_service=None, on_reply=None, window_lookup=None, **engine_kwargs):
     """A proxy whose upstream is a scripted handler, with aging run synchronously.
 
     `schedule` is injected to run the post-response work to completion inline.
@@ -84,6 +86,7 @@ def _proxy(upstream=None, *, gc_service=None, on_reply=None, **engine_kwargs):
         if False
         else _run_now(coro),
         on_reply=on_reply,
+        window_lookup=window_lookup,
     )
     app.state.seen = seen
     return TestClient(app), service, memory, seen
@@ -288,7 +291,7 @@ class TestTheClientsHistoryIsReplaced:
         assert front["content"][0] == {"type": "text", "text": reminder}, "said once, ahead of the recap"
         assert sum(json.dumps(message).count("Project rule") for message in sent) == 1 + sum(
             1 for message in sent if not _is_front(message) and message["role"] == "user"), "once in the recap, as sent in each recent turn"
-        summariser = service.generational_memory.compactor.provider
+        summariser = service.generational_memory.compactor.provider.inner
         assert summariser.calls and not any("Project rule" in str(call.messages) for call in summariser.calls)
 
     def test_a_client_moving_its_cache_markers_stays_one_conversation_within_the_limit(self):
@@ -673,6 +676,8 @@ class TestFirstDoNoHarm:
 
         class _BrokenService:
             session_manager = SessionManager()
+            event_bus = EventBus()
+            gc_config = GCConfig()
 
             async def gc_collect(self, session_id, query=None):
                 raise RuntimeError("engine exploded")
@@ -689,6 +694,8 @@ class TestFirstDoNoHarm:
     def test_a_gc_failure_is_counted_as_a_bypass(self):
         class _BrokenService:
             session_manager = SessionManager()
+            event_bus = EventBus()
+            gc_config = GCConfig()
 
             async def gc_collect(self, session_id, query=None):
                 raise RuntimeError("engine exploded")
@@ -737,6 +744,8 @@ class TestTheStatsSurface:
     def test_a_bypassed_request_is_not_counted_as_free(self):
         class _BrokenService:
             session_manager = SessionManager()
+            event_bus = EventBus()
+            gc_config = GCConfig()
 
             async def gc_collect(self, session_id, query=None):
                 raise RuntimeError("engine exploded")
@@ -748,7 +757,7 @@ class TestTheStatsSurface:
         _post(client, _body(("user", "a turn with some real length to it here")))
 
         stats = client.get("/stats").json()
-        assert stats["tokens_forwarded"] == stats["tokens_in_client_history"]
+        assert stats["tokens_forwarded"] == stats["tokens_from_client"]
         assert stats["tokens_saved"] == 0
 
 
@@ -1269,3 +1278,100 @@ class TestTheHistoryObserver:
         assert response.status_code == 200
         assert len(seen) == 1
         assert client.get("/stats").json()["gc_bypassed"] == 0, "not even GC is given up for it"
+
+
+class TestTrafficIsMeasured:
+    """What `/stats` reports happened: each request whole, the provider's own usage, grouped as the client ran it."""
+
+    TOOLS = [{"name": "Read", "description": "Reads a file from the local filesystem. " * 20,
+              "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}}}]
+
+    @staticmethod
+    def _converse(client, turns: int, headers=None, **extra) -> dict:
+        conversation: list[tuple[str, str]] = []
+        for index in range(turns):
+            conversation.append(("user", f"turn {index}: we discussed the storage layer at length today"))
+            _post(client, _body(*conversation, **extra), headers=headers)
+            conversation.append(("assistant", UPSTREAM_OK["content"][0]["text"]))
+        return client.get("/stats").json()
+
+    def test_the_system_prompt_and_tools_count_on_both_sides_and_save_nothing(self):
+        """Left out, the share saved was measured against only the part GC can shrink, and read too large."""
+        bare = self._converse(_proxy()[0], 10)
+        whole = self._converse(_proxy()[0], 10, system="You are a careful assistant. " * 40, tools=self.TOOLS)
+
+        fixed = fixed_prompt_tokens({"system": "You are a careful assistant. " * 40, "tools": self.TOOLS})
+        assert whole["tokens_from_client"] - bare["tokens_from_client"] == 10 * fixed
+        assert whole["tokens_forwarded"] - bare["tokens_forwarded"] == 10 * fixed
+        assert whole["tokens_saved"] == bare["tokens_saved"] > 0
+        assert whole["ratio"] > bare["ratio"]
+
+    def test_the_providers_usage_is_added_up_from_every_reply(self):
+        stats = self._converse(_proxy()[0], 3)
+
+        assert stats["provider_usage"]["replies"] == 3
+        assert stats["provider_usage"]["input_tokens"] == 3 * UPSTREAM_OK["usage"]["input_tokens"]
+        assert stats["provider_usage"]["output_tokens"] == 3 * UPSTREAM_OK["usage"]["output_tokens"]
+
+    def test_a_streamed_replys_usage_is_read_as_it_passes(self):
+        def event(payload: dict) -> str:
+            return f"event: {payload['type']}\ndata: {json.dumps(payload)}\n\n"
+
+        body = (event({"type": "message_start", "message": {"usage": {"input_tokens": 7,
+                                                                      "cache_read_input_tokens": 4000,
+                                                                      "output_tokens": 1}}})
+                + event({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "ok"}})
+                + event({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 61}})
+                + event({"type": "message_stop"})).encode()
+        client, _, _, _ = _proxy(_streaming_upstream(body))
+
+        response = _post(client, _body(("user", "which database?"), stream=True))
+
+        assert response.content == body
+        usage = client.get("/stats").json()["provider_usage"]
+        assert (usage["input_tokens"], usage["cache_read_input_tokens"], usage["output_tokens"]) == (7, 4000, 61)
+
+    def test_conversations_are_grouped_under_the_client_session_that_ran_them(self):
+        client, _, _, _ = _proxy()
+        self._converse(client, 4, headers={CLIENT_SESSION_HEADER: "cc-1"})
+        self._converse(client, 3, headers={CLIENT_SESSION_HEADER: "cc-1", CLIENT_AGENT_HEADER: "agent-a"})
+
+        [session] = client.get("/stats").json()["client_sessions"]
+        by_agent = {conversation["agent"]: conversation for conversation in session["conversations"]}
+        assert set(by_agent) == {None, "agent-a"}
+        # Each conversation's first request, which belonged to none yet, was claimed by it.
+        assert by_agent[None]["traffic"]["requests"] == 4
+        assert by_agent["agent-a"]["traffic"]["requests"] == 3
+        assert session["outside_conversations"]["requests"] == 0
+        assert session["traffic"]["requests"] == 7
+        assert by_agent[None]["model"] == "claude-sonnet-5"
+        assert API_KEY not in json.dumps(session)
+
+
+class TestEachConversationIsSizedForItsModel:
+    def test_the_window_the_upstream_reports_sizes_the_recap_and_is_shown_as_reported(self):
+        asked: list[str] = []
+
+        async def lookup(model: str) -> int | None:
+            asked.append(model)
+            return 1_000_000
+
+        client, service, _, _ = _proxy(window_lookup=lookup)
+        conversation = [("user", "we need a database"), ("assistant", "Noted."), ("user", "which one?")]
+        _post(client, _body(*conversation), headers={CLIENT_SESSION_HEADER: "cc-1"})
+        _post(client, _body(*conversation, ("assistant", "Postgres."), ("user", "and backups?")),
+              headers={CLIENT_SESSION_HEADER: "cc-1"})
+
+        [state_id] = service.session_manager.store.active_session_ids()
+        assert service.session_manager.store.get(state_id).context_window == 1_000_000
+        [conversation_stats] = client.get("/stats").json()["client_sessions"][0]["conversations"]
+        assert conversation_stats["context_window"] == {"tokens": 1_000_000, "reported": True}
+        assert asked == ["claude-sonnet-5"]
+
+    def test_without_a_lookup_the_configured_window_is_used_and_said_to_be_assumed(self):
+        client, service, _, _ = _proxy()
+        conversation = [("user", "we need a database"), ("assistant", "Noted."), ("user", "which one?")]
+        _post(client, _body(*conversation), headers={CLIENT_SESSION_HEADER: "cc-1"})
+
+        [conversation_stats] = client.get("/stats").json()["client_sessions"][0]["conversations"]
+        assert conversation_stats["context_window"] == {"tokens": service.gc_config.context_window, "reported": False}

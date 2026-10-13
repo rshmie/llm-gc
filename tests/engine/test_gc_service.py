@@ -352,3 +352,40 @@ class TestNothingRecordedIsDestroyed:
         assert sorted(message.turn_index for message in held) == list(range(len(scores)))
         assert all(message == turn(message.turn_index) for message in held)
         assert not [e for e in finished if e.data["gc_result"].status is GCStatus.BYPASSED_ON_ERROR]
+
+
+class TestTheRecapIsSizedForTheModelsWindow:
+    def test_a_session_told_its_window_sizes_its_recap_for_it(self):
+        service, _, _ = make_service(GCConfig(context_window=200_000, max_recap_ratio=0.3))
+        _converse(service, 1)
+
+        assert service.inspect("s").recap_budget == 60_000
+        service.use_context_window("s", 1_000_000)
+        inspection = service.inspect("s")
+        assert (inspection.context_window, inspection.recap_budget) == (1_000_000, 300_000)
+
+    def test_the_window_moves_only_the_budget(self):
+        """The same conversation as the budget test above: on its small window the coldest quote is
+        summarised to fit; on a model with a larger window it stays quoted. Savings still come from scores."""
+        config = GCConfig(context_window=1000, max_recap_ratio=0.378, min_cut_tokens=0, last_n_turns_to_keep=1)
+        scores = {0: 0.8, 1: 0.95, 2: 0.95, 3: ARCHIVED_SCORE}
+        small, _, _ = make_service(config, scores=scores)
+        large, _, _ = make_service(config, scores=scores)
+        large.session_manager.get_or_create("s")
+        large.use_context_window("s", 100_000)
+
+        _converse(small, 5)
+        _converse(large, 5)
+
+        assert _levels(small) == {0: COMPACTED, 1: KEPT, 2: KEPT, 3: ARCHIVED}
+        assert _levels(large) == {0: KEPT, 1: KEPT, 2: KEPT, 3: ARCHIVED}
+
+    def test_a_rewound_session_keeps_its_window(self):
+        service, _, _ = make_service()
+        _converse(service, 2)
+        service.use_context_window("s", 1_000_000)
+        state = service.session_manager.store.get("s")
+
+        fresh = service.session_manager.replace(state, state.snapshot)
+
+        assert fresh.context_window == 1_000_000

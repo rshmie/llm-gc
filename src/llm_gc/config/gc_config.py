@@ -43,10 +43,14 @@ class GCConfig(BaseModel):
 
     @property
     def max_recap_tokens(self) -> int:
-        """Token ceiling for the recap, derived from the window.
+        """Token ceiling for the recap at the configured window."""
+        return self.recap_budget()
 
-        A property rather than a stored field so there is one source of truth: a
-        stored absolute alongside the window would let the two drift, and the
-        drift's symptom is a proxy that silently costs more than it saves.
+    def recap_budget(self, context_window: int | None = None) -> int:
+        """Token ceiling for the recap: its share of `context_window`, or of the configured window.
+
+        Derived rather than stored so there is one source of truth: a stored absolute
+        alongside the window would let the two drift, and the drift's symptom is a
+        proxy that silently costs more than it saves.
         """
-        return int(self.context_window * self.max_recap_ratio)
+        return int((context_window or self.context_window) * self.max_recap_ratio)

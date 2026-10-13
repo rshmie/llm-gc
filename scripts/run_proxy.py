@@ -228,7 +228,7 @@ def demo(compactor_kind: str) -> None:
     stats = client.get("/stats").json()
     print(f"\n{'':>4} requests={stats['requests']}  gc_applied={stats['gc_applied']}  "
           f"gc_bypassed={stats['gc_bypassed']}")
-    print(f"{'':>4} client history {stats['tokens_in_client_history']} tok -> forwarded "
+    print(f"{'':>4} client sent {stats['tokens_from_client']} tok -> forwarded "
           f"{stats['tokens_forwarded']} tok   saved {stats['tokens_saved']:+d}  ({stats['ratio']}x)")
 
     final = forwarded[-1]["messages"]
