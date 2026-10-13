@@ -344,8 +344,8 @@ turn's words beside what the model receives instead, read from its span. A
 transcript recorder the proxy feeds while the dashboard runs supplies only what
 the session has not recorded yet — the newest request's own message, which joins
 the conversation when a later request carries it with its reply — and each
-conversation's opening words for the picker: text only, bounded by session count,
-dropped with its session. That message is shown as the *newest request*, never as
+conversation's opening words for the picker, with the client session and agent its
+requests named: text only, bounded by session count, dropped with its session. That message is shown as the *newest request*, never as
 something the user said: clients send side requests too (after each reply, Claude
 Code asks the model to suggest the user's next prompt), and one arrives with the
 same history, system prompt and tools as a real next message, so nothing in it
@@ -687,6 +687,34 @@ control,* another thing to learn while the default stays unreadable. *Rejected: 
 per row kept in step by script,* which drifts and stutters. *Accepted cost:* a very long
 conversation is a long strip, and only part of it is in view at once; the group labels say
 where the collected messages end and the recent ones begin.
+
+### The picker groups a client session's conversations
+
+One Claude Code session reaches the proxy as several conversations — its main one, one
+per sub-agent, and a new main one after `/compact` or an edited message — each
+collected on its own (see [the proxy](../proxy/overview.md)). Listed flat by opening
+words, they could not be told apart: two sub-agents of one session open with the same
+words. So the picker groups conversations under the client session they came from, the
+most recently active session first, and names each one's part:
+
+```
+Claude Code session 6d84277c · since 10:56
+   Main · This session is being continued from…      ← the newest main conversation
+   Subagent 1 · In /private/tmp/…                     ← by start order
+   Subagent 2 · In /private/tmp/…
+   Earlier main · Use the Agent tool to launch…      ← replaced; closes once idle
+Claude Code session bb0fff8d · since 10:56
+   Main · Read utils.py and tell me…
+```
+
+The newest main conversation is the one in use: an older one in the same session was
+replaced, and nothing will continue it. A line above both tabs says where the selected
+conversation sits and that its numbers are its own, while the Engine tab's totals add
+up every conversation since the proxy started — the two scopes on the page, named where
+they are read. Conversations whose client names no session are listed as before, under
+"Other conversations" when grouped ones are present. *Rejected: hiding sub-agent
+conversations* — they are prompts LLM-GC forwards and collects, and hiding them would
+hide what it does.
 
 ### The conversation view keeps no collection log
 

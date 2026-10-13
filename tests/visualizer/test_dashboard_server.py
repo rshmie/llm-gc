@@ -10,7 +10,7 @@ from llm_gc.config import GCConfig
 from llm_gc.engine import build_gc_service
 from llm_gc.engine.gc_service import GcService
 from llm_gc.llm import FakeProvider, LLMResponse, StopReason
-from llm_gc.models import Message
+from llm_gc.models import ClientOrigin, Message
 from llm_gc.monitoring import ContextHealthMonitor
 from llm_gc.utils import count_tokens
 from llm_gc.visualizer import TranscriptRecorder, create_dashboard_app
@@ -112,6 +112,23 @@ class TestOverview:
         assert titles["named"].endswith("…")
         assert len(titles["named"]) <= 72
         assert titles["unnamed"] is None
+
+    def test_each_conversation_says_which_client_session_and_agent_it_came_from(self):
+        """What lets the picker group a Claude Code session's main conversation with its sub-agents."""
+        service, monitor = _engine()
+        for session_id in ("main", "agent", "other"):
+            _converse(service, session_id, 2)
+        recorder = TranscriptRecorder()
+        turn = [Message(role="user", content="hello", turn_index=0)]
+        recorder.record("main", turn, ClientOrigin(session_id="c7a78c2f"))
+        recorder.record("agent", turn, ClientOrigin(session_id="c7a78c2f", agent_id="a1c50dab"))
+        recorder.record("other", turn)
+
+        sessions = _client(service, monitor, transcripts=recorder).get("/api/overview").json()["sessions"]
+        origins = {s["session_id"]: (s["client_session"], s["agent"]) for s in sessions}
+
+        assert origins == {"main": ("c7a78c2f", None), "agent": ("c7a78c2f", "a1c50dab"), "other": (None, None)}
+        assert all(s["started_at"] <= s["last_activity"] for s in sessions)
 
     def test_reports_the_tunable_settings(self):
         config = _client(*_engine()).get("/api/overview").json()["config"]
@@ -297,6 +314,15 @@ class TestTranscript:
         _converse(service, "s", 3)
         transcript = _client(service, monitor).get("/api/sessions/s/transcript").json()
         assert transcript == {"captured": False, "turns": [], "total_tokens": 0, "recorded_tokens": 0, "reply": None}
+
+    def test_a_request_that_names_no_client_session_keeps_the_one_named_before(self):
+        recorder = TranscriptRecorder()
+        recorder.record("s", [Message(role="user", content="a", turn_index=0)], ClientOrigin(session_id="c7a78c2f"))
+        recorder.record("s", [Message(role="user", content="a", turn_index=0)])
+
+        assert recorder.origin("s") == ClientOrigin(session_id="c7a78c2f")
+        recorder.forget("s")
+        assert recorder.origin("s") is None
 
     def test_a_closed_sessions_copy_is_dropped(self):
         service, monitor = _engine()

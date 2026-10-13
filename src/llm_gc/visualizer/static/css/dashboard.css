@@ -99,6 +99,8 @@ main > * + * , .view > * + * { margin-top: 16px; }
 @media (max-width: 640px) { .intro { flex-wrap: wrap; } }
 
 .result { border-left: 4px solid var(--tone); }
+.origin-line { font-size: 13px; max-width: 1100px; }
+.origin-line b { color: var(--ink); font-weight: 650; }
 .result.tone-good { --tone: var(--good); } .result.tone-muted { --tone: var(--baseline); } .result.tone-critical { --tone: var(--critical); }
 .result h2 { font-size: 16px; }
 .result p { color: var(--ink-2); margin-top: 6px; max-width: 900px; }

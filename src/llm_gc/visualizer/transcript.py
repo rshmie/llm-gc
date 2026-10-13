@@ -18,7 +18,7 @@ from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from llm_gc.models import Message
+from llm_gc.models import ClientOrigin, Message
 from llm_gc.utils import count_tokens
 
 # Sessions whose transcript is kept. Above this, the least recently active is
@@ -42,13 +42,15 @@ class TranscriptRecorder:
         self._max_sessions = max_sessions
         self._transcripts: OrderedDict[str, tuple[TranscriptTurn, ...]] = OrderedDict()
         self._replies: dict[str, TranscriptTurn] = {}
+        self._origins: dict[str, ClientOrigin] = {}
 
-    def record(self, session_id: str, messages: Sequence[Message]) -> None:
+    def record(self, session_id: str, messages: Sequence[Message], origin: ClientOrigin | None = None) -> None:
         """Replace the session's transcript with what the client just sent.
 
         Replaced rather than appended, so an edited or regenerated conversation
         shows what the client holds now. Text only: keeping `raw_content` would hold
-        every attached image in memory for the life of the session.
+        every attached image in memory for the life of the session. A request that
+        names no client session keeps the origin an earlier one named.
         """
         self._transcripts[session_id] = tuple(
             TranscriptTurn(turn_index=message.turn_index, role=message.role, text=message.content,
@@ -56,6 +58,8 @@ class TranscriptRecorder:
                            instruction_tokens=sum(count_tokens(text) for text in message.instructions))
             for message in messages
         )
+        if origin is not None:
+            self._origins[session_id] = origin
         # The reply it showed is in this history now, or the client moved on without it.
         self._replies.pop(session_id, None)
         self._transcripts.move_to_end(session_id)
@@ -78,6 +82,10 @@ class TranscriptRecorder:
     def get(self, session_id: str) -> tuple[TranscriptTurn, ...] | None:
         return self._transcripts.get(session_id)
 
+    def origin(self, session_id: str) -> ClientOrigin | None:
+        """The client session and agent the conversation's requests named, if any did."""
+        return self._origins.get(session_id)
+
     def reply(self, session_id: str) -> TranscriptTurn | None:
         """The newest reply, until the next request records it."""
         return self._replies.get(session_id)
@@ -85,3 +93,4 @@ class TranscriptRecorder:
     def forget(self, session_id: str) -> None:
         self._transcripts.pop(session_id, None)
         self._replies.pop(session_id, None)
+        self._origins.pop(session_id, None)

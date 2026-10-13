@@ -28,7 +28,7 @@ from fastapi.responses import StreamingResponse
 from llm_gc.config.constants import APP_VERSION
 from llm_gc.engine.gc_service import GcService
 from llm_gc.exceptions import ConfigError
-from llm_gc.models import Message
+from llm_gc.models import ClientOrigin, Message
 from llm_gc.models.generation_snapshot import GenerationSnapshot
 from llm_gc.proxy.anthropic_translation import (
     Instruction,
@@ -40,7 +40,7 @@ from llm_gc.proxy.anthropic_translation import (
     reply_text,
     rewrite_messages,
 )
-from llm_gc.proxy.session_identity import SESSION_HEADER, chain_hashes
+from llm_gc.proxy.session_identity import SESSION_HEADER, chain_hashes, client_origin
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +125,7 @@ def create_app(
     http_client: httpx2.AsyncClient | None = None,
     upstream_timeout_s: float = DEFAULT_UPSTREAM_TIMEOUT_S,
     schedule: Callable[[Awaitable[None]], None] | None = None,
-    on_client_history: Callable[[str, list[Message]], None] | None = None,
+    on_client_history: Callable[[str, list[Message], ClientOrigin | None], None] | None = None,
     on_reply: Callable[[str, Message, str], None] | None = None,
 ) -> FastAPI:
     """Wire the proxy around an already-built engine.
@@ -139,9 +139,10 @@ def create_app(
         upstream_timeout_s: Ceiling on the forwarded call.
         schedule: How to run post-response aging. Injectable so a test can drive it
             to completion instead of racing a fire-and-forget task.
-        on_client_history: Called with each request's session and the conversation
-            the client sent, before forwarding. How the dashboard sees what was
-            said; must be fast, and a failure in it never affects the request.
+        on_client_history: Called with each request's session, the conversation
+            the client sent, and the client session it names, before forwarding.
+            How the dashboard sees what was said; must be fast, and a failure in it
+            never affects the request.
         on_reply: Called with the session, the turn being answered and the reply's
             text, once a reply has finished reaching the client. How the dashboard
             shows the newest reply before the next request records it; the same
@@ -255,9 +256,10 @@ async def _handle(app: FastAPI, request: Request) -> Response:
     # failure of ours can stop the conversation: the worst case is no GC.
     session_id: str | None = None
     try:
-        session_id = _record_client_history(app, history, request.headers.get(SESSION_HEADER))
+        origin = client_origin(request.headers)
+        session_id = _record_client_history(app, history, request.headers.get(SESSION_HEADER), origin)
         if session_id is not None:
-            _observe_history(app, session_id, client_messages)
+            _observe_history(app, session_id, client_messages, origin)
         forward_body, forwarded_tokens = await _apply_gc(app, session_id, history, new_turn, payload, body,
                                                          instructions)
     except Exception as err:
@@ -297,15 +299,19 @@ def _log_answer(status: int, payload: dict[str, Any], from_client: int, forwarde
     name = model if isinstance(model, str) and model.isprintable() else "?"
     extra = {"session_id": session_id, "status": status, "model": name,
              "tokens_from_client": from_client, "tokens_forwarded": forwarded}
+    # Names the conversation, as the dashboard's picker does; a first turn belongs to none yet.
+    where = f" in {session_id}" if session_id is not None else ""
     if status < 400:
         share = f"{forwarded / from_client:.0%}" if from_client else "-"
-        logger.info("%s -> %d: client sent %s tokens, LLM-GC forwarded %s (%s)",
-                    name, status, f"{from_client:,}", f"{forwarded:,}", share, extra=extra)
+        logger.info("%s -> %d%s: client sent %s tokens, LLM-GC forwarded %s (%s)",
+                    name, status, where, f"{from_client:,}", f"{forwarded:,}", share, extra=extra)
     else:
-        logger.warning("%s -> %d: %s", name, status, _ERROR_STATUS_HINTS.get(status, _ERROR_STATUS_HINT), extra=extra)
+        logger.warning("%s -> %d%s: %s", name, status, where, _ERROR_STATUS_HINTS.get(status, _ERROR_STATUS_HINT),
+                       extra=extra)
 
 
-def _record_client_history(app: FastAPI, history: list[Message], header_value: str | None) -> str | None:
+def _record_client_history(app: FastAPI, history: list[Message], header_value: str | None,
+                           origin: ClientOrigin | None) -> str | None:
     """Find the session this history belongs to and record what it has not seen.
 
     The client's history is the truth: it holds every earlier reply exactly as the
@@ -352,19 +358,39 @@ def _record_client_history(app: FastAPI, history: list[Message], header_value: s
             metrics.sessions_seeded += 1
             state = manager.get_or_create(f"s_{uuid.uuid4().hex[:16]}")
             agreed = 0
+            _log_conversation_started(state.session_id, len(history), origin)
 
     if agreed < len(history):
         gc_service.gc_record(state.session_id, history[agreed:], hashes[agreed:])
     return state.session_id
 
 
-def _observe_history(app: FastAPI, session_id: str, client_messages: list[Message]) -> None:
+def _log_conversation_started(session_id: str, turns: int, origin: ClientOrigin | None) -> None:
+    """Say why a conversation appeared: nothing in progress continues the history it came with.
+
+    A client session can start several - one per sub-agent, and another after it
+    compacts or rewinds - so the line names the client session and agent it came from.
+    """
+    if origin is None:
+        source = "no client session named"
+    else:
+        source = f"client session {origin.session_id}, " + (
+            f"sub-agent {origin.agent_id}" if origin.agent_id is not None else "main conversation")
+    logger.info("conversation %s started: no conversation in progress continues its %d-turn history (%s)",
+                session_id, turns, source,
+                extra={"session_id": session_id, "history_turns": turns,
+                       "client_session": origin.session_id if origin is not None else None,
+                       "client_agent": origin.agent_id if origin is not None else None})
+
+
+def _observe_history(app: FastAPI, session_id: str, client_messages: list[Message],
+                     origin: ClientOrigin | None) -> None:
     """Hand the conversation to an observer, if one is attached. Never fails the request."""
     observer = app.state.on_client_history
     if observer is None:
         return
     try:
-        observer(session_id, client_messages)
+        observer(session_id, client_messages, origin)
     except Exception:
         logger.exception("history observer failed; the request is unaffected", extra={"session_id": session_id})
 

@@ -19,7 +19,9 @@ from llm_gc.config import GCConfig
 from llm_gc.engine import build_gc_service
 from llm_gc.engine.generations.front import FRONT_HEADER
 from llm_gc.llm import FakeProvider, LLMResponse, StopReason
+from llm_gc.models import ClientOrigin
 from llm_gc.proxy import SESSION_HEADER, create_app
+from llm_gc.proxy.session_identity import CLIENT_AGENT_HEADER, CLIENT_SESSION_HEADER
 from llm_gc.session import SessionManager
 
 API_KEY = "sk-ant-super-secret"
@@ -553,6 +555,74 @@ class TestEachAnswerIsLogged:
         _post(client, _body(("user", "hello")))
 
         assert API_KEY not in caplog.text
+
+
+CLIENT_SESSION = "c7a78c2f-d25c-44e4-af6f-dba30717fb9b"
+
+
+class TestClientSessions:
+    """One Claude Code session holds several conversations: its main one and one per sub-agent."""
+
+    def _proxy_seeing_origins(self):
+        observed: list[tuple[str, ClientOrigin | None]] = []
+        service, _ = _engine()
+        app = create_app(service, http_client=httpx2.AsyncClient(
+            transport=httpx2.MockTransport(lambda request: httpx2.Response(200, json=UPSTREAM_OK))),
+            schedule=_run_now, on_client_history=lambda session_id, messages, origin: observed.append((session_id, origin)))
+        return TestClient(app), observed
+
+    def test_a_sub_agent_is_its_own_conversation_labelled_with_the_client_session(self):
+        client, observed = self._proxy_seeing_origins()
+        main = {CLIENT_SESSION_HEADER: CLIENT_SESSION}
+        agent = {CLIENT_SESSION_HEADER: CLIENT_SESSION, CLIENT_AGENT_HEADER: "a1c50dab6bf4df2c1"}
+
+        _post(client, _body(("user", "find the TODOs"), ("assistant", "starting an agent"), ("user", "go")), main)
+        _post(client, _body(("user", "search for TODO"), ("assistant", "grep"), ("user", "results")), agent)
+
+        (main_id, main_origin), (agent_id, agent_origin) = observed
+        assert main_id != agent_id
+        assert main_origin == ClientOrigin(session_id=CLIENT_SESSION)
+        assert agent_origin == ClientOrigin(session_id=CLIENT_SESSION, agent_id="a1c50dab6bf4df2c1")
+
+    def test_the_client_session_never_joins_two_conversations(self):
+        """It labels; content decides. After a compaction the client sends a history that
+        continues nothing recorded, under the same client session: a new conversation."""
+        client, observed = self._proxy_seeing_origins()
+        headers = {CLIENT_SESSION_HEADER: CLIENT_SESSION}
+
+        _post(client, _body(("user", "the database is postgres"), ("assistant", "noted"), ("user", "next")), headers)
+        _post(client, _body(("user", "This session is being continued: a summary"), ("assistant", "ok"),
+                            ("user", "go on")), headers)
+
+        assert len({session_id for session_id, _ in observed}) == 2
+
+    def test_a_new_conversation_is_logged_with_why_and_where_it_came_from(self, caplog):
+        caplog.set_level(logging.INFO, logger="llm_gc.proxy.server")
+        client, observed = self._proxy_seeing_origins()
+        headers = {CLIENT_SESSION_HEADER: CLIENT_SESSION, CLIENT_AGENT_HEADER: "a545ab218c80b9b63"}
+
+        _post(client, _body(("user", "list the files"), ("assistant", "ls"), ("user", "three files")), headers)
+
+        [started] = [r for r in caplog.records if hasattr(r, "history_turns")]
+        session_id, _ = observed[0]
+        assert started.getMessage() == (
+            f"conversation {session_id} started: no conversation in progress continues its 2-turn history "
+            f"(client session {CLIENT_SESSION}, sub-agent a545ab218c80b9b63)")
+
+    def test_a_continuing_request_starts_nothing_and_its_answer_names_the_conversation(self, caplog):
+        caplog.set_level(logging.INFO, logger="llm_gc.proxy.server")
+        client, observed = self._proxy_seeing_origins()
+        turns = [("user", "hello"), ("assistant", "hi"), ("user", "which database?")]
+
+        _post(client, _body(*turns))
+        _post(client, _body(*turns, ("assistant", "postgres"), ("user", "and the cache?")))
+
+        started = [r for r in caplog.records if hasattr(r, "history_turns")]
+        answers = [r for r in caplog.records if hasattr(r, "status")]
+        session_id, _ = observed[-1]
+        assert len(started) == 1
+        assert "(no client session named)" in started[0].getMessage()
+        assert all(f"-> 200 in {session_id}: " in answer.getMessage() for answer in answers)
 
 
 class TestHeaderHygiene:
@@ -1180,7 +1250,7 @@ class TestTheHistoryObserver:
 
     def test_it_receives_the_whole_conversation_the_client_sent(self):
         observed = []
-        client, _ = self._proxy_with(lambda session_id, messages: observed.append((session_id, messages)))
+        client, _ = self._proxy_with(lambda session_id, messages, origin: observed.append((session_id, messages)))
 
         _post(client, _body(("user", "the database is postgres"), ("assistant", "noted"), ("user", "and the cache?")))
 
@@ -1190,7 +1260,7 @@ class TestTheHistoryObserver:
             ("user", "the database is postgres"), ("assistant", "noted"), ("user", "and the cache?")]
 
     def test_a_failing_observer_never_costs_the_request(self):
-        def broken(session_id, messages):
+        def broken(session_id, messages, origin):
             raise RuntimeError("dashboard bug")
 
         client, seen = self._proxy_with(broken)

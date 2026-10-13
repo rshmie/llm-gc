@@ -9,13 +9,37 @@ doc/design/proxy/overview.md.
 
 import hashlib
 import json
-from collections.abc import Sequence
+import re
+from collections.abc import Mapping, Sequence
 
-from llm_gc.models import Message
+from llm_gc.models import ClientOrigin, Message
 from llm_gc.proxy.anthropic_translation import lift_instructions
 
 SESSION_HEADER = "x-llm-gc-session"
 """Client-supplied session id. Preferred over matching by content."""
+
+# Claude Code names its own session, and each sub-agent, on every request. They label a
+# conversation; they never identify one, since one Claude Code session holds several.
+CLIENT_SESSION_HEADER = "x-claude-code-session-id"
+CLIENT_AGENT_HEADER = "x-claude-code-agent-id"
+
+# A client's ids reach the log and the dashboard, so only a short plain id is taken.
+_CLIENT_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def client_origin(headers: Mapping[str, str]) -> ClientOrigin | None:
+    """The client session and agent a request names, or None when it names no session."""
+    session_id = _client_id(headers.get(CLIENT_SESSION_HEADER))
+    if session_id is None:
+        return None
+    return ClientOrigin(session_id=session_id, agent_id=_client_id(headers.get(CLIENT_AGENT_HEADER)))
+
+
+def _client_id(value: str | None) -> str | None:
+    if value is None:
+        return None
+    value = value.strip()
+    return value if _CLIENT_ID.fullmatch(value) else None
 
 
 def chain_hashes(messages: Sequence[Message]) -> list[str]:

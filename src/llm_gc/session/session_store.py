@@ -28,7 +28,7 @@ class SessionStore:
         if state is None:
             state = SessionState(session_id=session_id)
             self._sessions[session_id] = state
-            logger.info("Created new session", extra={"session_id": session_id})
+            logger.debug("created session %s", session_id, extra={"session_id": session_id})
         else:
             logger.debug("Reusing existing session", extra={"session_id": session_id})
         return state

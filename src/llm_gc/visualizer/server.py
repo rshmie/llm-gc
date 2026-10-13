@@ -22,6 +22,7 @@ from llm_gc.config.constants import APP_VERSION
 from llm_gc.engine import AbandonedCut, AgingDegradation, CutOutcome, GcService, GCStatus
 from llm_gc.monitoring import ContextHealth, ContextHealthMonitor
 from llm_gc.monitoring.knowledge_state import KnowledgeState, project_knowledge_state
+from llm_gc.session import SessionState
 from llm_gc.visualizer.transcript import TranscriptRecorder, TranscriptTurn
 
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -52,6 +53,9 @@ SESSION_TITLE_MAX_CHARS = 72
 class SessionSummary(BaseModel):
     session_id: str
     title: str | None             # its opening words, when the transcript was captured
+    client_session: str | None    # the client's own session it came from, when the client names one
+    agent: str | None             # the client's sub-agent it belongs to; None for a main conversation
+    started_at: datetime
     version: int                  # changes whenever the session's content does
     recorded_turns: int
     cuts: int
@@ -123,15 +127,8 @@ def create_dashboard_app(
         store = gc_service.session_manager.store
         states = [state for session_id in store.active_session_ids()
                   if (state := store.get(session_id)) is not None]
-        sessions = [
-            SessionSummary(session_id=state.session_id,
-                           title=_opening_words(transcripts.get(state.session_id) if transcripts is not None else None),
-                           version=state.snapshot.version,
-                           recorded_turns=state.snapshot.recorded_turn_count, cuts=state.snapshot.cut_count,
-                           aging_in_flight=state.aging_in_flight, last_activity=state.last_updated_at,
-                           newest_reply=_reply_index(transcripts, state.session_id))
-            for state in sorted(states, key=lambda state: state.last_updated_at, reverse=True)
-        ]
+        sessions = [_summarise(state, transcripts)
+                    for state in sorted(states, key=lambda state: state.last_updated_at, reverse=True)]
         return DashboardOverview(
             sessions=sessions,
             config={"context_window": config.context_window, "min_cut_tokens": config.min_cut_tokens,
@@ -189,6 +186,19 @@ def create_dashboard_app(
                                duration_ms=result.duration_ms)
 
     return app
+
+
+def _summarise(state: SessionState, transcripts: TranscriptRecorder | None) -> SessionSummary:
+    origin = transcripts.origin(state.session_id) if transcripts is not None else None
+    return SessionSummary(session_id=state.session_id,
+                          title=_opening_words(transcripts.get(state.session_id) if transcripts is not None else None),
+                          client_session=origin.session_id if origin is not None else None,
+                          agent=origin.agent_id if origin is not None else None,
+                          started_at=state.created_at,
+                          version=state.snapshot.version,
+                          recorded_turns=state.snapshot.recorded_turn_count, cuts=state.snapshot.cut_count,
+                          aging_in_flight=state.aging_in_flight, last_activity=state.last_updated_at,
+                          newest_reply=_reply_index(transcripts, state.session_id))
 
 
 def _reply_index(transcripts: TranscriptRecorder | None, session_id: str) -> int | None:

@@ -88,6 +88,33 @@ session gets a new state object, so an aging pass still running on the old one
 discards its result instead of committing changes planned against a conversation
 that no longer exists.
 
+**One client session, several conversations.** A conversation here is one message
+list, and a client can run several under one session of its own. Claude Code sends its
+main conversation, one per sub-agent, and, after `/compact` or an edited message, a new
+main conversation that continues nothing recorded. Each is its own prompt, so each is its
+own LLM-GC session, collected on its own. Claude Code names its session on every request
+(`x-claude-code-session-id`) and a sub-agent's requests name the agent too
+(`x-claude-code-agent-id`); the proxy reads both as a label, short plain ids only, and
+never as identity.
+
+```
+Claude Code session 6d84277c
+  ├─ main conversation          s_0676…   (after /compact: the one in use)
+  ├─ sub-agent afc5b6eb         s_591e…
+  ├─ sub-agent a4e43c0c         s_143a…
+  └─ earlier main conversation  s_2cb5…   (replaced; closes once idle)
+```
+
+The proxy logs each conversation it starts, with the history it came with and the
+client session and agent it names, and each answer names its conversation, so a log
+line and a dashboard entry can be matched. *Rejected: keying the session by Claude
+Code's session id* — the main conversation and its sub-agents interleave under one id,
+so every request would read as an edit of the last and restart the session, and nothing
+would ever be collected. *Rejected: recognising a compacted conversation by its opening
+words* — tied to one client's current text; the headers are structure. *Accepted cost:*
+the label comes from one client's header names; a client that sends none is shown
+ungrouped, and a renamed header turns the grouping off rather than grouping wrongly.
+
 ### Forwarding
 
 - **Untouched when nothing has aged.** If the collected context is exactly the
