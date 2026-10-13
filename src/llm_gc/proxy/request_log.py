@@ -67,6 +67,7 @@ class RequestRecord:
     tokens_from_client: int
     tokens_forwarded: int
     collected: bool
+    carries_collections: int       # collections made since its conversation's previous request: this one carries them
     # True once a later request of its conversation carries its newest message, False once one
     # replaces it; None until then.
     kept: bool | None = None
@@ -91,7 +92,7 @@ class RequestLog:
 
     def begin(self, *, conversation_id: str | None, origin: ClientOrigin | None, hashes: Sequence[str],
               newest: NewestKind, model: str | None, tokens_from_client: int, tokens_forwarded: int,
-              collected: bool) -> RequestRecord:
+              collected: bool, carries_collections: int = 0) -> RequestRecord:
         """Open a record for a request about to be forwarded, and settle the earlier records it answers.
 
         `hashes` are the chain hashes of every message the request carries, in order.
@@ -101,7 +102,8 @@ class RequestLog:
         record = RequestRecord(request_id=uuid4().hex[:12], origin=origin, conversation_id=conversation_id,
                                position=len(hashes), newest=newest, newest_hash=hashes[-1], model=model,
                                forwarded_at=self._clock(), tokens_from_client=tokens_from_client,
-                               tokens_forwarded=tokens_forwarded, collected=collected)
+                               tokens_forwarded=tokens_forwarded, collected=collected,
+                               carries_collections=carries_collections)
         self._records.append(record)
         self._watch(origin, record)
         return record

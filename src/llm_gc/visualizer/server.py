@@ -94,6 +94,7 @@ def create_dashboard_app(
     monitor: ContextHealthMonitor,
     read_proxy_stats: Callable[[], dict[str, Any]] | None = None,
     transcripts: TranscriptRecorder | None = None,
+    read_trace: Callable[[str], dict[str, Any] | None] | None = None,
     allowed_hosts: list[str] | None = None,
 ) -> FastAPI:
     """The dashboard over a running engine.
@@ -105,6 +106,8 @@ def create_dashboard_app(
             dashboard does not depend on the proxy package.
         transcripts: What each client last sent, fed by the proxy. Without it the
             dashboard still shows what the model receives, but not what was said.
+        read_trace: A client session's trace from the proxy's request log, passed as
+            a function for the same reason as `read_proxy_stats`.
         allowed_hosts: Host names served; localhost by default.
 
     Every route is `async` on purpose: FastAPI runs plain `def` routes in a thread
@@ -167,6 +170,15 @@ def create_dashboard_app(
                           recorded_tokens=sum(turn.tokens for turn in turns or () if turn.turn_index < recorded),
                           reply=transcripts.reply(session_id) if transcripts is not None else None)
 
+    @app.get("/api/trace/{client_session}")
+    async def session_trace(client_session: str) -> JSONResponse:
+        """One client session as its turns, their requests and the subagents each started."""
+        trace = read_trace(client_session) if read_trace is not None else None
+        if trace is None:
+            return JSONResponse(status_code=404, content={"error": {
+                "code": "TRACE_NOT_FOUND", "message": f"no requests named client session {client_session!r}"}})
+        return JSONResponse(_with_words(trace, transcripts))
+
     @app.post("/api/sessions/{session_id}/gc", response_model=ManualCutResult)
     async def run_gc_now(session_id: str, request: Request) -> ManualCutResult | JSONResponse:
         """The developer's lever: cut now, without waiting for the batch minimum.
@@ -210,10 +222,33 @@ def _opening_words(turns: Sequence[TranscriptTurn] | None) -> str | None:
     """How a person recognises a conversation: its first user message, on one line and shortened."""
     first = next((turn.text for turn in turns or () if turn.role == "user" and not turn.relayed and turn.text.strip()),
                  None)
-    if first is None:
-        return None
-    line = " ".join(first.split())
+    return _one_line(first) if first is not None else None
+
+
+def _one_line(text: str) -> str:
+    line = " ".join(text.split())
     return line if len(line) <= SESSION_TITLE_MAX_CHARS else line[:SESSION_TITLE_MAX_CHARS - 1].rstrip() + "…"
+
+
+def _with_words(trace: dict[str, Any], transcripts: TranscriptRecorder | None) -> dict[str, Any]:
+    """The trace with what a person recognises it by: each turn's message, each subagent's task.
+
+    From the transcripts the dashboard already holds, so only while a conversation is
+    live; a closed one's words are gone, and its turns show without them.
+    """
+    def said(conversation_id: str | None, position: int) -> str | None:
+        turns = transcripts.get(conversation_id) if transcripts is not None and conversation_id else None
+        text = next((turn.text for turn in turns or () if turn.turn_index == position - 1), None)
+        return _one_line(text) if text and text.strip() else None
+
+    def tasked(node: dict[str, Any]) -> dict[str, Any]:
+        conversation = node["conversation_id"]
+        turns = transcripts.get(conversation) if transcripts is not None and conversation else None
+        return {**node, "words": _opening_words(turns)}
+
+    return {**trace, "subagents_before": [tasked(node) for node in trace["subagents_before"]],
+            "turns": [{**turn, "words": said(turn["conversation_id"], turn["position"]),
+                       "subagents": [tasked(node) for node in turn["subagents"]]} for turn in trace["turns"]]}
 
 
 def _session_not_found(session_id: str) -> JSONResponse:

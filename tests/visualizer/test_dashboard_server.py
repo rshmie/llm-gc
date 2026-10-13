@@ -341,3 +341,35 @@ def test_the_page_sets_children_only_through_its_helper():
     page = "\n".join(path.read_text() for path in sorted(static.glob("js/*.js")))
     calls = [line.strip() for line in page.splitlines() if ".replaceChildren(" in line and not line.strip().startswith("//")]
     assert calls == ["export function setChildren(target, ...children) { target.replaceChildren(...nodes(children)); }"]
+
+
+class TestTheSessionTrace:
+    TRACE = {"client_session": "cc-1", "before": [], "subagents_before": [],
+             "turns": [{"index": 1, "conversation_id": "s_main", "position": 3, "requests": [],
+                        "subagents": [{"agent": "a1", "conversation_id": "s_a1", "requests": []}]}]}
+
+    def _client(self, transcripts):
+        service, monitor = _engine()
+        return _client(service, monitor, transcripts=transcripts,
+                       read_trace=lambda client_session: self.TRACE if client_session == "cc-1" else None)
+
+    def test_each_turn_and_subagent_carries_the_words_a_person_recognises_it_by(self):
+        transcripts = TranscriptRecorder()
+        transcripts.record("s_main", [Message(role="user", content="first", turn_index=0),
+                                      Message(role="assistant", content="ok", turn_index=1),
+                                      Message(role="user", content="Use two   subagents,\nplease.", turn_index=2)])
+        transcripts.record("s_a1", [Message(role="user", content="Count the test files.", turn_index=0)])
+
+        trace = self._client(transcripts).get("/api/trace/cc-1").json()
+
+        [turn] = trace["turns"]
+        assert turn["words"] == "Use two subagents, please."
+        assert turn["subagents"][0]["words"] == "Count the test files."
+
+    def test_a_closed_conversation_shows_without_its_words(self):
+        trace = self._client(TranscriptRecorder()).get("/api/trace/cc-1").json()
+        assert trace["turns"][0]["words"] is None
+
+    def test_an_unknown_client_session_is_a_404(self):
+        response = self._client(TranscriptRecorder()).get("/api/trace/cc-gone")
+        assert response.status_code == 404 and response.json()["error"]["code"] == "TRACE_NOT_FOUND"

@@ -768,6 +768,46 @@ would be forecast: its Collections cell reads *not collected*, the panels and th
 rather than collects. Its map and messages are shown as for any conversation, every
 message sent as written.
 
+### A session is traced turn by turn
+
+A Claude Code session is one piece of work to the person running it, and several
+conversations to LLM-GC. The trace shows it the first way: the turns the person typed,
+each with every request it led to and every subagent it started, while each conversation
+keeps its own detail view.
+
+```
+Turn 1 · "Use two subagents in parallel: …" · 11 requests
+    your message → Agent, Agent
+      ├ Subagent 1 · "Count the test files…" · started by Agent toolu_A · not collected
+      │   task → Bash · tool results → Bash · tool results → SubagentHandback
+      └ Subagent 2 · "Summarise README.md…" · started by Agent toolu_B · not collected
+    tool results · side request (not kept) · subagent report · subagent report
+Turn 2 · "Thanks. Which test runner do we use?"
+```
+
+- **A turn is a span of the main conversation's time.** It begins at a message the
+  person typed that the conversation kept, and runs to the next. A retry of the same
+  message does not begin another, and a typed message whose place another request took
+  is *pending* until the conversation carries one of them on. The main conversation's
+  tool rounds, its side requests and requests no conversation has claimed belong to the
+  turn their time falls in; requests before the first turn — a quota check — are listed
+  before it.
+- **A subagent belongs to the turn that started it.** Through its link to the call that
+  started it, a subagent stays under that turn while it runs on after the person types
+  again, and a subagent another subagent started stays with the first. One no call is
+  known to have started falls in the turn of its first request.
+- **Cost adds up the tree; a window does not.** A turn's totals count its own requests
+  and its subagents'. Each conversation's window and recap stay its own: a subagent's
+  requests were never in the main conversation's prompt.
+- **Built on read, from the request log.** A record settled since the last read changes
+  the trace with it. The words a turn or a subagent is recognised by come from the
+  transcripts the dashboard holds, so a closed conversation's turns show without them.
+
+*Rejected: nesting by time alone* — a background subagent that outlives its turn would
+appear under a turn that never asked for it. *Rejected: one swimlane per conversation
+across the whole session* — a long session becomes a wide chart no one can read; within
+an open turn, lanes are worth it.
+
 ### The conversation view keeps no collection log
 
 Collections are what LLM-GC did, and the Engine view is where that is shown: what

@@ -384,6 +384,8 @@ def _measure_request(app: FastAPI, session_id: str | None, origin: ClientOrigin 
     try:
         hashes = hashes if hashes is not None else chain_hashes(client_messages)
         model = _model_name(payload)
+        # Read before the ledger counts this request, which marks them sent.
+        carried = metrics.traffic.collections_waiting(session_id) if session_id is not None else 0
         counted = metrics.traffic.record_request(conversation_id=session_id, origin=origin, model=model,
                                                  opening=hashes[0], tokens_from_client=from_client,
                                                  tokens_forwarded=forwarded, context_window=window,
@@ -391,7 +393,7 @@ def _measure_request(app: FastAPI, session_id: str | None, origin: ClientOrigin 
         record = metrics.request_log.begin(conversation_id=session_id, origin=origin, hashes=hashes,
                                            newest=newest_kind(client_messages[-1]), model=model,
                                            tokens_from_client=from_client, tokens_forwarded=forwarded,
-                                           collected=collected)
+                                           collected=collected, carries_collections=carried)
         linker: SpawnLinker | None = app.state.spawn_linker
         if linker is not None and origin is not None and origin.agent_id is not None and record.position == 1:
             first = client_messages[0]

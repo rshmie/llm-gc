@@ -11,6 +11,7 @@ from llm_gc.cli.settings import ProxySettings, create_model_window_lookup
 from llm_gc.engine import GcService
 from llm_gc.monitoring import ContextHealthMonitor
 from llm_gc.proxy import create_app
+from llm_gc.proxy.trace import build_trace
 from llm_gc.visualizer import TranscriptRecorder, create_dashboard_app
 
 
@@ -58,8 +59,12 @@ def serve_proxy(service: GcService, settings: ProxySettings, *, http_client: htt
             event_bus=service.event_bus, gc_config=settings.engine,
             read_generations=lambda session_id: (state.snapshot if session_id is not None
                                                  and (state := store.get(session_id)) is not None else None))
+        request_log = proxy_app.state.metrics.request_log
         apps.append((create_dashboard_app(service, monitor, read_proxy_stats=proxy_app.state.metrics.as_dict,
-                                          transcripts=transcripts), settings.dashboard_port))
+                                          transcripts=transcripts,
+                                          read_trace=lambda client_session: build_trace(request_log.records(),
+                                                                                        client_session)),
+                     settings.dashboard_port))
 
     # No access log: the dashboard polls, and a line per poll buried the proxy's own lines,
     # which already record each request. uvicorn's access logger is shared by the process,

@@ -183,6 +183,11 @@ class TrafficLedger:
         for target in targets:
             target.provider.add(usage)
 
+    def collections_waiting(self, conversation_id: str) -> int:
+        """Collections made since the conversation's newest request: the next request carries them."""
+        conversation = self._conversations.get(conversation_id)
+        return conversation.collections_not_yet_sent if conversation is not None else 0
+
     def record_collection(self, conversation_id: str, *, completed: bool, spent: ModelUsage) -> None:
         """Count a collection's own model calls, and the collection itself when one was made."""
         self.total.summaries.add(spent)
