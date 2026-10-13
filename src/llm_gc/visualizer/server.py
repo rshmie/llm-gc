@@ -20,6 +20,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from llm_gc.config.constants import APP_VERSION
 from llm_gc.engine import AbandonedCut, AgingDegradation, CutOutcome, GcService, GCStatus
+from llm_gc.engine.pause import Pause
 from llm_gc.monitoring import ContextHealth, ContextHealthMonitor
 from llm_gc.monitoring.knowledge_state import KnowledgeState, project_knowledge_state
 from llm_gc.session import SessionState
@@ -87,6 +88,7 @@ class DashboardOverview(BaseModel):
     sessions: list[SessionSummary]   # most recently active first
     config: dict[str, Any]
     proxy: dict[str, Any] | None     # None when the dashboard is not running beside a proxy
+    pause: Pause | None = None       # set while LLM-GC's own model calls yield to the upstream's rate limit
 
 
 def create_dashboard_app(
@@ -141,6 +143,7 @@ def create_dashboard_app(
                     # Whose turns facts are read from: without a model, only the user's.
                     "facts_read_from": sorted(gc_service.generational_memory.fact_reader.speakers)},
             proxy=read_proxy_stats() if read_proxy_stats is not None else None,
+            pause=gc_service.model_calls.current(),
         )
 
     @app.get("/api/sessions/{session_id}", response_model=KnowledgeState)

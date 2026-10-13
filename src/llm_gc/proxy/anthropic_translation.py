@@ -305,6 +305,7 @@ class ReplyOutline:
     stop_reason: str | None = None
     usage: ProviderUsage | None = None
     tool_calls: tuple[ToolCall, ...] = ()
+    retry_after_s: float | None = None    # the upstream's Retry-After on a refusal, when it gave one
 
 
 def read_reply(status: int, raw: bytes, *, read_prompts: bool = False) -> tuple[ReplyOutline, dict[str, str]]:

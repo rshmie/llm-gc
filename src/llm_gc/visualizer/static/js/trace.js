@@ -2,7 +2,7 @@
 // each subagent under the request whose reply started it. Measured, never forecast: every number is a
 // request that happened.
 
-import { TRACE_KINDS } from "./vocabulary.js";
+import { PAUSED_TEXT, TRACE_KINDS } from "./vocabulary.js";
 import { $, compact, fill, fmt, h, plural, share } from "./dom.js";
 import { state, ui } from "./state.js";
 import { hoverTip } from "./tooltip.js";
@@ -30,12 +30,12 @@ const STATUS_WORDS = { 401: "credential refused", 403: "credential refused", 413
 // `force` redraws after a toggle; otherwise only when the trace changed, so a poll keeps hover and focus.
 export function renderTrace(actions, force = false) {
   const trace = state.trace;
-  const key = trace ? JSON.stringify(trace) : null;
+  const key = trace ? JSON.stringify([trace, state.pause]) : null;
   if (!force && key === shownKey) return;
   shownKey = key;
   $("trace-card").hidden = !trace;
   if (!trace) return;
-  fill("trace-card", traceHead(trace), before(trace, actions),
+  fill("trace-card", traceHead(trace), paused(), before(trace, actions),
     h("ol", { class: "turns" }, [...trace.turns].reverse().map((turn) => turnItem(turn, trace, actions))));
 }
 
@@ -61,6 +61,14 @@ function traceHead(trace) {
       spent && spent.calls ? ` LLM-GC's own model calls: ${plural(spent.calls, "call")}, ${compact(spent.input_tokens)} tokens in, ${compact(spent.output_tokens)} out.`
         : " LLM-GC has made no model calls for this session."),
   ];
+}
+
+// While LLM-GC yields to a rate limit, the session's page says so first.
+function paused() {
+  if (!state.pause) return null;
+  return h("div", { class: "status-line tone-warn trace-paused" }, h("span", { class: "badge", "aria-hidden": "true" }, "⏸"),
+    h("span", { class: "msg-text", ...hoverTip("Paused", PAUSED_TEXT) }, h("b", {}, `LLM-GC is yielding to a rate limit until ${new Date(state.pause.until).toLocaleTimeString()}.`),
+      ` ${state.pause.reason[0].toUpperCase()}${state.pause.reason.slice(1)}, so LLM-GC makes no model calls of its own and starts no collection meanwhile. Your requests go through as normal.`));
 }
 
 function before(trace, actions) {

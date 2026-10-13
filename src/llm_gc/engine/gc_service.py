@@ -23,7 +23,8 @@ from llm_gc.engine.generations.generational_memory import GenerationalMemory
 from llm_gc.engine.generations.planning import Bands, LevelOptions, Plan, plan_levels
 from llm_gc.engine.inspection import CutPreview, SessionInspection, batch_worth_cutting
 from llm_gc.events import Event, EventBus, EventType
-from llm_gc.exceptions import CompactionRefused, LLMGCError
+from llm_gc.engine.pause import ModelCallPause
+from llm_gc.exceptions import CompactionRefused, LLMGCError, LLMRateLimitError
 from llm_gc.llm.metering import measure_model_usage
 from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.message import said_by_user
@@ -156,6 +157,8 @@ class GcService:
         self.span_scorer = span_scorer
         self.event_bus = event_bus
         self.gc_config = gc_config
+        # LLM-GC's own model calls yield to the upstream's rate limit; see `pause_model_calls`.
+        self.model_calls = ModelCallPause()
         self._bands = Bands(keep=gc_config.keep_threshold, archive=gc_config.archive_threshold,
                             margin=gc_config.level_margin)
 
@@ -235,6 +238,19 @@ class GcService:
         if state is not None:
             state.context_window = context_window
 
+    def pause_model_calls(self, retry_after_s: float | None, reason: str) -> None:
+        """Make no model call of LLM-GC's own until the upstream's pressure has passed.
+
+        For the upstream's Retry-After when it gave one, a minute otherwise; a later call
+        extends the pause. Collections skipped meanwhile are reported as paused, with the
+        reason. The client's own requests are never held back.
+        """
+        if self.model_calls.pause(retry_after_s, reason):
+            pause = self.model_calls.current()
+            logger.warning("LLM-GC pauses its own model calls until %s: %s",
+                           f"{pause.until.astimezone():%H:%M:%S}" if pause is not None else "?", reason,
+                           extra={"retry_after_s": retry_after_s})
+
     def set_collection_enabled(self, session_id: str, enabled: bool) -> None:
         """Turn collection on or off for one session. Off, it is still recorded and inspected, never collected."""
         state = self.session_manager.store.get(session_id)
@@ -300,6 +316,9 @@ class GcService:
 
         if not state.collection_enabled:
             gc_result = self._unchanged_result(base, gc_run_id, GCStatus.BYPASSED_NOT_COLLECTED, start)
+        elif (pause := self.model_calls.current()) is not None:
+            gc_result = self._unchanged_result(base, gc_run_id, GCStatus.BYPASSED_PAUSED, start,
+                                               failure_reason=f"paused until {pause.until.astimezone():%H:%M:%S}: {pause.reason}")
         elif state.aging_in_flight:
             logger.debug("aging already in flight; skipping this trigger",
                          extra={"session_id": session_id, "gc_run_id": gc_run_id})
@@ -454,6 +473,11 @@ class GcService:
                 logger.warning("a span was made without its summary",
                                extra={"session_id": session_id, "turn_indices": turns, "reason": reason.value})
                 degradations.append(self._record_degradation(session_id, reason, turns, draft.summary_error))
+        # One of LLM-GC's own calls was rate-limited: it shares the upstream's limit with the client, so it yields.
+        for error in [draft.summary_error for draft in condensed] + [draft.facts_error for draft in condensed]:
+            if isinstance(error, LLMRateLimitError):
+                self.pause_model_calls(error.retry_after_s, "the upstream rate-limited one of LLM-GC's own calls")
+                break
         unread = [(draft, draft.facts_error) for draft in condensed if draft.facts_error is not None]
         if unread:
             turns = [turn.turn_index for draft, _ in unread for turn in draft.turns]

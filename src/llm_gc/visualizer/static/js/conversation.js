@@ -88,6 +88,8 @@ export function renderStatus() {
     "Each says what the model gets instead. Nothing is lost: an exchange always keeps its words.",
     ["See why", () => { showTab("engine"); openCard("notmoved", true); }], ["shortfalls", latestShortfall]));
   if (collecting()) items.push(line("", "…", "Collecting this conversation.", "The page updates when it finishes."));
+  if (state.pause) items.push(line("warn", "⏸", `LLM-GC is yielding to a rate limit until ${new Date(state.pause.until).toLocaleTimeString()}.`,
+    "It makes no model calls of its own and starts no collection meanwhile; your requests go through as normal.", ["Why", () => { showTab("engine"); }]));
   fill("status", items);
 }
 

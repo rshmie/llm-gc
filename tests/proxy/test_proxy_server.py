@@ -10,6 +10,7 @@ import hashlib
 import json
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 
 import httpx2
 import pytest
@@ -1535,3 +1536,51 @@ class TestEachSubagentIsLinkedToItsCall:
         records = self._run(link_subagents=False)
 
         assert all(record.spawned_by is None for record in records)
+
+
+class TestLlmGcYieldsWhenTheUpstreamPushesBack:
+    """A 429 or 529 on a client's request pauses LLM-GC's own model calls; the client's requests go through."""
+
+    REFUSED = {"type": "error", "error": {"type": "rate_limit_error", "message": "slow down"}}
+
+    def _client(self, refuse_first: int, status: int, headers=None):
+        answered = {"n": 0}
+
+        def upstream(request):
+            answered["n"] += 1
+            if answered["n"] <= refuse_first:
+                return httpx2.Response(status, json=self.REFUSED, headers=headers or {})
+            return httpx2.Response(200, json=UPSTREAM_OK)
+
+        return _proxy(upstream)
+
+    @staticmethod
+    def _converse(client, turns: int = 10) -> list:
+        conversation: list[tuple[str, str]] = []
+        responses = []
+        for index in range(turns):
+            conversation.append(("user", f"turn {index}: we discussed the storage layer at length today"))
+            responses.append(_post(client, _body(*conversation)))
+            conversation.append(("assistant", UPSTREAM_OK["content"][0]["text"]))
+        return responses
+
+    def test_a_rate_limited_request_pauses_llm_gc_for_as_long_as_the_upstream_asked(self):
+        client, service, _, _ = self._client(refuse_first=1, status=429, headers={"retry-after": "30"})
+        before = datetime.now(timezone.utc)
+
+        response = _post(client, _body(("user", "hello")))
+
+        assert response.status_code == 429 and response.json() == self.REFUSED, "the client gets the upstream's answer"
+        pause = service.model_calls.current()
+        assert pause is not None and "rate-limited a request from the client" in pause.reason
+        assert timedelta(seconds=29) < pause.until - before < timedelta(seconds=32)
+
+    def test_while_paused_requests_go_through_and_nothing_is_collected(self):
+        client, service, _, _ = self._client(refuse_first=1, status=529)
+        _post(client, _body(("user", "hello")))
+
+        responses = self._converse(client)
+
+        assert all(response.status_code == 200 for response in responses)
+        [session_id] = service.session_manager.store.active_session_ids()
+        assert service.session_manager.store.get(session_id).snapshot.cut_count == 0

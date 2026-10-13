@@ -16,3 +16,5 @@ class GCStatus(Enum):
     DISCARDED_SESSION_CLOSED = "discarded_session_closed"
     # Collection is turned off for this session: it is recorded and shown, never collected.
     BYPASSED_NOT_COLLECTED = "bypassed_not_collected"
+    # LLM-GC is yielding to the upstream's rate limit: none of its own model calls until the pause ends.
+    BYPASSED_PAUSED = "bypassed_paused"

@@ -745,3 +745,4 @@ table.terms td:first-child { font-family: ui-monospace, SFMono-Regular, Menlo, m
 .turn-head .chev, .wf-agent .chev { font-size: 10px; }
 .wf-agent .chev { display: inline-block; width: 12px; color: var(--ink-3); }
 .wf-open { margin: 0 8px 0 6px; font-size: 12.5px; }
+.trace-paused { margin-top: 12px; }

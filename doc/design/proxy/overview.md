@@ -213,6 +213,31 @@ forwarding itself may fail a request:
 | Background aging, or scheduling it | The full answer | That aging pass; logged |
 | The history observer (the dashboard's transcript) | The full answer, with GC | Nothing; logged |
 | The provider | The provider's own error | Nothing of ours |
+| The upstream rate-limits or is overloaded (429, 529) | The provider's answer; later requests forwarded as before | LLM-GC's own model calls, and so collections, until the pause ends |
+
+**LLM-GC yields to the upstream's limits.** Its summaries and fact reads sometimes can go to the
+same upstream as the client's requests, often under the same credential, so they share
+its rate limit. When a client request comes back 429 (rate limited) or 529 (overloaded),
+or one of LLM-GC's own calls is rate-limited, LLM-GC makes no model call of its own for
+as long as the upstream's `Retry-After` asks, or a minute when it gives none; a later
+refusal extends the pause, up to ten minutes. No collection starts meanwhile, and each
+check skipped is recorded as *paused*, with the reason. The client's requests are never
+held back: they are forwarded exactly as before, with the recap already made. The
+dashboard says so on every tab while it lasts.
+
+```
+client request ──► upstream ──► 429, retry-after: 30
+                                   │
+                                   ▼
+                      LLM-GC pauses its own calls 30 s ──► checks skipped: "paused"
+client requests keep going ──► forwarded as before, recap unchanged
+```
+
+*Rejected: retrying LLM-GC's own calls with backoff* — it keeps competing with the
+client for the same limit, only more slowly. *Rejected: leaving it to the summary
+calls' own errors* — a refused summary is recorded, but the next collection tries
+again at once, still competing. *Accepted cost:* while paused, the conversation grows
+uncondensed; a collection follows once the pause ends.
 
 A malformed body is forwarded untouched, because the provider is the authority on
 its own API. Guards catch `Exception`, never `BaseException`, so cancellation on

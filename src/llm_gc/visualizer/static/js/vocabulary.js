@@ -80,7 +80,11 @@ export const STATUS = {
   bypassed_on_error:        { tone: "critical", icon: "✕", text: "failed: nothing changed" },
   discarded_session_closed: { tone: "", icon: "–", text: "discarded: the conversation had closed" },
   bypassed_not_collected:   { tone: "", icon: "–", text: "not collected: recorded and sent as written" },
+  bypassed_paused:          { tone: "", icon: "⏸", text: "paused: yielding to the upstream's rate limit" },
 };
+// While the upstream is rate-limiting or overloaded, LLM-GC makes no model calls of its own.
+export const PAUSED_TEXT = "The upstream turned a request away as rate-limited or overloaded. LLM-GC's summaries and fact reads can go to the same upstream, often under the same credential, so they would compete with your requests for the same limit. LLM-GC makes no model calls of its own until the pause ends, and no collection starts meanwhile. Your requests are never held back: they are forwarded exactly as before, with the recap already made.";
+
 // Why a conversation is recorded but never collected: today, only a subagent's.
 export const NOT_COLLECTED_TEXT = "LLM-GC records this conversation and shows it, but sends it as written: it is a subagent's, which usually ends before a collection could pay for itself, and whose answer is only as good as what it read. The collect_subagents setting turns collection on.";
 // What a collection did. Always from the engine's outcome, which names every message it moved: a

@@ -373,3 +373,14 @@ class TestTheSessionTrace:
     def test_an_unknown_client_session_is_a_404(self):
         response = self._client(TranscriptRecorder()).get("/api/trace/cc-gone")
         assert response.status_code == 404 and response.json()["error"]["code"] == "TRACE_NOT_FOUND"
+
+
+def test_the_overview_says_while_llm_gc_is_yielding_to_a_rate_limit():
+    service, monitor = _engine()
+    client = _client(service, monitor)
+    assert client.get("/api/overview").json()["pause"] is None
+
+    service.pause_model_calls(60, "the upstream rate-limited a request from the client")
+
+    pause = client.get("/api/overview").json()["pause"]
+    assert pause["reason"] == "the upstream rate-limited a request from the client" and pause["until"]

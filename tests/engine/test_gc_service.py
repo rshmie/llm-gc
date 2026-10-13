@@ -1,17 +1,21 @@
 """A collection: condense what aged out of the tail, score every span, give each its level."""
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from llm_gc.config import GCConfig
 from llm_gc.engine import DegradationReason
-from llm_gc.engine.compaction import BaseCompactor
+from llm_gc.engine.compaction import BaseCompactor, LLMCompactor
 from llm_gc.engine.compaction.compaction_strategy import CompactionStrategy
 from llm_gc.engine.gc_result import CutOutcome
 from llm_gc.engine.gc_status import GCStatus
-from llm_gc.events import EventType
+from llm_gc.engine.pause import ModelCallPause
+from llm_gc.events import EventBus, EventType
+from llm_gc.exceptions import LLMRateLimitError
+from llm_gc.llm import FakeProvider
 from llm_gc.models.generation_snapshot import DetailLevel
 from llm_gc.utils import count_tokens
 from tests.engine.support import ARCHIVED_SCORE, COMPACTED_SCORE, KEPT_SCORE, SUMMARY, make_service, turn
@@ -457,3 +461,38 @@ def test_a_relayed_report_in_the_tail_is_not_what_the_user_is_discussing_now():
 
     asyncio.run(scenario())
     assert heard[-1] == [2], "the tail is turns 2-4: the user's turn, a reply, and a relayed report"
+
+
+class TestLlmGcYieldsToTheUpstreamsRateLimit:
+    def test_while_paused_no_collection_starts_and_no_model_is_called(self):
+        service, _, provider = make_service(default_score=COMPACTED_SCORE)
+        service.pause_model_calls(60, "the upstream rate-limited a request from the client")
+
+        results = _converse(service, 4)
+
+        assert {result.status for result in results} == {GCStatus.BYPASSED_PAUSED}
+        assert "rate-limited a request from the client" in results[-1].failure_reason
+        assert provider.calls == [] and _snapshot(service).old == ()
+
+    def test_when_the_pause_ends_collection_resumes(self):
+        clock = [datetime(2026, 10, 13, 12, 0, tzinfo=timezone.utc)]
+        service, _, _ = make_service(default_score=COMPACTED_SCORE)
+        service.model_calls = ModelCallPause(clock=lambda: clock[0])
+        service.pause_model_calls(60, "overloaded")
+        _converse(service, 3)
+        clock[0] += timedelta(seconds=61)
+
+        [result] = _converse(service, 1, start=3)
+
+        assert result.status is GCStatus.COMPLETED
+
+    def test_llm_gcs_own_call_being_rate_limited_pauses_it_too(self):
+        """Its calls share the limit with the client's: a 429 on one of them is the same pressure."""
+        limited = FakeProvider(responses=[LLMRateLimitError("slow down", retry_after_s=45)] * 20)
+        service, _, _ = make_service(compactor=LLMCompactor(event_bus=EventBus(), provider=limited),
+                                     default_score=COMPACTED_SCORE)
+
+        _converse(service, 3)
+
+        pause = service.model_calls.current()
+        assert pause is not None and "LLM-GC's own calls" in pause.reason

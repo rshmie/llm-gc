@@ -2,7 +2,7 @@
 // runs and why each message gets what it gets, what collections did and couldn't do, every check,
 // and last the proxy's totals and settings, which apply to every conversation.
 
-import { BECOMES, CARD_INFO, CATS, CHART_HEIGHT, CHECKS_SHOWN, CREDENTIAL_REFUSED_TEXT, CREDENTIAL_REFUSED_TITLE, MAX_EXCHANGE_LINKS, MOVES_SHOWN, NOT_COLLECTED_TEXT, NOT_MOVED, OUTCOME_LINES, STATUS, describeOutcome, swatch } from "./vocabulary.js";
+import { BECOMES, CARD_INFO, CATS, CHART_HEIGHT, CHECKS_SHOWN, CREDENTIAL_REFUSED_TEXT, CREDENTIAL_REFUSED_TITLE, MAX_EXCHANGE_LINKS, MOVES_SHOWN, NOT_COLLECTED_TEXT, NOT_MOVED, OUTCOME_LINES, PAUSED_TEXT, STATUS, describeOutcome, swatch } from "./vocabulary.js";
 import { $, agoTs, compact, countEl, fill, fmt, h, meterBar, plural, reducedMotion, setChildren, storeGet, storeSet, svg } from "./dom.js";
 import { credentialRefusal, keepLast, preview, state, ui } from "./state.js";
 import { hideTooltip, info, placeTooltip, showTooltip, tipQuote, tooltipContent, hoverTip } from "./tooltip.js";
@@ -134,13 +134,14 @@ export function renderEngineStatus() {
   $("view-engine").classList.toggle("has-problems", problems > 0);
   const failed = !!last && last.gc_status === "bypassed_on_error";
   const refusal = credentialRefusal();
-  const tone = failed || refusal ? "critical" : problems ? "warn" : "good";
-  const lastText = state.knowledge && !state.knowledge.collected ? "This conversation is a subagent's: recorded and sent as written, never checked for a collection."
+  const tone = failed || refusal ? "critical" : problems || state.pause ? "warn" : "good";
+  const lastText = state.pause ? `Its own model calls are paused until ${new Date(state.pause.until).toLocaleTimeString()}: ${state.pause.reason}. Your requests go through as normal.`
+    : state.knowledge && !state.knowledge.collected ? "This conversation is a subagent's: recorded and sent as written, never checked for a collection."
     : last ? `Last check ${agoTs(last.gc_completed_at)}: ${STATUS[last.gc_status]?.text || last.gc_status}, ${last.duration_ms.toFixed(0)} ms.`
     : "No checks yet. LLM-GC checks after every reply.";
   fill("eng-status", h("div", { class: `status-line tone-${tone}` },
-    h("span", { class: "badge", "aria-hidden": "true" }, failed || refusal ? "✕" : problems ? "!" : "✓"),
-    h("span", { class: "msg-text" }, h("b", {}, refusal ? CREDENTIAL_REFUSED_TITLE : failed ? "The last check failed, and nothing changed." : problems ? `${plural(problems, "part")} of a collection fell short.` : "LLM-GC is working normally."),
+    h("span", { class: "badge", "aria-hidden": "true" }, failed || refusal ? "✕" : problems ? "!" : state.pause ? "⏸" : "✓"),
+    h("span", { class: "msg-text", ...(state.pause ? hoverTip("Paused", PAUSED_TEXT) : {}) }, h("b", {}, refusal ? CREDENTIAL_REFUSED_TITLE : failed ? "The last check failed, and nothing changed." : problems ? `${plural(problems, "part")} of a collection fell short.` : state.pause ? "LLM-GC is yielding to a rate limit." : "LLM-GC is working normally."),
       refusal ? ` ${CREDENTIAL_REFUSED_TEXT} The upstream said: ${refusal.degradation.detail}` : ` ${lastText}`,
       !refusal && failed && last.failure_reason ? ` ${last.failure_stage}: ${last.failure_reason}` : null),
     problems ? h("button", { class: "link-btn", type: "button", onclick: () => openCard("notmoved", true) }, "See why →")
@@ -173,7 +174,8 @@ export function renderNext(k) {
   const newest = k.turns.filter((t) => t.fidelity === "verbatim" && !t.becomes).length;
 
   const saving = cut.estimated_saving;
-  const lede = !taking.length ? "Nothing to collect yet."
+  const lede = state.pause ? `Paused until ${new Date(state.pause.until).toLocaleTimeString()}: LLM-GC is yielding to the upstream's rate limit, so no collection starts.`
+    : !taking.length ? "Nothing to collect yet."
     : !cut.batch_ready ? `Waiting for ${fmt(cut.min_cut_tokens - cut.compactable_tokens)} more tokens of messages to compact or archive.`
     : saving > 0 ? "Ready: it runs after the next reply."
     : "Enough to collect, but collecting now would make the prompt bigger, so it waits.";

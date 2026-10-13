@@ -7,7 +7,7 @@ import { $, h } from "./dom.js";
 // `clientSession` is the session picked at the top - a Claude Code session's id, or OTHER for conversations no
 // client session named - and `selected` the conversation shown on the Conversation and Engine tabs.
 export const OTHER = "__other__";
-export const state = { config: null, proxy: null, sessions: [], clientSession: null, trace: null, selected: null, version: null,
+export const state = { config: null, proxy: null, pause: null, sessions: [], clientSession: null, trace: null, selected: null, version: null,
   knowledge: null, transcript: null, activity: null };
 export const ui = { tab: "session", filter: "all", query: "", promptView: false, open: new Set(), chartKey: null, earlierOpen: false, listOpen: true,
   stayOpen: false, allChecks: false, allMoves: false, allProblems: false, mapSession: null,

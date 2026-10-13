@@ -181,6 +181,7 @@ async function refresh() {
     state.config = overview.config;
     fillConfigValues(state.config);
     state.proxy = overview.proxy;
+    state.pause = overview.pause;
     state.sessions = overview.sessions;
     const picks = clientSessions();
     chooseClientSession(picks);

@@ -1,9 +1,11 @@
 // Run GC now: the dashboard's one action, and the explanation of its outcome.
 
-import { ACTION_HEADER, NOT_COLLECTED_TEXT, STATUS, describeOutcome } from "./vocabulary.js";
+import { ACTION_HEADER, NOT_COLLECTED_TEXT, PAUSED_TEXT, STATUS, describeOutcome } from "./vocabulary.js";
 import { $, fmt, h, plural, setChildren } from "./dom.js";
 import { keepLast, sessionPath, state } from "./state.js";
 import { showTab } from "./shell.js";
+
+const pauseEnds = () => state.pause ? `It ends at ${new Date(state.pause.until).toLocaleTimeString()}.` : "It has ended; try again.";
 
 export function explainResult(r, before) {
   const figures = (after) => [["before", `${fmt(r.tokens_before)} tokens`], ["after", `${fmt(after)} tokens`]];
@@ -40,6 +42,7 @@ export function explainResult(r, before) {
       body: [`The ${plural(cut.turns.length, "older message")} would all be kept word for word (they are short, or matter now), so collecting them would save nothing.`] };
   }
   if (r.status === "bypassed_aging_in_flight") return { tone: "muted", title: "– A collection is already running", body: ["LLM-GC is already collecting this conversation. Try again in a moment."] };
+  if (r.status === "bypassed_paused") return { tone: "muted", title: "⏸ Paused: LLM-GC is yielding to a rate limit", body: [PAUSED_TEXT, pauseEnds()] };
   if (r.status === "bypassed_not_collected") return { tone: "muted", title: "– Not collected", body: [NOT_COLLECTED_TEXT] };
   if (r.status === "bypassed_on_error") return { tone: "critical", title: "✕ The collection failed, and nothing changed", body: ["The conversation is exactly as it was. The error is in the proxy's log."] };
   return { tone: "muted", title: STATUS[r.status]?.text || r.status, body: [] };

@@ -19,7 +19,7 @@ import logging
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Any
 
 import httpx2
@@ -77,6 +77,10 @@ _REPLY_KEPT_MAX_BYTES = 4 * 1024 * 1024
 
 # A model name longer than this is not a model name; it is not kept or shown.
 _MODEL_NAME_MAX_CHARS = 128
+
+# Answers that say the upstream is under pressure: rate limited, or overloaded. LLM-GC's own model
+# calls share it with the client, so they pause rather than add to it.
+_PRESSURE_STATUSES = {429: "rate-limited", 529: "said it was overloaded on"}
 
 # What to do with a reply once it ends: its outline, and the prompts its tool calls gave subagents.
 OutlineHandler = Callable[[ReplyOutline, Mapping[str, str]], None]
@@ -403,6 +407,9 @@ def _measure_request(app: FastAPI, session_id: str | None, origin: ClientOrigin 
         return None
 
     def close(outline: ReplyOutline, prompts: Mapping[str, str]) -> None:
+        if (pressure := _PRESSURE_STATUSES.get(outline.status)) is not None:
+            app.state.gc_service.pause_model_calls(outline.retry_after_s,
+                                                   f"the upstream {pressure} a request from the client")
         if outline.usage is not None:
             TrafficLedger.record_usage(counted, outline.usage)
         metrics.request_log.finish(record, outline)
@@ -631,7 +638,8 @@ async def _forward(app: FastAPI, body: bytes, headers: dict[str, str], target: s
     if on_complete is not None and upstream.status_code == 200:
         on_complete(upstream.content)
     if on_outline is not None:
-        on_outline(*read_reply(upstream.status_code, upstream.content, read_prompts=_reads_prompts(app)))
+        outline, prompts = read_reply(upstream.status_code, upstream.content, read_prompts=_reads_prompts(app))
+        on_outline(_with_retry_after(outline, upstream.headers), prompts)
     return _verbatim(upstream, upstream.content)
 
 
@@ -658,7 +666,8 @@ async def _forward_stream(app: FastAPI, body: bytes, headers: dict[str, str], ta
         finally:
             await upstream.aclose()
         if on_outline is not None:
-            on_outline(*read_reply(upstream.status_code, content))
+            outline, prompts = read_reply(upstream.status_code, content)
+            on_outline(_with_retry_after(outline, upstream.headers), prompts)
         return _verbatim(upstream, content)
 
     async def relay() -> AsyncIterator[bytes]:
@@ -695,6 +704,17 @@ async def _forward_stream(app: FastAPI, body: bytes, headers: dict[str, str], ta
         headers=_response_headers(upstream),
         media_type=upstream.headers.get("content-type", "text/event-stream"),
     )
+
+
+def _with_retry_after(outline: ReplyOutline, headers: httpx2.Headers) -> ReplyOutline:
+    """The outline of a refusal, with the wait the upstream asked for, in seconds, when it gave one."""
+    if outline.status not in _PRESSURE_STATUSES:
+        return outline
+    try:
+        seconds = float(headers.get("retry-after", ""))
+    except ValueError:
+        return outline
+    return replace(outline, retry_after_s=seconds) if seconds > 0 else outline
 
 
 def _reads_prompts(app: FastAPI) -> bool:
