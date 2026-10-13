@@ -433,3 +433,27 @@ class TestASessionCanBeRecordedWithoutBeingCollected:
         state = service.session_manager.store.get("s")
 
         assert service.session_manager.replace(state, state.snapshot).collection_enabled is False
+
+
+def test_a_relayed_report_in_the_tail_is_not_what_the_user_is_discussing_now():
+    """Scored against it, every exchange near a subagent's findings would look like the subject."""
+    service, scorer, _ = make_service(GCConfig(min_cut_tokens=0, last_n_turns_to_keep=3), default_score=COMPACTED_SCORE)
+    heard: list[list[int]] = []
+    score = scorer.score
+
+    def recording(spans, now, newest_turn):
+        heard.append([message.turn_index for message in now])
+        return score(spans, now, newest_turn)
+
+    scorer.score = recording  # type: ignore[method-assign]
+
+    async def scenario():
+        for index in range(5):
+            message = turn(index, role="user" if index % 2 == 0 else "assistant")
+            if index == 4:
+                message = message.model_copy(update={"relayed": True})
+            _record(service, message)
+            await service.gc_age("s")
+
+    asyncio.run(scenario())
+    assert heard[-1] == [2], "the tail is turns 2-4: the user's turn, a reply, and a relayed report"

@@ -51,6 +51,7 @@ class TurnState(BaseModel):
     becomes: TurnFidelity | None = None    # set when the next collection would change how the model receives it
     tool_calls: bool = False               # an assistant turn asking the client to run a tool
     tool_results: bool = False             # a user turn carrying what the client's tools returned, not words the user wrote
+    relayed: bool = False                  # a user turn relaying another agent's report, not words the user wrote
 
 
 class SpanState(BaseModel):
@@ -186,7 +187,8 @@ def _turn_state(message: Message, fidelity: TurnFidelity, *, span: int | None = 
                 becomes: TurnFidelity | None = None) -> TurnState:
     return TurnState(turn_index=message.turn_index, role=message.role, tokens=message.token_count,
                      text=message.content, fidelity=fidelity, span=span, score=score, becomes=becomes,
-                     tool_calls=bool(tool_use_ids(message)), tool_results=bool(tool_result_ids(message)))
+                     tool_calls=bool(tool_use_ids(message)), tool_results=bool(tool_result_ids(message)),
+                     relayed=message.relayed)
 
 
 def _fact_states(knowledge: tuple[KnowledgeEntry, ...], inspection: SessionInspection,

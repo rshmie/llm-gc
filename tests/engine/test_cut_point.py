@@ -113,3 +113,11 @@ def test_the_cut_is_the_latest_safe_one_where_a_span_may_begin(turns, keep_last)
         assert not _splits_a_question_from_its_answer(turns, cut)
     later = range(cut + 1, len(turns) - keep_last + 1)
     assert not any(_safe(turns, c, keep_last) and _span_starts(turns)[c] for c in later), "a later cut was missed"
+
+
+def test_a_relayed_report_is_not_where_an_exchange_opens():
+    """It joins the exchange that started the subagent, so no cut falls just before it."""
+    report = Message(role="user", content="<agent-message>done</agent-message>", turn_index=2, relayed=True)
+    turns = [_text(0, "user"), _text(1, "assistant"), report, _text(3, "assistant"), _text(4, "user")]
+    starts = _span_starts(turns)
+    assert starts[2] is False and starts[4] is True

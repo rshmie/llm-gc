@@ -156,7 +156,15 @@ A collection never cuts between them either: it cuts only where a span may begin
 ```
 
 A tool result arrives as a user-role message, but it continues the exchange; it
-does not start a new one. An exchange larger than 8,000 tokens (a long agentic
+does not start a new one. So does a subagent's relayed report: Claude Code adds a
+background subagent's findings to the main conversation under the user role, and
+the report joins the exchange that started the subagent. Only a turn the person
+wrote opens an exchange.
+
+```
+ user ─ assistant → Agent ×2 ─ (tool result: "started") ─ assistant … ─ report ─ assistant ─ report ─ assistant
+ └──────────────── one exchange: the question, the subagents' reports, the answers to them ──────────────┘
+``` An exchange larger than 8,000 tokens (a long agentic
 run) is divided between tool rounds, never between a tool call and its result,
 and never between a question and its first answer. See [the-cut.md](the-cut.md)
 for when a collection makes spans.

@@ -362,7 +362,8 @@ is not shown under a question it did not answer. *Accepted cost:* a reply the
 client regenerates is shown until the regenerated one replaces it.
 For the same reason a turn carrying tool results is shown as *tool results*, not
 as the user's words: the client sends what its tools returned under the user's
-role. Instructions the client wrote into a message — Claude Code's
+role. A subagent's relayed report is shown as a *subagent report*, for the same
+reason. Instructions the client wrote into a message — Claude Code's
 `<system-reminder>` blocks — show as a tag with their size, not among its words:
 they are not conversation, are never condensed, and are not counted in the
 request's size, which covers what LLM-GC can change. Their size is read from the

@@ -210,3 +210,36 @@ class TestWritingBack:
         sent = rewrite_messages(CLAUDE_CODE, extract_messages(CLAUDE_CODE), instructions=instructions)["messages"]
 
         assert sent == CLAUDE_CODE["messages"]
+
+
+class TestARelayedReportIsMarked:
+    """Claude Code relays a background subagent's report as a user turn wrapped in <agent-message>."""
+
+    @staticmethod
+    def _turn(content) -> Message:
+        return extract_messages({"messages": [{"role": "user", "content": "go"}, {"role": "assistant", "content": "ok"},
+                                              {"role": "user", "content": content}]})[-1]
+
+    def test_a_turn_that_opens_with_the_element_is_relayed(self):
+        assert self._turn('<agent-message agent="a1">Found 42 test files.</agent-message>').relayed
+
+    def test_it_is_still_relayed_after_the_instructions_before_it_are_lifted(self):
+        """Run 2 of the trace: a reminder block, then the report, in one user turn."""
+        turn = self._turn([{"type": "text", "text": "<system-reminder>Today is Tuesday.</system-reminder>"},
+                           {"type": "text", "text": "<agent-message>README: three lines.</agent-message>"}])
+        assert turn.relayed and turn.instructions and turn.content.startswith("<agent-message")
+
+    @pytest.mark.parametrize("content", ["Please read <agent-message> tags carefully.", "What did the agent find?"])
+    def test_a_message_the_user_wrote_is_not(self, content):
+        assert not self._turn(content).relayed
+
+    def test_an_assistant_turn_quoting_the_element_is_not(self):
+        turns = extract_messages({"messages": [{"role": "user", "content": "go"},
+                                               {"role": "assistant", "content": "<agent-message>x</agent-message>"}]})
+        assert not turns[-1].relayed
+
+    def test_a_quoted_report_is_named_as_one_in_the_recap(self):
+        report = Message(role="user", content="<agent-message>Found 42 test files.</agent-message>", turn_index=4,
+                         relayed=True)
+        text = span_text(Span(turns=(report,), level=DetailLevel.KEPT), Annotations())
+        assert "(turn 4, subagent report)" in text and "(turn 4, user)" not in text

@@ -168,6 +168,20 @@ high share of it would be worth its risk.
   the front, word for word, in order, each said once — Claude Code repeats some
   after every file it reads. Summarised with their message, the model read a
   paraphrase of the project's rules, or nothing of them.
+- **A subagent's report is marked, not lifted.** When a background subagent
+  finishes, Claude Code adds its report to the main conversation as a user turn
+  that opens with an `<agent-message>` element, sometimes after a reminder in the
+  same turn. A turn whose text, once its reminders are lifted, opens with that
+  element is marked *relayed*. It stays conversation — scored, condensed when it
+  goes cold, quoted as a `subagent report` — but nothing reads it as the person:
+  it opens no exchange, is not what the user is discussing now, and its facts are
+  the assistant's side. *Rejected: lifting it like a reminder* — instructions are
+  never condensed, so a long report would ride in every request for the rest of the
+  session. *Rejected: recognising it by matching the subagent's handback text* — in
+  a live trace one report in two was wrapped so its text no longer matched.
+  *Accepted cost:* the element is Claude Code's; another client's relayed report is
+  read as the user's, as before, and a person who starts a message with
+  `<agent-message` is read as a report.
 
   ```
   message 0 as sent:   <system-reminder>CLAUDE.md…</system-reminder>  Help me design…

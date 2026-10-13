@@ -22,6 +22,10 @@ class Message(BaseModel):
     not in `content`, so the engine never condenses it; whoever forwards a collected
     turn delivers it word for word. Excluded from serialisation for the same reason
     as `raw_content`.
+
+    `relayed` marks a user-role turn the client wrote to relay another agent's
+    report - a background subagent's findings - rather than words the person typed.
+    It is conversation, condensed like any turn, but never read as the person's.
     """
     role: Literal["user", "assistant", "system"]
     content: str
@@ -29,6 +33,7 @@ class Message(BaseModel):
     turn_index: int = 0
     raw_content: Any = Field(default=None, exclude=True, repr=False)
     instructions: tuple[str, ...] = Field(default=(), exclude=True, repr=False)
+    relayed: bool = False
 
     def preview(self, max_length: int = 50) -> str:
         if len(self.content) > max_length:
@@ -45,6 +50,23 @@ def tool_use_ids(message: Message) -> list[str]:
 def tool_result_ids(message: Message) -> list[str]:
     return [block["tool_use_id"] for block in _blocks(message)
             if block.get("type") == "tool_result" and "tool_use_id" in block]
+
+
+# How a quote or a transcript names a relayed report's speaker.
+RELAYED_SPEAKER = "subagent report"
+
+
+def said_by_user(message: Message) -> bool:
+    """Whether the turn is words the person wrote: a user turn that is neither tool results nor a relayed report.
+
+    What opens an exchange, what scoring reads as the subject now, and whose facts are the user's.
+    """
+    return message.role == "user" and not message.relayed and not tool_result_ids(message)
+
+
+def speaker_label(message: Message) -> str:
+    """The turn's speaker as a quote or a transcript names it."""
+    return RELAYED_SPEAKER if message.relayed else message.role
 
 
 def _blocks(message: Message) -> Iterable[dict]:

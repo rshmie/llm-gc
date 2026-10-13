@@ -20,8 +20,10 @@ Something the conversation settled and may need later, said by either side:
   turned it down.
 
 Tool calls (`[tool call: name] {input}`) and their output (`[tool result] ...`)
-are what the assistant did and saw. A value in them is a fact only when the
-conversation settles on it, not because a file or a command's output contains it.
+are what the assistant did and saw. A turn marked `subagent report` is another
+agent's findings, relayed to the assistant: the user did not write it. A value in
+any of them is a fact only when the conversation settles on it, not because a file,
+a command's output or a report contains it.
 
 Not facts: explanations, reasoning, trade-offs, options only considered, general
 knowledge, advice nobody took up, questions, and pleasantries. When in doubt, leave

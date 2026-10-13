@@ -30,7 +30,7 @@ from llm_gc.llm.provider import LLMProvider, LLMResponse
 from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.generation_snapshot import file_knowledge
 from llm_gc.models.knowledge_entry import KnowledgeStatus, KnowledgeType
-from llm_gc.models.message import tool_result_ids
+from llm_gc.models.message import said_by_user, speaker_label
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +124,7 @@ class LLMFactReader:
         """
         shown = record[-self._on_record_max:]
         facts = "\n".join(f"{fact.topic_label}: {fact.content}" for fact in shown) or "(none yet)"
-        transcript = "\n".join(f"[turn {turn.turn_index}] {turn.role}: {turn.content}" for turn in turns)
+        transcript = "\n".join(f"[turn {turn.turn_index}] {speaker_label(turn)}: {turn.content}" for turn in turns)
         return Message(role="user", turn_index=turns[0].turn_index,
                        content=f"{FACTS_OPEN}\n{facts}\n{FACTS_CLOSE}\n\n{TRANSCRIPT_OPEN}\n{transcript}\n{TRANSCRIPT_CLOSE}")
 
@@ -152,7 +152,8 @@ def _entry(fact: _Fact, turns: dict[int, Message]) -> KnowledgeEntry | None:
     """A validated fact, or None when it names a turn it was not given or is not a short topic and value.
 
     Its speaker is taken from the turn, never from the model: the user when the turn
-    is something they wrote, the assistant for its replies and for tool results.
+    is something they wrote, the assistant for its replies, for tool results and for
+    another agent's relayed report.
     """
     topic = " ".join(fact.topic.split()).strip(" .:").casefold()
     value = " ".join(fact.value.split()).strip()
@@ -161,5 +162,5 @@ def _entry(fact: _Fact, turns: dict[int, Message]) -> KnowledgeEntry | None:
         return None
     kind = next((kind for kind in KnowledgeType if kind.value == fact.kind.casefold()), KnowledgeType.FACT)
     turn = turns[fact.turn]
-    speaker: Literal["user", "assistant"] = "user" if turn.role == "user" and not tool_result_ids(turn) else "assistant"
+    speaker: Literal["user", "assistant"] = "user" if said_by_user(turn) else "assistant"
     return KnowledgeEntry(message_turn=fact.turn, content=value, topic_label=topic, knowledge_type=kind, speaker=speaker)

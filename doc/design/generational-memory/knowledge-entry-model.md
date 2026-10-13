@@ -120,7 +120,12 @@ in use, so a change worded differently is missed.
 
 Each entry records its `speaker`, from the turn it was read from. An entry the assistant
 stated on a topic the user decided is not filed: only the user changes their own decision,
-and the recommendation stays in its exchange's summary.
+and the recommendation stays in its exchange's summary. A tool result and a subagent's
+relayed report arrive under the user role, but their speaker is the assistant: they are
+what the assistant's side found, not what the user said. Read as the user's, a
+subagent's finding — "the config uses MySQL" — would replace the decision the user made
+on the same topic. The model reading facts is shown the report labelled
+`subagent report`, never as the user.
 
 ---
 

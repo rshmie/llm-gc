@@ -204,3 +204,21 @@ class TestFactsAreReadOncePerCollection:
 
         assert asyncio.run(memory.condense([])) == []
         assert reader.asked == []
+
+
+def _report(index: int, text: str = "<agent-message>Found 42 test files in tests/.</agent-message>") -> Message:
+    return Message(role="user", content=text, token_count=30, turn_index=index, relayed=True)
+
+
+class TestARelayedReportIsNotTheUsers:
+    """A background subagent's report arrives under the user role, but the user did not write it."""
+
+    def test_it_joins_the_exchange_that_started_the_subagent(self):
+        turns = [_user(0), _assistant(1, calls=("a",)), _results(2, ("a",)), _assistant(3), _report(4), _assistant(5),
+                 _user(6), _assistant(7)]
+        assert _indices(group_exchanges(turns)) == [[0, 1, 2, 3, 4, 5], [6, 7]]
+
+    def test_it_is_never_the_index_line(self):
+        writer = OpeningWordsIndexWriter()
+        turns = [_report(0), _user(1, "Which runner do we use?"), _assistant(2)]
+        assert writer.write(turns) == "Which runner do we use?"
