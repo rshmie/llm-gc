@@ -17,10 +17,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from llm_gc.config import GCConfig
-from llm_gc.engine.switch_policy import CacheState
+from llm_gc.engine.switch_policy import CacheState, SwitchReason
 from llm_gc.engine import build_gc_service
 from llm_gc.engine.generations.front import FRONT_HEADER
-from llm_gc.events import EventBus
+from llm_gc.events import EventBus, EventType
 from llm_gc.llm import FakeProvider, LLMResponse, StopReason
 from llm_gc.models import ClientOrigin
 from llm_gc.proxy import SESSION_HEADER, create_app
@@ -1638,3 +1638,61 @@ class TestTheCacheIsWatched:
         watch, clock, session_id = self._answered(self.CACHE_READ, status=429)
         clock[0] += 3600
         assert watch.state(session_id) is CacheState.WARM
+
+
+class TestAPreparedCutWaitsForTheRightRequest:
+    """With the cache warm, a prepared cut waits; a cold cache or the stale bound switches it in."""
+
+    CACHED = {**UPSTREAM_OK, "usage": {"input_tokens": 12, "cache_read_input_tokens": 54_000,
+                                        "cache_creation_input_tokens": 1_700, "output_tokens": 18}}
+    # No saving repays a thousandfold, so on a warm cache only the bound could switch a cut in. On the
+    # 200-token window, eight exchanges stage a cut of about 156 stale tokens: under a bound of the
+    # whole window, over one of half of it.
+    PATIENT = {"min_saving_share": 1000.0}
+
+    def _client(self, **config):
+        client, service, _, seen = _proxy(lambda request: httpx2.Response(200, json=self.CACHED), **config)
+        clock = [1_000.0]
+        client.app.state.metrics.cache_watch = CacheWatch(clock=lambda: clock[0])
+        return client, service, seen, clock
+
+    @staticmethod
+    def _ask(client, seen, history: list[dict]) -> list[dict]:
+        """One more exchange of the same conversation; returns the messages forwarded for it."""
+        history.append({"role": "user", "content": f"question {len(history) // 2}: we went over the storage layer, "
+                                                   "retention, and the rollout plan again"})
+        client.post("/v1/messages", json={"model": "m", "max_tokens": 64, "messages": history},
+                    headers={"x-api-key": API_KEY, SESSION_HEADER: "s"})
+        history.append({"role": "assistant", "content": UPSTREAM_OK["content"]})
+        return json.loads(seen[-1].content)["messages"]
+
+    def test_on_a_warm_cache_a_cut_that_would_not_repay_its_rewrite_waits(self):
+        client, service, seen, _ = self._client(max_stale_ratio=1.0, **self.PATIENT)
+        history: list[dict] = []
+        forwarded = [self._ask(client, seen, history) for _ in range(8)]
+
+        assert not any(_is_front(message) for request in forwarded for message in request), "sent as written"
+        assert service.session_manager.store.get("s").snapshot.staged is not None, "prepared, waiting"
+
+    def test_the_waiting_cut_is_switched_in_once_the_cache_goes_cold(self):
+        client, service, seen, clock = self._client(max_stale_ratio=1.0, **self.PATIENT)
+        history: list[dict] = []
+        for _ in range(8):
+            self._ask(client, seen, history)
+
+        clock[0] += 3600   # the person steps away; the provider's entry expires
+        forwarded = self._ask(client, seen, history)
+
+        assert _is_front(forwarded[0]), "the cold request carries the collection"
+        snapshot = service.session_manager.store.get("s").snapshot
+        assert snapshot.staged is None and snapshot.cut_count == 1
+
+    def test_on_a_warm_cache_the_stale_bound_switches_it_in_for_the_models_sake(self):
+        client, service, seen, _ = self._client(max_stale_ratio=0.5, **self.PATIENT)
+        reasons = []
+        service.event_bus.subscribe(EventType.GC_FINISHED, lambda event: reasons.append(event.data["gc_result"].switch_reason))
+        history: list[dict] = []
+        forwarded = [self._ask(client, seen, history) for _ in range(8)]
+
+        assert any(_is_front(message) for message in forwarded[-1])
+        assert SwitchReason.STALE_WEIGHT_AT_BOUND in reasons and SwitchReason.CACHE_COLD not in reasons

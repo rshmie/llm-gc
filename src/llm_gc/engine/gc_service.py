@@ -21,10 +21,10 @@ from llm_gc.engine.generations.front import (
 )
 from llm_gc.engine.generations.generational_memory import GenerationalMemory
 from llm_gc.engine.generations.planning import Bands, LevelOptions, Plan, plan_levels
-from llm_gc.engine.inspection import CutPreview, SessionInspection, batch_worth_cutting
+from llm_gc.engine.inspection import CutPreview, SessionInspection, SwitchPreview, batch_worth_cutting
 from llm_gc.events import Event, EventBus, EventType
 from llm_gc.engine.pause import ModelCallPause
-from llm_gc.engine.switch_policy import CacheState, SwitchDecision, SwitchReason, decide_switch
+from llm_gc.engine.switch_policy import CacheState, SwitchReason, decide_switch
 from llm_gc.exceptions import CompactionRefused, LLMGCError, LLMRateLimitError
 from llm_gc.llm.metering import measure_model_usage
 from llm_gc.models import KnowledgeEntry, Message
@@ -209,28 +209,30 @@ class GcService:
         state = self.session_manager.store.get(session_id)
         if state is None or (staged := state.snapshot.staged) is None:
             return None
-        decision = self._switch_decision(state, staged, cache, requested)
-        if decision is None or not decision.switch:
+        preview = self._switch_preview(state, staged, cache, requested)
+        if preview is None or not preview.decision.switch:
             return None
         before = state.snapshot
         applied = apply_aging(before, staged.delta)
         state.snapshot = replace(applied.snapshot, staged=None, thinking_valid_from=None,
                                  cut_count=applied.snapshot.cut_count + 1)
         self._announce(session_id, staged.delta, applied)
-        result = self._switched_result(before, state.snapshot, staged, decision.reason, start)
-        logger.debug("collection switched in", extra={"session_id": session_id, "reason": decision.reason.value,
+        result = self._switched_result(before, state.snapshot, staged, preview.decision.reason, start)
+        logger.debug("collection switched in", extra={"session_id": session_id, "reason": preview.decision.reason.value,
                                                       "young_remaining": len(state.snapshot.young)})
         self.event_bus.emit(Event(event_type=EventType.GC_FINISHED,
                                   data={"gc_run_id": result.gc_run_id, "session_id": session_id, "gc_result": result}))
         return result
 
-    def inspect(self, session_id: str) -> SessionInspection | None:
+    def inspect(self, session_id: str, cache: CacheState = CacheState.COLD) -> SessionInspection | None:
         """A read-only view of one session, or None if there is no such session.
 
-        Uses the same rendering as `gc_collect` and the same planning as `gc_age`,
-        so the view cannot drift from what the engine does. No model calls, and
-        unlike the request-path methods it never creates a session or resets its
-        idle clock: looking must not change what is looked at.
+        Uses the same rendering as `gc_collect`, the same planning as `gc_age` and
+        the same measures as `gc_switch`, so the view cannot drift from what the
+        engine does. `cache` is the state the next request would meet, for the verdict
+        on a staged cut. No model calls, and unlike the request-path methods it never
+        creates a session or resets its idle clock: looking must not change what is
+        looked at.
         """
         state = self.session_manager.store.get(session_id)
         if state is None:
@@ -256,6 +258,7 @@ class GcService:
             context_window=window,
             recap_budget=self.gc_config.recap_budget(window),
             collection_enabled=state.collection_enabled,
+            staged=self._switch_preview(state, snapshot.staged, cache) if snapshot.staged is not None else None,
         )
 
     def use_context_window(self, session_id: str, context_window: int) -> None:
@@ -555,23 +558,28 @@ class GcService:
                                                          unread[0][1]))
         return degradations
 
-    def _switch_decision(self, state: SessionState, staged: StagedCut, cache: CacheState,
-                         requested: bool) -> SwitchDecision | None:
-        """What the switch policy says about the session's staged cut now.
+    def _switch_preview(self, state: SessionState, staged: StagedCut, cache: CacheState,
+                        requested: bool = False) -> SwitchPreview | None:
+        """The measures the switch policy weighs for the session's staged cut now, and its verdict.
 
         None when it may not be switched in at all: collection is off for the session, or
-        a rewind has left fewer turns after the cut than stay verbatim.
+        a rewind has left fewer turns after the cut than stay verbatim. The one place the
+        measures are taken, for the switch and for the dashboard alike.
         """
         if not state.collection_enabled:
             return None
         tail = [turn for turn in state.snapshot.young if turn.turn_index not in staged.delta.departed_turns]
         if len(tail) < self.gc_config.last_n_turns_to_keep:
             return None
-        return decide_switch(saving_tokens=staged.saving_tokens,
-                             rewritten_tokens=staged.front_tokens + sum(turn.token_count for turn in tail),
-                             stale_tokens=staged.stale_tokens,
-                             stale_bound_tokens=self.gc_config.stale_bound(state.context_window),
-                             min_saving_share=self.gc_config.min_saving_share, cache=cache, requested=requested)
+        rewritten = staged.front_tokens + sum(turn.token_count for turn in tail)
+        bound = self.gc_config.stale_bound(state.context_window)
+        share = self.gc_config.min_saving_share
+        decision = decide_switch(saving_tokens=staged.saving_tokens, rewritten_tokens=rewritten,
+                                 stale_tokens=staged.stale_tokens, stale_bound_tokens=bound, min_saving_share=share,
+                                 cache=cache, requested=requested)
+        return SwitchPreview(saving_tokens=staged.saving_tokens, rewritten_tokens=rewritten,
+                             stale_tokens=staged.stale_tokens, stale_bound_tokens=bound, min_saving_share=share,
+                             cache=cache, decision=decision)
 
     def _switched_result(self, before: GenerationSnapshot, after: GenerationSnapshot, staged: StagedCut,
                          reason: SwitchReason, start: float) -> GCResult:

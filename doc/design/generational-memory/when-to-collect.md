@@ -1,10 +1,5 @@
 # When to Collect
 
-> **Being built.** Staging, the switch and the proxy's reading of the cache state are in
-> the code, but the proxy does not pass that state to the switch yet: until it does, it
-> treats every request as cold, so a staged cut is switched in at the next request that
-> carries any saving.
-
 ## How it works
 
 A collection has two halves, and they cost different things, so they have different
@@ -238,10 +233,12 @@ The window is read per model, as the recap's budget is.
 
 ### What the dashboard shows
 
-The next-collection card names, for the staged cut: its stale weight against the floor and
-the bound; its saving against the share times what it would rewrite; the cache state and
-the gap behind it; and the zone it is in, with the reason it switched or is waiting. A cut
-that waits says what it waits for.
+Before a cut is prepared, the next-collection card shows the two conditions for preparing
+one. Once one is prepared, it shows the three ways it is switched in, each with its state:
+whether the cache is cold, with the idle time and lifetime behind that; its saving against
+the share times what it would make the provider cache again; and its stale weight against
+the bound. Its first line says whether the next request switches it in and why, or that it
+waits and what switching now would cost. A cut that waits always says so.
 
 ## Why it exists
 

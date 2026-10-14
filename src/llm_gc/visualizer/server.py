@@ -21,7 +21,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from llm_gc.config.constants import APP_VERSION
 from llm_gc.engine import AbandonedCut, AgingDegradation, CutOutcome, GcService, GCStatus
 from llm_gc.engine.pause import Pause
-from llm_gc.engine.switch_policy import CacheState
+from llm_gc.engine.switch_policy import CacheReading, CacheState
 from llm_gc.monitoring import ContextHealth, ContextHealthMonitor
 from llm_gc.monitoring.knowledge_state import KnowledgeState, project_knowledge_state
 from llm_gc.session import SessionState
@@ -98,6 +98,7 @@ def create_dashboard_app(
     read_proxy_stats: Callable[[], dict[str, Any]] | None = None,
     transcripts: TranscriptRecorder | None = None,
     read_trace: Callable[[str], dict[str, Any] | None] | None = None,
+    read_cache: Callable[[str], CacheReading] | None = None,
     allowed_hosts: list[str] | None = None,
 ) -> FastAPI:
     """The dashboard over a running engine.
@@ -111,6 +112,9 @@ def create_dashboard_app(
             dashboard still shows what the model receives, but not what was said.
         read_trace: A client session's trace from the proxy's request log, passed as
             a function for the same reason as `read_proxy_stats`.
+        read_cache: A conversation's prompt cache as the proxy reads it, for the verdict
+            on a staged cut. Without it the verdict is for a cold cache, which is what a
+            conversation with no proxy reading its cache meets.
         allowed_hosts: Host names served; localhost by default.
 
     Every route is `async` on purpose: FastAPI runs plain `def` routes in a thread
@@ -140,7 +144,8 @@ def create_dashboard_app(
             config={"context_window": config.context_window, "min_cut_tokens": config.min_cut_tokens,
                     "last_n_turns_to_keep": config.last_n_turns_to_keep, "keep_threshold": config.keep_threshold,
                     "archive_threshold": config.archive_threshold, "level_margin": config.level_margin,
-                    "max_recap_tokens": config.max_recap_tokens,
+                    "max_recap_tokens": config.max_recap_tokens, "min_saving_share": config.min_saving_share,
+                    "max_stale_ratio": config.max_stale_ratio,
                     # Whose turns facts are read from: without a model, only the user's.
                     "facts_read_from": sorted(gc_service.generational_memory.fact_reader.speakers)},
             proxy=read_proxy_stats() if read_proxy_stats is not None else None,
@@ -149,10 +154,11 @@ def create_dashboard_app(
 
     @app.get("/api/sessions/{session_id}", response_model=KnowledgeState)
     async def session_knowledge(session_id: str) -> KnowledgeState | JSONResponse:
-        inspection = gc_service.inspect(session_id)
+        cache = read_cache(session_id) if read_cache is not None else None
+        inspection = gc_service.inspect(session_id, cache=cache.state if cache is not None else CacheState.COLD)
         if inspection is None:
             return _session_not_found(session_id)
-        return project_knowledge_state(inspection)
+        return project_knowledge_state(inspection, cache)
 
     @app.get("/api/sessions/{session_id}/activity", response_model=ContextHealth)
     async def session_activity(session_id: str) -> ContextHealth | JSONResponse:

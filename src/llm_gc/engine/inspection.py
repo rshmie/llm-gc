@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from llm_gc.engine.generations.front import Front
+from llm_gc.engine.switch_policy import CacheState, SwitchDecision
 from llm_gc.models import Message
 from llm_gc.models.generation_snapshot import DetailLevel, GenerationSnapshot
 
@@ -54,6 +55,23 @@ class CutPreview:
 
 
 @dataclass(frozen=True)
+class SwitchPreview:
+    """A staged cut, the measures the switch policy weighs, and what it would decide for the next request.
+
+    The same measures `gc_switch` decides on, so a dashboard cannot show a different
+    verdict from the one the request path reaches.
+    """
+
+    saving_tokens: int          # what its cut removes from the prompt
+    rewritten_tokens: int       # what the provider would cache again: the front it renders plus the tail now
+    stale_tokens: int           # what its turns the plan condenses add up to
+    stale_bound_tokens: int     # the most stale weight the model may carry
+    min_saving_share: float     # when warm, how many times `rewritten_tokens` the saving must be
+    cache: CacheState           # the state it was decided for
+    decision: SwitchDecision
+
+
+@dataclass(frozen=True)
 class SessionInspection:
     """One session at one moment: what it holds, what the model is sent, and what comes next."""
 
@@ -67,6 +85,7 @@ class SessionInspection:
     context_window: int       # the window the recap is sized for
     recap_budget: int
     collection_enabled: bool  # False: recorded and shown, never collected, so no collection is forecast
+    staged: SwitchPreview | None = None   # set while a prepared cut waits to be switched in
 
     @property
     def context(self) -> list[Message]:

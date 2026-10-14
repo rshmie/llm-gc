@@ -66,7 +66,8 @@ def serve_proxy(service: GcService, settings: ProxySettings, *, http_client: htt
                                summaries=metrics.traffic.session_summaries(client_session))
 
         apps.append((create_dashboard_app(service, monitor, read_proxy_stats=metrics.as_dict, transcripts=transcripts,
-                                          read_trace=read_trace), settings.dashboard_port))
+                                          read_trace=read_trace, read_cache=metrics.cache_watch.reading),
+                     settings.dashboard_port))
 
     # No access log: the dashboard polls, and a line per poll buried the proxy's own lines,
     # which already record each request. uvicorn's access logger is shared by the process,

@@ -209,3 +209,35 @@ class TestASwitchWhileAPassIsRunning:
         assert service.gc_switch(SESSION, CacheState.COLD) is not None
         held = [turn for span in service.session_manager.store.get(SESSION).snapshot.old for turn in span.turn_indices]
         assert sorted(held) == list(range(8)), "every turn in exactly one span"
+
+
+class TestTheInspectionShowsTheSwitchsVerdict:
+    def test_the_verdict_shown_is_the_one_the_switch_reaches(self):
+        service, _ = _service(**PATIENT)
+        _record(service, 0, 1, 2, 3)
+        _prepare(service)
+
+        warm = service.inspect(SESSION, cache=CacheState.WARM).staged
+        cold = service.inspect(SESSION, cache=CacheState.COLD).staged
+
+        assert warm is not None and (warm.decision.switch, warm.decision.reason) == (
+            False, SwitchReason.WAITING_FOR_PAYBACK)
+        assert cold is not None and (cold.decision.switch, cold.decision.reason) == (True, SwitchReason.CACHE_COLD)
+        assert service.gc_switch(SESSION, CacheState.WARM) is None
+        assert service.gc_switch(SESSION, CacheState.COLD).switch_reason is cold.decision.reason
+        assert service.inspect(SESSION).staged is None, "nothing waits once it is switched in"
+
+    def test_it_shows_the_measures_the_policy_weighs(self):
+        service, _ = _service(**PATIENT)
+        state = _record(service, 0, 1, 2, 3)
+        _prepare(service)
+        staged = state.snapshot.staged
+
+        preview = service.inspect(SESSION, cache=CacheState.WARM).staged
+
+        tail = [turn for turn in state.snapshot.young if turn.turn_index not in staged.delta.departed_turns]
+        assert (preview.saving_tokens, preview.stale_tokens) == (staged.saving_tokens, staged.stale_tokens)
+        assert preview.rewritten_tokens == staged.front_tokens + sum(turn.token_count for turn in tail)
+        assert preview.stale_bound_tokens == service.gc_config.stale_bound(state.context_window)
+        assert preview.min_saving_share == 1000.0
+

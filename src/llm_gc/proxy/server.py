@@ -30,7 +30,6 @@ from llm_gc.config.constants import APP_VERSION
 from llm_gc.engine.gc_result import GCResult
 from llm_gc.engine.gc_service import GcService
 from llm_gc.engine.gc_status import GCStatus
-from llm_gc.engine.switch_policy import CacheState
 from llm_gc.events import Event, EventType
 from llm_gc.exceptions import ConfigError
 from llm_gc.llm.metering import ModelUsage
@@ -555,8 +554,10 @@ async def _apply_gc(
         return original_body, client_tokens
 
     gc_service: GcService = app.state.gc_service
+    metrics: ProxyMetrics = app.state.metrics
     # A staged cut is switched in, or not, as this request is built: then it is the first to carry it.
-    gc_service.gc_switch(session_id, CacheState.COLD)
+    # Whether its cache would serve this request decides whether switching costs a rewrite.
+    gc_service.gc_switch(session_id, metrics.cache_watch.state(session_id))
     collected = await gc_service.gc_collect(session_id)
     if [message.turn_index for message in collected] == list(range(len(history))):
         return original_body, client_tokens

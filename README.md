@@ -279,10 +279,13 @@ Open the dashboard at http://127.0.0.1:9901. A conversation appears there from i
 message: the first has no history yet for LLM-GC to recognise it by.
 
 At first every message is sent whole, so the line says `(100%)`. Once older turns that LLM-GC
-could condense add up (1,000 tokens' worth, by default), it runs a *collection*: the dashboard
-says *Last collection …*, and the percentage drops. With Claude Code, file reads and command
-output get there within a few messages. To see one sooner, press **Run GC now** on the
-dashboard, or restart with `llm-gc start --dashboard --min-cut-tokens 300`.
+could condense add up (1,000 tokens' worth, by default), it prepares a *collection* in the
+background. The collection takes effect at the request where it costs least: at once when the
+provider's prompt cache has expired (after five idle minutes, by default) or is not used; while
+the cache is warm, only once it saves at least as much as it makes the provider cache again, or
+once the model carries too much that has gone quiet. Then the dashboard says *Last collection …*
+and the percentage drops. The Engine tab's *Next collection* card says which of these it is
+waiting for. To see one now, press **Run GC now** on the dashboard.
 
 `llm-gc stats`, in a terminal with the environment activated, prints the totals so far, what the provider reported, and each Claude Code session's conversations with what each sent and saved.
 
@@ -354,7 +357,7 @@ condensed too. The client's own instructions are not: its system prompt, its too
 the instructions it writes into messages (Claude Code's CLAUDE.md, memory and notes) reach
 the model word for word with every request.
 
-A collection decides whether it is worth making before it pays for a single summary. Collecting in batches means the start of the prompt changes rarely, so the provider's prompt cache keeps working, and none of it runs while a request waits.
+A collection is prepared in the background, and decides whether it is worth making before it pays for a single summary. It changes the prompt only when that is cheap or needed: when the provider's cache has expired anyway, when the saving repays caching the prompt again, or when the model carries too much that has gone quiet. None of it runs while a request waits.
 
 ### Generational memory
 
@@ -419,13 +422,14 @@ LLM-GC borrows principles from garbage collection — a concept pioneered in Lis
 | Sweep phase | Plan every span's detail level: kept, summarised, archived |
 | Compaction | Rewrite the start of the prompt as one recap of every span at its level |
 | Minor collection | A collection: a batch of older turns leaves the young generation as spans |
-| Eden filling up | The turns a collection would condense reaching `min_cut_tokens` |
+| Eden filling up | Turns that have gone quiet reaching `min_cut_tokens`: a cut is prepared |
+| Safepoint | The request a prepared cut is switched in at: where the provider's cache is cold, the cut repays caching the prompt again, or the stale bound is reached |
 | Young generation | Recent turns (full detail) |
 | Old generation | Older exchanges, each shown at a detail level |
 | Permanent generation | Facts, and what replaced them (never discarded) |
-| GC pause | None on the request: the check runs after each reply, in about 10 ms, and a collection's summaries are written then too |
-| Concurrent GC | Collections run between turns, while the user reads the reply |
-| GC tuning flags | Level lines, recap budget, batch size and newest turns kept |
+| GC pause | None on the request: a cut is prepared after each reply, summaries included, and switching it in makes no model call |
+| Concurrent GC | Cuts are prepared between turns, while the user reads the reply |
+| GC tuning flags | Level lines, recap budget, batch size, newest turns kept, saving share and stale bound |
 
 ### Where the analogy breaks — and why that matters more than where it holds
 
@@ -472,9 +476,10 @@ The **?** button explains the page. The **Conversation** tab shows every turn as
 was said beside what the model still has of it — word for word, kept, compacted,
 archived, or out of view — and each fact exactly as the model is sent it. The
 **Engine** tab shows the three generations, how each turn is scored, every check
-and collection, and the proxy's counters. **Run GC now** collects the selected
-conversation without waiting for the minimum. `llm-gc start --dashboard
---min-cut-tokens 300` makes collections happen within a short conversation.
+and collection, and the proxy's counters. **Run GC now** prepares a cut for the selected
+conversation without waiting for the minimum and switches it in at once. With `min_saving_share`
+set to 0, every prepared cut is switched in as soon as it saves something; together with
+`llm-gc start --dashboard --min-cut-tokens 300`, collections happen within a short conversation.
 
 ### Without a key
 
@@ -537,12 +542,12 @@ async def on_turn(session_id: str, text: str, role: str, index: int) -> list[Mes
 - Generational memory (young / old / permanent): every span keeps its original turns; facts are filed with supersession, and a span whose decision was later replaced says so
 - A summarising compactor that refuses any summary that does not shrink what it replaces
 - Facts read by a model once per collection, filed under the topic they change; only the user changes a decision the user made
-- Collections: the prompt changes only at its start, the recap, in batches, so the provider's prompt cache and the model's thinking blocks stay valid
+- Collections prepared in the background and switched in when the provider's cache is cold, when the saving repays caching the prompt again, or when stale material reaches its bound; the prompt changes only at its start, so between collections the cache and the model's thinking blocks stay valid
 - An Anthropic Messages proxy, streaming included, that finds each conversation by its content, passes the client's other calls through, and never makes a reply wait on GC
 - Agent conversations: tool rounds condensed like words, the client's instructions never condensed — verified with Claude Code
 - Per-session state that reads never wait for
 - A live dashboard: what the model has of every message and fact, the newest request and reply, and what LLM-GC did
-- Configurable level lines, margin, recap budget and batch size
+- Configurable level lines, margin, recap budget, batch size, saving share and stale bound
 - A decision-survival check: scripted conversations asked about their own facts, through LLM-GC and sent whole
 
 **In scope — not built yet:**
@@ -676,7 +681,9 @@ environment they take `LLM_GC_ENGINE__`:
 
 | `GCConfig` | Flag | Default | What it decides |
 |---|---|---|---|
-| `min_cut_tokens` | `--min-cut-tokens` | 1000 | tokens a collection must summarise or archive before it runs |
+| `min_cut_tokens` | `--min-cut-tokens` | 1000 | tokens of older turns to summarise or archive before a cut is prepared |
+| `min_saving_share` | | 1.0 | with the provider's cache warm, how many times what switching a cut in makes it cache again the cut must save; 0 switches it in as soon as it saves anything |
+| `max_stale_ratio` | | 0.1 | share of the window the model may carry that a prepared cut would condense; at it, the cut is switched in whatever the cache costs |
 | `last_n_turns_to_keep` | `--keep-last` | 5 | newest messages always sent word for word |
 | `context_window` | `--context-window` | 128,000 (proxy: 200,000) | the model's window; the recap budget is a share of it |
 | `keep_threshold` | | 0.7 | score at or above which a span is quoted whole |

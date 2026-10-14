@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from llm_gc.config import GCConfig
 from llm_gc.engine import build_gc_service
 from llm_gc.engine.gc_service import GcService
+from llm_gc.engine.switch_policy import CacheReading, CacheState
 from llm_gc.llm import FakeProvider, LLMResponse, StopReason
 from llm_gc.models import ClientOrigin, Message
 from llm_gc.monitoring import ContextHealthMonitor
@@ -386,3 +387,38 @@ def test_the_overview_says_while_llm_gc_is_yielding_to_a_rate_limit():
 
     pause = client.get("/api/overview").json()["pause"]
     assert pause["reason"] == "the upstream rate-limited a request from the client" and pause["until"]
+
+
+class TestAPreparedCutIsShownWithWhatDecidesIt:
+    @staticmethod
+    def _staged(service: GcService, session_id: str, turns: int) -> None:
+        """Record turns and prepare a cut, without switching it in."""
+        async def scenario() -> None:
+            for index in range(turns):
+                text = f"the topic{index % 8} is version {index}. " + "We walked through throughput at length. " * 4
+                turn = Message(role="user" if index % 2 == 0 else "assistant", content=text,
+                               token_count=count_tokens(text), turn_index=index)
+                service.gc_record(session_id, [turn], [f"{session_id}-{index}"])
+            await service.gc_age(session_id, ignore_batch_minimum=True)
+
+        asyncio.run(scenario())
+
+    def test_the_verdict_is_for_the_cache_the_proxy_reads(self):
+        service, monitor = _engine()
+        self._staged(service, "s", 12)
+        reading = CacheReading(CacheState.WARM, uses_cache=True, idle_s=40.0, lifetime_s=300.0)
+        body = _client(service, monitor, read_cache=lambda session_id: reading).get("/api/sessions/s").json()
+
+        assert body["cache"] == {"state": "warm", "uses_cache": True, "idle_s": 40.0, "lifetime_s": 300.0}
+        staged = body["staged"]
+        assert staged is not None and staged["switches"] == (staged["reason"] != "waiting_for_payback")
+        assert staged["rewritten_tokens"] > 0 and staged["stale_bound_tokens"] > 0
+
+    def test_without_a_proxy_reading_the_cache_the_verdict_is_for_a_cold_one(self):
+        service, monitor = _engine()
+        self._staged(service, "s", 12)
+        body = _client(service, monitor).get("/api/sessions/s").json()
+
+        assert body["cache"] is None
+        assert body["staged"]["switches"] is True and body["staged"]["reason"] == "cache_cold"
+

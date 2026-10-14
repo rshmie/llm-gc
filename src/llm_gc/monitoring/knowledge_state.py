@@ -13,6 +13,7 @@ from enum import Enum
 from pydantic import BaseModel
 
 from llm_gc.engine.inspection import SessionInspection
+from llm_gc.engine.switch_policy import CacheReading, CacheState
 from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.generation_snapshot import DetailLevel, Span
 from llm_gc.models.knowledge_entry import KnowledgeStatus
@@ -89,6 +90,28 @@ class NextCutState(BaseModel):
     estimated_saving: int                 # what the cut would save at estimated summary sizes
 
 
+class StagedCutState(BaseModel):
+    """A prepared cut waiting to be switched in, and what decides when: the switch policy's own measures."""
+
+    turns: list[int]                      # the verbatim turns it would take; the next pass may prepare more
+    saving_tokens: int
+    rewritten_tokens: int
+    stale_tokens: int
+    stale_bound_tokens: int
+    min_saving_share: float
+    switches: bool                        # whether the next request would switch it in
+    reason: str                           # the policy's reason, as `SwitchReason` names it
+
+
+class CacheReadingState(BaseModel):
+    """The provider's cache for this conversation as the proxy reads it, and from what."""
+
+    state: CacheState
+    uses_cache: bool | None               # None before any request was answered
+    idle_s: float | None
+    lifetime_s: float | None
+
+
 class KnowledgeState(BaseModel):
     """Everything the dashboard shows about one conversation's content."""
 
@@ -108,12 +131,18 @@ class KnowledgeState(BaseModel):
     context_window: int                   # the window of the model being called, as the recap is sized for it
     recap_budget: int
     collected: bool                       # False: recorded and shown, never collected
+    staged: StagedCutState | None = None  # set while a prepared cut waits to be switched in
+    cache: CacheReadingState | None = None   # None when no proxy reads the cache beside this dashboard
 
 
-def project_knowledge_state(inspection: SessionInspection) -> KnowledgeState:
-    """Pivot one session's inspection from generations to spans, turns and facts."""
+def project_knowledge_state(inspection: SessionInspection, cache: CacheReading | None = None) -> KnowledgeState:
+    """Pivot one session's inspection from generations to spans, turns and facts.
+
+    `cache` is the reading the inspection's verdict on a staged cut was made for, shown beside it.
+    """
     snapshot = inspection.snapshot
     spans = _span_states(inspection)
+    staged = inspection.staged
     return KnowledgeState(
         session_id=inspection.session_id,
         version=snapshot.version,
@@ -136,6 +165,13 @@ def project_knowledge_state(inspection: SessionInspection) -> KnowledgeState:
         context_window=inspection.context_window,
         recap_budget=inspection.recap_budget,
         collected=inspection.collection_enabled,
+        staged=StagedCutState(turns=sorted(snapshot.staged.delta.departed_turns) if snapshot.staged else [],
+                              saving_tokens=staged.saving_tokens, rewritten_tokens=staged.rewritten_tokens,
+                              stale_tokens=staged.stale_tokens, stale_bound_tokens=staged.stale_bound_tokens,
+                              min_saving_share=staged.min_saving_share, switches=staged.decision.switch,
+                              reason=staged.decision.reason.value) if staged is not None else None,
+        cache=CacheReadingState(state=cache.state, uses_cache=cache.uses_cache, idle_s=cache.idle_s,
+                                lifetime_s=cache.lifetime_s) if cache is not None else None,
     )
 
 

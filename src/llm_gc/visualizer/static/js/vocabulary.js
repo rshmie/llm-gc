@@ -74,6 +74,8 @@ export const TRACE_KINDS = {
 
 export const STATUS = {
   completed:                { tone: "good", icon: "✓", text: "collection made" },
+  staged:                   { tone: "", icon: "◷", text: "prepared: a cut waits to be switched in" },
+  discarded_history_changed: { tone: "", icon: "–", text: "discarded: the conversation was rewound while it ran" },
   bypassed_batch_too_small: { tone: "", icon: "–", text: "nothing to collect yet" },
   bypassed_no_saving:       { tone: "", icon: "–", text: "skipped: it would have made the prompt bigger" },
   bypassed_aging_in_flight: { tone: "", icon: "–", text: "skipped: a collection was already running" },
@@ -81,6 +83,13 @@ export const STATUS = {
   discarded_session_closed: { tone: "", icon: "–", text: "discarded: the conversation had closed" },
   bypassed_not_collected:   { tone: "", icon: "–", text: "not collected: recorded and sent as written" },
   bypassed_paused:          { tone: "", icon: "⏸", text: "paused: yielding to the upstream's rate limit" },
+};
+// Why a prepared cut is switched in with the next request, in the switch policy's order.
+export const SWITCH_REASON = {
+  requested: "Run GC now was pressed",
+  cache_cold: "the cache is cold, so the request is read in full anyway and switching costs nothing extra",
+  repays_rewrite: "it removes at least what it makes the provider cache again",
+  stale_weight_at_bound: "the model carries as much gone-quiet material as it may, so it is switched in whatever the cache costs",
 };
 // While the upstream is rate-limiting or overloaded, LLM-GC makes no model calls of its own.
 export const PAUSED_TEXT = "The upstream turned a request away as rate-limited or overloaded. LLM-GC's summaries and fact reads can go to the same upstream, often under the same credential, so they would compete with your requests for the same limit. LLM-GC makes no model calls of its own until the pause ends, and no collection starts meanwhile. Your requests are never held back: they are forwarded exactly as before, with the recap already made.";
@@ -123,7 +132,7 @@ export const HEIGHT = { verbatim: 100, kept: 100, compacted: 52, archived: 24, o
 export const CARD_INFO = {
   facts: ["What the model is told, fact by fact", "What the conversation settled, as topic: value notes, and how each one reaches the model. “How fact collection works”, below the facts, says how they are read and what each status means. Hover a status for its meaning."],
   generations: ["Generations", "Where each message lives, as in a generational garbage collector. New messages enter the young generation and are sent word for word. A collection moves older ones into the old generation as exchanges, each shown kept, compacted or archived by how much it matters now, and decided again at every collection. The facts read from every exchange are filed in the permanent generation, which also records what replaced what. The old generation is sent as the recap, at the start of the prompt, within its budget."],
-  next: ["Next collection", "GC checks after every reply, and a check collects when two things hold. First, enough older messages to condense: only those to be compacted or archived count, not ones kept word for word or the newest few, since those save nothing. Second, the result must be smaller than the prompt is now. That is estimated here from each summary's target size, the same estimate the collection checks before paying for any summary, and checked again on the real summaries before anything changes. Run GC now skips the first condition, never the second."],
+  next: ["Next collection", "A collection has two halves. After every reply, a pass prepares a cut when two things hold: enough older messages to condense (only those to be compacted or archived count, since keeping a message word for word saves nothing), and a result smaller than the prompt is now, estimated from each summary's target size before any summary is paid for and checked again on the real ones. Preparing changes nothing the model is sent. The prepared cut is switched in as a later request is built: at once if the provider's cache is cold, since that request is read in full anyway; on a warm cache only once the saving repays what the provider must cache again, or once what the model carries that has gone quiet reaches its bound. Run GC now prepares a cut and switches it in at once, but never one that would make the prompt bigger."],
   rate: ["How each exchange is scored", "Each dot is an exchange's score, from 0 to 1, against your two lines: kept from the upper one, archived below the lower one, compacted in between. Every exchange is scored again at every collection, so one the conversation returns to can rise. A score must clear a line by the margin to move, so an exchange near a line doesn't flip back and forth. When the recap is over its budget, the coldest exchanges lose detail first."],
   moves: ["What moved, and when", "Every collection in the recent checks, from its own record: each message it took and the level it was given, the earlier messages it showed with less or more detail, and any fact one of its messages replaced."],
   notmoved: ["What fell short, and why", "Parts of a collection that couldn't be done: a summary the safeguard rejected or that failed, facts that couldn't be read, or a recap over its budget. Each says what the model gets instead. Nothing is lost: an exchange always keeps its words."],

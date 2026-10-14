@@ -13,7 +13,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from llm_gc.engine.switch_policy import CacheState
+from llm_gc.engine.switch_policy import CacheReading, CacheState
 from llm_gc.proxy.traffic import MAX_CONVERSATIONS, ProviderUsage
 
 # How long past its lifetime an entry must be before it counts as gone. The proxy times a
@@ -68,7 +68,11 @@ class CacheWatch:
             watched.last_used_at, watched.lifetime_s = started_at, lifetime_s
 
     def state(self, conversation_id: str) -> CacheState:
-        """Warm or cold for the request being built now. Unknown counts as warm.
+        """Warm or cold for the request being built now. Unknown counts as warm."""
+        return self.reading(conversation_id).state
+
+    def reading(self, conversation_id: str) -> CacheReading:
+        """The state for the request being built now, with what it was read from.
 
         Cold when the conversation's replies show it does not use the cache, or when it has
         been idle longer than its entry lives. With no answered request yet, nothing says
@@ -76,8 +80,8 @@ class CacheWatch:
         """
         watched = self._watched.get(conversation_id)
         if watched is None:
-            return CacheState.WARM
-        if not watched.uses_cache:
-            return CacheState.COLD
+            return CacheReading(CacheState.WARM)
         idle_s = self._clock() - watched.last_used_at
-        return CacheState.COLD if idle_s > watched.lifetime_s + EXPIRY_MARGIN_S else CacheState.WARM
+        cold = not watched.uses_cache or idle_s > watched.lifetime_s + EXPIRY_MARGIN_S
+        return CacheReading(CacheState.COLD if cold else CacheState.WARM, uses_cache=watched.uses_cache,
+                            idle_s=idle_s, lifetime_s=watched.lifetime_s)

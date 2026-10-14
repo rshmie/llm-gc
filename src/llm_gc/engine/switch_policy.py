@@ -23,6 +23,16 @@ class CacheState(Enum):
     COLD = "cold"
 
 
+@dataclass(frozen=True, slots=True)
+class CacheReading:
+    """A conversation's cache state, with what it was read from, for showing to a person."""
+
+    state: CacheState
+    uses_cache: bool | None = None    # whether any reply used the cache; None before one was answered
+    idle_s: float | None = None       # since its newest answered request began
+    lifetime_s: float | None = None   # how long that request asked the provider to keep its entry
+
+
 class SwitchReason(Enum):
     """Why a cut was switched in, or why it was not. Stable: the dashboard and events carry it."""
 

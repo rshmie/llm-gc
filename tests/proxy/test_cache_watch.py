@@ -120,3 +120,28 @@ class TestBounds:
             watch.observe(conversation, started_at=clock.now, lifetime_s=FIVE_MINUTES, usage=UNCACHED)
         assert watch.state("a") is CacheState.WARM, "forgotten: unknown, so warm"
         assert watch.state("c") is CacheState.COLD
+
+
+class TestTheReadingSaysWhatItWasReadFrom:
+    def test_a_watched_conversation_reports_its_idle_time_and_lifetime(self):
+        watch, clock = _watch()
+        started = _answered(watch, clock)
+        clock.now = started + 60
+
+        reading = watch.reading("c")
+
+        assert (reading.state, reading.uses_cache, reading.idle_s, reading.lifetime_s) == (
+            CacheState.WARM, True, 60.0, FIVE_MINUTES)
+
+    def test_an_unknown_conversation_reads_warm_with_nothing_behind_it(self):
+        watch, _ = _watch()
+        reading = watch.reading("never-seen")
+        assert (reading.state, reading.uses_cache, reading.idle_s, reading.lifetime_s) == (
+            CacheState.WARM, None, None, None)
+
+    def test_a_conversation_that_never_caches_reads_cold_and_says_so(self):
+        watch, clock = _watch()
+        _answered(watch, clock, usage=UNCACHED)
+        reading = watch.reading("c")
+        assert (reading.state, reading.uses_cache) == (CacheState.COLD, False)
+
