@@ -9,7 +9,9 @@ from llm_gc.exceptions import ConfigError
 from llm_gc.models import Message
 from llm_gc.models.generation_snapshot import DetailLevel, Span
 from llm_gc.proxy.anthropic_translation import (
+    DEFAULT_CACHE_LIFETIME_S,
     Instruction,
+    cache_lifetime_s,
     carry_instructions,
     extract_instructions,
     extract_messages,
@@ -249,3 +251,43 @@ class TestARelayedReportIsMarked:
                          relayed=True)
         text = span_text(Span(turns=(report,), level=DetailLevel.KEPT), Annotations())
         assert "(turn 4, subagent report)" in text and "(turn 4, user)" not in text
+
+
+def _marked(ttl: str | None = None) -> dict:
+    return {"type": "ephemeral", **({"ttl": ttl} if ttl is not None else {})}
+
+
+class TestTheCacheLifetimeAsked:
+    """The lifetime of the entry covering the conversation: what a collection makes the provider write again."""
+
+    def test_a_marker_naming_no_lifetime_gets_the_providers_default(self):
+        payload = {"messages": [{"role": "user", "content": [{"type": "text", "text": "hi",
+                                                              "cache_control": _marked()}]}]}
+        assert cache_lifetime_s(payload) == DEFAULT_CACHE_LIFETIME_S == 300.0
+
+    def test_an_hour_is_read_as_an_hour(self):
+        payload = {"messages": [{"role": "user", "content": [{"type": "text", "text": "hi",
+                                                              "cache_control": _marked("1h")}]}]}
+        assert cache_lifetime_s(payload) == 3600.0
+
+    def test_the_last_marker_in_prompt_order_decides(self):
+        """An hour on the system prompt, five minutes on the conversation: the conversation's entry is the one at stake."""
+        payload = {"system": [{"type": "text", "text": "be careful", "cache_control": _marked("1h")}],
+                   "messages": [{"role": "user", "content": [{"type": "text", "text": "hi",
+                                                              "cache_control": _marked("5m")}]}]}
+        assert cache_lifetime_s(payload) == 300.0
+
+    def test_a_top_level_marker_comes_last_because_the_provider_applies_it_to_the_last_block(self):
+        payload = {"cache_control": _marked("1h"),
+                   "messages": [{"role": "user", "content": [{"type": "text", "text": "hi",
+                                                              "cache_control": _marked("5m")}]}]}
+        assert cache_lifetime_s(payload) == 3600.0
+
+    @pytest.mark.parametrize("payload", [
+        {"messages": [{"role": "user", "content": "no markers at all"}]},
+        {"messages": "not a list", "system": "a string system prompt", "tools": None},
+        {"cache_control": _marked("forever")},
+        {"cache_control": _marked(3600)},
+    ])
+    def test_no_marker_or_an_unreadable_one_gets_the_default(self, payload):
+        assert cache_lifetime_s(payload) == DEFAULT_CACHE_LIFETIME_S

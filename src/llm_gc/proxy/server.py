@@ -41,6 +41,7 @@ from llm_gc.proxy.anthropic_translation import (
     extract_instructions,
     ReplyOutline,
     StreamOutlineReader,
+    cache_lifetime_s,
     extract_messages,
     fixed_prompt_tokens,
     forwardable_headers,
@@ -49,6 +50,7 @@ from llm_gc.proxy.anthropic_translation import (
     reply_text,
     rewrite_messages,
 )
+from llm_gc.proxy.cache_watch import CacheWatch
 from llm_gc.proxy.model_windows import ModelWindow, ModelWindows, WindowLookup
 from llm_gc.proxy.session_identity import SESSION_HEADER, chain_hashes, client_origin
 from llm_gc.proxy.request_log import RequestLog, newest_kind
@@ -119,6 +121,7 @@ class ProxyMetrics:
         self.sessions_seeded = 0
         self.traffic = TrafficLedger()
         self.request_log = RequestLog()
+        self.cache_watch = CacheWatch()
 
     def as_dict(self) -> dict[str, Any]:
         total = self.traffic.total
@@ -402,6 +405,8 @@ def _measure_request(app: FastAPI, session_id: str | None, origin: ClientOrigin 
         if linker is not None and origin is not None and origin.agent_id is not None and record.position == 1:
             first = client_messages[0]
             linker.offer_opening(origin.session_id, record, "\n".join((first.content, *first.instructions)))
+        # The cache's lifetime counts from when a request starts, which is now: it is forwarded next.
+        started_at, lifetime_s = metrics.cache_watch.now(), cache_lifetime_s(payload)
     except Exception:
         logger.exception("counting the request failed; the request is unaffected", extra={"session_id": session_id})
         return None
@@ -412,6 +417,9 @@ def _measure_request(app: FastAPI, session_id: str | None, origin: ClientOrigin 
                                                    f"the upstream {pressure} a request from the client")
         if outline.usage is not None:
             TrafficLedger.record_usage(counted, outline.usage)
+            if session_id is not None:
+                metrics.cache_watch.observe(session_id, started_at=started_at, lifetime_s=lifetime_s,
+                                            usage=outline.usage)
         metrics.request_log.finish(record, outline)
         if linker is not None and origin is not None and prompts:
             linker.offer_calls(origin.session_id, record, prompts)

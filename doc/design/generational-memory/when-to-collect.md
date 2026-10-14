@@ -1,8 +1,8 @@
 # When to Collect
 
-> **Being built.** The staged cut and the switch on the request path are not in the code
-> yet: until they are, a pass commits its cut as soon as it finishes. The switch policy is
-> the first piece to land.
+> **Being built.** The switch policy and the proxy's reading of the cache state are in the
+> code. The staged cut and the switch on the request path are not yet: until they are, a
+> pass commits its cut as soon as it finishes.
 
 ## How it works
 
@@ -41,6 +41,35 @@ What decides *what* is condensed and *how* is unchanged: the plan scores every s
 what is being discussed now and gives it a level (see [the-cut.md](the-cut.md)). This
 document is about *when* the prompt changes.
 
+### The provider's prompt cache, in plain words
+
+Every request sends the whole conversation again. To avoid reading it all from scratch
+each time, the provider **remembers the prompt it has just read**, for a few minutes.
+
+Think of a reviewer who has just read the first 50 pages of your document. You send it back
+with one new page at the end:
+
+- **Back within a few minutes, first 50 pages unchanged:** they skip what they have already
+  read and read only the new page. Fast and cheap. This is a **warm** cache.
+- **Back after they have forgotten, or they never kept it:** they read all 51 pages from
+  the start, at full price. This is a **cold** cache.
+- **Page 1 changed:** they cannot trust anything after it, so they read everything again,
+  even if they remembered it. That is what a collection does: it replaces the start of the
+  conversation with the recap.
+
+That last point is why *when* a collection takes effect matters:
+
+```
+                         don't collect now                   collect now (swap in the recap)
+                         ─────────────────────────────────   ─────────────────────────────────────────
+ WARM (they remember)    reads only the new turn: cheap      must read everything again: EXPENSIVE
+ COLD (they forgot)      reads everything: full price        reads everything, but less of it: CHEAPER
+```
+
+When warm, collecting throws away something that was nearly free; it is worth it only if
+the saving is big. When cold, the full read happens anyway, so collecting makes it smaller
+and costs nothing extra. The rest of this section says the same thing precisely.
+
 ### What a switch costs, and what it buys
 
 Provider caches match a prompt from its first byte. A switch changes the message after
@@ -74,35 +103,46 @@ back its rewrite only after many more requests.
 
 ### Warm and cold
 
-A conversation's cache is **warm** when the next request would read what the last one
-wrote, and **cold** when it would miss anyway. A switch on a cold request costs nothing: the
-whole prompt is written regardless, and a smaller prompt is written for less.
+- **Warm:** the provider still remembers this conversation's prompt, so the next request
+  is cheap as long as its start is unchanged.
+- **Cold:** the provider has forgotten it (the conversation sat idle too long), or never
+  kept it (the client does not use the cache). The next request is read in full whatever
+  LLM-GC does, so a switch on it costs nothing and makes that full read smaller.
 
 ```
  time ──────────────────────────────────────────────────────────────────────────────►
 
  requests   ●  ●  ●  ●  ●                                                     ●
-            └ a burst: each request reads what the last wrote ┘               │
- passes     ▲  ▲  ▲  ▲  ▲  → a cut is staged                                  │
+            └ a burst: the provider remembers (WARM) ┘                        │
+ passes     ▲  ▲  ▲  ▲  ▲  → a cut is staged, waiting                         │
                            └──── idle for longer than the cache lifetime ─────┤
-                                 the provider's entry expires                 ▼
-                                          this request misses the cache whatever happens:
-                                          switching costs nothing and writes less
+                                 the provider forgets (COLD)                  ▼
+                                          this request is read in full whatever happens:
+                                          switching here costs nothing and makes it smaller
 ```
 
-Three observations decide it, all read from the conversation, none stored:
+How the proxy tells which, precisely. Three observations decide it, all read from the
+conversation's own traffic; no vendor figure is kept:
 
-- whether the conversation's replies report cached tokens at all, read or written;
-- when its previous request began, because the cache's lifetime counts from the start of
-  the request that last read or wrote the entry;
-- the lifetime, taken from the request when it states one, and otherwise the wire
-  format's documented default.
+- whether any of its replies has reported cached tokens, read or written. Once one has,
+  the conversation counts as using the cache: a later reply too short to be cached does
+  not mean it stopped;
+- when its newest answered request began, because the cache's lifetime counts from the
+  start of the request that last read or wrote the entry, not from the end of its reply.
+  A refused request never reached the cache and says nothing about it;
+- the lifetime its last cache marker asks for, in prompt order, because that is the entry
+  covering the conversation; with none named, the wire format's documented default.
 
-The cache is cold when the conversation does not use it, or when the gap since the
-previous request exceeds the lifetime. A conversation that does not use the cache is
-always cold: every token is billed in full, so a smaller prompt is strictly cheaper.
-**When the observations cannot settle it, the cache counts as warm**: wrongly warm costs
-one missed free switch, wrongly cold costs a rewrite.
+The cache is cold when the conversation does not use it, or when it has been idle longer
+than the lifetime plus a margin of a few seconds, which absorbs the gap between when the
+proxy forwards a request and when the provider receives it. A conversation that does not
+use the cache is always cold: every token is billed in full, so a smaller prompt is
+strictly cheaper. **When the observations cannot settle it, the cache counts as warm**,
+including before any request has been answered: wrongly warm costs one missed free
+switch, wrongly cold costs a rewrite.
+
+The proxy keeps these observations per conversation and hands the engine only the
+answer, so the engine has no clock and no knowledge of any provider.
 
 ### The switch policy
 

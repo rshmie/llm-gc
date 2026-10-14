@@ -65,6 +65,12 @@ SPAWN_PROMPT_MAX_CHARS = 32_000
 # The stream events a spawned prompt is read from, when prompts are read.
 _PROMPT_EVENTS = (b'"input_json_delta"', b'"content_block_stop"')
 
+# How long the provider keeps a cache entry when the marker names no lifetime: its documented
+# default. A marker may name another as a number and a unit, such as "1h".
+DEFAULT_CACHE_LIFETIME_S = 300.0
+_CACHE_TTL = re.compile(r"(\d+)([smh])")
+_CACHE_TTL_UNIT_S = {"s": 1, "m": 60, "h": 3600}
+
 
 @dataclass(frozen=True)
 class Instruction:
@@ -194,6 +200,30 @@ def _count_repeated(text: str) -> int:
     # Every request of a conversation repeats the same system prompt and tools, often tens of
     # thousands of tokens; counted once each, not once per request.
     return count_tokens(text) if text else 0
+
+
+def cache_lifetime_s(payload: dict[str, Any]) -> float:
+    """How long the provider keeps this request's cached conversation, in seconds.
+
+    The lifetime its last cache marker names, in prompt order: tools, system, then the
+    messages' blocks, then a top-level marker, which the provider applies to the last block.
+    The last marker is the entry that covers the conversation, the part a collection makes
+    the provider write again. With no marker, or one naming no lifetime, the default.
+    """
+    blocks: list[object] = []
+    for key in ("tools", "system"):
+        if isinstance(value := payload.get(key), list):
+            blocks.extend(value)
+    messages = payload.get("messages")
+    for message in messages if isinstance(messages, list) else ():
+        if isinstance(message, dict) and isinstance(content := message.get("content"), list):
+            blocks.extend(content)
+    blocks.append(payload)
+    markers = [marker for block in blocks
+               if isinstance(block, dict) and isinstance(marker := block.get("cache_control"), dict)]
+    ttl = markers[-1].get("ttl") if markers else None
+    match = _CACHE_TTL.fullmatch(ttl) if isinstance(ttl, str) else None
+    return float(int(match[1]) * _CACHE_TTL_UNIT_S[match[2]]) if match else DEFAULT_CACHE_LIFETIME_S
 
 
 def _raw_messages(payload: dict[str, Any]) -> list[dict[str, Any]]:

@@ -17,6 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from llm_gc.config import GCConfig
+from llm_gc.engine.switch_policy import CacheState
 from llm_gc.engine import build_gc_service
 from llm_gc.engine.generations.front import FRONT_HEADER
 from llm_gc.events import EventBus
@@ -24,6 +25,7 @@ from llm_gc.llm import FakeProvider, LLMResponse, StopReason
 from llm_gc.models import ClientOrigin
 from llm_gc.proxy import SESSION_HEADER, create_app
 from llm_gc.proxy.anthropic_translation import fixed_prompt_tokens
+from llm_gc.proxy.cache_watch import CacheWatch
 from llm_gc.proxy.session_identity import CLIENT_AGENT_HEADER, CLIENT_SESSION_HEADER
 from llm_gc.session import SessionManager
 
@@ -1584,3 +1586,55 @@ class TestLlmGcYieldsWhenTheUpstreamPushesBack:
         assert all(response.status_code == 200 for response in responses)
         [session_id] = service.session_manager.store.active_session_ids()
         assert service.session_manager.store.get(session_id).snapshot.cut_count == 0
+
+
+class TestTheCacheIsWatched:
+    """From each answered request, the proxy learns whether its conversation's cache would serve the next one."""
+
+    CACHE_READ = {"input_tokens": 12, "cache_read_input_tokens": 54_000, "cache_creation_input_tokens": 1_700,
+                  "output_tokens": 18}
+
+    @staticmethod
+    def _answered(usage: dict, *, status: int = 200, ttl: str | None = None, took_s: float = 0.0):
+        """One request answered with `usage`, its reply taking `took_s` on the watch's clock."""
+        reply = {**UPSTREAM_OK, "usage": usage}
+        clock = [1_000.0]
+
+        def upstream(request: httpx2.Request) -> httpx2.Response:
+            clock[0] += took_s
+            return httpx2.Response(status, json=reply)
+
+        client, service, _, _ = _proxy(upstream)
+        watch = client.app.state.metrics.cache_watch = CacheWatch(clock=lambda: clock[0])
+        marker = {"type": "ephemeral", **({"ttl": ttl} if ttl is not None else {})}
+        _post(client, _body(("user", "about databases"), ("assistant", "ok"), ("user", "go on"),
+                            cache_control=marker))
+        [session_id] = service.session_manager.store.active_session_ids()
+        return watch, clock, session_id
+
+    def test_a_reply_that_read_the_cache_keeps_the_conversation_warm_until_its_lifetime_passes(self):
+        watch, clock, session_id = self._answered(self.CACHE_READ)
+        clock[0] += 60
+        assert watch.state(session_id) is CacheState.WARM
+        clock[0] += 300
+        assert watch.state(session_id) is CacheState.COLD
+
+    def test_the_lifetime_counts_from_when_the_request_was_forwarded_not_when_its_reply_ended(self):
+        watch, clock, session_id = self._answered(self.CACHE_READ, took_s=240.0)
+        clock[0] = 1_000.0 + 310
+        assert watch.state(session_id) is CacheState.COLD
+
+    def test_the_lifetime_the_request_asked_for_is_the_one_used(self):
+        watch, clock, session_id = self._answered(self.CACHE_READ, ttl="1h")
+        clock[0] += 20 * 60
+        assert watch.state(session_id) is CacheState.WARM
+
+    def test_a_conversation_whose_replies_use_no_cache_is_cold(self):
+        watch, _, session_id = self._answered(UPSTREAM_OK["usage"])
+        assert watch.state(session_id) is CacheState.COLD
+
+    def test_a_refused_request_tells_nothing_about_the_cache(self):
+        """A 429 never reached the cache: the conversation stays unknown, which counts as warm."""
+        watch, clock, session_id = self._answered(self.CACHE_READ, status=429)
+        clock[0] += 3600
+        assert watch.state(session_id) is CacheState.WARM
