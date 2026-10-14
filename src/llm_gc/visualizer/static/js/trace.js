@@ -1,14 +1,16 @@
-// The Session tab: a Claude Code session turn by turn, each turn's requests on a waterfall in time,
-// each subagent under the request whose reply started it. Measured, never forecast: every number is a
-// request that happened.
+// The Requests tab: a Claude Code session turn by turn, oldest first as the conversation reads, each turn's
+// requests on a waterfall in time, each subagent under the request whose reply started it. Measured, never
+// forecast: every number is a request that happened.
 
 import { PAUSED_TEXT, TRACE_KINDS } from "./vocabulary.js";
 import { $, compact, fill, fmt, h, plural, share } from "./dom.js";
 import { state, ui } from "./state.js";
-import { hoverTip } from "./tooltip.js";
+import { hoverTip, info } from "./tooltip.js";
 
 // Requests that are not part of the conversation fold into one line per turn.
 const SIDE_KINDS = new Set(["unclaimed", "replaced"]);
+// The newest turns shown before "Show N earlier turns" folds the rest above them, as a chat loads older messages.
+const TURNS_SHOWN = 8;
 const shortId = (id) => id.slice(0, 8);
 const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const seconds = (ms) => ms < 1000 ? "<1 s" : ms < 60_000 ? `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s` : `${Math.round(ms / 60_000)} min`;
@@ -35,31 +37,37 @@ export function renderTrace(actions, force = false) {
   shownKey = key;
   $("trace-card").hidden = !trace;
   if (!trace) return;
-  fill("trace-card", traceHead(trace), paused(), before(trace, actions),
-    h("ol", { class: "turns" }, [...trace.turns].reverse().map((turn) => turnItem(turn, trace, actions))));
+  const folded = !ui.turnsEarlierOpen && trace.turns.length > TURNS_SHOWN;
+  const shown = folded ? trace.turns.slice(-TURNS_SHOWN) : trace.turns;
+  const earlier = trace.turns.length > TURNS_SHOWN ? h("button", { class: "link-btn turns-earlier", type: "button", "aria-expanded": String(!folded),
+    onclick: () => { ui.turnsEarlierOpen = folded; renderTrace(actions, true); } },
+    folded ? `Show ${plural(trace.turns.length - shown.length, "earlier turn")}` : "Show fewer turns") : null;
+  fill("trace-card", traceHead(trace), paused(), before(trace, actions), earlier,
+    h("ol", { class: "turns" }, shown.map((turn) => turnItem(turn, trace, actions))));
 }
 
 function traceHead(trace) {
   const t = trace.totals;
   const spent = trace.summaries;
   const subagents = trace.turns.reduce((n, turn) => n + turn.subagents.length, 0) + trace.subagents_before.length;
+  const stat = (label, value, sub, tip = null) => h("div", { class: "tstat", ...(tip ? hoverTip(...tip) : {}) },
+    h("div", { class: "k" }, label), h("div", { class: "v" }, value), sub ? h("div", { class: "s" }, sub) : null);
+  const worth = ["Tokens are not all worth the same",
+    "A cache read costs a fraction of sending a token plainly, and a cache write more than sending it. The tokens LLM-GC removes would mostly have been cache reads, so set what it saved against the cache writes its collections caused."];
   return [
     h("div", { class: "card-head" }, h("div", {},
       h("h2", {}, `Claude Code session ${shortId(trace.client_session)}`),
-      h("p", { class: "sub" }, `Since ${clock(trace.started_at)} · ${plural(trace.turns.length, "turn")} · ${plural(t.requests, "request")} · ${plural(subagents, "subagent")}. Newest turn first; open one to see every request it made.`))),
-    h("p", { class: "session-totals" },
-      "Claude Code sent ", h("b", {}, fmt(t.tokens_from_client)), " tokens overall · LLM-GC forwarded ", h("b", {}, fmt(t.tokens_forwarded)),
-      " · ", h("b", {}, saved(t))),
-    h("p", { class: "session-totals" },
-      `The provider's own count: ${compact(t.cache_read_input_tokens)} cache read · ${compact(t.input_tokens)} input · `,
-      h("b", {}, `${compact(t.cache_creation_input_tokens)} cache write`), ` · ${compact(t.output_tokens)} output.`,
-      t.collection_cache_write_tokens ? [" ", h("span", hoverTip(TRACE_KINDS.collection[0], TRACE_KINDS.collection[1]),
-        h("b", {}, compact(t.collection_cache_write_tokens)), " of the cache writes were on requests that carried a collection.")] : ""),
-    h("p", { class: "session-totals secondary" },
-      "Tokens are not all worth the same: a cache read costs a fraction of sending a token plainly, a cache write more than sending it. ",
-      "The tokens LLM-GC removes would mostly have been cache reads, so set what it saved against the cache writes its collections caused.",
-      spent && spent.calls ? ` LLM-GC's own model calls: ${plural(spent.calls, "call")}, ${compact(spent.input_tokens)} tokens in, ${compact(spent.output_tokens)} out.`
-        : " LLM-GC has made no model calls for this session."),
+      h("p", { class: "sub" }, `Since ${clock(trace.started_at)} · ${plural(trace.turns.length, "turn")} · ${plural(t.requests, "request")} · ${plural(subagents, "subagent")}. Oldest turn first; the newest is open, and each opens to every request it made.`))),
+    h("div", { class: "trace-stats" },
+      stat("Claude Code sent", fmt(t.tokens_from_client), "tokens, by LLM-GC's count"),
+      stat("LLM-GC forwarded", fmt(t.tokens_forwarded), saved(t)),
+      stat("Read from the cache", compact(t.cache_read_input_tokens), "by the provider's count", worth),
+      stat("Written to the cache", compact(t.cache_creation_input_tokens),
+        t.collection_cache_write_tokens ? `${compact(t.collection_cache_write_tokens)} of it carrying a collection` : "by the provider's count", worth),
+      stat("Sent plainly · output", `${compact(t.input_tokens)} · ${compact(t.output_tokens)}`, "by the provider's count"),
+      stat("LLM-GC's own model calls", spent && spent.calls ? fmt(spent.calls) : "none",
+        spent && spent.calls ? `${compact(spent.input_tokens)} tokens in, ${compact(spent.output_tokens)} out` : "for this session")),
+    h("p", { class: "trace-worth secondary" }, worth[0], info("billed")),
   ];
 }
 
@@ -92,6 +100,9 @@ function turnItem(turn, trace, actions) {
   const collections = [...turn.requests, ...turn.subagents.flatMap((a) => a.requests)].reduce((n, r) => n + r.carries_collections, 0);
   const duration = turn.ended_at ? seconds(at(turn.ended_at) - at(turn.started_at)) : "running…";
   return h("li", { class: `turn${open ? " open" : ""}` },
+    // Oldest first, so the turn that began a new main conversation sits just below the line that marks it.
+    turn.new_conversation ? h("div", { class: "turn-boundary", ...hoverTip(TRACE_KINDS.boundary[0], TRACE_KINDS.boundary[1]) },
+      "A new main conversation begins here: after /compact, or an edited message") : null,
     h("button", { class: "turn-head", type: "button", "aria-expanded": String(open),
       onclick: () => { ui.turnOpen.set(key, !open); renderTrace(actions, true); } },
       h("span", { class: "chev", "aria-hidden": "true" }, open ? "▼" : "▶"),
@@ -109,10 +120,7 @@ function turnItem(turn, trace, actions) {
           ? h("button", { class: "link-btn", type: "button", onclick: () => actions.open(turn.conversation_id, turn.position - 1) }, "Open this message in its conversation →")
           : "Its conversation has closed, so its messages are gone; its counts stay."),
       waterfall(turn.requests, turn.subagents, span(turn.requests.concat(turn.subagents.flatMap((a) => a.requests)), turn), actions, key))
-      : null,
-    // Newest first, so the turn that began a new main conversation sits just above the line that marks it.
-    turn.new_conversation ? h("div", { class: "turn-boundary", ...hoverTip(TRACE_KINDS.boundary[0], TRACE_KINDS.boundary[1]) },
-      "↑ A new main conversation began with this turn: after /compact, or an edited message") : null);
+      : null);
 }
 
 // The time a list of requests covers: from the first sent to the last back, or now while one runs.
@@ -180,10 +188,10 @@ function subagentLines(agent, window, actions) {
         h("span", { class: "chev", "aria-hidden": "true" }, open ? "▼" : "▶"), ` ${agent.label}`),
       actions.live(agent.conversation_id)
         ? h("button", { class: "link-btn wf-open", type: "button", onclick: () => actions.open(agent.conversation_id, null) }, "Open →") : null,
-      h("span", { class: "wf-tokens" }, ` ${plural(t.requests, "request")} · ${fmt(t.tokens_from_client)} sent overall`),
+      h("span", { class: "wf-tokens" }, ` ${plural(t.requests, "request")} · ${fmt(t.tokens_from_client)} tokens sent`),
       h("span", { class: "secondary", ...hoverTip(TRACE_KINDS.subagent[0], TRACE_KINDS.subagent[1]) },
-        link ? ` · started by ${link.tool}` : " · started by a call not determined", agent.collected ? "" : " · not collected"),
-      h("span", { class: "wf-words" }, agent.words ? ` · “${agent.words}”` : "")),
+        link ? ` · started by a ${link.tool} call` : " · its starting call wasn't matched", agent.collected ? "" : " · recorded, not collected"),
+      agent.words ? h("span", { class: "wf-words" }, `“${agent.words}”`) : null),
     bar(agent.started_at, agent.ended_at, window, "agent", `${clock(agent.started_at)} · ${agent.ended_at ? seconds(at(agent.ended_at) - at(agent.started_at)) : "running"}`));
   return [head, ...(open ? agent.requests.map((row) => requestLine(row, window, 1)) : [])];
 }

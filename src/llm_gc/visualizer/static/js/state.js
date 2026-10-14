@@ -4,14 +4,17 @@
 import { ORDER, categoryOf } from "./vocabulary.js";
 import { $, h } from "./dom.js";
 
-// `clientSession` is the session picked at the top - a Claude Code session's id, or OTHER for conversations no
-// client session named - and `selected` the conversation shown on the Conversation and Engine tabs.
+// `selected` is the conversation picked at the top, shown on the Conversation and Engine tabs, and `clientSession`
+// the Claude Code session it ran in, whose requests the Requests tab shows - or OTHER for conversations no client
+// session named. A session whose conversations have all closed can be picked for its requests alone.
 export const OTHER = "__other__";
 export const state = { config: null, proxy: null, pause: null, sessions: [], clientSession: null, trace: null, selected: null, version: null,
-  knowledge: null, transcript: null, activity: null };
-export const ui = { tab: "session", filter: "all", query: "", promptView: false, open: new Set(), chartKey: null, earlierOpen: false, listOpen: true,
+  knowledge: null, transcript: null, activity: null,
+  // The shown conversation's cache as the proxy reads it now, from the overview: it ages every second.
+  cache: null };
+export const ui = { tab: "conversation", filter: "all", query: "", promptView: false, open: new Set(), chartKey: null, earlierOpen: false,
   stayOpen: false, allChecks: false, allMoves: false, allProblems: false, mapSession: null,
-  turnOpen: new Map(), openAgents: new Set(), showSide: new Set(), pendingJump: null,
+  turnOpen: new Map(), openAgents: new Set(), showSide: new Set(), pendingJump: null, turnsEarlierOpen: false,
   // Whether the shown conversation follows the session's main one: true until the person picks another.
   followMain: true };
 

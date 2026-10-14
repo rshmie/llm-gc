@@ -23,7 +23,7 @@ from llm_gc.engine import AbandonedCut, AgingDegradation, CutOutcome, GcService,
 from llm_gc.engine.pause import Pause
 from llm_gc.engine.switch_policy import CacheReading, CacheState
 from llm_gc.monitoring import ContextHealth, ContextHealthMonitor
-from llm_gc.monitoring.knowledge_state import KnowledgeState, project_knowledge_state
+from llm_gc.monitoring.knowledge_state import CacheReadingState, KnowledgeState, project_knowledge_state
 from llm_gc.session import SessionState
 from llm_gc.visualizer.transcript import TranscriptRecorder, TranscriptTurn
 
@@ -64,6 +64,9 @@ class SessionSummary(BaseModel):
     aging_in_flight: bool
     last_activity: datetime
     newest_reply: int | None = None   # the turn index of the reply being shown, which arrives without a new version
+    # The provider's cache for it as the proxy reads it now; None without a proxy. Polled with the overview because
+    # it changes with time, not with the conversation.
+    cache: CacheReadingState | None = None
 
 
 class Transcript(BaseModel):
@@ -137,7 +140,7 @@ def create_dashboard_app(
         store = gc_service.session_manager.store
         states = [state for session_id in store.active_session_ids()
                   if (state := store.get(session_id)) is not None]
-        sessions = [_summarise(state, transcripts)
+        sessions = [_summarise(state, transcripts, read_cache)
                     for state in sorted(states, key=lambda state: state.last_updated_at, reverse=True)]
         return DashboardOverview(
             sessions=sessions,
@@ -213,8 +216,10 @@ def create_dashboard_app(
     return app
 
 
-def _summarise(state: SessionState, transcripts: TranscriptRecorder | None) -> SessionSummary:
+def _summarise(state: SessionState, transcripts: TranscriptRecorder | None,
+               read_cache: Callable[[str], CacheReading] | None) -> SessionSummary:
     origin = transcripts.origin(state.session_id) if transcripts is not None else None
+    cache = read_cache(state.session_id) if read_cache is not None else None
     return SessionSummary(session_id=state.session_id,
                           title=_opening_words(transcripts.get(state.session_id) if transcripts is not None else None),
                           client_session=origin.session_id if origin is not None else None,
@@ -223,7 +228,9 @@ def _summarise(state: SessionState, transcripts: TranscriptRecorder | None) -> S
                           version=state.snapshot.version,
                           recorded_turns=state.snapshot.recorded_turn_count, cuts=state.snapshot.cut_count,
                           aging_in_flight=state.aging_in_flight, last_activity=state.last_updated_at,
-                          newest_reply=_reply_index(transcripts, state.session_id))
+                          newest_reply=_reply_index(transcripts, state.session_id),
+                          cache=CacheReadingState(state=cache.state, uses_cache=cache.uses_cache, idle_s=cache.idle_s,
+                                                  lifetime_s=cache.lifetime_s) if cache is not None else None)
 
 
 def _reply_index(transcripts: TranscriptRecorder | None, session_id: str) -> int | None:

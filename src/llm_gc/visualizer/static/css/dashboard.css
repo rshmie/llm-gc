@@ -142,7 +142,7 @@ main > * + * , .view > * + * { margin-top: 16px; }
 .status-line .then::before { content: ""; width: 1px; height: 16px; background: var(--hairline); }
 @media (max-width: 640px) { .status-line .then::before { display: none; } }
 
-/* ================================================================ the prompt: cost, holdings, window, and the map */
+/* ================================================================ the three questions, and the map */
 .prompt-card { padding: 20px 22px 18px; display: grid; gap: 22px; }
 /* A grid item will not shrink below its content by default, so a map wider than the card would widen the
    card and the page. Letting it shrink is what makes the map scroll inside itself. */
@@ -150,34 +150,35 @@ main > * + * , .view > * + * { margin-top: 16px; }
 /* Cards fade from a lighter top to the surface colour over 160px. The map's row labels are painted in the
    surface colour to hide bars sliding under them, so here the fade ends above the map and they match. */
 .card.map-card { background-image: linear-gradient(180deg, var(--surface-hi), var(--surface) 64px); }
-.prompt-top { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr); }
-.prompt-top > section { padding: 0 22px; min-width: 0; }
-.prompt-top > section:first-child { padding-left: 0; }
-.prompt-top > section + section { border-left: 1px solid var(--hairline); }
-@media (max-width: 980px) {
-  .prompt-top { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); row-gap: 20px; }
-  .prompt-top > section:first-child { grid-column: 1 / -1; padding-right: 0; }
-  .prompt-top > section:nth-child(2) { border-left: 0; padding-left: 0; }
+.summary-card { padding: 18px 22px 16px; }
+.summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.sum-col { padding: 0 20px; min-width: 0; }
+.sum-col:first-child { padding-left: 0; }
+.sum-col:last-child { padding-right: 0; }
+.sum-col + .sum-col { border-left: 1px solid var(--hairline); }
+.sum-col h2 { font-size: 12px; font-weight: 650; color: var(--ink-3); letter-spacing: .04em; text-transform: uppercase; margin: 0 0 10px; }
+.sum-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+.sum-line { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 8px; align-items: start; font-size: 13.5px; color: var(--ink-2); line-height: 1.45; }
+.sum-line b { color: var(--ink); font-weight: 650; font-variant-numeric: tabular-nums; }
+.sum-mark { width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: var(--ink-3); background: var(--raised); margin-top: 1px; }
+.sum-line.tone-good .sum-mark { background: var(--good-wash); color: var(--good-ink); }
+.sum-line.tone-warn .sum-mark { background: var(--warn); color: #3a2a00; }
+.sum-line.tone-warn .sum-words, .sum-line.tone-warn .sum-words b { color: var(--warn-ink); }
+.sum-line.tone-critical .sum-mark { background: var(--critical); color: #fff; }
+.sum-line .x { padding: 0 4px; font-size: 16px; }
+.sum-note { font-size: 12.5px; color: var(--ink-3); }
+.sum-foot { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--hairline); display: flex; flex-direction: column; gap: 4px; }
+.sum-tokens { margin: 0; font-size: 13px; color: var(--ink-2); }
+.sum-tokens b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.sum-window { white-space: nowrap; }
+.meter.mini { display: inline-block; width: 72px; height: 6px; margin: 0 0 1px 8px; vertical-align: middle; }
+@media (max-width: 900px) {
+  .summary-grid { grid-template-columns: minmax(0, 1fr); }
+  .sum-col { padding: 0 !important; border-left: 0 !important; }
+  .sum-col + .sum-col { margin-top: 14px; padding-top: 14px !important; border-top: 1px solid var(--hairline); }
 }
-@media (max-width: 560px) { .prompt-top { grid-template-columns: minmax(0, 1fr); } .prompt-top > section { padding: 0 !important; border-left: 0 !important; } }
 .label { font-size: 12px; font-weight: 600; color: var(--ink-3); letter-spacing: .04em; text-transform: uppercase; display: flex; align-items: center; gap: 6px; }
-.hero-row { display: flex; align-items: baseline; gap: 6px 14px; flex-wrap: wrap; margin-top: 6px; }
-.hero { font-size: 52px; font-weight: 700; letter-spacing: -0.03em; line-height: 1; }
-.hero-unit { font-size: 15px; color: var(--ink-2); font-weight: 500; }
-.delta { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; padding: 3px 10px; border-radius: 999px; background: var(--raised); color: var(--ink-2); }
-.delta.good { background: var(--good-wash); color: var(--good-ink); }
-.hero-sub { margin: 8px 0 0; font-size: 13px; color: var(--ink-2); max-width: 52ch; }
-.tile-big { font-size: 22px; font-weight: 680; letter-spacing: -0.01em; line-height: 1.2; margin-top: 10px; }
-.tile-big small { font-size: 13px; font-weight: 500; color: var(--ink-2); letter-spacing: 0; }
-.tile-lede { margin: 6px 0 8px; font-size: 13px; color: var(--ink-2); }
 .note { font-size: 12.5px; color: var(--ink-3); margin-top: 8px; }
-.holds { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
-.holds li { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; gap: 10px; align-items: end; font-size: 13px; color: var(--ink-2); }
-.holds .hb { width: 9px; border-radius: 2px 2px 0 0; justify-self: center; background: var(--f); }
-.holds .hb.f-out_of_view { background: transparent; box-shadow: inset 0 0 0 1.5px var(--f); }
-.holds li b { color: var(--ink); font-weight: 650; font-variant-numeric: tabular-nums; }
-.holds li.zero, .holds li.zero b { color: var(--ink-3); font-weight: 500; }
-.holds li.alert, .holds li.alert b { color: var(--warn-ink); }
 .meter { height: 8px; border-radius: 4px; background: var(--meter-track); overflow: hidden; margin-top: 12px; }
 /* The fill is the same element across renders (see meterBar in dom.js), so this transition plays
    instead of the bar simply appearing at its new width. */
@@ -189,6 +190,10 @@ main > * + * , .view > * + * { margin-top: 16px; }
 .map-head { display: flex; align-items: baseline; justify-content: space-between; gap: 6px 10px; flex-wrap: wrap; }
 .map-head h2 { font-size: 15px; font-weight: 650; }
 .map-head .muted { font-size: 12.5px; }
+.map-card .card-head { margin-bottom: 0; }
+.card-head-tools { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap; }
+.map-card.collapsed .card-head, #messages.collapsed .card-head { margin-bottom: 0; }
+#messages.collapsed .card-head .sub, #messages.collapsed #jump-newest, #messages.collapsed .toggle { display: none; }
 /* The map: a bar per message, oldest left. Width is its size in tokens, height how much the model
    still has. The Sent row beneath uses the same scale, so the recap and the saving sit
    under the messages they came from. Cells carry no padding or border, so the three rows'
@@ -565,6 +570,9 @@ tr.cut td { font-weight: 600; }
 .drawer h3 { font-size: 13.5px; font-weight: 650; margin: 22px 0 10px; }
 .drawer ol { padding-left: 20px; display: flex; flex-direction: column; gap: 8px; color: var(--ink-2); }
 .drawer ol b { color: var(--ink); }
+.drawer .guide-sub { list-style: disc; padding-left: 18px; margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+.drawer .guide-analogy { margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: var(--sunken); color: var(--ink-2); font-size: 13px; line-height: 1.5; }
+.drawer .guide-analogy b { color: var(--ink); }
 .anatomy { display: flex; gap: 3px; margin: 16px 0 6px; font-size: 12px; font-weight: 600; }
 .anatomy > div { border-radius: 6px; padding: 9px 8px; text-align: center; color: #fff; }
 .anatomy .blk { background: var(--fid-compacted); flex: 1.5; }
@@ -616,7 +624,7 @@ body { background: radial-gradient(1100px 520px at 12% -8%, color-mix(in srgb, v
 .an-s.block i, .an-s.recent i { background-image: linear-gradient(180deg, var(--gloss), transparent 55%, var(--shade)); }
 .meter { box-shadow: inset 0 1px 2px var(--shade); }
 .meter > div { background-image: linear-gradient(180deg, var(--gloss), transparent 60%); }
-.rate-dot:not(.f-out_of_view), .lg:not(.f-out_of_view), .holds .hb:not(.f-out_of_view), .swatch:not(.f-out_of_view) { background-image: radial-gradient(circle at 35% 30%, var(--gloss), transparent 65%); }
+.rate-dot:not(.f-out_of_view), .lg:not(.f-out_of_view), .swatch:not(.f-out_of_view) { background-image: radial-gradient(circle at 35% 30%, var(--gloss), transparent 65%); }
 .rate-track .rate-dot:not(.f-out_of_view) { box-shadow: 0 0 0 2px var(--surface), 0 3px 6px var(--shade); }
 .run-gc { background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0) 60%);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 4px 12px -4px color-mix(in srgb, var(--accent) 70%, transparent); }
@@ -693,6 +701,12 @@ table.terms td:first-child { font-family: ui-monospace, SFMono-Regular, Menlo, m
 .conv-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
 .conv-bar select { width: 380px; }
 .conv-bar .origin-line { flex: 1 1 100%; margin: 0; }
+.bar-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.bar-chip { display: inline-flex; align-items: center; font: inherit; font-size: 12.5px; font-weight: 600; padding: 4px 10px; border-radius: 999px; background: var(--raised); color: var(--ink-2); border: 1px solid var(--hairline); white-space: nowrap; }
+button.bar-chip { cursor: pointer; }
+button.bar-chip:hover { color: var(--ink); }
+.bar-chip.tone-good { background: var(--good-wash); color: var(--good-ink); border-color: transparent; }
+.bar-chip.tone-cold { background: var(--accent-wash); color: var(--accent); border-color: transparent; }
 @media (max-width: 640px) { .conv-bar .picker { flex: 1 1 100%; } .conv-bar select { flex: 1; width: auto; } }
 
 /* ---------------------------------------------------------------- the session, turn by turn */
@@ -725,7 +739,16 @@ table.terms td:first-child { font-family: ui-monospace, SFMono-Regular, Menlo, m
 .wf-words { color: var(--ink-2); }
 .wf-mark { color: var(--accent); }
 .wf-agent { background: var(--sunken); }
-.wf-agent .wf-label { padding-left: 10px; }
+.wf-agent .wf-label { padding-left: 10px; white-space: normal; overflow: visible; }
+.wf-agent .wf-words { display: block; padding-left: 18px; margin-top: 2px; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-agent { border-left: 3px solid var(--fid-compacted); }
+.trace-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-top: 4px; }
+.tstat { background: var(--sunken); border-radius: 10px; padding: 10px 12px; min-width: 0; }
+.tstat .k { font-size: 11.5px; font-weight: 600; color: var(--ink-3); letter-spacing: .03em; text-transform: uppercase; }
+.tstat .v { font-size: 20px; font-weight: 680; color: var(--ink); font-variant-numeric: tabular-nums; margin-top: 2px; }
+.tstat .s { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+.trace-worth { font-size: 12.5px; margin: 10px 0 0; display: flex; align-items: center; gap: 6px; }
+.turns-earlier { display: block; margin: 14px 0 0 6px; font-weight: 600; }
 .wf-row.kind-replaced, .wf-row.kind-unclaimed { opacity: 0.6; }
 .wf-side { display: block; margin-top: 6px; font-weight: 500; color: var(--ink-3); }
 .wf-track { position: relative; height: 12px; background: var(--sunken); border-radius: 4px; }

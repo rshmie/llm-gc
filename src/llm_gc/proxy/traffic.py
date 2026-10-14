@@ -62,6 +62,23 @@ class ProviderUsage:
 
 
 @dataclass(slots=True)
+class LastReply:
+    """The newest answered request, counted both ways: by LLM-GC's tokenizer, and as the provider reported it.
+
+    The two tokenizers differ, so the pair is how a reader sets LLM-GC's own counts, which are estimates,
+    against what the provider bills.
+    """
+
+    tokens_forwarded: int     # the whole request as LLM-GC forwarded it, by LLM-GC's count
+    usage: ProviderUsage      # the provider's own count of its reply
+
+    @property
+    def provider_prompt_tokens(self) -> int:
+        """The whole prompt as the provider counted it: read in full, read from its cache, and written to it."""
+        return self.usage.input_tokens + self.usage.cache_read_input_tokens + self.usage.cache_creation_input_tokens
+
+
+@dataclass(slots=True)
 class Traffic:
     """Requests through the proxy and what they carried, for one conversation, one client session, or all."""
 
@@ -70,6 +87,7 @@ class Traffic:
     tokens_forwarded: int = 0      # the same requests as LLM-GC forwarded them
     provider: ProviderUsage = field(default_factory=ProviderUsage)
     summaries: ModelUsage = field(default_factory=ModelUsage)   # LLM-GC's own model calls
+    last_reply: LastReply | None = None   # the newest answered request: not added up, replaced
 
     @property
     def tokens_saved(self) -> int:
@@ -83,7 +101,9 @@ class Traffic:
         self.summaries.add(other.summaries)
 
     def as_dict(self) -> dict[str, Any]:
-        return {**asdict(self), "tokens_saved": self.tokens_saved}
+        last = self.last_reply
+        return {**asdict(self), "tokens_saved": self.tokens_saved,
+                "last_reply": None if last is None else {**asdict(last), "provider_prompt_tokens": last.provider_prompt_tokens}}
 
 
 @dataclass(slots=True)
@@ -178,10 +198,16 @@ class TrafficLedger:
         return tuple(targets)
 
     @staticmethod
-    def record_usage(targets: RequestTargets, usage: ProviderUsage) -> None:
-        """Add what the provider reported for one reply to everything its request was counted in."""
+    def record_usage(targets: RequestTargets, usage: ProviderUsage, tokens_forwarded: int | None = None) -> None:
+        """Add what the provider reported for one reply to everything its request was counted in.
+
+        With `tokens_forwarded`, LLM-GC's own count of that request, the pair becomes each target's
+        newest answered request.
+        """
         for target in targets:
             target.provider.add(usage)
+            if tokens_forwarded is not None:
+                target.last_reply = LastReply(tokens_forwarded=tokens_forwarded, usage=usage)
 
     def session_summaries(self, client_session: str) -> ModelUsage | None:
         """LLM-GC's own model calls for one client session's conversations, or None for a session not counted."""

@@ -27,7 +27,7 @@ export function explainResult(r, before) {
     const why = [
       o.kept.length ? `${plural(o.kept.length, "message")} would be kept, quoted word for word (they are short, or matter now), and each quote carries a small marker, so it grows a little` : null,
       o.archived.length ? `${plural(o.archived.length, "message")} would be archived, to their exchange's opening line and facts` : null,
-      o.compacted.length ? `${plural(o.compacted.length, "message")} would be compacted, summarised` : null,
+      o.compacted.length ? `${plural(o.compacted.length, "message")} would be summarised` : null,
     ].filter(Boolean);
     return { tone: "muted", title: "– Nothing changed: collecting now would have made the prompt bigger",
       body: [`Collecting the ${plural(a.turns.length, "older message")} (${fmt(a.tokens_taken)} tokens now) would have left the model with ${fmt(a.context_tokens_after)} tokens instead of ${fmt(r.tokens_before)}. A collection is only made when it shrinks what the model gets, so LLM-GC left them word for word.`],
@@ -39,7 +39,7 @@ export function explainResult(r, before) {
     const cut = before ? before.next_cut : null;
     if (!cut || cut.turns.length === 0) return nothingWaiting(before);
     return { tone: "muted", title: "– Nothing to collect yet",
-      body: [`The ${plural(cut.turns.length, "older message")} would all be kept word for word (they are short, or matter now), so collecting them would save nothing.`] };
+      body: [`The ${plural(cut.turns.length, "older message")} would all be quoted word for word (they are short, or matter now), so collecting them would save nothing.`] };
   }
   if (r.status === "bypassed_aging_in_flight") return { tone: "muted", title: "– A collection is already running", body: ["LLM-GC is already collecting this conversation. Try again in a moment."] };
   if (r.status === "bypassed_paused") return { tone: "muted", title: "⏸ Paused: LLM-GC is yielding to a rate limit", body: [PAUSED_TEXT, pauseEnds()] };

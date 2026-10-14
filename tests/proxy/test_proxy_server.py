@@ -1696,3 +1696,19 @@ class TestAPreparedCutWaitsForTheRightRequest:
 
         assert any(_is_front(message) for message in forwarded[-1])
         assert SwitchReason.STALE_WEIGHT_AT_BOUND in reasons and SwitchReason.CACHE_COLD not in reasons
+
+
+class TestTheNewestRequestIsCountedBothWays:
+    def test_llm_gcs_count_and_the_providers_are_kept_for_the_same_request(self):
+        usage = {"input_tokens": 40, "cache_read_input_tokens": 900, "cache_creation_input_tokens": 60, "output_tokens": 7}
+        client, service, _, _ = _proxy(lambda request: httpx2.Response(200, json={**UPSTREAM_OK, "usage": usage}))
+        _post(client, _body(("user", "about databases"), ("assistant", "ok"), ("user", "go on")))
+        [session_id] = service.session_manager.store.active_session_ids()
+
+        stats = client.get("/stats").json()
+        conversation = next(c for c in stats["other_conversations"] if c["conversation_id"] == session_id)
+        last = conversation["traffic"]["last_reply"]
+
+        assert last["tokens_forwarded"] == conversation["traffic"]["tokens_forwarded"], "its only request"
+        assert last["provider_prompt_tokens"] == 40 + 900 + 60
+

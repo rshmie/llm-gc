@@ -265,3 +265,25 @@ class TestReadingASpawnedPrompt:
 
         assert prompts == {"toolu_a": self.PROMPT}
         assert self.PROMPT not in repr(outline)
+
+
+class TestTheNewestRequestCountedBothWays:
+    def test_each_reply_replaces_the_newest_pair_where_its_request_was_counted(self):
+        ledger = _ledger()
+        targets = _request(ledger, "c1", forwarded=1_000)
+        TrafficLedger.record_usage(targets, ProviderUsage(replies=1, input_tokens=100, cache_read_input_tokens=1_300,
+                                                          cache_creation_input_tokens=80), tokens_forwarded=1_000)
+        targets = _request(ledger, "c1", forwarded=1_200)
+        TrafficLedger.record_usage(targets, ProviderUsage(replies=1, input_tokens=20, cache_read_input_tokens=1_700,
+                                                          cache_creation_input_tokens=60), tokens_forwarded=1_200)
+
+        last = _conversation(ledger, "c1")["traffic"]["last_reply"]
+        assert last["tokens_forwarded"] == 1_200
+        assert last["provider_prompt_tokens"] == 20 + 1_700 + 60, "read in full, from the cache, and written to it"
+        assert ledger.total.provider.replies == 2, "the totals still add every reply up"
+
+    def test_without_llm_gcs_count_no_pair_is_kept(self):
+        ledger = _ledger()
+        TrafficLedger.record_usage(_request(ledger, "c1"), ProviderUsage(replies=1, input_tokens=5))
+        assert _conversation(ledger, "c1")["traffic"]["last_reply"] is None
+

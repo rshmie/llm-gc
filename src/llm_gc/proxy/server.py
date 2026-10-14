@@ -416,7 +416,7 @@ def _measure_request(app: FastAPI, session_id: str | None, origin: ClientOrigin 
             app.state.gc_service.pause_model_calls(outline.retry_after_s,
                                                    f"the upstream {pressure} a request from the client")
         if outline.usage is not None:
-            TrafficLedger.record_usage(counted, outline.usage)
+            TrafficLedger.record_usage(counted, outline.usage, forwarded)
             if session_id is not None:
                 metrics.cache_watch.observe(session_id, started_at=started_at, lifetime_s=lifetime_s,
                                             usage=outline.usage)

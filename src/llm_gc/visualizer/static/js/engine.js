@@ -201,7 +201,7 @@ function renderPreparing(k) {
           checkItem(cut.batch_ready ? "good" : "wait", cut.batch_ready ? "✓" : "…", "Enough to collect",
             h("span", { class: "num" }, countEl("next-ready", cut.compactable_tokens), ` tokens · ${fmt(cut.min_cut_tokens)} needed`),
             meterOf("next-ready", cut.compactable_tokens, cut.min_cut_tokens, "Tokens of messages to compact or archive"),
-            h("p", {}, "Only messages to be compacted or archived count. Keeping a message word for word saves nothing.")),
+            h("p", {}, "Only messages to be summarised or archived count. Quoting a message word for word saves nothing.")),
           !taking.length
             ? checkItem("wait", "…", "Makes the prompt smaller", null, h("p", {}, "Nothing to estimate: no older messages are waiting."))
             : saving > 0
@@ -264,8 +264,8 @@ function wouldDo(k, taking, title, heads, note = null) {
       h("span", {}, h("b", {}, plural(turns.length, "message")), ` ${label}`, rowNote ? h("span", { class: "would-note" }, ` (${rowNote})`) : null),
       h("span", { class: "num" }, `${fmt(tokensOf(turns))} tokens`)) : null;
   };
-  const counted = [row("compacted", "compacted"), row("archived", "archived"), row("out_of_view", "folded out of view")].filter(Boolean);
-  const notCounted = [row("kept", "kept word for word", "short, or it matters now"),
+  const counted = [row("compacted", "summarised"), row("archived", "archived"), row("out_of_view", "folded out of view")].filter(Boolean);
+  const notCounted = [row("kept", "quoted word for word", "short, or it matters now"),
     newest ? h("li", {}, swatch("verbatim"), h("span", {}, h("b", {}, `The newest ${plural(newest, "message")}`), " stay recent, sent as written"), h("span")) : null,
     moving.length ? h("li", {}, h("span", { class: "qdot" }), h("span", {}, h("b", {}, plural(moving.length, "earlier exchange")), " shown at another level"), h("span")) : null].filter(Boolean);
   return h("div", {},
@@ -289,7 +289,7 @@ export function whyText(item) {
   const s = item.score.toFixed(2);
   const band = item.score >= high ? "kept" : item.score >= low ? "compacted" : "archived";
   const earned = `Score ${s}: ${band === "kept" ? `at or above ${high.toFixed(2)}, so kept` : band === "compacted"
-    ? `between ${low.toFixed(2)} and ${high.toFixed(2)}, so compacted` : `below ${low.toFixed(2)}, so archived`}.`;
+    ? `between ${low.toFixed(2)} and ${high.toFixed(2)}, so summarised` : `below ${low.toFixed(2)}, so archived`}.`;
   const to = item.becomes ?? item.level;
   if (!to || to === band) return earned;
   if (to === "out_of_view") return `${earned} Folded out of view instead: the recap is over its budget with every exchange at its least detail, so the oldest are folded.`;

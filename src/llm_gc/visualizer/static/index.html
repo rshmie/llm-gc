@@ -17,15 +17,11 @@
       LLM-GC
     </span>
     <nav class="tabs" role="tablist" aria-label="Views">
-      <button role="tab" id="tab-session" aria-selected="true" aria-controls="view-session">Session</button>
-      <button role="tab" id="tab-conversation" aria-selected="false" aria-controls="view-conversation">Conversation</button>
+      <button role="tab" id="tab-conversation" aria-selected="true" aria-controls="view-conversation">Conversation</button>
+      <button role="tab" id="tab-requests" aria-selected="false" aria-controls="view-requests">Requests</button>
       <button role="tab" id="tab-engine" aria-selected="false" aria-controls="view-engine">Engine</button>
     </nav>
     <span class="spacer"></span>
-    <div class="picker">
-      <label for="client-select">Session</label>
-      <select id="client-select"><option>none yet</option></select>
-    </div>
     <span class="live" id="live" data-state="connecting" role="status"><span class="dot"></span><span id="live-text">connecting…</span></span>
     <button class="icon-btn" id="theme" type="button" title="Theme: follow the system">◐</button>
     <button class="icon-btn" id="open-guide" type="button" title="How LLM-GC works, and what the words mean" aria-label="How it works">?</button>
@@ -43,13 +39,14 @@
 
   <section class="card result" id="result" hidden aria-live="polite"></section>
 
-  <!-- On the Conversation and Engine tabs: which of the session's conversations is shown, and the one action on it. -->
+  <!-- On every tab: which conversation is shown, grouped by the Claude Code session it ran in, and the one action on it. -->
   <section class="conv-bar" id="conv-bar" hidden>
     <div class="picker">
       <label for="session-select">Conversation</label>
       <select id="session-select"><option>none yet</option></select>
     </div>
-    <button class="run-gc" id="run-gc" disabled title="Collect this conversation now, without waiting for enough messages to compact or archive.">Run GC now</button>
+    <div class="bar-chips" id="bar-chips" aria-live="polite"></div>
+    <button class="run-gc" id="run-gc" disabled title="Prepare a collection of this conversation now and switch it in at once, without waiting for enough messages to summarise or archive, or for the cache.">Run GC now</button>
     <p class="origin-line secondary" id="origin-line" hidden></p>
   </section>
 
@@ -58,14 +55,14 @@
     <p class="secondary" style="margin-top:6px">Conversations appear here as they pass through the proxy, from their second message.</p>
     <p class="secondary" style="margin-top:6px">Restarted the proxy? It keeps conversations in memory only, so yours reappears, complete, with its next message.</p>
     <ol>
-      <li>Start the proxy with the dashboard: <code>python scripts/run_proxy.py --serve --dashboard</code></li>
+      <li>Start LLM-GC with the dashboard: <code>llm-gc start --dashboard</code></li>
       <li>Talk through it: <code>python scripts/chat.py</code>, or point any Anthropic client at <code>http://127.0.0.1:9900</code></li>
-      <li>Watch each message move from recent into the recap as the conversation grows.</li>
+      <li>Watch older messages move from recent into the recap as the conversation grows.</li>
     </ol>
   </section>
 
-  <!-- ===================================================== the session: turn by turn, as it happened -->
-  <div id="view-session" class="view" role="tabpanel" aria-labelledby="tab-session" hidden>
+  <!-- ===================================================== the requests: the Claude Code session turn by turn, as it happened -->
+  <div id="view-requests" class="view" role="tabpanel" aria-labelledby="tab-requests" hidden>
     <section class="card trace-card" id="trace-card" aria-label="The session, turn by turn" hidden></section>
     <section class="card other-card" id="other-card" aria-label="Conversations no client session named" hidden></section>
     <section class="card session-card" id="session-card" aria-label="This session's conversations" hidden></section>
@@ -73,14 +70,13 @@
 
   <!-- ===================================================== the conversation: what the model knows -->
   <div id="view-conversation" class="view" role="tabpanel" aria-labelledby="tab-conversation" hidden>
-    <div class="status-stack" id="status" role="status"></div>
-
-    <section class="card prompt-card" aria-label="What is sent with each request">
-      <div class="prompt-top">
-        <section id="panel-size"></section>
-        <section id="panel-holds"></section>
-        <section id="panel-window"></section>
+    <section class="card summary-card" aria-label="What the model remembers, what it has forgotten, and whether to worry">
+      <div class="summary-grid">
+        <section class="sum-col" aria-labelledby="sum-remembers-title"><h2 id="sum-remembers-title">What the model remembers</h2><div id="sum-remembers"></div></section>
+        <section class="sum-col" aria-labelledby="sum-forgotten-title"><h2 id="sum-forgotten-title">What it has forgotten</h2><div id="sum-forgotten"></div></section>
+        <section class="sum-col" aria-labelledby="sum-worry-title"><h2 id="sum-worry-title">Should you worry?</h2><div id="sum-worry" role="status"></div></section>
       </div>
+      <div class="sum-foot" id="sum-foot"></div>
     </section>
 
     <section class="card facts-card" data-card="facts" aria-labelledby="facts-title">
@@ -100,12 +96,15 @@
       </div>
     </section>
 
-    <section class="card prompt-card map-card" aria-labelledby="hero-title">
-      <div>
+    <section class="card prompt-card map-card" data-card="map" aria-labelledby="hero-title">
+      <div class="card-head">
         <div class="map-head">
           <h2 id="hero-title">What the model has of each message</h2>
-          <span class="muted">Width: size in tokens · height: how much the model still has · hover to trace · click to open<span id="an-hint"></span></span>
+          <span class="muted">A bar per exchange in the recap and per recent message · width: size as written · height: how much the model still has · click to open<span id="an-hint"></span></span>
         </div>
+        <button class="collapse card-toggle" type="button" aria-expanded="true" aria-controls="map-body" aria-label="Collapse What the model has of each message" title="Collapse"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      </div>
+      <div class="card-body" id="map-body">
         <div class="pmap" id="map" tabindex="0">
           <div class="an-row"><div class="an-rowlab"></div><div class="an-labels" id="an-labels"></div></div>
           <div class="an-row"><div class="an-rowlab">Messages</div><div class="an-bars" id="an-bars"></div></div>
@@ -116,17 +115,22 @@
       </div>
     </section>
 
-    <section class="card" id="messages" aria-labelledby="messages-title">
+    <section class="card" id="messages" data-card="messages" aria-labelledby="messages-title">
       <div class="card-head">
         <div>
-          <h2 id="messages-title">Exchange by exchange</h2>
-          <div class="sub">Newest first: what the model reads for each, and what was said.</div>
+          <h2 id="messages-title">The conversation</h2>
+          <div class="sub">Oldest first, as the model reads it: for each exchange, what the model reads and what was said.</div>
         </div>
-        <div class="toggle" role="group" aria-label="View">
-          <button id="view-timeline" aria-pressed="true">As it happened</button>
-          <button id="view-prompt" aria-pressed="false">Exactly what the model receives</button>
+        <div class="card-head-tools">
+          <button class="link-btn" id="jump-newest" type="button">Jump to newest ↓</button>
+          <div class="toggle" role="group" aria-label="View">
+            <button id="view-timeline" aria-pressed="true">As it happened</button>
+            <button id="view-prompt" aria-pressed="false">Exactly what the model receives</button>
+          </div>
+          <button class="collapse card-toggle" type="button" aria-expanded="true" aria-controls="messages-body" aria-label="Collapse The conversation" title="Collapse"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         </div>
       </div>
+      <div class="card-body" id="messages-body">
       <div class="toolbar" id="toolbar">
         <div class="search">
           <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="7" cy="7" r="4.8"/><path d="m10.6 10.6 3.6 3.6" stroke-linecap="round"/></svg>
@@ -138,6 +142,7 @@
       </div>
       <div class="timeline" id="timeline"></div>
       <div id="prompt" hidden></div>
+      </div>
     </section>
   </div>
 
@@ -145,7 +150,7 @@
   <div id="view-engine" class="view" role="tabpanel" aria-labelledby="tab-engine" hidden>
     <div class="eng-intro">
       <h1>LLM-GC at work</h1>
-      <p>When the next collection runs and why, what collections have done to this conversation, and a record of every check.</p>
+      <p>When the next collection is prepared and switched in, and why; what collections have done to this conversation; and a record of every check.</p>
     </div>
     <div class="proxy-line" id="proxy-line"></div>
     <div class="status-stack" id="eng-status" role="status"></div>
@@ -249,31 +254,44 @@
   <div class="anatomy-caption" aria-hidden="true"><div style="flex:1.5">the old generation: every exchange at its level (the front)</div><div style="flex:1">the young generation: at least the newest <b class="cfg" data-config="last_n_turns_to_keep">…</b>, as written</div><div style="flex:1">&nbsp;</div></div>
 
   <h3>How a message moves through the generations</h3>
-  <div class="gflow" role="img" aria-label="Every message starts in the young generation. A collection moves older messages into the old generation as exchanges, each shown kept, compacted or archived by its score and decided again at every collection. The facts read from each exchange are filed in the permanent generation, and shown on its line.">
+  <div class="gflow" role="img" aria-label="Every message starts in the young generation. A collection moves older messages into the old generation as exchanges, each shown quoted, summarised or archived by its score and decided again at every collection. The facts read from each exchange are filed in the permanent generation, and shown on its line.">
     <div class="gnode g-young"><b>Young generation</b><span>Every message starts here, recent: sent as its own message, exactly as written.</span></div>
     <div class="gcut">↓ <b>a collection</b> takes the older messages as exchanges, each shown by its score</div>
     <div class="grows">
-      <div class="grow"><span class="band">≥ <b class="cfg" data-config="keep_threshold">…</b></span><b class="verb">kept</b><span class="to t-old">quoted word for word</span></div>
-      <div class="grow"><span class="band">between</span><b class="verb">compacted</b><span class="to t-old">opening line, facts and summary</span></div>
-      <div class="grow"><span class="band">&lt; <b class="cfg" data-config="archive_threshold">…</b></span><b class="verb">archived</b><span class="to t-old">opening line and facts</span></div>
+      <div class="grow"><span class="band">≥ <b class="cfg" data-config="keep_threshold">…</b></span><b class="verb">quoted</b><span class="to t-old">word for word, marked [Quoted exactly]</span></div>
+      <div class="grow"><span class="band">between</span><b class="verb">summarised</b><span class="to t-old">opening line, facts and summary, marked [Summarised]</span></div>
+      <div class="grow"><span class="band">&lt; <b class="cfg" data-config="archive_threshold">…</b></span><b class="verb">archived</b><span class="to t-old">opening line and facts, marked [Archived]</span></div>
     </div>
     <div class="gdest">
       <div class="gnode g-old"><b>Old generation</b><span>Every exchange at its level, decided again at every collection. The recap spends up to <b class="cfg" data-config="max_recap_tokens">…</b> tokens on them; over that, the coldest lose detail first.</span></div>
       <div class="gcold">facts read<br>once →</div>
-      <div class="gnode g-perm"><b>Permanent generation</b><span>The facts read from every exchange, and what replaced what. A compacted or archived exchange shows its facts on its line; a kept one has them in its words.</span></div>
+      <div class="gnode g-perm"><b>Permanent generation</b><span>The facts read from every exchange, and what replaced what. A summarised or archived exchange shows its facts on its line; a quoted one has them in its words.</span></div>
     </div>
   </div>
 
   <h3>When a collection happens</h3>
+  <p>A collection (a <i>cut</i> in the code) has two halves, because they cost different things.</p>
   <ol>
-    <li>After every reply, LLM-GC runs a <b>pass</b> (on screen, a <i>check</i>). Most passes change nothing.</li>
-    <li>The newest <b class="cfg" data-config="last_n_turns_to_keep">…</b> messages always stay in the young generation. An exchange
-      too short for its summary or opening line to be any smaller is kept word for word: a level is used only when it is cheaper.</li>
-    <li>Once the older messages to be compacted or archived reach <b class="cfg" data-config="min_cut_tokens">…</b> tokens,
-      the check makes a <b>collection</b> (a <i>cut</i> in the code) and moves them all at once. Changing the recap rarely keeps the
-      provider's prompt cache working.</li>
-    <li>A collection that would make the prompt bigger is skipped. <b>Run GC now</b> collects at once, ignoring the token minimum but never that rule.</li>
+    <li><b>It is prepared.</b> After every reply LLM-GC runs a <b>check</b> (a <i>pass</i>). Once the older messages to be
+      summarised or archived reach <b class="cfg" data-config="min_cut_tokens">…</b> tokens, and the result would be smaller,
+      it writes their summaries and reads their facts. That costs LLM-GC's own model calls, and changes nothing the model is
+      sent. The newest <b class="cfg" data-config="last_n_turns_to_keep">…</b> messages always stay recent.</li>
+    <li><b>It is switched in</b> as a later request is built, which is the first to carry it:
+      <ul class="guide-sub">
+        <li>at once if the provider's <b>cache is cold</b>: that request is read in full anyway, so the change costs nothing extra;</li>
+        <li>on a <b>warm</b> cache, once it saves at least <b class="cfg" data-config="min_saving_share">…</b> times what it makes
+          the provider cache again;</li>
+        <li>or once the model carries too much that has gone quiet: its <b>stale weight</b> reaches
+          <b class="cfg" data-config="max_stale_ratio" data-format="percent">…</b> of the window, whatever the cache costs.</li>
+      </ul></li>
+    <li>A collection that would make the prompt bigger is never switched in. <b>Run GC now</b> prepares one and switches it in at
+      once, ignoring the token minimum and the cache, but never that rule.</li>
   </ol>
+  <div class="guide-analogy"><b>Warm and cold, in plain words.</b> The provider is like a reviewer who has just read the first
+    50 pages of your document. Send it back soon with one new page and they read only the new page: the cache is <b>warm</b>.
+    Send it after they have forgotten and they read all 51: it is <b>cold</b>. Change page 1 and they must reread everything,
+    remembered or not. A collection changes page 1, so LLM-GC switches one in when the reviewer has forgotten anyway, or
+    when the saving is worth the reread.</div>
 
   <h3>What to watch</h3>
   <ol>
@@ -292,12 +310,16 @@
     <thead><tr><th>Code and docs</th><th>On screen</th><th>Meaning</th></tr></thead>
     <tbody>
       <tr><td>pass</td><td>check</td><td>runs after every reply</td></tr>
-      <tr><td>cut</td><td>collection</td><td>a check that moved messages out of the young generation</td></tr>
+      <tr><td>cut</td><td>collection</td><td>older messages moved out of the young generation into the recap</td></tr>
+      <tr><td>staged cut</td><td>prepared collection</td><td>summaries and facts ready, not yet sent to the model</td></tr>
+      <tr><td>switch</td><td>switched in</td><td>the request a prepared collection first reaches the model with</td></tr>
+      <tr><td>CacheState</td><td>cache warm / cold</td><td>whether the provider still remembers the prompt</td></tr>
+      <tr><td>stale weight</td><td>stale weight</td><td>what is still sent word for word that a prepared collection would condense</td></tr>
       <tr><td>front</td><td>recap</td><td>the first message of every request: every exchange at its level</td></tr>
       <tr><td>span</td><td>exchange</td><td>a message of yours and everything up to your next one</td></tr>
       <tr><td>young generation (verbatim)</td><td>recent</td><td>not collected yet: each sent as its own message, exactly as written</td></tr>
-      <tr><td>kept</td><td>kept</td><td>its exchange quoted word for word</td></tr>
-      <tr><td>compacted</td><td>compacted</td><td>its exchange's opening line, facts and summary</td></tr>
+      <tr><td>kept</td><td>quoted</td><td>its exchange quoted word for word, marked [Quoted exactly]</td></tr>
+      <tr><td>compacted</td><td>summarised</td><td>its exchange's opening line, facts and summary, marked [Summarised]</td></tr>
       <tr><td>archived</td><td>archived</td><td>its exchange's opening line and facts</td></tr>
       <tr><td>out_of_view</td><td>out of view</td><td>folded with its neighbours behind one line</td></tr>
     </tbody>

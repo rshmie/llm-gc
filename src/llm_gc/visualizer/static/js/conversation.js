@@ -3,8 +3,8 @@
 // Every value comes from an endpoint; this view formats and explains, and derives
 // nothing beyond grouping, counting, and sums and differences of numbers it was given.
 
-import { BECOMES, CATS, CLAMP_CHARS, FAR_JUMP_SCREENS, MAP_PX_PER_MESSAGE, EARLIER_SHOWN, GLOSSARY, HEIGHT, MIN_BAR_PX, NOT_COLLECTED_TEXT, ORDER, RUN_MIN, FACT_STATUS, categoryOf, describeOutcome, swatch } from "./vocabulary.js";
-import { $, agoTs, countEl, fill, fmt, h, meterBar, plural, ranges, reducedMotion, setChildren, share, storeGet, storeSet, svg } from "./dom.js";
+import { BECOMES, CATS, CLAMP_CHARS, CREDENTIAL_REFUSED_TEXT, CREDENTIAL_REFUSED_TITLE, FAR_JUMP_SCREENS, MAP_PX_PER_MESSAGE, EARLIER_SHOWN, GLOSSARY, HEIGHT, MIN_BAR_PX, NOT_COLLECTED_TEXT, ORDER, RUN_MIN, FACT_STATUS, SWITCH_REASON, categoryOf, describeOutcome, swatch } from "./vocabulary.js";
+import { $, agoTs, compact, countEl, fill, fmt, h, meterBar, plural, ranges, reducedMotion, setChildren, share, storeGet, storeSet } from "./dom.js";
 import { collecting, countCats, credentialRefusal, factsByTurn, has, instructionTokens, marked, newestReply, pendingTurns, preview, query, recapLimit, state, trafficOf, turnMatches, ui, writtenTokens } from "./state.js";
 import { hideTooltip, info, showTooltip, tipAction, tipQuote, hoverTip } from "./tooltip.js";
 import { offerReturn, showTab } from "./shell.js";
@@ -31,7 +31,6 @@ function instructionsTag(turn) {
   return tokens ? h("span", { class: "tag", ...hoverTip(GLOSSARY.instructions[0], GLOSSARY.instructions[1]) },
     `+ client instructions · ${plural(tokens, "token")}`) : null;
 }
-const changes = (n) => n === 1 ? "1 message changes" : `${fmt(n)} messages change`;
 const changing = (k) => k.turns.filter((t) => t.becomes).length;
 const capitalised = (text) => text[0].toUpperCase() + text.slice(1);
 export const messagesLabel = (turns) => turns.length === 1 ? `message ${turns[0]}` : `messages ${ranges(turns)}`;
@@ -42,141 +41,196 @@ const levelLine = (cat) => h("div", { class: "tip-level" }, levelBadge(cat), ` $
 const levelColour = (cat) => cat === "out_of_view" ? "var(--warn)" : `var(--fid-${cat})`;
 
 export function renderHero(k) {
-  renderSize(k);
-  renderHolds(k);
-  renderWindow(k);
+  renderSummary(k);
   renderMap(k);
 }
 
-// ----------------------------------------------------------------- what needs attention
+// ----------------------------------------------------------------- the three questions
 
-// Only what needs a look gets a banner: what the model can no longer see, and a collection that fell
-// short. Everything else is said in the panel it is about. A warning can be dismissed, and comes
-// back only when there is more of what it warns about.
+// A warning can be dismissed, and comes back only when there is more of what it warns about.
 const dismissedKey = () => `llmgc.dismissed.${state.selected}`;
 function dismissed() {
   try { return JSON.parse(storeGet(dismissedKey()) || "{}"); } catch { return {}; }
 }
 function dismiss(kind, upTo) {
   storeSet(dismissedKey(), JSON.stringify({ ...dismissed(), [kind]: upTo }));
-  renderStatus();
+  renderSummary(state.knowledge);
 }
 
-export function renderStatus() {
-  const k = state.knowledge;
-  if (!k) return;
-  const unseen = countCats(k).out_of_view;
-  const folded = k.spans.filter((s) => s.level === "out_of_view").length;
-  const shortfalls = state.activity ? state.activity.recent_degradations : [];
-  const latestShortfall = shortfalls.length ? shortfalls.at(-1).occurred_at : 0;
-  const hidden = dismissed();
-  const toMessages = (filter) => () => { setFilter(filter); $("messages").scrollIntoView({ behavior: smooth(), block: "start" }); };
-  const line = (tone, icon, title, text, action, dismissal) => h("div", { class: `status-line tone-${tone}` },
-    h("span", { class: "badge", "aria-hidden": "true" }, icon),
-    h("span", { class: "msg-text" }, h("b", {}, title), text ? ` ${text}` : null),
-    action ? h("button", { class: "link-btn", type: "button", onclick: action[1] }, `${action[0]} →`) : null,
+// A current fact reaches the model on its exchange's line in the recap, or in its words when that exchange is quoted.
+const reachesModel = (fact) => fact.sent || fact.span_level === "kept";
+const MARKS = { good: "✓", warn: "!", critical: "✕" };
+// One line of a column: a mark, the words, then a link to where it shows, and a way to dismiss it.
+function sumLine(tone, words, action = null, dismissal = null) {
+  return h("li", { class: `sum-line${tone ? ` tone-${tone}` : ""}` },
+    h("span", { class: "sum-mark", "aria-hidden": "true" }, MARKS[tone] || "·"),
+    h("span", { class: "sum-words" }, words,
+      action ? [" ", h("button", { class: "link-btn", type: "button", onclick: action[1] }, `${action[0]} →`)] : null),
     dismissal ? h("button", { class: "x", type: "button", "aria-label": "Dismiss", title: "Hide until there is more of this",
       onclick: () => dismiss(...dismissal) }, "×") : null);
+}
+const toMessages = (filter) => () => { setFilter(filter); $("messages").scrollIntoView({ behavior: smooth(), block: "start" }); };
+const toFacts = () => $("facts-title").scrollIntoView({ behavior: smooth(), block: "start" });
+const toEngine = (card) => () => { offerReturn("conversation", window.scrollY); showTab("engine"); openCard(card, true); };
+
+// What the model receives of the conversation, from most to least.
+function remembers(k, counts, facts) {
+  const exchanges = (level) => k.spans.filter((s) => s.level === level).length;
+  const n = (count) => h("b", {}, fmt(count));
+  const sent = facts.filter(reachesModel).length;
+  return [
+    sumLine("", [n(counts.verbatim), ` recent ${counts.verbatim === 1 ? "message" : "messages"}, exactly as written`]),
+    counts.kept ? sumLine("", [n(counts.kept), ` ${counts.kept === 1 ? "message" : "messages"} quoted word for word in the recap`]) : null,
+    counts.compacted ? sumLine("", [n(counts.compacted), ` ${counts.compacted === 1 ? "message" : "messages"} as ${plural(exchanges("compacted"), "summary", "summaries")}`]) : null,
+    counts.archived ? sumLine("", [n(counts.archived), ` ${counts.archived === 1 ? "message" : "messages"} by ${exchanges("archived") === 1 ? "its exchange's" : "their exchanges'"} opening line and facts`]) : null,
+    facts.length ? sumLine("", [n(sent), ` of ${plural(facts.length, "fact")} told to it, as facts or in their words`]) : null,
+  ].filter(Boolean);
+}
+
+// What it no longer has word for word, and whether anything is gone from view.
+function forgotten(k, counts, facts) {
+  const condensed = counts.compacted + counts.archived + counts.out_of_view;
+  if (!condensed) return [sumLine("good", counts.kept ? "Nothing: every message is sent or quoted word for word." : "Nothing yet: every message is sent as written.")];
+  const unseen = facts.filter((f) => !reachesModel(f)).length;
+  const replaced = k.facts.filter((f) => f.status === "superseded").length;
+  const unread = k.spans.filter((s) => s.facts_unread).reduce((sum, s) => sum + s.turns.length, 0);
+  return [
+    sumLine("", [h("b", {}, fmt(condensed)), ` ${condensed === 1 ? "message" : "messages"} no longer word for word`]),
+    counts.out_of_view
+      ? sumLine("warn", [h("b", {}, fmt(counts.out_of_view)), " out of view: it knows they exist, not what was said"], ["Show", toMessages("out_of_view")])
+      : sumLine("good", "Nothing out of view"),
+    unseen ? sumLine("warn", [h("b", {}, fmt(unseen)), ` ${unseen === 1 ? "fact" : "facts"} it can't see`], ["Show", toFacts])
+      : facts.length ? sumLine("good", "Every fact still reaches it") : null,
+    unread ? sumLine("warn", [h("b", {}, fmt(unread)), ` ${unread === 1 ? "message's" : "messages'"} facts couldn't be read: it gets their summary or opening line without them`], ["Show", toFacts]) : null,
+    replaced ? sumLine("", [h("b", {}, fmt(replaced)), ` earlier ${replaced === 1 ? "value" : "values"} replaced, and marked so`]) : null,
+    h("li", { class: "sum-note" }, "Every word is stored: a later collection shows it in more detail again if the conversation comes back to it."),
+  ].filter(Boolean);
+}
+
+// Whether anything needs a look: what the model can't see, a collection that fell short, a filling window.
+// The all-clear is said only when it is true, not when its warnings were dismissed.
+function worries(k, counts, facts) {
+  const hidden = dismissed();
+  const unseenFacts = facts.filter((f) => !reachesModel(f)).length;
+  const shortfalls = state.activity ? state.activity.recent_degradations : [];
+  const latestShortfall = shortfalls.length ? shortfalls.at(-1).occurred_at : 0;
+  const fill_ = windowUse(k);
+  const staged = k.staged;
   const items = [];
   // First, and with no way to hide it: unlike the others, it does not pass until someone acts.
-  if (credentialRefusal()) items.push(line("critical", "✕", CREDENTIAL_REFUSED_TITLE, CREDENTIAL_REFUSED_TEXT,
-    ["See why", () => { showTab("engine"); openCard("notmoved", true); }]));
-  if (unseen > (hidden.out_of_view ?? 0)) items.push(line("warn", "!", `The model can no longer see ${plural(unseen, "message")}.`,
-    `The recap reached its budget of ${recapLimit()} with every exchange at its least detail, so the oldest ${plural(folded, "exchange")} were folded into one line saying they exist. Their words are stored, not lost.`,
-    ["Show them", toMessages("out_of_view")], ["out_of_view", unseen]));
-  if (latestShortfall > (hidden.shortfalls ?? 0)) items.push(line("warn", "!", `${plural(shortfalls.length, "part")} of a collection fell short.`,
-    "Each says what the model gets instead. Nothing is lost: an exchange always keeps its words.",
-    ["See why", () => { showTab("engine"); openCard("notmoved", true); }], ["shortfalls", latestShortfall]));
-  if (collecting()) items.push(line("", "…", "Collecting this conversation.", "The page updates when it finishes."));
-  if (state.pause) items.push(line("warn", "⏸", `LLM-GC is yielding to a rate limit until ${new Date(state.pause.until).toLocaleTimeString()}.`,
-    "It makes no model calls of its own and starts no collection meanwhile; your requests go through as normal.", ["Why", () => { showTab("engine"); }]));
-  fill("status", items);
+  if (credentialRefusal()) items.push(sumLine("critical", [h("b", {}, CREDENTIAL_REFUSED_TITLE), ` ${CREDENTIAL_REFUSED_TEXT}`], ["See why", toEngine("notmoved")]));
+  if (counts.out_of_view > (hidden.out_of_view ?? 0)) items.push(sumLine("warn",
+    [h("b", {}, `It can no longer see ${plural(counts.out_of_view, "message")}.`), ` The recap reached its budget of ${recapLimit()} with every exchange at its least detail, so the oldest were folded into one line.`],
+    ["Show them", toMessages("out_of_view")], ["out_of_view", counts.out_of_view]));
+  if (unseenFacts) items.push(sumLine("warn", [h("b", {}, `${plural(unseenFacts, "fact")} ${unseenFacts === 1 ? "doesn't" : "don't"} reach it.`), " Their exchanges are out of view."], ["Show", toFacts]));
+  if (latestShortfall > (hidden.shortfalls ?? 0)) items.push(sumLine("warn",
+    [h("b", {}, `${plural(shortfalls.length, "part")} of a collection fell short.`), " Each says what the model gets instead; nothing is lost."],
+    ["See why", toEngine("notmoved")], ["shortfalls", latestShortfall]));
+  if (fill_ && fill_.share >= WINDOW_WARN) items.push(sumLine("warn", [h("b", {}, `The prompt fills ${Math.round(fill_.share * 100)}% of the model's window.`), ` ${fill_.how}`]));
+  if (staged && staged.stale_tokens >= STALE_NOTE * staged.stale_bound_tokens && !staged.switches) items.push(sumLine("",
+    [`The model carries ${plural(staged.stale_tokens, "token")} that have gone quiet, ${Math.round((100 * staged.stale_tokens) / staged.stale_bound_tokens)}% of its bound. At the bound, the prepared collection is switched in.`],
+    ["Why", toEngine("next")]));
+  if (state.pause) items.push(sumLine("warn", [h("b", {}, `LLM-GC is yielding to a rate limit until ${new Date(state.pause.until).toLocaleTimeString()}.`), " It prepares no collection meanwhile; your requests go through as normal."], ["Why", toEngine("next")]));
+  if (collecting()) items.push(sumLine("", "Preparing a collection now: this updates when it finishes."));
+  const clear = !counts.out_of_view && !unseenFacts && !shortfalls.length && !credentialRefusal() && !(fill_ && fill_.share >= WINDOW_WARN);
+  if (clear) items.unshift(sumLine("good", [h("b", {}, "No."), facts.length ? " Every fact reaches the model," : "", " nothing is out of view, and no collection fell short."]));
+  else if (!items.some((item) => /tone-(warn|critical)/.test(item.className))) items.unshift(sumLine("", "Nothing new since you dismissed what was here."));
+  return items;
 }
+// A window this full is worth a look; stale weight this close to its bound is worth a mention.
+const WINDOW_WARN = 0.8;
+const STALE_NOTE = 0.8;
 
-// ----------------------------------------------------------------- the prompt: cost, holdings, window
-
-export function renderSize(k) {
-  const written = writtenTokens(k);
-  const sent = k.context_tokens;
-  const less = written - sent;
-  // A forecast: what the next request will carry. What requests did carry is measured, below it.
-  const [tone, text] = !k.collected ? ["", "Same as written: not collected"]
-    : k.cuts === 0 ? ["", "Same as written: nothing collected yet"]
-    : less >= 0 ? ["good", `↓ ${fmt(less)} · ${share(less, written)}% less than as written`]
-    : ["", `↑ ${fmt(-less)} more than as written: the recap outgrew what it replaced`];
-  fill("panel-size",
-    h("div", { class: "label" }, "The next request", info("size")),
-    h("div", { class: "hero-row" }, h("span", { class: "hero" }, countEl("size-sent", sent)), h("span", { class: "hero-unit" }, "tokens"),
-      h("span", { class: `delta${tone ? ` ${tone}` : ""}` }, text)),
-    h("p", { class: "hero-sub" }, "Of this conversation: the recap, then the recent messages as written. Your next message is added on top, and the system prompt and tools go with it unchanged."),
-    measuredSoFar());
-}
-
-// What this conversation's requests carried, as the proxy counted them: the record behind the forecast above.
-function measuredSoFar() {
-  const c = trafficOf(state.selected);
-  if (!c) return null;
-  const t = c.traffic;
-  const saved = t.tokens_saved ? `saved ${fmt(t.tokens_saved)} (${share(t.tokens_saved, t.tokens_from_client)}% of all it sent)`
-    : c.collected === false ? "nothing saved: not collected" : "nothing saved yet";
-  return h("p", { class: "hero-sub measured" }, h("b", {}, "So far: "), `${plural(t.requests, "request")} sent ${fmt(t.tokens_from_client)} tokens overall, the system prompt and tools included; ${saved}.`,
-    c.collections_not_yet_sent ? h("span", { class: "st warn" }, ` ⚠ The newest collection has not reached the model: no request has carried it yet.`) : null);
-}
-
-export function renderHolds(k) {
-  const counts = countCats(k);
-  const next = changing(k);
-  const why = h("button", { class: "link-btn", type: "button", onclick: () => { showTab("engine"); openCard("rate", true); } }, "Why?");
-  const sofar = `${plural(k.turns.length, "message")} so far, ${!k.cuts ? "all sent as written." : counts.out_of_view ? "some out of view." : "none out of view."}`;
-  const rows = ORDER.filter((key) => key !== "out_of_view" || counts.out_of_view).map((key) => h("li",
-    { class: key === "out_of_view" ? "alert" : counts[key] ? "" : "zero", ...hoverTip(GLOSSARY[key][0], GLOSSARY[key][1]) },
-    h("i", { class: `hb f-${key}`, style: `height:${Math.max(3, Math.round(HEIGHT[key] * 0.13))}px` }),
-    h("span", {}, CATS[key].label), h("b", {}, countEl(`holds-${key}`, counts[key]))));
-  fill("panel-holds",
-    h("div", { class: "label" }, "How each message is sent", info("holds")),
-    h("ul", { class: "holds" }, rows),
-    h("div", { class: "note" }, sofar, h("div", { id: "last-collection" }),
-      !k.collected ? h("div", { ...hoverTip("Not collected", NOT_COLLECTED_TEXT) }, "Not collected: a subagent's conversation is recorded and sent as written.")
-        : next ? h("div", {}, k.next_cut.batch_ready ? `A collection runs after your next reply: ${changes(next)}. ` : `${changes(next)} at the next collection. `, why) : null));
-  renderLastCollection();
-}
-
-// When the last collection ran, and a way to what it moved. Drawn on every refresh, as "ago" moves on;
-// a collection running now is said here too, beside the counts it will change.
-export function renderLastCollection() {
-  const box = $("last-collection");
-  if (!box) return;
-  const passes = state.activity ? state.activity.recent_passes : [];
-  const last = passes.filter((p) => p.gc_status === "completed").at(-1);
-  const moved = h("button", { class: "link-btn", type: "button",
-    onclick: () => { offerReturn("conversation", window.scrollY); showTab("engine"); openCard("moves", true); } }, "What moved");
-  setChildren(box, collecting() ? "Collecting now: these counts update when it finishes."
-    : last ? [`Last collection ${agoTs(last.gc_completed_at)}${last.outcome ? `: ${describeOutcome(last.outcome)}` : ""}. `, moved] : null);
-}
-
-export function renderWindow(k) {
+// How full the model's window is: by the provider's own count of the last request when there is one, since the
+// window is in its tokens and that count includes the system prompt and tools; otherwise LLM-GC's estimate.
+function windowUse(k) {
   const w = k.context_window;
-  const measured = trafficOf(state.selected);
-  const window = measured && measured.context_window;
-  const source = !window ? "the configured window" : window.reported ? `the window of ${measured.model || "this model"}, as the provider reports it`
-    : "the configured window, as the provider has not reported this model's";
-  const share = w ? k.context_tokens / w : 0;
-  fill("panel-window",
-    h("div", { class: "label" }, "The model's window", info("window")),
-    h("div", { class: "tile-big" }, w ? [countEl("window-pct", share * 100, { format: (v) => (v < 0.1 && v > 0 ? "<0.1" : v.toFixed(v < 10 ? 1 : 0)) }), "%"] : "—", h("small", {}, " used")),
-    h("div", { class: "meter", role: "meter", "aria-valuemin": "0", "aria-valuemax": String(w || 0), "aria-valuenow": String(k.context_tokens), "aria-label": "Share of the model's window" },
-      meterBar("window-share", share * 100)),
-    h("div", { class: "note" }, `${fmt(k.context_tokens)} of ${fmt(w)} tokens before your next message, in ${source}.`));
+  if (!w) return null;
+  const c = trafficOf(state.selected);
+  const last = c && c.traffic.last_reply;
+  return last ? { share: last.provider_prompt_tokens / w, how: "By the provider's count of the last request, system prompt and tools included." }
+    : { share: k.context_tokens / w, how: "By LLM-GC's estimate of the conversation alone." };
+}
+
+export function renderSummary(k) {
+  if (!k) return;
+  const counts = countCats(k);
+  const facts = k.facts.filter((f) => f.status === "active");
+  fill("sum-remembers", h("ul", { class: "sum-list" }, remembers(k, counts, facts)));
+  fill("sum-forgotten", h("ul", { class: "sum-list" }, forgotten(k, counts, facts)));
+  fill("sum-worry", h("ul", { class: "sum-list" }, worries(k, counts, facts)));
+  fill("sum-foot", tokenLines(k));
+  renderBar(k);
+}
+
+// The token figures, each named for whose count it is: LLM-GC's own tokenizer is an estimate, the provider's is what it bills.
+function tokenLines(k) {
+  const written = writtenTokens(k);
+  const less = written - k.context_tokens;
+  const c = trafficOf(state.selected);
+  const t = c && c.traffic;
+  const last = t && t.last_reply;
+  const use = windowUse(k);
+  const passes = state.activity ? state.activity.recent_passes : [];
+  const lastCollection = passes.filter((p) => p.gc_status === "completed").at(-1);
+  const saving = !k.collected ? "not collected" : !k.cuts ? "nothing collected yet" : less >= 0 ? `${share(less, written)}% less than as written` : "more than as written: the recap outgrew what it replaced";
+  const ratio = last && last.tokens_forwarded ? last.provider_prompt_tokens / last.tokens_forwarded : null;
+  const percent = (part) => part < 0.001 && part > 0 ? "<0.1" : (part * 100).toFixed(part < 0.1 ? 1 : 0);
+  const windowMeter = use ? h("span", { class: "sum-window" }, ` · ${percent(use.share)}% of the model's window`,
+    h("span", { class: "meter mini", role: "meter", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(Math.round(use.share * 100)), "aria-label": "Share of the model's window" },
+      meterBar("window-share", use.share * 100))) : null;
+  return [
+    h("p", { class: "sum-tokens" }, "Next request: ", h("b", {}, `≈ ${fmt(k.context_tokens)}`), " tokens of conversation, by LLM-GC's estimate", info("size"), ` · ${saving}`,
+      last ? null : windowMeter),
+    last ? h("p", { class: "sum-tokens" }, "Last request, as the provider counted it: ", h("b", {}, fmt(last.provider_prompt_tokens)),
+      " tokens with the system prompt and tools", windowMeter,
+      h("span", { class: "secondary" }, ` · ${compact(last.usage.cache_read_input_tokens)} read from its cache, ${compact(last.usage.cache_creation_input_tokens)} written to it, ${compact(last.usage.input_tokens)} sent plainly`,
+        ratio ? `. LLM-GC counted the same request at ${fmt(last.tokens_forwarded)}: the provider's count runs ${ratio.toFixed(2)}× LLM-GC's estimate here.` : ".")) : null,
+    lastCollection ? h("p", { class: "sum-tokens secondary" }, `Last collection ${agoTs(lastCollection.gc_completed_at)}${lastCollection.outcome ? `: ${describeOutcome(lastCollection.outcome)}` : ""}. `,
+      h("button", { class: "link-btn", type: "button", onclick: toEngine("moves") }, "What moved →")) : null,
+    t ? h("p", { class: "sum-tokens secondary" }, `So far: ${plural(t.requests, "request")}, ${fmt(t.tokens_from_client)} tokens sent overall by LLM-GC's count, ${t.tokens_saved ? `${fmt(t.tokens_saved)} saved (${share(t.tokens_saved, t.tokens_from_client)}%)` : "nothing saved yet"}.`) : null,
+  ];
+}
+
+// ----------------------------------------------------------------- the bar above every tab: the cache, and the next collection
+
+const duration = (seconds) => seconds < 90 ? `${Math.round(seconds)} s` : seconds < 5400 ? `${Math.round(seconds / 60)} min` : `${+(seconds / 3600).toFixed(1)} h`;
+
+// Each chip says one thing in a few words; hovering says the rest.
+export function renderBar(k) {
+  const chip = (tone, label, title, text, onclick = null) => h(onclick ? "button" : "span",
+    { class: `bar-chip${tone ? ` tone-${tone}` : ""}`, ...(onclick ? { type: "button", onclick } : {}), ...hoverTip(title, text) }, label);
+  const cache = state.cache;
+  const cacheChip = !cache ? null
+    : cache.uses_cache === null ? chip("", "Cache: no reply yet", GLOSSARY.cache[0], GLOSSARY.cache[1])
+    : cache.uses_cache === false ? chip("", "Cache: not used", GLOSSARY.cache[0], "This conversation's replies use no prompt cache, so every request is read in full and a smaller prompt is always cheaper. " + GLOSSARY.cache[1])
+    : cache.state === "warm" ? chip("good", `Cache warm · ${duration(Math.max(0, cache.lifetime_s - cache.idle_s))} left`, GLOSSARY.cache[0],
+      `${duration(cache.idle_s)} since the last request; the provider keeps this conversation cached for ${duration(cache.lifetime_s)} after each one. ${GLOSSARY.cache[1]}`)
+    : chip("cold", `Cache cold · idle ${duration(cache.idle_s)}`, GLOSSARY.cache[0],
+      `Idle longer than the ${duration(cache.lifetime_s)} the provider keeps this conversation cached. ${GLOSSARY.cache[1]}`);
+  const s = k && k.staged;
+  const next = !k ? null
+    : !k.collected ? chip("", "Not collected", "Not collected", NOT_COLLECTED_TEXT)
+    : collecting() ? chip("", "Preparing a collection…", GLOSSARY.prepared[0], GLOSSARY.prepared[1], toEngine("next"))
+    : s && s.switches ? chip("good", "Collection: switches in next request", GLOSSARY.prepared[0], `${capitalised(SWITCH_REASON[s.reason] || s.reason)}. ${GLOSSARY.prepared[1]}`, toEngine("next"))
+    : s ? chip("", "Collection: prepared, waiting", GLOSSARY.prepared[0], `The cache is warm and switching now would make the provider cache ${fmt(s.rewritten_tokens)} tokens again to save ${fmt(s.saving_tokens)}. ${GLOSSARY.prepared[1]}`, toEngine("next"))
+    : k.next_cut.batch_ready ? chip("", "Collection: prepared after the next reply", GLOSSARY.check[0], GLOSSARY.check[1], toEngine("next"))
+    : k.next_cut.compactable_tokens ? chip("", `Collection: not enough yet · ${fmt(k.next_cut.compactable_tokens)} of ${fmt(k.next_cut.min_cut_tokens)} tokens`, GLOSSARY.check[0],
+      `A collection is prepared once the older messages to be summarised or archived add up to ${fmt(k.next_cut.min_cut_tokens)} tokens. ${GLOSSARY.check[1]}`, toEngine("next"))
+    : chip("", "Collection: nothing to collect yet", GLOSSARY.check[0], GLOSSARY.check[1], toEngine("next"));
+  fill("bar-chips", cacheChip, next);
 }
 
 // ----------------------------------------------------------------- the map: what the model has of each message
 
-// One bar per message, reused across renders and keyed by message: a collection changes a bar's
-// colour and height in place, which is what lets the change transition instead of jumping.
+// One bar per exchange the recap holds - the model reads one entry for each - and one per recent message,
+// reused across renders and keyed by what it stands for: a re-planned exchange changes its colour and height
+// in place, which is what lets the change transition instead of jumping. `barOfTurn` finds a message's bar.
 const barCache = new Map();
+let barOfTurn = new Map();
 let lastCats = new Map();
 let ledgerSegs = null;
-export function clearMapCache() { barCache.clear(); lastCats = new Map(); ledgerSegs = null; }
+export function clearMapCache() { barCache.clear(); barOfTurn = new Map(); lastCats = new Map(); ledgerSegs = null; }
 
 // Appends what is new instead of re-inserting what is already there: an element taken out of the
 // page and put back loses its running transition.
@@ -219,10 +273,15 @@ function markMoreSideways(el) {
 
 export function renderMap(k) {
   const facts = factsByTurn(k);
+  const byIndex = new Map(k.turns.map((t) => [t.turn_index, t]));
   const items = [
-    ...k.turns.map((t) => ({ turn: t, i: t.turn_index, cat: categoryOf(t), tok: t.tokens, role: t.role, text: t.text })),
-    ...pendingTurns(k).map((p) => ({ pending: true, i: p.turn_index, cat: "pending", tok: p.tokens, role: p.role, text: p.text })),
+    ...k.spans.map((span) => ({ span, key: `s${span.turns[0]}`, i: span.turns[0], turns: span.turns, cat: span.level,
+      tok: span.turns.reduce((n, i) => n + (byIndex.get(i)?.tokens ?? 0), 0), text: span.text })),
+    ...k.turns.filter((t) => t.fidelity === "verbatim").map((t) => ({ turn: t, key: `t${t.turn_index}`, i: t.turn_index, turns: [t.turn_index],
+      cat: categoryOf(t), tok: t.tokens, role: t.role, text: t.text })),
+    ...pendingTurns(k).map((p) => ({ pending: true, key: `p${p.turn_index}`, i: p.turn_index, turns: [p.turn_index], cat: "pending", tok: p.tokens, role: p.role, text: p.text })),
   ];
+  const messages = items.reduce((n, x) => n + x.turns.length, 0);
   const barsHost = $("an-bars");
   const scroller = $("map");
   // Read before anything changes: a map the reader had scrolled to its newest end follows new messages.
@@ -239,13 +298,13 @@ export function renderMap(k) {
   const width = (x) => Math.max(x.tok ?? floor, floor);
   barsHost.classList.toggle("dense", items.length > 80);
   barsHost.classList.toggle("searching", !!query());
-  $("map").setAttribute("aria-label", `Every message in order, oldest first: ${items.length} in all`);
+  $("map").setAttribute("aria-label", `Every message in order, oldest first: ${messages} in all, the collected ones as their exchanges`);
 
   const groupOf = (x) => x.pending ? "newest" : x.cat !== "verbatim" ? "condensed" : x.turn.becomes ? "next" : "tail";
   const runs = [];
   for (const x of items) {
     const g = groupOf(x), r = runs.at(-1);
-    if (r && r.g === g) { r.n++; r.w += width(x); } else runs.push({ g, n: 1, w: width(x) });
+    if (r && r.g === g) { r.n += x.turns.length; r.w += width(x); } else runs.push({ g, n: x.turns.length, w: width(x) });
   }
   const GROUP = { condensed: "Collected", next: "Next", tail: "Recent", newest: "" };
   setChildren($("an-labels"), runs.map((r) => h("div", { class: "an-l", style: `flex-grow:${r.w}` },
@@ -253,39 +312,46 @@ export function renderMap(k) {
       r.g === "newest" ? " " : [h("b", {}, GROUP[r.g]), ` · ${r.n}`]))));
 
   let changed = 0;
+  barOfTurn = new Map();
   const cells = items.map((x) => {
-    let el = barCache.get(x.i);
+    let el = barCache.get(x.key);
     if (!el) {
       el = h("div", { class: "bar", tabindex: "0", role: "button",
         onclick: () => jumpTo(el._i),
         onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); jumpTo(el._i); } },
-        onpointerenter: (e) => { showTooltip(e, ...el._tip); trace([el._i]); },
+        onpointerenter: (e) => { showTooltip(e, ...el._tip); trace(el._turns); },
         onpointerleave: () => { hideTooltip(); trace(null); },
-        onfocus: (e) => { showTooltip(e, ...el._tip); trace([el._i]); },
+        onfocus: (e) => { showTooltip(e, ...el._tip); trace(el._turns); },
         onblur: () => { hideTooltip(); trace(null); } });
       el._cell = h("div", { class: "an-c" }, el);
-      barCache.set(x.i, el);
+      barCache.set(x.key, el);
     }
     el._i = x.i;
+    el._turns = x.turns;
+    for (const i of x.turns) barOfTurn.set(i, el);
     el._cell.style.flexGrow = String(width(x));
     const t = x.turn;
-    const span = t && t.span !== null ? k.spans[t.span] : null;
-    const hit = query() ? (x.pending ? has(x.text) : turnMatches(t, facts)) : null;
+    const moving = x.span || t;
+    const hit = query() ? (x.pending ? has(x.text) : x.span ? has(x.text) || x.turns.some((i) => turnMatches(byIndex.get(i), facts)) : turnMatches(t, facts)) : null;
     el.className = `bar${x.pending ? " pending" : ` f-${x.cat}`}${hit === null ? "" : hit ? " hit" : " miss"}`;
-    const before = lastCats.get(x.i);
+    const before = lastCats.get(x.key);
     el.style.setProperty("--d", before !== undefined && before !== x.cat ? `${(changed++ * 0.03).toFixed(2)}s` : "0s");
-    lastCats.set(x.i, x.cat);
+    lastCats.set(x.key, x.cat);
     el.style.setProperty("--h", `${x.pending ? 100 : HEIGHT[x.cat]}%`);
-    setChildren(el, t && t.becomes ? h("span", { class: "q", style: `--qb:${levelColour(t.becomes)}` }) : null);
+    setChildren(el, moving && moving.becomes ? h("span", { class: "q", style: `--qb:${levelColour(moving.becomes)}` }) : null);
     const size = plural(x.tok, "token");
+    const name = x.span ? `${capitalised(messagesLabel(x.turns))}, one exchange` : `Message ${x.i}`;
     el.setAttribute("aria-label", x.pending ? `Message ${x.i}, newest request, ${size}: not in the conversation yet`
-      : `Message ${x.i}, ${speakerOf(x.turn)}, ${size}: ${CATS[x.cat].label}`);
+      : `${name}, ${size} as written: ${CATS[x.cat].label}`);
     el._tip = x.pending
       ? [`Message ${x.i} · newest request · ${size}`, GLOSSARY.newest[1], tipQuote(preview(x.text))]
-      : [[swatch(x.cat), `Message ${x.i} · ${speakerOf(x.turn)} · ${size}`], levelLine(x.cat),
-        span ? `Its exchange: ${messagesLabel(span.turns)}` : null,
-        t.becomes ? h("div", { class: "tip-level" }, "Next collection: ", levelBadge(t.becomes), ` ${whyText(span || t)}`) : null,
-        tipQuote(preview(x.text)), tipAction("Click to open")];
+      : x.span
+        ? [[swatch(x.cat), `${capitalised(messagesLabel(x.turns))} · ${size} as written`], levelLine(x.cat),
+          x.span.becomes ? h("div", { class: "tip-level" }, "Next collection: ", levelBadge(x.span.becomes), ` ${whyText(x.span)}`) : null,
+          h("div", {}, "The model reads:"), tipQuote(preview(x.text)), tipAction("Click to open")]
+        : [[swatch(x.cat), `Message ${x.i} · ${speakerOf(t)} · ${size}`], levelLine(x.cat),
+          t.becomes ? h("div", { class: "tip-level" }, "Next collection: ", levelBadge(t.becomes), ` ${whyText(t)}`) : null,
+          tipQuote(preview(x.text)), tipAction("Click to open")];
     return el._cell;
   });
   reconcile(barsHost, cells);
@@ -360,7 +426,7 @@ export function trace(ids, seg = null) {
     if (row.dataset.turns.split(",").map(Number).some((n) => ids.includes(n))) row.classList.add("linked");
   }
   for (const i of ids) {
-    barCache.get(i)?.classList.add("linked");
+    barOfTurn.get(i)?.classList.add("linked");
     const t = k && k.turns.find((x) => x.turn_index === i);
     const key = !t ? "pending" : t.fidelity !== "verbatim" ? "block" : "recent";
     segs[key].classList.add("linked");
@@ -381,7 +447,7 @@ export function celebrateCleanup() {
 
 export function setFilter(key) {
   ui.filter = key;
-  ui.listOpen = true;
+  openCard("messages");
   if (ui.promptView) setPromptView(false);
   renderMessages();
 }
@@ -402,14 +468,9 @@ export function renderChips(k) {
   const chip = (key, label, count, mark) => h("button", { class: "chip-btn", type: "button", "aria-pressed": String(ui.filter === key),
     ...(GLOSSARY[key] ? hoverTip(GLOSSARY[key][0], GLOSSARY[key][1]) : {}),
     onclick: () => setFilter(ui.filter === key && key !== "all" ? "all" : key) }, mark, label, h("span", { class: "count" }, countEl(`chip-${key}`, count)));
-  const toggle = h("button", { class: "list-toggle", type: "button", "aria-controls": "timeline", "aria-expanded": String(ui.listOpen),
-    "aria-label": ui.listOpen ? "Hide the messages" : "Show the messages", title: ui.listOpen ? "Hide the messages" : "Show the messages",
-    onclick: () => { ui.listOpen = !ui.listOpen; storeSet("llmgc.messages", ui.listOpen ? "open" : "closed"); renderChips(k); renderTimeline(k); } },
-    svg("svg", { width: 14, height: 14, viewBox: "0 0 16 16", "aria-hidden": "true" },
-      svg("path", { d: "M4 6l4 4 4-4", fill: "none", stroke: "currentColor", "stroke-width": 1.8, "stroke-linecap": "round", "stroke-linejoin": "round" })));
   fill("chips", chip("all", "All", k.turns.length + pending),
     ORDER.filter((key) => counts[key]).map((key) => chip(key, CATS[key].label, counts[key], swatch(key))),
-    nextCount ? chip("next", "Changes next", nextCount, h("span", { class: "qdot" })) : null, toggle);
+    nextCount ? chip("next", "Changes next", nextCount, h("span", { class: "qdot" })) : null);
 }
 
 // One row per exchange the old generation holds, one per run of folded exchanges (they share a
@@ -468,59 +529,64 @@ const isCondensed = (row) => row.kind === "run" || row.kind === "span" || row.ki
 export function renderTimeline(k) {
   const facts = factsByTurn(k);
   const visible = buildRows(k).filter((row) => rowVisible(row, facts));
-  // Newest first: what the model sees now leads, and older history reads on below it.
-  const folded = foldRuns(visible).reverse();
+  // Oldest first, as a chat reads and as the model reads the prompt: the recap, then the recent messages.
+  const folded = foldRuns(visible);
   const filtered = ui.filter !== "all" || query();
-  // Unfiltered, a long conversation shows only its newest rows; the rest sit behind a button at
-  // the foot. Filtering, searching or jumping to a message shows everything that matches.
-  // Unfolded, the list shows at least the first few rows of the recap: what the model reads in
-  // place of everything older is the part a reader most wants to see.
-  const firstCondensed = folded.findIndex(isCondensed);
-  const keep = Math.max(EARLIER_SHOWN, firstCondensed === -1 ? 0 : firstCondensed + RECAP_ROWS_SHOWN);
+  // Unfiltered, a long conversation shows its newest rows and the last few of the recap; the earlier ones
+  // sit behind a button at the top, as a chat loads older messages above. Filtering, searching or jumping
+  // to a message shows everything that matches.
+  const lastCondensed = folded.findLastIndex(isCondensed);
+  const keep = Math.max(EARLIER_SHOWN, lastCondensed === -1 ? 0 : folded.length - lastCondensed - 1 + RECAP_ROWS_SHOWN);
   const canFold = !filtered && folded.length - keep >= RUN_MIN;
-  const foldOlder = canFold && !ui.earlierOpen;
-  const shown = foldOlder ? folded.slice(0, keep) : folded;
-  // One line marks where the next collection's queue starts, and one where the recap starts.
+  const foldEarlier = canFold && !ui.earlierOpen;
+  const shown = foldEarlier ? folded.slice(folded.length - keep) : folded;
+  // Each part of the prompt is labelled where it begins, in the order the model reads it.
+  const queued = k.turns.filter((t) => t.fidelity === "verbatim" && t.becomes).length;
   const items = [];
-  let pastQueued = false, pastCondensed = false;
+  let part = null;
   for (const row of shown) {
-    if (!filtered && !pastQueued && !pastCondensed && isQueued(row)) {
-      pastQueued = true;
-      items.push(h("div", { class: "boundary" }, h("span", {}, "↑ Stays recent · ↓ Taken by the next collection")));
-    }
-    if (!filtered && !pastCondensed && isCondensed(row)) {
-      pastCondensed = true;
-      items.push(h("div", { class: "boundary" }, h("span", {}, "↑ Recent, sent as written · ↓ In the recap, ", h("b", {}, fmt(k.front_tokens)), " tokens")));
+    const now = isCondensed(row) ? "recap" : row.kind === "pending" || row.kind === "reply" ? "newest" : "recent";
+    if (!filtered && now !== part) {
+      items.push(h("div", { class: "boundary" }, h("span", {},
+        now === "recap" ? ["In the recap · ", h("b", {}, fmt(k.front_tokens)), " tokens, standing in for every older exchange"]
+          : now === "recent" ? ["Recent, sent as written", queued ? ` · the next collection takes the first ${plural(queued, "message")}` : ""]
+            : "Not in the conversation yet")));
+      part = now;
     }
     items.push(rowElement(row, facts));
   }
   const timeline = $("timeline");
-  timeline.hidden = !ui.listOpen;
   renderSearchVerdict(k);
   const note = $("filter-note");
-  note.hidden = !filtered || !ui.listOpen;
+  note.hidden = !filtered;
   if (filtered) {
     const shownCount = visible.reduce((n, row) => n + rowMessageCount(row), 0);
     setChildren(note, `Showing ${plural(shownCount, "message")}${query() ? ` matching “${ui.query.trim()}”` : ""}${ui.filter !== "all" ? ` · ${ui.filter === "next" ? "changing at the next collection" : CATS[ui.filter].tag}` : ""}`,
       h("button", { class: "link-btn", type: "button", onclick: () => { ui.query = ""; $("search").value = ""; setFilter("all"); } }, "Show all"));
   }
-  const olderCount = folded.slice(keep).reduce((n, row) => n + rowMessageCount(row), 0);
-  const setOlder = (open) => {
+  const earlierCount = folded.slice(0, folded.length - keep).reduce((n, row) => n + rowMessageCount(row), 0);
+  const setEarlier = (open) => {
     ui.earlierOpen = open;
     renderTimeline(state.knowledge);
-    // Folding back shortens the list from below; keep the button in view rather than the page's foot.
-    if (!open) $("older-toggle")?.scrollIntoView({ block: "nearest" });
+    $("earlier-toggle")?.scrollIntoView({ block: "nearest" });
   };
-  const olderBtn = canFold ? h("div", { class: "earlier-row" },
-    h("button", { class: "link-btn", id: "older-toggle", type: "button", "aria-expanded": String(!foldOlder), onclick: () => setOlder(foldOlder) },
-      foldOlder ? `Show ${plural(olderCount, "older message")}` : "Show fewer messages")) : null;
-  setChildren(timeline, items.length ? items : h("p", { class: "empty", style: "padding:14px 0" },
-    filtered ? "No message matches." : "No messages recorded yet."), olderBtn);
+  const earlierBtn = canFold ? h("div", { class: "earlier-row" },
+    h("button", { class: "link-btn", id: "earlier-toggle", type: "button", "aria-expanded": String(!foldEarlier), onclick: () => setEarlier(foldEarlier) },
+      foldEarlier ? `Show ${plural(earlierCount, "earlier message")}` : "Show fewer messages")) : null;
+  setChildren(timeline, earlierBtn, items.length ? items : h("p", { class: "empty", style: "padding:14px 0" },
+    filtered ? "No message matches." : "No messages recorded yet."));
   for (const row of timeline.querySelectorAll("[data-turns]")) {
     const ids = row.dataset.turns.split(",").map(Number);
     row.addEventListener("pointerenter", () => trace(ids));
     row.addEventListener("pointerleave", () => trace(null));
   }
+}
+
+// The newest message is at the foot of the list, as in a chat; one click takes you there.
+export function jumpToNewest() {
+  openCard("messages");
+  const rows = $("timeline").querySelectorAll("article.msg");
+  rows[rows.length - 1]?.scrollIntoView({ behavior: smooth(), block: "center" });
 }
 
 function rowElement(row, facts) {
@@ -680,7 +746,7 @@ export function runRow(run) {
         h("span", { class: "run-sub" }, h("span", { class: "minis" }, run.rows.map(() => h("span", { class: "mini f-archived" }))),
           plural(run.turns.length, "message"))),
       h("span", { class: "run-toggle" }, open ? "Hide" : "Show")),
-    open ? [...run.rows].reverse().map(spanRow) : null);
+    open ? run.rows.map(spanRow) : null);
 }
 
 export function jumpTo(turnIndex) {
@@ -694,7 +760,7 @@ export function jumpTo(turnIndex) {
   const row = buildRows(k).find((r) => r.turns.some((t) => t.turn_index === turnIndex) || (r.pending && r.pending.turn_index === turnIndex));
   if (row && !rowVisible(row, facts)) { ui.filter = "all"; ui.query = ""; $("search").value = ""; }
   ui.earlierOpen = true;
-  ui.listOpen = true;
+  openCard("messages");
   if (row && (row.kind === "span" || row.kind === "folded")) ui.open.add(`orig-${row.turns[0].turn_index}`);
   if (row && row.cat === "archived") {
     const run = foldRuns(buildRows(k).filter((r) => rowVisible(r, facts)))
@@ -720,20 +786,18 @@ export function renderPrompt(k) {
     try { await navigator.clipboard.writeText(whole); copy.textContent = "Copied"; } catch { copy.textContent = "Could not copy"; }
     setTimeout(() => { copy.textContent = "Copy"; }, 1500);
   } }, "Copy");
-  // Newest first, as the other view is, so switching views keeps the newest message on top;
-  // Copy keeps the order the model reads, since that is the prompt someone would replay.
+  // In the order the model reads it, as the other view is: the recap, then the recent messages, oldest first.
   setChildren($("prompt"),
-    h("div", { class: "prompt-head" }, h("div", { class: "note" }, "The conversation as LLM-GC forwards it, before your next message, newest first. ",
-      "The model reads it from the bottom up, and Copy gives it in that order. ",
+    h("div", { class: "prompt-head" }, h("div", { class: "note" }, "The conversation as LLM-GC forwards it, before your next message, in the order the model reads it. ",
       tail.some((t) => t.tool_calls || t.tool_results) ? "Recent messages go exactly as your client sent them; tool calls and results are shown in the text form LLM-GC reads them in. " : null,
       "Your client's own instructions are not shown – its system prompt, its tools, and what it puts inside messages – and go word for word with every request; those from collected messages open the recap. ",
-      k.front_text ? "The recap stays byte for byte the same until the next collection, so the provider can keep it cached."
+      k.front_text ? "The recap stays byte for byte the same until the next collection is switched in, so the provider can keep it cached."
         : "Nothing has been collected, so your app's own request is forwarded untouched."), copy),
-    [...tail].reverse().map((t) => h("div", { class: "prompt-msg" }, h("div", { class: "msg-head" }, h("span", { class: "who" }, t.role),
-      t.tool_results ? toolTag("tool results") : t.tool_calls ? toolTag("tool calls") : null, instructionsTag(t),
-      h("span", { class: "num" }, `message ${t.turn_index} · ${plural(t.tokens, "token")}`)), promptText(t.text || "(no text)", `prompt-${t.turn_index}`))),
     k.front_text ? h("div", { class: "prompt-msg front" }, h("div", { class: "msg-head" }, h("span", { class: "who" }, "user"),
-      h("span", { class: "tag" }, h("span", { class: "key block" }), `the recap · ${plural(k.front_tokens, "token")}`), info("block")), promptText(k.front_text, "prompt-front")) : null);
+      h("span", { class: "tag" }, h("span", { class: "key block" }), `the recap · ${plural(k.front_tokens, "token")}`), info("block")), promptText(k.front_text, "prompt-front")) : null,
+    tail.map((t) => h("div", { class: "prompt-msg" }, h("div", { class: "msg-head" }, h("span", { class: "who" }, t.role),
+      t.tool_results ? toolTag("tool results") : t.tool_calls ? toolTag("tool calls") : null, instructionsTag(t),
+      h("span", { class: "num" }, `message ${t.turn_index} · ${plural(t.tokens, "token")}`)), promptText(t.text || "(no text)", `prompt-${t.turn_index}`))));
 }
 
 // A long block starts folded, as messages do elsewhere; Copy still takes the whole prompt.
@@ -753,7 +817,7 @@ function promptText(text, key) {
 
 // What the model reads of a message said in an exchange shown at each level below kept.
 const BELOW_KEPT = {
-  compacted: "now compacted: the model reads its exchange's summary, which may word it differently",
+  compacted: "now summarised: the model reads its exchange's summary, which may word it differently",
   archived: "now archived: the model reads only its exchange's opening line and facts",
   out_of_view: "now out of view: the model knows its exchange exists, not what was said",
 };
@@ -790,9 +854,9 @@ export function setPromptView(on) {
   $("view-prompt").setAttribute("aria-pressed", String(on));
   $("view-timeline").setAttribute("aria-pressed", String(!on));
   $("prompt").hidden = !on;
-  $("timeline").hidden = on || !ui.listOpen;
+  $("timeline").hidden = on;
   $("chips").hidden = on;
-  $("filter-note").hidden = on || !ui.listOpen || (ui.filter === "all" && !query());
+  $("filter-note").hidden = on || (ui.filter === "all" && !query());
   if (state.knowledge) { if (on) renderPrompt(state.knowledge); else renderTimeline(state.knowledge); }
 }
 
@@ -801,7 +865,7 @@ export function setPromptView(on) {
 // A current fact reaches the model on its exchange's line in the recap, or in its words when that
 // exchange is kept; `sent` is set from the facts the recap actually carries.
 const reaches = (fact) => fact.sent || fact.span_level === "kept";
-// Newest first, as the exchanges below are, with the facts the model can't see ahead of the rest.
+// The facts the model can't see first, then the newest: what most needs a look leads.
 const lookFirst = (a, b) => reaches(a) - reaches(b) || b.turn - a.turn;
 const changedAt = (fact) => fact.superseded_by_turn ?? fact.turn;
 // Whether the engine reads facts from the assistant's turns; without a model it reads only the user's.
