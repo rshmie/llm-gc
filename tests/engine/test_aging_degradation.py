@@ -155,7 +155,9 @@ class TestTheEventIsEmittedAsItHappens:
 
         results = _run(service)
 
-        assert len(seen) == len(_degradations(results)) > 0
+        # Counted on the passes that met them: a collection switched in repeats its preparation's.
+        passes = [result for result in results if result.status is not GCStatus.COMPLETED]
+        assert len(seen) == len(_degradations(passes)) > 0
         assert {event.data["session_id"] for event in seen} == {SESSION}
 
     def test_a_clean_collection_emits_nothing(self):

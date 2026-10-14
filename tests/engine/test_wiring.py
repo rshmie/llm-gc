@@ -12,6 +12,8 @@ from llm_gc.models import Message
 from llm_gc.scoring import RelevanceType
 from llm_gc.utils import count_tokens
 
+from tests.engine.support import collect
+
 
 def test_without_a_summary_provider_turns_are_kept_whole():
     service = build_gc_service(GCConfig(), summary_provider=None)
@@ -74,7 +76,7 @@ def test_a_change_of_plan_in_a_later_collection_replaces_the_value_under_its_top
             message = Message(role="user" if turn % 2 == 0 else "assistant", content=text,
                               token_count=count_tokens(text), turn_index=turn)
             service.gc_record("s", [message], [f"h{turn}"])
-            await service.gc_age("s")
+            await collect(service, "s")
 
     asyncio.run(converse())
 
@@ -104,7 +106,7 @@ def test_a_recommendation_never_marks_the_users_decision_replaced():
             message = Message(role="user" if turn % 2 == 0 else "assistant", content=text,
                               token_count=count_tokens(text), turn_index=turn)
             service.gc_record("s", [message], [f"h{turn}"])
-            await service.gc_age("s")
+            await collect(service, "s")
 
     asyncio.run(converse())
 
@@ -140,7 +142,7 @@ def test_a_recommendation_in_the_same_exchange_never_outranks_the_users_decision
             message = Message(role="user" if turn % 2 == 0 else "assistant", content=text,
                               token_count=count_tokens(text), turn_index=turn)
             service.gc_record("s", [message], [f"h{turn}"])
-            await service.gc_age("s")
+            await collect(service, "s")
 
     asyncio.run(converse())
 

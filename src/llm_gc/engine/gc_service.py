@@ -6,8 +6,8 @@ from time import perf_counter
 
 from llm_gc.config.constants import DEFAULT_COMPACTION_TARGET_RATIO
 from llm_gc.config.gc_config import GCConfig
-from llm_gc.engine.aging_degradation import AgingDegradation, DegradationReason
-from llm_gc.engine.cut_point import find_cut_point
+from llm_gc.models.aging_degradation import AgingDegradation, DegradationReason
+from llm_gc.engine.cut_point import find_cut_point, is_safe_cut
 from llm_gc.engine.gc_result import AbandonedCut, CutOutcome, GCResult
 from llm_gc.engine.gc_status import GCStatus
 from llm_gc.engine.generations.condensing import Condensed
@@ -24,9 +24,11 @@ from llm_gc.engine.generations.planning import Bands, LevelOptions, Plan, plan_l
 from llm_gc.engine.inspection import CutPreview, SessionInspection, batch_worth_cutting
 from llm_gc.events import Event, EventBus, EventType
 from llm_gc.engine.pause import ModelCallPause
+from llm_gc.engine.switch_policy import CacheState, SwitchDecision, SwitchReason, decide_switch
 from llm_gc.exceptions import CompactionRefused, LLMGCError, LLMRateLimitError
 from llm_gc.llm.metering import measure_model_usage
 from llm_gc.models import KnowledgeEntry, Message
+from llm_gc.models.knowledge_entry import KnowledgeStatus
 from llm_gc.models.message import said_by_user
 from llm_gc.models.generation_snapshot import (
     AgingDelta,
@@ -34,6 +36,7 @@ from llm_gc.models.generation_snapshot import (
     DetailLevel,
     GenerationSnapshot,
     Span,
+    StagedCut,
     apply_aging,
     file_knowledge,
 )
@@ -51,11 +54,14 @@ _CONDENSED = (DetailLevel.ARCHIVED, DetailLevel.OUT_OF_VIEW)
 class _Planned:
     """One plan over every span: the old generation's as they stand, then the cut's new ones.
 
-    New spans carry a provisional level until the plan gives them theirs.
+    New spans carry a provisional level until the plan gives them theirs. Of the new ones,
+    those before `drafts_from` are already condensed - a staged cut's - and those from it
+    on are drafts whose turns a pass would still pay to condense.
     """
 
     spans: tuple[Span, ...]
     new_from: int
+    drafts_from: int
     scores: tuple[float, ...]
     options: tuple[LevelOptions, ...]
     plan: Plan
@@ -72,14 +78,23 @@ class _Planned:
         return list(zip(self.spans[: self.new_from], self.plan.levels[: self.new_from], strict=True))
 
     @property
+    def condensed_spans(self) -> list[Span]:
+        """The cut's new spans that were condensed before this plan: a staged cut's."""
+        return list(self.spans[self.new_from:][: self.drafts_from])
+
+    @property
     def cut_turns(self) -> list[Message]:
         return [turn for span in self.spans[self.new_from:] for turn in span.turns]
 
     @property
     def compactable_tokens(self) -> int:
-        """Tokens of the cut's turns the plan would not keep word for word."""
-        return sum(turn.token_count for span, level in self.placed if level is not DetailLevel.KEPT
-                   for turn in span.turns)
+        """Tokens of the drafted turns the plan would not keep word for word: what a pass would pay to condense."""
+        return _not_kept_tokens(self.placed[self.drafts_from:])
+
+    @property
+    def stale_tokens(self) -> int:
+        """Tokens of all the cut's turns the plan would not keep word for word: the stale weight."""
+        return _not_kept_tokens(self.placed)
 
     def cut_saving(self, front_exists: bool) -> int:
         """What the cut's new spans save against the turns they replace, at the costs planned.
@@ -92,12 +107,6 @@ class _Planned:
         saved = sum(sum(turn.token_count for turn in span.turns) - option.cost(level) for span, option, level in new)
         return saved - (0 if front_exists else FRONT_OVERHEAD_TOKENS)
 
-    def tokens_at(self, *levels: DetailLevel) -> int:
-        return sum(turn.token_count for span, level in self.placed if level in levels for turn in span.turns)
-
-    def turns_at(self, *levels: DetailLevel) -> int:
-        return sum(len(span.turns) for span, level in self.placed if level in levels)
-
     def delta(self) -> AgingDelta:
         return AgingDelta(
             departed_turns=frozenset(turn.turn_index for turn in self.cut_turns),
@@ -107,16 +116,9 @@ class _Planned:
         )
 
     def outcome(self) -> CutOutcome:
-        def placed_at(level: DetailLevel) -> list[int]:
-            return [turn for span, placed in self.placed if placed is level for turn in span.turn_indices]
-
-        def replanned(moved: Callable[[int, int], bool]) -> list[int]:
-            return [turn for span, level in self.replanned if moved(_RANK[level], _RANK[span.level])
-                    for turn in span.turn_indices]
-
-        return CutOutcome(kept=placed_at(DetailLevel.KEPT), compacted=placed_at(DetailLevel.COMPACTED),
-                          archived=placed_at(DetailLevel.ARCHIVED), folded=placed_at(DetailLevel.OUT_OF_VIEW),
-                          lowered=replanned(lambda now, was: now < was), raised=replanned(lambda now, was: now > was))
+        # From the levels, not from `delta()`: an estimated plan can place a draft at a level
+        # it has no material for yet, which is fine for a forecast and not for a span.
+        return _outcome(self.placed, self.replanned)
 
     def preview(self, min_cut_tokens: int, front_exists: bool) -> CutPreview:
         new = self.spans[self.new_from:]
@@ -194,6 +196,34 @@ class GcService:
         state = self.session_manager.get_or_create(session_id)
         return self._assemble(state.snapshot)
 
+    def gc_switch(self, session_id: str, cache: CacheState, *, requested: bool = False) -> GCResult | None:
+        """Request path: switch the session's staged cut in, if the switch policy says now. Immediate.
+
+        `cache` is the provider cache the request being built would meet; `requested` is
+        the developer asking for a collection now. Returns the collection when one is
+        switched in, None otherwise. The commit is one synchronous step onto the current
+        snapshot with no model call, so the request being built is the first to carry the
+        new front. Emits the collection's events, then GC_FINISHED, after the commit.
+        """
+        start = perf_counter()
+        state = self.session_manager.store.get(session_id)
+        if state is None or (staged := state.snapshot.staged) is None:
+            return None
+        decision = self._switch_decision(state, staged, cache, requested)
+        if decision is None or not decision.switch:
+            return None
+        before = state.snapshot
+        applied = apply_aging(before, staged.delta)
+        state.snapshot = replace(applied.snapshot, staged=None, thinking_valid_from=None,
+                                 cut_count=applied.snapshot.cut_count + 1)
+        self._announce(session_id, staged.delta, applied)
+        result = self._switched_result(before, state.snapshot, staged, decision.reason, start)
+        logger.debug("collection switched in", extra={"session_id": session_id, "reason": decision.reason.value,
+                                                      "young_remaining": len(state.snapshot.young)})
+        self.event_bus.emit(Event(event_type=EventType.GC_FINISHED,
+                                  data={"gc_run_id": result.gc_run_id, "session_id": session_id, "gc_result": result}))
+        return result
+
     def inspect(self, session_id: str) -> SessionInspection | None:
         """A read-only view of one session, or None if there is no such session.
 
@@ -209,8 +239,7 @@ class GcService:
         young = _in_order(snapshot.young)
         cut = find_cut_point(young, self.gc_config.last_n_turns_to_keep)
         window = state.context_window or self.gc_config.context_window
-        planned = self._plan(snapshot, young, cut, self.generational_memory.draft(young[:cut]),
-                             estimate_summaries=True, recap_budget=self.gc_config.recap_budget(window))
+        planned, _ = self._estimate(snapshot, young, cut, self.gc_config.recap_budget(window))
         preview = planned.preview(self.gc_config.min_cut_tokens, front_exists=bool(snapshot.old))
         if not state.collection_enabled:
             # Nothing will be collected, so nothing is forecast to change.
@@ -288,26 +317,34 @@ class GcService:
         self.session_manager.retip(state)
         return state
 
-    async def gc_update(self, session_id: str, new_turn: Message) -> None:
-        """Record one turn, then run a pass over the session: the library's one-call loop."""
+    async def gc_update(self, session_id: str, new_turn: Message, *, cache: CacheState = CacheState.COLD) -> None:
+        """Record one turn, prepare a cut, and switch it in if the policy says so: the library's one-call loop.
+
+        `cache` is the provider cache the caller's next request would meet. Cold by default:
+        a caller that says nothing of one has none to protect, so a cut takes effect as soon
+        as it saves something.
+        """
         state = self.session_manager.get_or_create(session_id)
         state.snapshot = state.snapshot.with_turn(new_turn)
         await self.gc_age(session_id)
+        self.gc_switch(session_id, cache)
 
     async def gc_age(self, session_id: str, *, ignore_batch_minimum: bool = False) -> GCResult:
-        """Cold path: collect the session if enough of it would be condensed.
+        """Cold path: prepare a cut and stage it, if enough of the session would be condensed.
 
-        The plan decides how each span is shown; the batch size decides when.
-        Recording is separate and immediate, so the next `gc_collect` sees new
-        turns even while a pass is running. At most one pass runs per session: a
-        second trigger is reported and skipped rather than queued.
+        The plan decides how each span is shown; the batch size decides whether a pass
+        is worth its model calls. A staged cut changes nothing the model is sent until
+        `gc_switch` switches it in; a later pass extends it rather than starting again.
+        Recording is separate and immediate, so the next `gc_collect` sees new turns even
+        while a pass is running. At most one pass runs per session: a second trigger is
+        reported and skipped rather than queued.
 
         `ignore_batch_minimum` is the manual lever: the same pass with
         `min_cut_tokens` taken as zero. Every other rule still holds - the newest
         turns stay verbatim, no tool round is split, something must be condensed,
-        and the collection must shrink the context.
+        and the cut must shrink the context.
 
-        Emits GC_FINISHED exactly once, after any commit, and returns the result.
+        Emits GC_FINISHED exactly once, after any staging, and returns the result.
         """
         start = perf_counter()
         gc_run_id = str(uuid.uuid4())
@@ -343,24 +380,27 @@ class GcService:
 
     async def _age(self, state: SessionState, base: GenerationSnapshot, gc_run_id: str, start: float,
                    min_cut_tokens: int) -> GCResult:
-        """Plan a collection against `base`, then commit it onto whatever the snapshot is now.
+        """Prepare a cut against `base`, then stage it onto whatever the snapshot is now.
 
-        Plans twice: first with estimated summaries, to decide whether the batch is
-        worth paying for summaries at all, then with the real ones. Nothing reaches
-        session state until the commit, which is synchronous: no `await` separates
-        reading the current snapshot from replacing it. A failure while planning
-        therefore leaves the session exactly as it was.
+        Plans first with the staged spans and estimated summaries for the turns past them,
+        to decide whether those turns are worth paying to condense; then condenses them and
+        plans again, against the snapshot as it is once the model calls are back. A switch,
+        a rewind or turns recorded in the meantime are taken in there: spans whose turns are
+        no longer the oldest young turns are left out, so nothing is staged against a stale
+        base and nothing condensed is paid for twice. Nothing reaches session state until
+        the staging, which is synchronous: no `await` separates reading the current snapshot
+        from replacing it. A failure therefore leaves the session exactly as it was.
         """
         session_id = state.session_id
+        keep_last = self.gc_config.last_n_turns_to_keep
         current_stage = "plan"
         degradations: list[AgingDegradation] = []
         try:
             young = _in_order(base.young)
-            cut = find_cut_point(young, self.gc_config.last_n_turns_to_keep)
-            drafts = self.generational_memory.draft(young[:cut])
+            cut = find_cut_point(young, keep_last)
             # Sized for the window of the model this conversation's requests name now.
             recap_budget = self.gc_config.recap_budget(state.context_window)
-            estimated = self._plan(base, young, cut, drafts, estimate_summaries=True, recap_budget=recap_budget)
+            estimated, drafts = self._estimate(base, young, cut, recap_budget)
             if not batch_worth_cutting(cut, estimated.compactable_tokens, min_cut_tokens):
                 return self._unchanged_result(base, gc_run_id, GCStatus.BYPASSED_BATCH_TOO_SMALL, start)
             if (saving := estimated.cut_saving(front_exists=bool(base.old))) <= 0:
@@ -370,14 +410,30 @@ class GcService:
                                               abandoned_cut=self._abandoned(base, estimated, saving))
 
             current_stage = "condense"
-            condensed = await self.generational_memory.complete(drafts, base.active_knowledge)
+            filed, _ = file_knowledge(base.knowledge, estimated.new_facts)
+            on_record = [entry for entry in filed if entry.knowledge_status is KnowledgeStatus.ACTIVE]
+            condensed = await self.generational_memory.complete(drafts, on_record)
             degradations.extend(self._report_failures(session_id, condensed))
 
+            # No await from here to the staging: plan against the snapshot as it is now.
             current_stage = "plan"
-            planned = self._plan(base, young, cut, condensed, estimate_summaries=False, recap_budget=recap_budget)
+            current = state.snapshot
+            now_young = _in_order(current.young)
+            material = _still_oldest(now_young, [*estimated.condensed_spans, *map(_span_of, condensed)])
+            cut_now = sum(len(span.turns) for span in material)
+            if not cut_now or len(now_young) - cut_now < keep_last or not is_safe_cut(now_young, cut_now):
+                logger.info("the prepared turns are no longer the session's oldest; not staged",
+                            extra={"session_id": session_id, "gc_run_id": gc_run_id})
+                return self._unchanged_result(current, gc_run_id, GCStatus.DISCARDED_HISTORY_CHANGED, start,
+                                              degradations=degradations)
+            held = {turn.turn_index for span in material for turn in span.turns}
+            facts = [fact for fact in (*estimated.new_facts, *(f for draft in condensed for f in draft.facts))
+                     if fact.message_turn in held]
+            planned = self._plan(current, now_young, cut_now, material, facts, drafts_from=len(material),
+                                 recap_budget=recap_budget)
             if planned.plan.over_budget:
                 degradations.append(self._record_degradation(
-                    session_id, DegradationReason.RECAP_OVER_BUDGET, [turn.turn_index for turn in young[:cut]],
+                    session_id, DegradationReason.RECAP_OVER_BUDGET, sorted(held),
                     LLMGCError(f"the folded front needs {planned.plan.tokens} tokens of a "
                                f"{recap_budget}-token recap budget")))
             delta = planned.delta()
@@ -386,14 +442,20 @@ class GcService:
             # can cost more than the turn did. Re-planned older spans are left out:
             # restoring one the conversation returned to is spending the score
             # decided and the budget bounds, not a saving that failed.
-            projected = self._context_tokens(apply_aging(base, replace(delta, level_changes=())).snapshot)
-            if projected >= self._context_tokens(base):
-                logger.info("collection abandoned: it would not shrink the context",
+            before = self._context_tokens(current)
+            saving = before - self._context_tokens(apply_aging(current, replace(delta, level_changes=())).snapshot)
+            if saving <= 0:
+                logger.info("cut not staged: it would not shrink the context",
                             extra={"session_id": session_id, "gc_run_id": gc_run_id})
-                return self._unchanged_result(base, gc_run_id, GCStatus.BYPASSED_NO_SAVING, start,
+                return self._unchanged_result(current, gc_run_id, GCStatus.BYPASSED_NO_SAVING, start,
                                               degradations=degradations,
-                                              abandoned_cut=self._abandoned(
-                                                  base, planned, self._context_tokens(base) - projected))
+                                              abandoned_cut=self._abandoned(current, planned, saving))
+            front = self._render_front(apply_aging(current, delta).snapshot)
+            # What an earlier preparation of the spans still held fell short of stays with them.
+            earlier = current.staged.degradations if current.staged is not None else ()
+            staged = StagedCut(delta=delta, saving_tokens=saving, stale_tokens=planned.stale_tokens,
+                               front_tokens=front.message.token_count if front is not None else 0,
+                               degradations=(*(d for d in earlier if held & set(d.turn_indices)), *degradations))
         except Exception as err:
             logger.exception("gc_age failed",
                              extra={"session_id": session_id, "gc_run_id": gc_run_id, "stage": current_stage})
@@ -405,30 +467,36 @@ class GcService:
                         extra={"session_id": session_id, "gc_run_id": gc_run_id})
             return self._unchanged_result(base, gc_run_id, GCStatus.DISCARDED_SESSION_CLOSED, start)
 
-        applied = apply_aging(state.snapshot, delta)
-        state.snapshot = replace(applied.snapshot, thinking_valid_from=None, cut_count=applied.snapshot.cut_count + 1)
-        self._announce(session_id, planned, applied)
+        state.snapshot = replace(current, staged=staged, version=current.version + 1)
+        logger.debug("cut staged", extra={"session_id": session_id, "gc_run_id": gc_run_id,
+                                          "turns_staged": cut_now, "saving_tokens": saving})
+        return self._unchanged_result(state.snapshot, gc_run_id, GCStatus.STAGED, start, degradations=degradations)
 
-        logger.debug("collection committed", extra={"session_id": session_id, "gc_run_id": gc_run_id,
-                                                     "turns_cut": cut, "young_remaining": len(state.snapshot.young)})
-        return self._completed_result(base, state.snapshot, gc_run_id, planned, len(young) - cut, degradations,
-                                      start)
+    def _estimate(self, base: GenerationSnapshot, young: Sequence[Message], cut: int,
+                  recap_budget: int) -> tuple[_Planned, list[Condensed]]:
+        """The cut a pass would prepare now, at estimated costs, and the drafts it would pay to condense.
 
-    def _plan(self, base: GenerationSnapshot, young: Sequence[Message], cut: int, condensed: Sequence[Condensed],
-              *, estimate_summaries: bool, recap_budget: int) -> _Planned:
+        A staged cut's spans come first, as they are; the turns past them up to `cut` are
+        drafted. The same estimate is the pass's decision and the dashboard's preview.
+        """
+        staged = base.staged.delta if base.staged is not None else AgingDelta()
+        held = len(staged.departed_turns)
+        drafts = self.generational_memory.draft(young[held:cut])
+        planned = self._plan(base, young, max(cut, held), [*staged.new_spans, *map(_span_of, drafts)],
+                             staged.new_knowledge, drafts_from=len(staged.new_spans), recap_budget=recap_budget)
+        return planned, drafts
+
+    def _plan(self, base: GenerationSnapshot, young: Sequence[Message], cut: int, new: Sequence[Span],
+              new_facts: Sequence[KnowledgeEntry], *, drafts_from: int, recap_budget: int) -> _Planned:
         """Score every span against what is being discussed now, and give each its level.
 
-        "Now" is what the user said in the tail. With `estimate_summaries`, a new
-        span that could be summarised is costed as its archived line plus the
-        compactor's target share of its words, because its summary has not been
-        paid for yet.
+        "Now" is what the user said in the tail. `new` are the cut's spans; those from
+        `drafts_from` on are drafts, so one that could be summarised is costed as its
+        archived line plus the compactor's target share of its words, because its summary
+        has not been paid for yet.
         """
-        new = [Span(turns=draft.turns, level=DetailLevel.KEPT, summary=draft.summary,
-                    summary_text=draft.summary_text, index_line=draft.index_line,
-                    facts_unread=draft.facts_error is not None) for draft in condensed]
-        spans = list(base.old) + new
-        new_facts = tuple(fact for draft in condensed for fact in draft.facts)
-        knowledge, _ = file_knowledge(base.knowledge, new_facts)
+        spans = list(base.old) + [replace(span, level=DetailLevel.KEPT) for span in new]
+        knowledge, _ = file_knowledge(base.knowledge, tuple(new_facts))
         annotated = KnowledgeIndex(knowledge)
 
         now = [turn for turn in young[cut:] if said_by_user(turn)]
@@ -438,8 +506,9 @@ class GcService:
         options = []
         for index, (span, score) in enumerate(zip(spans, scores, strict=True)):
             kept, compacted, archived = level_costs(span, annotated.for_span(span))
-            is_new = index >= len(base.old)
-            if compacted is None and is_new and estimate_summaries and self.generational_memory.worth_summarising(
+            position = index - len(base.old)
+            is_new = position >= 0
+            if compacted is None and position >= drafts_from and self.generational_memory.worth_summarising(
                     span.turns):
                 # A summarised span shows its archived line too, so its summary costs on top of that.
                 compacted = archived + int(kept * DEFAULT_COMPACTION_TARGET_RATIO)
@@ -448,8 +517,8 @@ class GcService:
 
         fold = count_tokens(folded_line(spans[0].first_turn, spans[-1].turns[-1].turn_index, len(spans))) if spans else 0
         plan = plan_levels(options, self._bands, recap_budget - FRONT_OVERHEAD_TOKENS, fold)
-        return _Planned(spans=tuple(spans), new_from=len(base.old), scores=tuple(scores), options=tuple(options),
-                        plan=plan, new_facts=new_facts)
+        return _Planned(spans=tuple(spans), new_from=len(base.old), drafts_from=drafts_from, scores=tuple(scores),
+                        options=tuple(options), plan=plan, new_facts=tuple(new_facts))
 
     def _abandoned(self, base: GenerationSnapshot, planned: _Planned, saving: int) -> AbandonedCut:
         """The cut a pass planned and did not make, and what it would have left the context at."""
@@ -486,22 +555,50 @@ class GcService:
                                                          unread[0][1]))
         return degradations
 
-    def _completed_result(self, base: GenerationSnapshot, final: GenerationSnapshot, gc_run_id: str,
-                          planned: _Planned, tail_length: int, degradations: list[AgingDegradation],
-                          start: float) -> GCResult:
-        final_messages = self._assemble(final)
+    def _switch_decision(self, state: SessionState, staged: StagedCut, cache: CacheState,
+                         requested: bool) -> SwitchDecision | None:
+        """What the switch policy says about the session's staged cut now.
+
+        None when it may not be switched in at all: collection is off for the session, or
+        a rewind has left fewer turns after the cut than stay verbatim.
+        """
+        if not state.collection_enabled:
+            return None
+        tail = [turn for turn in state.snapshot.young if turn.turn_index not in staged.delta.departed_turns]
+        if len(tail) < self.gc_config.last_n_turns_to_keep:
+            return None
+        return decide_switch(saving_tokens=staged.saving_tokens,
+                             rewritten_tokens=staged.front_tokens + sum(turn.token_count for turn in tail),
+                             stale_tokens=staged.stale_tokens,
+                             stale_bound_tokens=self.gc_config.stale_bound(state.context_window),
+                             min_saving_share=self.gc_config.min_saving_share, cache=cache, requested=requested)
+
+    def _switched_result(self, before: GenerationSnapshot, after: GenerationSnapshot, staged: StagedCut,
+                         reason: SwitchReason, start: float) -> GCResult:
+        """The collection a switch made, with what preparing its cut fell short of."""
+        delta = staged.delta
+
+        def turns_at(*levels: DetailLevel) -> int:
+            return sum(len(span.turns) for span in delta.new_spans if span.level in levels)
+
+        def tokens_at(*levels: DetailLevel) -> int:
+            return sum(turn.token_count for span in delta.new_spans if span.level in levels for turn in span.turns)
+
+        final_messages = self._assemble(after)
         return GCResult(
-            final_messages=final_messages, gc_run_id=gc_run_id, status=GCStatus.COMPLETED,
-            tokens_before=self._context_tokens(base),
+            final_messages=final_messages, gc_run_id=str(uuid.uuid4()), status=GCStatus.COMPLETED,
+            tokens_before=self._context_tokens(before),
             tokens_in_final=sum(message.token_count for message in final_messages),
-            kept_count=planned.turns_at(DetailLevel.KEPT) + tail_length,
-            compacted_count=planned.turns_at(DetailLevel.COMPACTED),
-            archived_count=planned.turns_at(*_CONDENSED),
-            kept_tokens=planned.tokens_at(DetailLevel.KEPT),
-            compacted_tokens=planned.tokens_at(DetailLevel.COMPACTED),
-            archived_tokens=planned.tokens_at(*_CONDENSED),
+            kept_count=turns_at(DetailLevel.KEPT) + len(after.young),
+            compacted_count=turns_at(DetailLevel.COMPACTED),
+            archived_count=turns_at(*_CONDENSED),
+            kept_tokens=tokens_at(DetailLevel.KEPT),
+            compacted_tokens=tokens_at(DetailLevel.COMPACTED),
+            archived_tokens=tokens_at(*_CONDENSED),
             duration_ms=(perf_counter() - start) * 1000,
-            degradations=degradations, outcome=planned.outcome(),
+            degradations=list(staged.degradations),
+            outcome=_outcome([(span, span.level) for span in delta.new_spans], delta.level_changes),
+            switch_reason=reason,
         )
 
     def _context_tokens(self, snapshot: GenerationSnapshot) -> int:
@@ -523,15 +620,15 @@ class GcService:
             degradations=degradations or [], abandoned_cut=abandoned_cut,
         )
 
-    def _announce(self, session_id: str, planned: _Planned, applied: AppliedAging) -> None:
-        """Emit the events for a committed collection, after the commit.
+    def _announce(self, session_id: str, delta: AgingDelta, applied: AppliedAging) -> None:
+        """Emit the events for a collection switched in, after the commit.
 
-        Emitted only now so an event always describes a change that happened: a
-        pass discarded because its session closed announces nothing.
+        Emitted only now so an event always describes a change that happened: a cut
+        that is staged and never switched in announces nothing.
         """
-        for span, level in planned.placed:
+        for span in delta.new_spans:
             turns = [turn.turn_index for turn in span.turns]
-            if level is DetailLevel.COMPACTED and span.summary is not None:
+            if span.level is DetailLevel.COMPACTED and span.summary is not None:
                 self.event_bus.emit(Event(event_type=EventType.MESSAGE_PROMOTED_TO_OLD_GEN, data={
                     "session_id": session_id,
                     "source_turn_indices": turns,
@@ -539,15 +636,15 @@ class GcService:
                     "tokens_before": sum(turn.token_count for turn in span.turns),
                     "tokens_after": span.summary.token_count,
                 }))
-            elif level in _CONDENSED:
-                self._announce_archived(session_id, span, [f for f in planned.new_facts if f.message_turn in turns],
+            elif span.level in _CONDENSED:
+                self._announce_archived(session_id, span, [f for f in delta.new_knowledge if f.message_turn in turns],
                                         "young")
-        for span, level in planned.replanned:
+        for span, level in delta.level_changes:
             if level in _CONDENSED and _RANK[level] < _RANK[span.level]:
                 self._announce_archived(session_id, span, [], "old")
 
         superseded_by = {id(s.new_entry): s.superseded for s in applied.supersessions}
-        for entry in planned.new_facts:
+        for entry in delta.new_knowledge:
             self.event_bus.emit(Event(event_type=EventType.KNOWLEDGE_ENTRY_ADDED,
                                       data={"session_id": session_id, "knowledge_entry": entry}))
             if id(entry) in superseded_by:
@@ -600,3 +697,52 @@ class GcService:
 
 def _in_order(messages: Sequence[Message]) -> list[Message]:
     return sorted(messages, key=lambda message: message.turn_index)
+
+
+def _span_of(condensed: Condensed) -> Span:
+    """A condensed span's material as a span, at a provisional level until a plan gives it one."""
+    return Span(turns=condensed.turns, level=DetailLevel.KEPT, summary=condensed.summary,
+                summary_text=condensed.summary_text, index_line=condensed.index_line,
+                facts_unread=condensed.facts_error is not None)
+
+
+def _still_oldest(young: Sequence[Message], spans: Sequence[Span]) -> list[Span]:
+    """The spans that still hold the oldest young turns, unchanged and in order.
+
+    Spans whose turns have already left the young generation - switched in while a pass
+    ran - are passed over. Matching stops at the first span whose turns no longer match,
+    which only a rewind causes.
+    """
+    if not young:
+        return []
+    matched: list[Span] = []
+    position = 0
+    for span in spans:
+        if span.turns[-1].turn_index < young[0].turn_index:
+            continue
+        if tuple(young[position:position + len(span.turns)]) != span.turns:
+            break
+        matched.append(span)
+        position += len(span.turns)
+    return matched
+
+
+def _not_kept_tokens(placed: Sequence[tuple[Span, DetailLevel]]) -> int:
+    return sum(turn.token_count for span, level in placed if level is not DetailLevel.KEPT for turn in span.turns)
+
+
+def _outcome(placed: Sequence[tuple[Span, DetailLevel]], replanned: Sequence[tuple[Span, DetailLevel]]) -> CutOutcome:
+    """Where a cut's turns end up, by turn: its new spans at their levels, and older spans re-planned.
+
+    Each older span is paired with its level after the cut; its own `level` is the one before.
+    """
+    def placed_at(level: DetailLevel) -> list[int]:
+        return [turn for span, at in placed if at is level for turn in span.turn_indices]
+
+    def moved(direction: Callable[[int, int], bool]) -> list[int]:
+        return [turn for span, level in replanned if direction(_RANK[level], _RANK[span.level])
+                for turn in span.turn_indices]
+
+    return CutOutcome(kept=placed_at(DetailLevel.KEPT), compacted=placed_at(DetailLevel.COMPACTED),
+                      archived=placed_at(DetailLevel.ARCHIVED), folded=placed_at(DetailLevel.OUT_OF_VIEW),
+                      lowered=moved(lambda now, was: now < was), raised=moved(lambda now, was: now > was))

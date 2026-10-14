@@ -18,7 +18,7 @@ from llm_gc.exceptions import LLMRateLimitError
 from llm_gc.llm import FakeProvider
 from llm_gc.models.generation_snapshot import DetailLevel
 from llm_gc.utils import count_tokens
-from tests.engine.support import ARCHIVED_SCORE, COMPACTED_SCORE, KEPT_SCORE, SUMMARY, make_service, turn
+from tests.engine.support import ARCHIVED_SCORE, COMPACTED_SCORE, KEPT_SCORE, SUMMARY, collect, make_service, turn
 
 KEPT, COMPACTED, ARCHIVED = DetailLevel.KEPT, DetailLevel.COMPACTED, DetailLevel.ARCHIVED
 
@@ -49,7 +49,7 @@ def _converse(service, turns: int, start: int = 0) -> list:
     async def scenario():
         for index in range(start, start + turns):
             _record(service, turn(index))
-            results.append(await service.gc_age("s"))
+            results.append(await collect(service, "s"))
 
     asyncio.run(scenario())
     return results
@@ -96,7 +96,7 @@ class TestEachSpanTakesTheLevelItsScoreEarns:
         async def scenario():
             for index, opening in enumerate(["The database is postgres.", None]):
                 _record(service, turn(index, opening=opening))
-                await service.gc_age("s")
+                await collect(service, "s")
 
         asyncio.run(scenario())
         front = asyncio.run(service.gc_collect("s"))[0].content
@@ -114,7 +114,7 @@ class TestEachSpanTakesTheLevelItsScoreEarns:
                 if index == 0:
                     message = message.model_copy(update={"content": stated, "token_count": count_tokens(stated)})
                 _record(service, message)
-                await service.gc_age("s")
+                await collect(service, "s")
 
         asyncio.run(scenario())
         assert _levels(service) == {0: KEPT, 1: ARCHIVED}
@@ -142,7 +142,7 @@ class TestNowIsWhatTheUserIsDiscussing:
                     message = message.model_copy(update={"raw_content": [
                         {"type": "tool_result", "tool_use_id": "t", "content": "ok"}]})
                 _record(service, message)
-                await service.gc_age("s")
+                await collect(service, "s")
 
         asyncio.run(scenario())
         assert heard[-1] == [2], "the tail is turns 2-4: one user turn, a reply, and a tool result"
@@ -189,7 +189,7 @@ class TestTheBatchDecidesWhen:
                                      default_score=COMPACTED_SCORE)
         _converse(service, 3)
 
-        manual = asyncio.run(service.gc_age("s", ignore_batch_minimum=True))
+        manual = asyncio.run(collect(service, "s", ignore_batch_minimum=True))
 
         assert manual.status is GCStatus.COMPLETED and manual.tokens_saved > 0
         assert _young(service) == [2], "the newest turns stay word for word"
@@ -204,7 +204,7 @@ class TestTheBatchDecidesWhen:
         async def scenario():
             for index in range(2):
                 _record(service, turn(index, length=2))
-                results.append(await service.gc_age("s"))
+                results.append(await collect(service, "s"))
 
         asyncio.run(scenario())
         result = results[-1]
@@ -222,7 +222,7 @@ class TestTheBatchDecidesWhen:
         async def scenario():
             for index in range(2):
                 _record(service, turn(index, length=8))
-                results.append(await service.gc_age("s"))
+                results.append(await collect(service, "s"))
 
         asyncio.run(scenario())
         result = results[-1]
@@ -304,15 +304,20 @@ class TestFailuresAreReportedAndLoseNothing:
 
 
 class TestTheBusSeesWhatTheCollectionDid:
-    def test_every_pass_emits_one_gc_finished_and_collect_emits_none(self):
+    def test_every_pass_and_every_switch_emits_one_gc_finished_and_collect_emits_none(self):
         service, _, _ = make_service(default_score=COMPACTED_SCORE)
         finished = []
         service.event_bus.subscribe(EventType.GC_FINISHED, finished.append)
 
         _converse(service, 3)
+        emitted = len(finished)
         asyncio.run(service.gc_collect("s"))
 
-        assert len(finished) == 3 and all(event.data["session_id"] == "s" for event in finished)
+        switches = [e for e in finished if e.data["gc_result"].status is GCStatus.COMPLETED]
+        assert len(finished) == emitted, "rendering the prompt changes nothing and announces nothing"
+        assert len(finished) - len(switches) == 3, "one per pass"
+        assert len(switches) == service.session_manager.store.get("s").snapshot.cut_count > 0, "one per switch"
+        assert all(event.data["session_id"] == "s" for event in finished)
 
     def test_what_a_pass_reports_is_exactly_what_collect_sends(self):
         service, _, _ = make_service(scores={0: COMPACTED_SCORE, 1: ARCHIVED_SCORE})
@@ -457,7 +462,7 @@ def test_a_relayed_report_in_the_tail_is_not_what_the_user_is_discussing_now():
             if index == 4:
                 message = message.model_copy(update={"relayed": True})
             _record(service, message)
-            await service.gc_age("s")
+            await collect(service, "s")
 
     asyncio.run(scenario())
     assert heard[-1] == [2], "the tail is turns 2-4: the user's turn, a reply, and a relayed report"

@@ -1,8 +1,9 @@
 # When to Collect
 
-> **Being built.** The switch policy and the proxy's reading of the cache state are in the
-> code. The staged cut and the switch on the request path are not yet: until they are, a
-> pass commits its cut as soon as it finishes.
+> **Being built.** Staging, the switch and the proxy's reading of the cache state are in
+> the code, but the proxy does not pass that state to the switch yet: until it does, it
+> treats every request as cold, so a staged cut is switched in at the next request that
+> carries any saving.
 
 ## How it works
 
@@ -191,7 +192,8 @@ stops at the first that holds:
 
 - While a cut waits, the model is sent the original turns, word for word, exactly as
   without LLM-GC. Waiting cannot lose a decision; a lossy summary can.
-- A switch never makes the prompt larger.
+- A switch's cut never makes the prompt larger. A span restored because the
+  conversation returned to it costs tokens on purpose, bounded by the recap budget.
 - What the model carries that has gone quiet is held under the bound: a cut that reaches
   it is switched in at the next request. The bound holds as long as passes complete; a
   paused or failed pass is reported, and the conversation grows until it can run.

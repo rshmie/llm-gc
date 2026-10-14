@@ -3,7 +3,8 @@ from typing import Self
 
 from llm_gc.config.constants import (
     DEFAULT_ARCHIVE_THRESHOLD, DEFAULT_CONTEXT_WINDOW, DEFAULT_KEEP_THRESHOLD, DEFAULT_LAST_N_TURNS_TO_KEEP,
-    DEFAULT_LEVEL_MARGIN, DEFAULT_MAX_RECAP_RATIO, DEFAULT_MIN_CUT_TOKENS,
+    DEFAULT_LEVEL_MARGIN, DEFAULT_MAX_RECAP_RATIO, DEFAULT_MAX_STALE_RATIO, DEFAULT_MIN_CUT_TOKENS,
+    DEFAULT_MIN_SAVING_SHARE,
 )
 
 class GCConfig(BaseModel):
@@ -26,10 +27,14 @@ class GCConfig(BaseModel):
     # How far past a line a score must be to move a span across it, either way.
     level_margin: float = Field(default=DEFAULT_LEVEL_MARGIN, ge=0.0)
     last_n_turns_to_keep: int = Field(default=DEFAULT_LAST_N_TURNS_TO_KEEP, ge=0)
-    # A session is collected only once the turns it would condense add up to this many tokens.
+    # A cut is prepared only once the new turns it would condense add up to this many tokens.
     min_cut_tokens: int = Field(default=DEFAULT_MIN_CUT_TOKENS, ge=0)
     # Everything the front shows for condensed turns, as a share of the window.
     max_recap_ratio: float = Field(default=DEFAULT_MAX_RECAP_RATIO, ge=0.0, le=1.0)
+    # With the cache warm, how many times what a switch makes the provider cache again it must remove.
+    min_saving_share: float = Field(default=DEFAULT_MIN_SAVING_SHARE, ge=0.0)
+    # The most stale weight the model may carry before a staged cut is switched in regardless, as a share of the window.
+    max_stale_ratio: float = Field(default=DEFAULT_MAX_STALE_RATIO, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
     def _bands_can_move_a_span(self) -> Self:
@@ -54,3 +59,7 @@ class GCConfig(BaseModel):
         proxy that silently costs more than it saves.
         """
         return int((context_window or self.context_window) * self.max_recap_ratio)
+
+    def stale_bound(self, context_window: int | None = None) -> int:
+        """The most stale weight the model may carry: its share of `context_window`, or of the configured window."""
+        return int((context_window or self.context_window) * self.max_stale_ratio)

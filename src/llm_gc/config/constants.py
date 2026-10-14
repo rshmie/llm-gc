@@ -17,6 +17,14 @@ DEFAULT_LAST_N_TURNS_TO_KEEP = 5
 # for a few tokens costs more than it saves. A draft value, to be tuned by watching
 # real conversations.
 DEFAULT_MIN_CUT_TOKENS = 1000
+# When the provider's cache is warm, a staged cut is switched in only once it removes at
+# least this many times what the switch makes the provider cache again. 1.0: at least as
+# much as it rewrites. Zero switches as soon as there is a saving. A draft value.
+DEFAULT_MIN_SAVING_SHARE = 1.0
+# The most stale weight - turns a staged cut condenses that the model is still sent word for
+# word - as a share of the model's window. Reaching it switches the cut in whatever the cache
+# costs, for the model's sake. A draft value; it is the dial between grounding and the bill.
+DEFAULT_MAX_STALE_RATIO = 0.10
 DEFAULT_MAX_RECENT_TRANSITIONS = 20
 DEFAULT_MAX_RECENT_DEGRADATIONS = 20
 DEFAULT_MAX_RECENT_PASSES = 50    # one pass runs after every request, so most are quiet

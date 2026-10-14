@@ -10,9 +10,10 @@ could ever be compacted or archived.
 from collections.abc import Mapping
 
 from llm_gc.config import GCConfig
-from llm_gc.engine import GcService
+from llm_gc.engine import GCResult, GcService
 from llm_gc.engine.compaction import BaseCompactor, LLMCompactor
 from llm_gc.engine.generations import GenerationalMemory
+from llm_gc.engine.switch_policy import CacheState
 from llm_gc.events import EventBus
 from llm_gc.extraction import FactReader, PatternFactReader
 from llm_gc.llm import FakeProvider, LLMResponse, StopReason
@@ -69,3 +70,18 @@ def make_service(config: GCConfig | None = None, scores: Mapping[int, float] | N
         gc_config=config if config is not None else GCConfig(min_cut_tokens=0, last_n_turns_to_keep=1),
     )
     return service, scorer, provider
+
+
+async def collect(service: GcService, session_id: str, *, ignore_batch_minimum: bool = False) -> GCResult:
+    """Prepare a cut and switch it in at once, as on a cold cache: a whole collection in one call.
+
+    Returns the collection when one was switched in, with what its preparation spent; otherwise
+    what the pass reported. The switch carries what preparing fell short of itself.
+    """
+    prepared = await service.gc_age(session_id, ignore_batch_minimum=ignore_batch_minimum)
+    switched = service.gc_switch(session_id, CacheState.COLD)
+    if switched is None:
+        return prepared
+    return switched.model_copy(update={"summary_calls": prepared.summary_calls,
+                                       "summary_input_tokens": prepared.summary_input_tokens,
+                                       "summary_output_tokens": prepared.summary_output_tokens})

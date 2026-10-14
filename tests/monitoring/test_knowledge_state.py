@@ -14,6 +14,8 @@ from llm_gc.models.knowledge_entry import KnowledgeStatus, KnowledgeType
 from llm_gc.monitoring.knowledge_state import KnowledgeState, TurnFidelity, project_knowledge_state
 from llm_gc.utils import count_tokens
 
+from tests.engine.support import collect
+
 SESSION = "s"
 
 SUMMARY = LLMResponse(text="Earlier turns covered the storage decision and the retention window in brief.",
@@ -47,7 +49,7 @@ def _converse(service: GcService, turns: int) -> KnowledgeState:
     async def scenario() -> None:
         for index in range(turns):
             service.gc_record(SESSION, [_turn(index)], [f"h{index}"])
-            await service.gc_age(SESSION)
+            await collect(service, SESSION)
 
     asyncio.run(scenario())
     return project_knowledge_state(service.inspect(SESSION))
@@ -128,7 +130,7 @@ class TestThePassOutcome:
             for index in range(80):
                 service.gc_record(SESSION, [_turn(index)], [f"h{index}"])
                 before = project_knowledge_state(service.inspect(SESSION))
-                result = await service.gc_age(SESSION)
+                result = await collect(service, SESSION)
                 passes.append((before, result, project_knowledge_state(service.inspect(SESSION))))
             return passes
 
@@ -251,7 +253,7 @@ class TestWhatTheDashboardSaysIsWhatTheModelReceives:
             states = []
             for index in range(120):
                 service.gc_record(SESSION, [_turn(index)], [f"h{index}"])
-                await service.gc_age(SESSION)
+                await collect(service, SESSION)
                 if index % 7 == 6:
                     states.append(project_knowledge_state(service.inspect(SESSION)))
             return states

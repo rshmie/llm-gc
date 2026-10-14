@@ -127,7 +127,8 @@ class TestOnePassAtATime:
 
         _run(scenario())
         statuses = [event.data["gc_result"].status for event in finished]
-        assert statuses == [GCStatus.BYPASSED_AGING_IN_FLIGHT, GCStatus.COMPLETED]
+        # The running pass stages its cut, and switching it in is a collection of its own.
+        assert statuses == [GCStatus.BYPASSED_AGING_IN_FLIGHT, GCStatus.STAGED, GCStatus.COMPLETED]
 
     def test_the_in_flight_flag_is_cleared_even_when_the_pass_fails(self):
         """Otherwise one failed pass would disable aging for the session forever."""

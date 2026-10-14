@@ -49,49 +49,59 @@ A **snapshot** is immutable. Every change produces a new snapshot with the next
 taken a snapshot therefore holds a consistent view for as long as it likes —
 across any number of `await`s — without a lock, because nothing can change it.
 
-The engine performs three operations on a session that change or use it, each
-with its own guarantee, and one that only looks:
+The engine performs four operations on a session that change or use it, each with
+its own guarantee, and one that only looks:
 
 | Operation | Who calls it | Guarantee |
 |---|---|---|
-| **collect** (assemble the context) | the proxy, before forwarding a request | Never waits. Reads the current snapshot once. |
+| **collect** (assemble the context) | the proxy, before forwarding a request | Never waits. Reads the current snapshot once and changes nothing. |
 | **record** turns | the proxy, from the client's history on each request | Immediate. The next collect sees them. |
-| **age** (a collection: draft, plan, summarise, commit) | after each response, in the background | At most one per session at a time; commits onto whatever the snapshot is *now*. |
+| **switch** a staged cut in | the proxy, just before collect | Immediate: no model call, no `await`. Commits the staged cut onto the current snapshot, when the switch policy says so. |
+| **age** (prepare a cut: draft, plan, summarise, stage) | after each response, in the background | At most one per session at a time; stages onto whatever the snapshot is *now*. |
 | **inspect** | the dashboard | Read-only. Never creates a session, never resets its idle clock, announces nothing. |
 
 Besides the three generations, a snapshot records how many cuts the session has
-had and, after a cut, the first turn whose thinking blocks were produced against
-the current front (see [the cut](../generational-memory/the-cut.md)).
+had, the cut a pass has staged and the request path has not switched in yet, and,
+after a switch, the first turn whose thinking blocks were produced against the
+current front (see [the cut](../generational-memory/the-cut.md)).
 
 Aging is the slow one: a summary is a model call that can take seconds. It is
-split so that the slow part holds nothing:
+split so that the slow part holds nothing, and it never changes what the model is
+sent; only a switch does:
 
 ```
 time ──────────────────────────────────────────────────────────────────────────▶
 
- aging:    read v7 ──── draft, plan, ask the LLM to summarise ──── commit
+ aging:    read v7 ──── draft, plan, ask the LLM to summarise ──── re-plan on now, stage
            young 0–9        (seconds, nothing held)                  │
                                                                      ▼
- record:              turn 10 ─▶ v8                            v9 = v8 + delta
-                                young 0–10                     young 6–10
-                                                               old   spans 0–1, 2–3, 4–5
+ record:              turn 10 ─▶ v8                            v9 = v8 + staged cut of 0–5
+                                young 0–10                     young 0–10, still sent whole
  collect:                         reads v8 ─▶ turns 0–10 verbatim
                                   (returns at once; complete, only less condensed)
+
+ next request:   switch ─▶ v10 = v9 with the staged cut applied: old spans 0–1, 2–3, 4–5
+                                                                 young 6–10
+                 collect ─▶ the front, then turns 6–10
 ```
 
 1. **Plan.** The pass reads the current snapshot (the *base*) and works out what
    to change: which turns leave the young generation, the spans they become, the
    facts read from them, and which older spans change level. Nothing reaches
    session state.
-2. **Delta.** The plan is expressed as a **delta** — things to remove and values
-   to add — never as replacement lists. A replacement list built from the base
-   would erase any turn recorded while the pass was waiting.
-3. **Commit.** The delta is applied to the *current* snapshot, which may have
-   gained turns since the base was read, in one step with no `await` inside it.
-   Turns recorded in the meantime survive, because the delta only removes what it
-   names.
+2. **Condense.** It reads the facts and writes the summaries. Nothing is held while
+   it waits.
+3. **Re-plan and stage.** Against the snapshot as it is *now*, in one step with no
+   `await` inside it, it plans again with what it condensed and stores the result as
+   a **delta** - things to remove and values to add, never replacement lists - held
+   as the session's staged cut. Spans whose turns are no longer the oldest young
+   turns are left out: switched in while it waited, or rewound. A replacement list
+   built from the base would erase any turn recorded while the pass was waiting.
+4. **Switch.** On a later request, the delta is applied to the current snapshot in
+   one step with no `await` inside it. Turns recorded in the meantime survive,
+   because the delta only removes what it names.
 
-Two checks guard the commit:
+Three checks guard it:
 
 - **One aging pass per session at a time.** A second trigger while a pass is in
   flight is reported (`bypassed_aging_in_flight`) and skipped, not queued.
@@ -103,6 +113,15 @@ Two checks guard the commit:
   id — the result is discarded (`discarded_session_closed`) and nothing is
   announced. A closed session stays closed, and a reopened id never inherits the
   previous conversation's work.
+- **A staged cut follows the history.** A rewind that discards one of its turns
+  drops it with the abandoned branch; a pass whose prepared turns a rewind has
+  changed stages nothing (`discarded_history_changed`).
+
+A switch does not wait for a running pass, and a pass does not hold switches back:
+in a long burst a pass is nearly always running, and holding switches would stop
+the stale-weight bound from ever being enforced. The pass re-planning on the
+current snapshot is what makes the two safe together, and a span condensed before
+a switch is never paid for twice.
 
 A delta that names a turn or span the snapshot no longer holds is a programmer
 error and raises: only one pass ages a session, so it means that rule broke, and
@@ -112,12 +131,13 @@ shown twice.
 
 ### Events describe committed changes
 
-The ager is the pass that reports. Events for spans summarised, spans archived or
-lowered, added facts, and supersessions are emitted **after the commit**, each carrying the
-`session_id`, so a subscriber that reads state on hearing an event sees the
-change it was told about, and a discarded pass announces nothing. The terminal
-GC event is emitted exactly once per update, whatever the outcome. The assembler
-emits nothing: it changes no state.
+Events for spans summarised, spans archived or lowered, added facts, and
+supersessions are emitted **after a switch commits**, each carrying the
+`session_id`, so a subscriber that reads state on hearing an event sees the change
+it was told about, and a cut that is staged and never switched in announces
+nothing. The terminal GC event is emitted once per pass, whatever its outcome, and
+once per switch, as the collection. The assembler emits nothing: it changes no
+state.
 
 Both the context the ager reports and the list the assembler returns come from a
 single assembly step, so the number a dashboard shows and the payload a caller

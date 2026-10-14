@@ -1,9 +1,5 @@
 # A Collection: How the Prompt Changes
 
-> **Being built.** Staging a cut and switching to it on the request path are not in the
-> code yet: until they are, a pass commits its cut as soon as it finishes. See
-> [when-to-collect.md](when-to-collect.md).
-
 ## How it works
 
 A **collection** (a *cut*, in the code) is the one moment LLM-GC changes what the
@@ -120,6 +116,7 @@ of these.
                              cut it would have made is reported, so a reader can see
                              by how much it fell short
  already running             another pass is in flight for this session
+ discarded: history changed  the client rewound past the turns it prepared while it ran
 ```
 
 The dashboard's **Run GC now** prepares a cut with `min_cut_tokens` taken as zero and
@@ -145,7 +142,9 @@ The span is **still made**:
                                  each shows its opening line alone
 ```
 
-Both are reported as degradations, and nothing is lost: the span holds its turns.
+Both are reported as degradations, and nothing is lost: the span holds its turns. The
+staged cut keeps them, so the collection that later switches it in reports them too, not
+only the pass that met them.
 Keeping a span whole costs tokens, so a collection whose only new span lost its
 summary usually no longer pays for itself, and is reported as "no saving" with the
 failure beside it. A span made while the provider was down keeps no summary; a

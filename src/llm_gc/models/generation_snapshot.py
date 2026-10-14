@@ -14,6 +14,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from enum import Enum
 
+from llm_gc.models.aging_degradation import AgingDegradation
 from llm_gc.models.knowledge_entry import KnowledgeEntry
 from llm_gc.models.message import Message
 from llm_gc.models.knowledge_entry import KnowledgeStatus
@@ -95,6 +96,9 @@ class GenerationSnapshot:
     # then nothing has been produced against it.
     thinking_valid_from: int | None = 0
     cut_count: int = 0
+    # A cut a pass prepared and the request path has not switched in yet. Its turns are
+    # still young, and are sent word for word until it is.
+    staged: "StagedCut | None" = None
 
     @property
     def active_knowledge(self) -> list[KnowledgeEntry]:
@@ -135,11 +139,16 @@ class GenerationSnapshot:
         young_indices = {message.turn_index for message in self.young}
         if any(index not in young_indices for index in range(turn_count, len(self.lineage))):
             return None
+        # A staged cut that holds a discarded turn describes the abandoned branch too.
+        staged = self.staged
+        if staged is not None and any(index >= turn_count for index in staged.delta.departed_turns):
+            staged = None
         return replace(
             self,
             young=tuple(m for m in self.young if m.turn_index < turn_count),
             lineage=self.lineage[:turn_count],
             version=self.version + 1,
+            staged=staged,
         )
 
 
@@ -161,6 +170,29 @@ class AgingDelta:
     @property
     def is_empty(self) -> bool:
         return not (self.departed_turns or self.new_spans or self.level_changes or self.new_knowledge)
+
+
+@dataclass(frozen=True)
+class StagedCut:
+    """A prepared cut waiting to be switched in: the change, and the measures that decide when.
+
+    It holds conversation content - spans, summaries, facts - so it lives in the snapshot,
+    the one owner of a session's conversation. Nothing the model is sent changes until it
+    is switched in.
+
+    `saving_tokens` is what its cut removes from the prompt. `stale_tokens` is what the
+    turns it condenses add up to: what the model carries that has gone quiet.
+    `front_tokens` is the front it would render; with the tail at the moment of the switch,
+    it is what the provider would have to cache again. `degradations` is what preparing it
+    fell short of - a refused summary, facts not read - so the collection that takes effect
+    reports them, not only the pass that met them.
+    """
+
+    delta: AgingDelta
+    saving_tokens: int
+    stale_tokens: int
+    front_tokens: int
+    degradations: tuple[AgingDegradation, ...] = ()
 
 
 @dataclass(frozen=True)

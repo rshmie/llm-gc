@@ -1,8 +1,9 @@
 from typing import Optional
 from pydantic import BaseModel, Field
 
-from llm_gc.engine.aging_degradation import AgingDegradation
+from llm_gc.models.aging_degradation import AgingDegradation
 from llm_gc.engine.gc_status import GCStatus
+from llm_gc.engine.switch_policy import SwitchReason
 from llm_gc.models.message import Message
 
 class CutOutcome(BaseModel):
@@ -88,6 +89,10 @@ class GCResult(BaseModel):
 
     abandoned_cut: Optional[AbandonedCut] = None
     """Set only on a `BYPASSED_NO_SAVING` pass: the cut it planned and did not make."""
+
+    switch_reason: Optional[SwitchReason] = None
+    """Set only when a cut was switched in: why then. `STALE_WEIGHT_AT_BOUND` marks one
+    switched in for the model's health that may have cost more than it saved."""
 
     @property
     def tokens_saved(self) -> int:

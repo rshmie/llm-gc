@@ -15,6 +15,8 @@ from llm_gc.monitoring import ContextHealthMonitor
 from llm_gc.utils import count_tokens
 from llm_gc.visualizer import TranscriptRecorder, create_dashboard_app
 
+from tests.engine.support import collect
+
 SUMMARY = LLMResponse(text="Earlier turns covered the storage decision and the retention window in brief.",
                       stop_reason=StopReason.COMPLETE, input_tokens=0, output_tokens=14,
                       model="scripted", provider="offline")
@@ -41,7 +43,7 @@ def _converse(service: GcService, session_id: str, turns: int) -> None:
             turn = Message(role="user" if index % 2 == 0 else "assistant", content=text,
                            token_count=count_tokens(text), turn_index=index)
             service.gc_record(session_id, [turn], [f"{session_id}-{index}"])
-            await service.gc_age(session_id)
+            await collect(service, session_id)
 
     asyncio.run(scenario())
 

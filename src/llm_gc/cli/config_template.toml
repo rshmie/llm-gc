@@ -67,8 +67,18 @@
 # The newest turns, always sent word for word.
 # last_n_turns_to_keep = 5
 
-# A collection runs once the turns it would condense add up to this many tokens.
+# A cut is prepared once the new turns it would condense add up to this many tokens. Preparing
+# changes nothing the model is sent; switching the cut in does.
 # min_cut_tokens = 1000
+
+# While the provider's prompt cache is warm, a prepared cut is switched in only once it removes
+# at least this many times what the switch makes the provider cache again. 0 switches as soon as
+# there is a saving. On a cold cache it is switched in whatever it saves.
+# min_saving_share = 1.0
+
+# The most the model may carry that a prepared cut would condense, as a share of the window.
+# Reaching it switches the cut in whatever the cache costs, for the model's sake.
+# max_stale_ratio = 0.1
 
 # The recap's budget, as a share of the window.
 # max_recap_ratio = 0.3

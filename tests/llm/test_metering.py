@@ -9,7 +9,7 @@ from llm_gc.events import EventBus
 from llm_gc.exceptions import LLMRateLimitError
 from llm_gc.llm import FakeProvider, LLMResponse, MeteredProvider, StopReason, measure_model_usage
 from llm_gc.models import Message
-from tests.engine.support import COMPACTED_SCORE, make_service, turn
+from tests.engine.support import COMPACTED_SCORE, collect, make_service, turn
 
 RESPONSE = LLMResponse(text="a summary", stop_reason=StopReason.COMPLETE, input_tokens=40, output_tokens=7,
                        model="m", provider="fake")
@@ -79,7 +79,7 @@ def test_a_collection_reports_what_its_own_model_calls_spent():
         for index in range(3):
             state = service.session_manager.get_or_create("s")
             state.snapshot = state.snapshot.with_turn(turn(index))
-            results.append(await service.gc_age("s"))
+            results.append(await collect(service, "s"))
         return results
 
     results = asyncio.run(scenario())

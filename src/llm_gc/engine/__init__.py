@@ -1,4 +1,4 @@
-from llm_gc.engine.aging_degradation import AgingDegradation, DegradationReason
+from llm_gc.models.aging_degradation import AgingDegradation, DegradationReason
 from llm_gc.engine.gc_result import AbandonedCut, CutOutcome, GCResult
 from llm_gc.engine.gc_service import GcService
 from llm_gc.engine.gc_status import GCStatus

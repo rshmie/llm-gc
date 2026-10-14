@@ -1,6 +1,6 @@
 """The snapshot model: immutable values, and a delta that merges onto newer state."""
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 
 import pytest
 from hypothesis import given
@@ -11,6 +11,7 @@ from llm_gc.models.generation_snapshot import (
     DetailLevel,
     GenerationSnapshot,
     Span,
+    StagedCut,
     apply_aging,
     file_knowledge,
 )
@@ -230,3 +231,24 @@ class TestSupersessionRules:
         _, by_assistant = file_knowledge((fact(1, "redis", "assistant"),), (fact(2, "valkey", "assistant"),))
 
         assert len(by_user) == 1 and len(by_assistant) == 1
+
+
+class TestAStagedCutFollowsTheHistory:
+    @staticmethod
+    def _staged_over_turns_0_and_1() -> GenerationSnapshot:
+        snapshot = GenerationSnapshot().with_turns([_turn(i) for i in range(6)], [f"h{i}" for i in range(6)])
+        staged = StagedCut(delta=AgingDelta(departed_turns=frozenset({0, 1}), new_spans=(_summary(0),)),
+                           saving_tokens=5, stale_tokens=10, front_tokens=3)
+        return replace(snapshot, staged=staged)
+
+    def test_a_rewind_behind_the_staged_turns_keeps_the_staged_cut(self):
+        snapshot = self._staged_over_turns_0_and_1()
+        assert snapshot.rewound_to(4).staged is snapshot.staged
+
+    def test_a_rewind_past_a_staged_turn_drops_it_with_the_abandoned_branch(self):
+        snapshot = self._staged_over_turns_0_and_1()
+        assert snapshot.rewound_to(1).staged is None
+
+    def test_recording_new_turns_keeps_it(self):
+        snapshot = self._staged_over_turns_0_and_1()
+        assert snapshot.with_turns([_turn(6)], ["h6"]).staged is snapshot.staged

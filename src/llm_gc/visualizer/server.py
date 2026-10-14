@@ -21,6 +21,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from llm_gc.config.constants import APP_VERSION
 from llm_gc.engine import AbandonedCut, AgingDegradation, CutOutcome, GcService, GCStatus
 from llm_gc.engine.pause import Pause
+from llm_gc.engine.switch_policy import CacheState
 from llm_gc.monitoring import ContextHealth, ContextHealthMonitor
 from llm_gc.monitoring.knowledge_state import KnowledgeState, project_knowledge_state
 from llm_gc.session import SessionState
@@ -184,21 +185,24 @@ def create_dashboard_app(
 
     @app.post("/api/sessions/{session_id}/gc", response_model=ManualCutResult)
     async def run_gc_now(session_id: str, request: Request) -> ManualCutResult | JSONResponse:
-        """The developer's lever: cut now, without waiting for the batch minimum.
+        """The developer's lever: prepare a cut without waiting for the batch minimum, and switch it in now.
 
-        Every other rule of a cut still applies, and it reports what happened the
-        same way an automatic pass does.
+        The switch policy is waived; every other rule of a cut still applies. It reports
+        the collection when one was switched in, and the pass otherwise, the same way an
+        automatic one is reported.
         """
         if request.headers.get(ACTION_HEADER) != "1":
             return JSONResponse(status_code=403, content={"error": {
                 "code": "ACTION_HEADER_REQUIRED", "message": f"send {ACTION_HEADER}: 1 to act from the dashboard"}})
         if gc_service.session_manager.store.get(session_id) is None:
             return _session_not_found(session_id)
-        result = await gc_service.gc_age(session_id, ignore_batch_minimum=True)
+        prepared = await gc_service.gc_age(session_id, ignore_batch_minimum=True)
+        switched = gc_service.gc_switch(session_id, CacheState.COLD, requested=True)
+        result = switched if switched is not None else prepared
         return ManualCutResult(status=result.status, tokens_before=result.tokens_before,
                                tokens_after=result.tokens_in_final, outcome=result.outcome,
-                               degradations=result.degradations, abandoned_cut=result.abandoned_cut,
-                               duration_ms=result.duration_ms)
+                               degradations=result.degradations, abandoned_cut=prepared.abandoned_cut,
+                               duration_ms=prepared.duration_ms + (switched.duration_ms if switched else 0.0))
 
     return app
 

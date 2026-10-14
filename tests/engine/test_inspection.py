@@ -20,6 +20,8 @@ from llm_gc.models.generation_snapshot import DetailLevel, GenerationSnapshot, S
 from llm_gc.models.knowledge_entry import KnowledgeType
 from llm_gc.utils import count_tokens
 
+from tests.engine.support import collect
+
 SESSION = "s"
 
 SUMMARY = LLMResponse(
@@ -59,7 +61,7 @@ def _converse(service: GcService, turns: int) -> list[Event]:
     async def scenario() -> None:
         for index in range(turns):
             _record(service, index)
-            await service.gc_age(SESSION)
+            await collect(service, SESSION)
 
     asyncio.run(scenario())
     return finished
@@ -142,7 +144,7 @@ class TestLookingChangesNothing:
             for index in range(20):
                 _record(service, index)
                 service.inspect(SESSION)
-                await service.gc_age(SESSION)
+                await collect(service, SESSION)
 
         asyncio.run(scenario())
         assert heard, "collections after previews still file and announce facts"
@@ -172,7 +174,7 @@ class TestTheViewIsTheEngine:
                 _record(service, index)
                 preview = service.inspect(SESSION).next_cut
                 young_before = {m.turn_index for m in _snapshot(service).young}
-                await service.gc_age(SESSION)
+                await collect(service, SESSION)
                 result = finished[-1].data["gc_result"]
                 if not preview.batch_ready:
                     assert result.status is GCStatus.BYPASSED_BATCH_TOO_SMALL, index
@@ -198,7 +200,7 @@ class TestTheViewIsTheEngine:
             for index in range(30):
                 _record(service, index)
                 preview = service.inspect(SESSION).next_cut
-                await service.gc_age(SESSION)
+                await collect(service, SESSION)
                 if preview.batch_ready:
                     checked.append((preview.estimated_saving, finished[-1].data["gc_result"]))
 
