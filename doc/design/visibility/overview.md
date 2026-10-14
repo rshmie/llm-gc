@@ -150,9 +150,9 @@ pass itself. Deciding *when* to clean context is a decision with consequences
 for what the model produces next, and that decision stays with the developer
 or the application. The dashboard's one control, **Run GC now**, does not
 contradict this: it is the *developer* pulling the lever explicitly — the human
-judgment the passivity rule exists to protect. It runs the same aging pass with
-only the batch minimum waived, so every other rule of a cut still holds and the
-result is reported like any automatic pass.
+judgment the passivity rule exists to protect. It prepares a cut with the batch
+minimum waived and switches to it at once, waiving the switch policy, so every other rule
+of a cut still holds and the result is reported like any automatic collection.
 
 ### What it exposes — named signals, no aggregate
 
@@ -214,12 +214,15 @@ Here every span is one exchange of two turns.
 - **The next collection**: which verbatim turns it would take, as which spans and
   at what level; which spans already collected it would show at another level; and
   the conditions it must meet, each with its state — a batch worth
-  collecting, against `min_cut_tokens`, and a cut that pays for itself. The first
+  preparing, against `min_cut_tokens`, and a cut that pays for itself. The first
   is planned exactly. The second is estimated at each summary's target size —
-  the very estimate a collection checks before paying for any summary, so a cut
-  the panel shows as not paying is one the collection skips — and measured again
+  the very estimate a pass checks before paying for any summary, so a cut
+  the panel shows as not paying is one the pass skips — and measured again
   on the real summaries; when that refuses a cut, the panel shows the attempt's
-  figures too. *Rejected: a progress meter alone.* It reads as a promise, and on a conversation of short messages the
+  figures too. Once a cut is staged the card also says what decides its switch: its stale
+  weight against the bound, its saving against the share times what it would rewrite, the
+  cache state and the gap behind it, and the reason it switched or is waiting
+  ([when-to-collect.md](../generational-memory/when-to-collect.md)). *Rejected: a progress meter alone.* It reads as a promise, and on a conversation of short messages the
   meter filled, Run GC now was pressed, and nothing happened, with nothing on the
   panel saying why.
 

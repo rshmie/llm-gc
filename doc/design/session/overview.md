@@ -124,16 +124,21 @@ single assembly step, so the number a dashboard shows and the payload a caller
 forwards cannot drift apart. That context is measured whole — the front
 included — because it is real tokens in the real prompt.
 
-### Aging collects the conversation in batches
+### Aging prepares a cut; the request path switches to it
 
-An aging pass changes the prompt only by a **collection** (a *cut*, in the code):
-the oldest turns become spans in one front message, every later turn stays
-verbatim, and every span's level is planned again. The plan decides how each span
-is shown; a collection is made only when the batch's turns the plan would not keep
-word for word add up to `min_cut_tokens`, because each collection resets the
-provider's prompt cache once, and only when it pays for itself. Otherwise the pass
-reports itself bypassed and changes nothing. The mechanism, its rules, and the
-rejected alternatives are in [the-cut.md](../generational-memory/the-cut.md).
+An aging pass prepares a **cut** (a *collection*, once it takes effect): the oldest
+turns become spans in one front message, every later turn stays verbatim, and every
+span's level is planned again. Preparing changes nothing the model is sent; the result
+is held as the session's staged cut. The prompt changes only when a **switch** on the
+request path commits it, and only when the switch policy says so: the cache is cold,
+the saving repays the rewrite, or the stale weight has reached its bound.
+
+The plan decides how each span is shown. A pass prepares a cut only when the new turns
+the plan would not keep word for word add up to `min_cut_tokens`, because each pass pays
+for model calls, and only when the cut pays for itself. Otherwise the pass reports itself
+bypassed and changes nothing. The mechanism, its rules, and the rejected alternatives are
+in [the-cut.md](../generational-memory/the-cut.md); when a cut is switched in is in
+[when-to-collect.md](../generational-memory/when-to-collect.md).
 
 ### Failures are contained
 

@@ -249,6 +249,22 @@ A malformed body is forwarded untouched, because the provider is the authority o
 its own API. Guards catch `Exception`, never `BaseException`, so cancellation on
 client disconnect still propagates and the upstream connection is closed.
 
+**Nor a more expensive one, nor a less grounded one.** Never worse has two meanings, and
+the engine holds both ([when-to-collect.md](../generational-memory/when-to-collect.md)):
+
+- **What the model reasons over.** While a prepared cut waits, the model is sent the
+  client's own turns word for word, as without LLM-GC; a switch never makes the prompt
+  larger; and what has gone quiet is held under a bound.
+- **What the conversation costs.** A prepared cut is switched in when the provider's
+  cache is already lost, or when the saving repays the rewrite. Only the bound, and the
+  developer's own *Run GC now*, can switch in a cut that costs more than it saves, and
+  the dashboard labels it.
+
+The proxy supplies the one thing the engine cannot see: whether the conversation's cache
+is warm. It reads the cached tokens each reply reports and the cache lifetime a request
+states, and when unsure it reports warm, the direction whose error costs only an
+opportunity.
+
 ### What is measured
 
 Every request is counted where it belongs: its conversation, the client session that ran
@@ -530,15 +546,14 @@ conversation are tested against what clients actually do.
 
 ### After a cut
 
-Once the engine has cut a session, the forwarded conversation is the front (one
-user-role message) followed by every later turn as the client's **original
+Once the engine has switched a session to a cut, the forwarded conversation is the front
+(one user-role message) followed by every later turn as the client's **original
 content** — images, tool calls and all. Thinking blocks are removed from every
 turn sent with the first request that carries a new front, because each was
-produced against a prompt the cut replaced; the proxy tells the engine when it
-sends a front for the first time, and that request's history length becomes the
-boundary. Replies produced from then on keep theirs. Between cuts the forwarded
-conversation only grows at the end, so the provider's prompt cache holds. See
-[the cut](../generational-memory/the-cut.md).
+produced against a prompt the cut replaced; that is the request that switched, and its
+history length becomes the boundary. Replies produced from then on keep theirs. Between
+switches the forwarded conversation only grows at the end, so the provider's prompt cache
+holds. See [the cut](../generational-memory/the-cut.md).
 
 ### Idle sessions
 
