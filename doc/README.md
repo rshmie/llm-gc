@@ -21,7 +21,7 @@ yet, the doc says so at the top.
 ```
 design/
   scoring/                    how much each span matters now — overview + one doc per importance scorer
-  generational-memory/        young / old / permanent, spans, detail levels, compaction, and the cut
+  generational-memory/        young / old / permanent, spans, detail levels, compaction, the cut, and when to collect
   session/                    per-conversation state and its concurrency contract
   proxy/                      the HTTP proxy: finding a conversation, forwarding, never degrading
   events/                     the event bus components report through

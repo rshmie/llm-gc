@@ -92,9 +92,9 @@ A provider that is slow or down stops spans from being summarised, safely: the
 spans are made without summaries, kept or archived by their score, and each failure
 is reported. A span made then is not summarised later.
 
-Every summary costs money, which is one reason a collection waits for a batch worth
+Every summary costs money, which is one reason a pass waits for a batch worth
 making, and why it checks that its cut would pay for itself before buying any
-summary (see [the-cut.md](the-cut.md)).
+summary (see [the-cut.md](the-cut.md) and [when-to-collect.md](when-to-collect.md)).
 
 ## Alternatives rejected
 

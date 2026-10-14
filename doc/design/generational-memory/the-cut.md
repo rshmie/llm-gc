@@ -1,5 +1,9 @@
 # A Collection: How the Prompt Changes
 
+> **Being built.** Staging a cut and switching to it on the request path are not in the
+> code yet: until they are, a pass commits its cut as soon as it finishes. See
+> [when-to-collect.md](when-to-collect.md).
+
 ## How it works
 
 A **collection** (a *cut*, in the code) is the one moment LLM-GC changes what the
@@ -7,6 +11,10 @@ model is sent. It takes the turns that have aged out of the tail, makes spans of
 them, and re-plans the level of every span the session holds. Everything it
 decides reaches the model through one message at the start of the prompt, the
 **front**; every later turn is sent exactly as the client wrote it.
+
+It happens in two halves. A background pass **prepares** a cut and stages it; the request
+path **switches** to it when the cache and the model's health call for it. This document
+is about what each half does. [when-to-collect.md](when-to-collect.md) is about when.
 
 ```
 before any collection:   t0 t1 t2 … t39 t40 … t57                (the client's history, untouched)
@@ -21,7 +29,7 @@ between collections:     [FRONT] t40 … t57 t58
 the next collection:     [FRONT′] t52 … t60       ← new spans added, every span's level re-planned
 ```
 
-### What a collection does, step by step
+### Preparing a cut, step by step
 
 ```
  after a response, in the background, one pass per session at a time
@@ -30,14 +38,14 @@ the next collection:     [FRONT′] t52 … t60       ← new spans added, every
                 verbatim, where a span may begin, and splits no tool round;
                 everything before it is the batch
                       │
- 2  DRAFT       group the batch into spans (one exchange each) and take each span's
-                opening line — no model call
+ 2  DRAFT       group the batch's turns that no staged cut holds into spans (one exchange
+                each) and take each span's opening line — no model call
                       │
- 3  PLAN        score every span, old and new, against what the user is discussing
+ 3  PLAN        score every span, old, staged and new, against what the user is discussing
                 now, and plan every level, with each new span's summary estimated
                       │
-                      ├── the batch's tokens the plan would not keep word for word
-                      │   are under `min_cut_tokens`?  ──► stop: not enough to collect
+                      ├── the new turns the plan would not keep word for word
+                      │   are under `min_cut_tokens`?  ──► stop: not enough to prepare
                       │
                       ├── the cut would not save anything, at the estimated costs?
                       │                                ──► stop: no saving (nothing paid for)
@@ -50,26 +58,46 @@ the next collection:     [FRONT′] t52 … t60       ← new spans added, every
  6  MEASURE     do the new spans, as rendered, cost less than the turns they replace?
                       │  no ──► stop: no saving, and report the cut it would have made
                       ▼
- 7  COMMIT      one synchronous step, onto the session's CURRENT snapshot
+ 7  STAGE       keep the planned result as the session's staged cut, in place of any
+                earlier one. The prompt has not changed.
 ```
 
-**Steps 2 and 3 cost nothing**, which is why they come first: a collection decides
+**Steps 2 and 3 cost nothing**, which is why they come first: a pass decides
 whether it is worth making before it pays for any model call. Its estimate leaves out
 the new spans' facts, which are not read yet; the measure in step 6 includes them. The same draft and
 plan is the dashboard's preview of the next collection, so the preview cannot drift
 from what the pass does.
 
-### When a collection happens
+A later pass **extends** a staged cut rather than starting again: the spans already
+condensed are kept, and only the turns that have gone quiet since are drafted and
+paid for. A summary is bought once per span, however many passes there are.
 
-**The plan decides how each span is shown; the batch decides when.** A collection
-is made only when:
+### Switching to it
 
-1. **The batch is worth one.** The batch's turns that the plan would not keep word
-   for word add up to at least `min_cut_tokens`. A batch the plan would keep
-   entirely is never collected: moving kept turns into the front saves nothing.
-2. **It would save something, at the estimated costs.** A session's first
-   collection also pays for the front's header, so a short batch can be worth
-   condensing and still not worth a collection.
+```
+ on the request path, as a request is built
+
+ the switch policy says switch ──► COMMIT   one synchronous step, onto the session's
+                                            CURRENT snapshot; this request is the first to
+                                            carry the new front
+```
+
+The commit applies the staged cut to whatever the snapshot is now, in one step with no
+`await` inside it. Turns recorded since the pass survive, because the cut only removes
+what it names. A staged cut belongs to the turns it was made from: if the client's history
+stops agreeing with them, a rewind or an edit, it is discarded.
+
+The assembler that renders the prompt still changes nothing; the switch is a step of its
+own before it.
+
+### What a cut must satisfy
+
+1. **Enough has gone quiet to prepare one.** The new turns the plan would not keep word
+   for word add up to at least `min_cut_tokens`. A batch the plan would keep entirely is
+   never prepared: moving kept turns into the front saves nothing.
+2. **It would save something, at the estimated costs.** A session's first collection also
+   pays for the front's header, so a short batch can be worth condensing and still not
+   worth a collection.
 3. **No tool round is split.** No tool result kept after the cut may answer a tool
    call before it. The provider's rule is stricter than "no orphans": a tool result
    must immediately follow the message holding its call. The front is always the
@@ -80,32 +108,31 @@ is made only when:
    restoring a span the conversation returned to costs tokens on purpose, and is
    bounded by the recap budget instead.
 
-This is how a generational garbage collector works too: a young-generation
-collection does not run when one object dies, but when the young generation has
-filled enough to be worth a pass.
+Whether a prepared cut becomes the prompt now is the switch policy's question, and not one
+of these.
 
 ```
  a pass's outcome            why
  ──────────────────────────  ──────────────────────────────────────────────────────
- completed                   rules 1–5 held; the collection is committed
- not enough to collect       rule 1: the batch is below min_cut_tokens
+ staged                      rules 1–5 held; the cut is ready to switch to
+ not enough to prepare       rule 1: the new turns are below min_cut_tokens
  no saving                   rule 2 (decided before paying) or rule 5 (after) — the
                              cut it would have made is reported, so a reader can see
                              by how much it fell short
  already running             another pass is in flight for this session
 ```
 
-The dashboard's **Run GC now** is the same pass with `min_cut_tokens` taken as zero;
-every other rule still holds.
+The dashboard's **Run GC now** prepares a cut with `min_cut_tokens` taken as zero and
+switches to it at once, waiving the switch policy; every other rule still holds.
 
-### What a pass reports
+### What a collection reports
 
-A completed pass reports its **outcome**, by turn: which of the cut's turns were
+A switch reports its **outcome**, by turn: which of the cut's turns were
 kept, compacted, archived or folded out of view, and which turns condensed earlier
 it showed with less detail or with more. Its token totals describe the cut's turns
 by the level the plan gave them. A pass that stopped for
 "no saving" reports the outcome it *would* have had, and the context it would have
-produced.
+produced. A cut that waits reports why, and what it is waiting for.
 
 ### When a summary or the facts fail
 
@@ -136,21 +163,15 @@ turns, oldest first, which is the only removal that leaves later blocks valid.
 Replies produced from that request on keep their thinking, because the front they
 were produced against does not change until the next collection.
 
-The boundary is recorded when the front is first sent, not when the collection
-commits:
+The switch happens as that request is built, so the request that switches is by
+definition the first to carry the front, and the boundary is the turns it sends:
 
 ```
-request N    plans the collection in the background   reply N produced against the OLD front
-                         └ commit
-request N+1  first to carry the new front              sends reply N back  -> its thinking is stale
-             boundary = the turns it sends              reply N+1 produced against the NEW front
-request N+2  same front                                 reply N+1 keeps its thinking
+request N    answered against the OLD front              reply N produced against the OLD front
+request N+1  the switch happens; first to carry it       sends reply N back  -> its thinking is stale
+             boundary = the turns it sends                reply N+1 produced against the NEW front
+request N+2  same front                                   reply N+1 keeps its thinking
 ```
-
-The commit cannot see reply N — it is still being written, or has not reached the
-proxy yet — and with a slow summary call the commit can land after request N+1 has
-already gone out on the old front. Only the first request that carries the front
-knows which turns predate it.
 
 The same stability is what lets the provider cache the prompt: a cached prefix is
 billed at a fraction of the input price and answered faster, but only if it is
@@ -168,7 +189,7 @@ occasionally, is the one rewrite both accept.
 
 ## Why this shape
 
-- **Change the prompt only at the front, only at a collection.** The one rewrite the
+- **Change the prompt only at the front, only at a switch.** The one rewrite the
   provider's checks accept and caching survives.
 - **Cut only where a span may begin.** Before a user message that opens an exchange,
   or, inside an exchange the assistant has already answered, between its tool
@@ -193,9 +214,14 @@ occasionally, is the one rewrite both accept.
   longer than `last_n_turns_to_keep`. *Rejected: cutting only before a user message.*
   One long agentic exchange has no such point, so it would never be collected and
   its prompt would grow without bound.
-- **Batch by the tokens the plan would condense, not by window fill.** LLM-GC
-  condenses what has gone quiet, which is its generational premise; batching only
-  stops it collecting for a handful of tokens.
+- **Prepare on what has gone quiet; switch on the cache and on health.** Preparing costs
+  LLM-GC's tokens and changes nothing the client sees, so a flat floor is the right gate
+  for it. Switching costs the provider's cache, so it waits for a cold cache, for a saving
+  that repays the rewrite, or for the model's stale weight to reach its bound. See
+  [when-to-collect.md](when-to-collect.md).
+- **Hold a prepared cut rather than commit it.** Committing as soon as a pass finishes
+  fixes the cache rewrite at an arbitrary moment. A staged cut can be switched in at the
+  request that would miss the cache anyway.
 - **Plan before paying.** Drafting and planning cost no model call, so a pass that
   will not collect, or whose cut cannot pay for itself, stops before buying
   summaries it would throw away.
@@ -212,7 +238,7 @@ occasionally, is the one rewrite both accept.
   turn 17 now?" can never be answered wrongly, and changing a span's level moves
   nothing.
 - **Derive the front from the generations rather than storing it.** Rendering is
-  deterministic and the generations change only when a collection commits, so the
+  deterministic and the generations change only when a switch commits, so the
   front is frozen between collections by construction.
 
 ### Alternatives rejected
@@ -240,7 +266,7 @@ occasionally, is the one rewrite both accept.
 
 ### Accepted costs
 
-- **A collection resets the cache once.** That is what `min_cut_tokens` amortises.
+- **A switch rewrites the cache once.** The switch policy decides when that is worth it.
 - **One summary call per new span**, including spans the plan will archive, so every
   level's material exists before it is needed, **and one call to read the facts** of
   all of them.
@@ -258,5 +284,5 @@ occasionally, is the one rewrite both accept.
   survive only as the text that described them.
 - **A collection can become visible in the middle of a tool round.** When the first
   request carrying a new front is a tool result, the reply that made the call loses
-  its thinking for that step. The fix is to hold a new front back until a request
-  that is not a tool result.
+  its thinking for that step. The switch policy could hold a cut back from such a
+  request unless the cache is cold or the cut is overdue.
