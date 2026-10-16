@@ -439,17 +439,43 @@ client that names no session has each conversation listed on its own.
 
 `/stats` returns the proxy's totals — requests, GC applied and bypassed,
 `tokens_from_client`, `tokens_forwarded`, `tokens_saved` and their ratio, the provider's
-reported usage, LLM-GC's own calls, and the reconciliations `history_rewinds`,
+reported usage, the cache written on requests that carried a collection
+(`collection_cache_write_tokens`), LLM-GC's own calls, and the reconciliations `history_rewinds`,
 `history_restarts` and `sessions_seeded` (a restart or a seed costs one uncompressed
 request, so each is counted rather than hidden) — then `client_sessions`, each with its
-conversations: their part (main, subagent, earlier main), model, window and counts; and
+conversations: their part (main, subagent, earlier main), model, window, counts and newest
+reply counted both ways, with its rate; and
 `other_conversations`, for those no client session named.
 
 `llm-gc stats` reads these from a running proxy, on the port the settings name, and
 validates the answer before using it, since whatever is on that port may not be an
-LLM-GC proxy. It prints the totals, what the provider reported and what LLM-GC's own calls
-spent, then one table per client session: each conversation's requests, tokens sent and
-saved, collections (and those not yet sent) and window. "Applied" counts requests that
+LLM-GC proxy. It prints the totals grouped by whose count they are, each group headed by
+that name rather than explained in a closing note:
+
+```
+LLM-GC's own count         an estimate, the same on both sides  →  sent, forwarded, saved (share)
+The provider's own count   what it bills                        →  the replies' usage by kind,
+                                                                    LLM-GC's own calls
+```
+
+then what the proxy handled (requests, conversations), then one table per client session:
+each conversation's requests, tokens sent and saved, collections (and those not yet sent),
+window, and the rate its newest reply measured ("Model count"). Sent and saved add up every request, each whole, so they grow far past any
+one conversation; the share is the figure to read. A share rounds halves up, as the
+dashboard does, and a saving too small to round to 1% reads "<1%", never "0%".
+
+**LLM-GC's own calls sit beside the saving, never taken from it.** A token saved and a
+token spent are not worth the same: with a warm cache a saved token would have been a
+cache read on the proxied model, the cheapest kind, while a spent one is input or output
+on the summary model. And neither figure holds what a collection costs on the proxied
+model: the prompt after the recap written to the cache again. *Rejected: a net saving
+(saved minus spent), or a saved-per-spent ratio* — both subtract or divide different
+kinds of token on different models, and both leave the cache writes out, so they read as
+a gain on a session that costs more than it would without LLM-GC. The provider's group
+names the cache written on requests that carried a collection instead, the cost to set
+the saving against, as the Session tab does. *Rejected: re-counting LLM-GC's calls with
+LLM-GC's tokenizer so both sit on one ruler* — that makes the counts alike, not the
+tokens. "Applied" counts requests that
 went through LLM-GC's path, which includes the early ones where nothing has been
 condensed yet; "bypassed" counts requests forwarded untouched because they could not be
 read or the engine failed on the request path. With no requests it says so instead of
@@ -484,8 +510,19 @@ request names model M
                  and, once, in the background:
                  GET /v1/models/M ─► max_input_tokens ─► remembered for M
 
-the conversation's recap budget = its share (30%) of that window, read at its next collection
+the conversation's recap budget = its share (30%) of that window, read at its next collection,
+                                   converted to LLM-GC's count at the rate its replies measure
 ```
+
+**Each reply measures the rate between the two counts.** Where a reply's usage is read,
+the proxy divides the provider's count of that request's whole prompt (input, cache read
+and cache write) by LLM-GC's count of the same request, and gives the engine that rate
+for the conversation. The engine keeps the window in the model's tokens and takes the
+recap budget and the stale bound from the window converted at the rate
+([detail levels](../generational-memory/detail-levels.md)). A reply that reports no
+usage measures nothing, and the rate stays as it was. A collection pass is scheduled as
+its request is sent, so it uses the rate of the reply before; the rate moves little
+between requests.
 
 A larger window cannot push a request past the model's: the recap is the conversation's
 own older turns, condensed or quoted, so even with every span restored it is about the

@@ -159,18 +159,36 @@ archived.
 ### The recap budget
 
 One budget covers everything the front shows for its spans: `max_recap_ratio` of
-the window of the model the conversation's requests name (30% by default; 60,000
-tokens of a 200k window, 300,000 of a 1M one), less the front's own header. A share,
-never an absolute: 200 tokens is nothing to a 128k window and everything to a
-200-token one. A session that has not learned its model's window uses the configured
-one.
+the window of the model the conversation's requests name (30% by default), less the
+front's own header. A share, never an absolute: 200 tokens is nothing to a 128k window
+and everything to a 200-token one. A session that has not learned its model's window
+uses the configured one.
+
+**The share is taken of the window counted as the recap is.** The window is in the
+model's tokens; the recap is measured in LLM-GC's, and every model's tokenizer counts
+the same text its own way (on one Claude Code session, about 1.48 of Claude's tokens
+for each of LLM-GC's). Compared directly, a 30% setting would allow about 44% of that
+window, and a different share on every model. So the window is first converted at the
+**rate** the conversation's own replies measure: the provider's count of a request's
+whole prompt over LLM-GC's count of the same request, taken from the newest reply.
+Until a reply measures it, the window is used as it is.
 
 ```
-the conversation's model        its window              recap budget (30%)
-claude-opus-5-5                 1,000,000 (reported)          300,000
-claude-haiku-4-5                  200,000 (reported)           60,000
-a name the gateway made up        200,000 (assumed)            60,000
+the conversation's model     its window              rate      in LLM-GC's count   recap budget (30%)
+claude-opus-5-5              1,000,000 (reported)    1.48          675,675              202,702
+claude-haiku-4-5               200,000 (reported)    1.48          135,135               40,540
+a name the gateway made up     200,000 (assumed)     not yet       200,000               60,000
 ```
+
+*Rejected: a table of rates per model* — kept by hand, and wrong for a renamed or new
+model. *Rejected: counting with the provider's tokenizer* — Claude's is not public, and
+asking the provider to count is a network call per request. *Rejected: giving the
+engine the window already converted* — the dashboard's window meter divides the
+provider's count of a request by the window, both in the model's tokens, and would read
+too full; the engine keeps the window as the model states it and the rate beside it.
+*Accepted cost:* the rate is the whole prompt's, mostly the system prompt and tools on
+Claude Code, not the recap's own; prose and code may convert at somewhat different
+rates.
 
 ### The front, rendered
 

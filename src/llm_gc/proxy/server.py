@@ -55,7 +55,7 @@ from llm_gc.proxy.model_windows import ModelWindow, ModelWindows, WindowLookup
 from llm_gc.proxy.session_identity import SESSION_HEADER, chain_hashes, client_origin
 from llm_gc.proxy.request_log import RequestLog, newest_kind
 from llm_gc.proxy.subagent_links import SpawnLinker
-from llm_gc.proxy.traffic import TrafficLedger
+from llm_gc.proxy.traffic import TrafficLedger, token_rate
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +135,7 @@ class ProxyMetrics:
             # None, not 1.0: a ratio with no requests behind it is not a measurement.
             "ratio": round(total.tokens_forwarded / total.tokens_from_client, 3) if total.tokens_from_client else None,
             "provider_usage": asdict(total.provider),
+            "collection_cache_write_tokens": total.collection_cache_write_tokens,
             "summaries": asdict(total.summaries),
             "history_rewinds": self.history_rewinds,
             "history_restarts": self.history_restarts,
@@ -416,10 +417,13 @@ def _measure_request(app: FastAPI, session_id: str | None, origin: ClientOrigin 
             app.state.gc_service.pause_model_calls(outline.retry_after_s,
                                                    f"the upstream {pressure} a request from the client")
         if outline.usage is not None:
-            TrafficLedger.record_usage(counted, outline.usage, forwarded)
+            TrafficLedger.record_usage(counted, outline.usage, forwarded, carried_collection=carried > 0)
             if session_id is not None:
                 metrics.cache_watch.observe(session_id, started_at=started_at, lifetime_s=lifetime_s,
                                             usage=outline.usage)
+                # The window is in the model's tokens; this is how LLM-GC sets its own counts against it.
+                if (rate := token_rate(forwarded, outline.usage)) is not None:
+                    app.state.gc_service.use_token_rate(session_id, rate)
         metrics.request_log.finish(record, outline)
         if linker is not None and origin is not None and prompts:
             linker.offer_calls(origin.session_id, record, prompts)

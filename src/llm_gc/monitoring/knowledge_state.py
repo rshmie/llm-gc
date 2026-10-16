@@ -128,8 +128,10 @@ class KnowledgeState(BaseModel):
     next_cut: NextCutState
     aging_in_flight: bool
     last_activity: datetime
-    context_window: int                   # the window of the model being called, as the recap is sized for it
-    recap_budget: int
+    context_window: int                   # the window of the model being called, in its tokens
+    recap_budget: int                     # in LLM-GC's count
+    token_rate: float | None = None       # the model's tokens per LLM-GC token; None until a reply measures it
+    window_in_own_count: int = 0          # the window in LLM-GC's count: what the recap budget and stale bound are shares of
     collected: bool                       # False: recorded and shown, never collected
     staged: StagedCutState | None = None  # set while a prepared cut waits to be switched in
     cache: CacheReadingState | None = None   # None when no proxy reads the cache beside this dashboard
@@ -164,6 +166,8 @@ def project_knowledge_state(inspection: SessionInspection, cache: CacheReading |
         last_activity=inspection.last_activity,
         context_window=inspection.context_window,
         recap_budget=inspection.recap_budget,
+        token_rate=inspection.token_rate,
+        window_in_own_count=inspection.window_in_own_count,
         collected=inspection.collection_enabled,
         staged=StagedCutState(turns=sorted(snapshot.staged.delta.departed_turns) if snapshot.staged else [],
                               saving_tokens=staged.saving_tokens, rewritten_tokens=staged.rewritten_tokens,

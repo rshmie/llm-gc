@@ -78,6 +78,16 @@ class TestWhereEachTurnIs:
         assert state.front_text is None and state.spans == []
         assert state.cuts == 0
 
+    def test_the_page_is_told_the_window_in_both_counts_and_the_rate_between_them(self):
+        """The window meter divides the provider's count by the model's window; the bound is set in LLM-GC's."""
+        service = _service(context_window=200_000)
+        _converse(service, 2)
+        service.use_token_rate(SESSION, 2.0)
+
+        state = project_knowledge_state(service.inspect(SESSION))
+
+        assert (state.context_window, state.token_rate, state.window_in_own_count) == (200_000, 2.0, 100_000)
+
     def test_after_cuts_every_turn_is_in_the_tail_or_shown_at_its_spans_level(self):
         state = _converse(_service(), 40)
 

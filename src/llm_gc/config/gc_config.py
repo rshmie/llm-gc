@@ -54,12 +54,15 @@ class GCConfig(BaseModel):
     def recap_budget(self, context_window: int | None = None) -> int:
         """Token ceiling for the recap: its share of `context_window`, or of the configured window.
 
-        Derived rather than stored so there is one source of truth: a stored absolute
-        alongside the window would let the two drift, and the drift's symptom is a
-        proxy that silently costs more than it saves.
+        `context_window` is counted as the recap is. Derived rather than stored so there is one
+        source of truth: a stored absolute alongside the window would let the two drift, and the
+        drift's symptom is a proxy that silently costs more than it saves.
         """
         return int((context_window or self.context_window) * self.max_recap_ratio)
 
     def stale_bound(self, context_window: int | None = None) -> int:
-        """The most stale weight the model may carry: its share of `context_window`, or of the configured window."""
+        """The most stale weight the model may carry: its share of `context_window`, or of the configured window.
+
+        `context_window` is counted as the stale weight is.
+        """
         return int((context_window or self.context_window) * self.max_stale_ratio)

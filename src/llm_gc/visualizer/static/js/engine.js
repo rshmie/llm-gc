@@ -118,11 +118,13 @@ export function renderProxy() {
       h("div", { class: "triple" }, [[p.sessions_seeded, "started fresh"], [p.history_rewinds, "rewound after an edit"], [p.history_restarts, "restarted"]]
         .map(([n, label]) => h("div", {}, h("b", {}, fmt(n)), h("span", {}, label))))),
     tile("What the provider reported", "billed", null,
-      u.replies ? `On ${plural(u.replies, "reply", "replies")}, by the provider's own count: what it bills.` : "No reply has reported its usage yet.",
+      u.replies ? [`On ${plural(u.replies, "reply", "replies")}, by the provider's own count: what it bills.`,
+        p.collection_cache_write_tokens ? ` ${compact(p.collection_cache_write_tokens)} of the cache writes were on requests that carried a collection: the cost to set a saving against.` : ""]
+        : "No reply has reported its usage yet.",
       u.replies ? h("div", { class: "triple" }, [[u.cache_read_input_tokens, "cache read"], [u.input_tokens + u.cache_creation_input_tokens, "input and cache write"], [u.output_tokens, "output"]]
         .map(([n, label]) => h("div", {}, h("b", {}, compact(n)), h("span", {}, label)))) : null),
     tile("LLM-GC's own model calls", null, s.calls ? countEl("tile-summaries", s.calls) : null,
-      s.calls ? `To summarise and read facts: ${fmt(s.input_tokens)} tokens in, ${fmt(s.output_tokens)} out. Not part of any conversation's request.`
+      s.calls ? `To summarise and read facts: ${fmt(s.input_tokens)} tokens in, ${fmt(s.output_tokens)} out, by the provider's count. Not part of any conversation's request, and not taken from its saving.`
         : "None yet: nothing has been summarised."));
 }
 
@@ -245,11 +247,24 @@ function renderStaged(k) {
             meterOf("next-repays", s.saving_tokens, needed, "Tokens the switch saves, against the tokens it must save"),
             h("p", {}, `Switching makes the provider cache the recap and the newest messages again, ${fmt(s.rewritten_tokens)} tokens; on a warm cache the switch must save ${fmt(s.min_saving_share)} times that.`)),
           checkItem(overdue ? "good" : "wait", overdue ? "✓" : "…", "Stale weight at its bound",
-            h("span", { class: "num" }, countEl("next-stale", s.stale_tokens), ` of ${fmt(s.stale_bound_tokens)} tokens`),
+            h("span", { class: "num" }, countEl("next-stale", s.stale_tokens), ` of ${fmt(s.stale_bound_tokens)} tokens, by LLM-GC's count`),
             meterOf("next-stale", s.stale_tokens, s.stale_bound_tokens, "Stale weight, against its bound"),
-            h("p", {}, "What the model still gets word for word that the prepared cut would condense. At the bound, the cut is switched in for the model's sake, whatever the cache costs.")))),
+            h("p", {}, "What the model still gets word for word that the prepared cut would condense. At the bound, the cut is switched in for the model's sake, whatever the cache costs. ",
+              boundFrom(k))))),
       wouldDo(k, taking, "What switching it in would do", ["Condensed", "Sent as they are"],
         unprepared ? h("p", { class: "note" }, `${plural(unprepared, "message")} below ${unprepared === 1 ? "is" : "are"} not prepared yet: the next pass condenses ${unprepared === 1 ? "it" : "them"} first.`) : null)));
+}
+
+// Where the stale bound comes from: a share of the model's window, which is in the model's tokens, converted by the
+// engine to LLM-GC's count at the rate the conversation's replies measure, so the bound and the stale weight are
+// counted alike. Shown as the engine reports it, never recomputed here.
+function boundFrom(k) {
+  const c = state.config;
+  if (!c) return null;
+  const share = `${Math.round(c.max_stale_ratio * 100)}% of the model's ${fmt(k.context_window)}-token window`;
+  return k.token_rate
+    ? `The bound is ${share}: ${fmt(k.window_in_own_count)} in LLM-GC's count, since the model counts ${k.token_rate.toFixed(2)} tokens for each of LLM-GC's.`
+    : `The bound is ${share}, taken as LLM-GC's count until a reply measures how the model's count runs against it.`;
 }
 
 // What the collection would do: the messages it would condense, by what each becomes, then the rest.
@@ -591,12 +606,12 @@ export function renderSettings() {
   const rows = [
     ["Collection size", "min_cut_tokens", c.min_cut_tokens, "tokens of messages to compact or archive before a cut is prepared", "--min-cut-tokens"],
     ["Saving share", "min_saving_share", c.min_saving_share, "with the provider's cache warm, how many times what a switch makes it cache again the cut must save before it is switched in"],
-    ["Stale bound", "max_stale_ratio", c.max_stale_ratio, "share of the window the model may carry that a prepared cut would condense; at it, the cut is switched in whatever the cache costs"],
+    ["Stale bound", "max_stale_ratio", c.max_stale_ratio, "share of the window the model may carry that a prepared cut would condense; at it, the cut is switched in whatever the cache costs. The window is in the model's tokens, so it is converted to LLM-GC's count first, at the rate the conversation's replies measure"],
     ["Always recent", "last_n_turns_to_keep", c.last_n_turns_to_keep, "newest messages never collected: each sent as its own message, as written", "--keep-last"],
     ["Keep from", "keep_threshold", c.keep_threshold, "an exchange scoring at or above this is kept, quoted word for word"],
     ["Archive below", "archive_threshold", c.archive_threshold, "an exchange scoring below this is archived, to its opening line and facts"],
     ["Level margin", "level_margin", c.level_margin, "how far past a line a score must move before a span changes level"],
-    ["Recap budget", "max_recap_tokens", c.max_recap_tokens, "most tokens the recap spends on older exchanges, at the configured window; above it, the coldest lose detail first. A conversation whose model's window the provider reports gets the same share of that window"],
+    ["Recap budget", "max_recap_tokens", c.max_recap_tokens, "most tokens the recap spends on older exchanges, at the configured window; above it, the coldest lose detail first. A conversation whose model's window the provider reports gets the same share of that window, converted to LLM-GC's count at the rate its replies measure"],
     ["Configured window", "context_window", c.context_window, "tokens assumed for a model whose window the provider has not reported", "--context-window"],
   ];
   fill("settings", rows.map(([label, name, value, desc, flag]) => h("div", { class: "setting" },
@@ -629,7 +644,7 @@ export function renderGenerations(k) {
       links("messages", young.map((t) => t.turn_index))),
     arrow(`collection${k.cuts ? ` ×${fmt(k.cuts)}` : ""}`, "in exchanges, each by its score"),
     box("old", "Old generation", "the recap: every exchange at its level", plural(k.spans.length, "exchange"),
-      `${levels.map((level) => `${at(level).length} ${CATS[level].tag}`).join(" · ") || "none yet"} · ${fmt(k.front_tokens)} of its ${fmt(k.recap_budget)}-token budget`,
+      `${levels.map((level) => `${at(level).length} ${CATS[level].tag}`).join(" · ") || "none yet"} · ${fmt(k.front_tokens)} of its ${fmt(k.recap_budget)}-token budget, by LLM-GC's count`,
       levels.map((level) => h("div", {}, `${CATS[level].tag}: `, exchangeLinks(at(level).map((span) => span.turns))))),
     arrow("facts read once", "as each exchange is made"),
     box("permanent", "Permanent generation", "facts, and what replaced what", plural(active.length, "current fact"),

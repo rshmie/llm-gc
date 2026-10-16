@@ -82,10 +82,12 @@ class SessionInspection:
     next_cut: CutPreview
     aging_in_flight: bool
     last_activity: datetime
-    context_window: int       # the window the recap is sized for
-    recap_budget: int
+    context_window: int       # the window the recap is sized for, in the model's tokens
+    recap_budget: int         # in LLM-GC's count: the window's share, converted at `token_rate`
     collection_enabled: bool  # False: recorded and shown, never collected, so no collection is forecast
     staged: SwitchPreview | None = None   # set while a prepared cut waits to be switched in
+    token_rate: float | None = None       # the model's tokens per LLM-GC token; None until a reply measures it
+    window_in_own_count: int = 0          # the window converted at `token_rate`: what the budgets are shares of
 
     @property
     def context(self) -> list[Message]:

@@ -683,13 +683,13 @@ environment they take `LLM_GC_ENGINE__`:
 |---|---|---|---|
 | `min_cut_tokens` | `--min-cut-tokens` | 1000 | tokens of older turns to summarise or archive before a cut is prepared |
 | `min_saving_share` | | 1.0 | with the provider's cache warm, how many times what switching a cut in makes it cache again the cut must save; 0 switches it in as soon as it saves anything |
-| `max_stale_ratio` | | 0.1 | share of the window the model may carry that a prepared cut would condense; at it, the cut is switched in whatever the cache costs |
+| `max_stale_ratio` | | 0.1 | share of the window the model may carry that a prepared cut would condense; at it, the cut is switched in whatever the cache costs. The window is converted to LLM-GC's count first, at the rate the conversation's replies measure |
 | `last_n_turns_to_keep` | `--keep-last` | 5 | newest messages always sent word for word |
 | `context_window` | `--context-window` | 128,000 (proxy: 200,000) | the model's window; the recap budget is a share of it |
 | `keep_threshold` | | 0.7 | score at or above which a span is quoted whole |
 | `archive_threshold` | | 0.3 | score below which a span is archived; between the two, summarised |
 | `level_margin` | | 0.05 | how far past a line a score must move before a span changes level, so a score near a line does not flip it back and forth |
-| `max_recap_ratio` | | 0.3 | share of the window the recap may spend; over it, the coldest spans lose detail, then the oldest fold out of view |
+| `max_recap_ratio` | | 0.3 | share of the window the recap may spend, the window converted to LLM-GC's count at the rate the conversation's replies measure; over it, the coldest spans lose detail, then the oldest fold out of view |
 
 The proxy's default window is 200,000, the smallest of the current models'. Raise it only
 if every model you proxy has a larger one: a window set too large lets a recap outgrow the

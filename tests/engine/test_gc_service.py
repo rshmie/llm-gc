@@ -1,8 +1,10 @@
 """A collection: condense what aged out of the tail, score every span, give each its level."""
 
 import asyncio
+import math
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -389,15 +391,49 @@ class TestTheRecapIsSizedForTheModelsWindow:
         assert _levels(small) == {0: COMPACTED, 1: KEPT, 2: KEPT, 3: ARCHIVED}
         assert _levels(large) == {0: KEPT, 1: KEPT, 2: KEPT, 3: ARCHIVED}
 
-    def test_a_rewound_session_keeps_its_window(self):
+    def test_a_rewound_session_keeps_its_window_and_its_rate(self):
         service, _, _ = make_service()
         _converse(service, 2)
         service.use_context_window("s", 1_000_000)
+        service.use_token_rate("s", 1.48)
         state = service.session_manager.store.get("s")
 
         fresh = service.session_manager.replace(state, state.snapshot)
 
-        assert fresh.context_window == 1_000_000
+        assert (fresh.context_window, fresh.token_rate) == (1_000_000, 1.48)
+
+
+class TestTheWindowIsSetAgainstLLMGCsOwnCount:
+    """The window is in the model's tokens, the recap in LLM-GC's; a rate measured on a reply joins them."""
+
+    def test_the_recap_budget_is_its_share_of_the_window_converted_at_the_rate(self):
+        """At 1.48 of the model's tokens per LLM-GC token, a 200,000 window is 135,135 of LLM-GC's, and 30% of
+        that is 40,540. Multiplied by the rate instead, the budget would grow to 88,800."""
+        service, _, _ = make_service(GCConfig(context_window=200_000, max_recap_ratio=0.3))
+        _converse(service, 1)
+
+        service.use_token_rate("s", 1.48)
+        inspection = service.inspect("s")
+
+        assert (inspection.window_in_own_count, inspection.recap_budget) == (135_135, 40_540)
+        assert (inspection.context_window, inspection.token_rate) == (200_000, 1.48), "the window stays the model's"
+
+    def test_until_a_reply_is_measured_the_window_is_used_as_it_is(self):
+        service, _, _ = make_service(GCConfig(context_window=200_000, max_recap_ratio=0.3))
+        _converse(service, 1)
+
+        inspection = service.inspect("s")
+
+        assert (inspection.token_rate, inspection.window_in_own_count, inspection.recap_budget) == (None, 200_000, 60_000)
+
+    @pytest.mark.parametrize("rate", [0.0, -1.48, math.nan, math.inf])
+    def test_a_rate_that_measures_nothing_is_refused(self, rate):
+        service, _, _ = make_service()
+        _converse(service, 1)
+
+        with pytest.raises(ValueError, match="positive"):
+            service.use_token_rate("s", rate)
+        assert service.inspect("s").token_rate is None
 
 
 class TestASessionCanBeRecordedWithoutBeingCollected:

@@ -1,5 +1,6 @@
 """Asking a running proxy for its counters, and showing them without claiming more than they say."""
 
+import math
 import textwrap
 from datetime import datetime
 
@@ -17,6 +18,19 @@ _LABEL_WIDTH = 26
 _SHORT_ID_CHARS = 8
 # Notes wrap here, so they read on a narrow terminal.
 _NOTE_WIDTH = 96
+
+# Whose count each figure is, named above its figures. The two tokenizers differ, so a
+# reader who takes one for the other misreads every number.
+_OWN_COUNT = ("LLM-GC's own count", "an estimate, made the same way on both sides, so the share holds")
+_PROVIDER_COUNT = ("The provider's own count", "what it bills")
+_NOT_NETTED = ("Not taken from the saving: the two are not worth the same. With a warm cache a saved token "
+               "would have been a cache read, the cheapest kind; these are the summary model's input and output.")
+_WEIGHED_AGAINST = "To weigh the saving, set it against the cache written on requests that carried a collection."
+_RATE_NOTE = ("Model count: how many tokens the model counted for each of LLM-GC's, on the conversation's newest "
+              "request. LLM-GC sizes the recap and the stale bound at this rate, so each is the share of the "
+              "model's window its setting names.")
+
+Section = tuple[str, list[tuple[int, str]]]
 
 
 class _Counters(BaseModel):
@@ -42,12 +56,22 @@ class SummaryStats(_Counters):
     output_tokens: int
 
 
+class LastReplyStats(_Counters):
+    """The newest answered request, counted by LLM-GC and by the provider."""
+
+    tokens_forwarded: int
+    provider_prompt_tokens: int
+    token_rate: float | None
+
+
 class TrafficStats(_Counters):
     requests: int
     tokens_from_client: int
     tokens_forwarded: int
     tokens_saved: int
     provider: ProviderUsageStats
+    collection_cache_write_tokens: int
+    last_reply: LastReplyStats | None
     summaries: SummaryStats
 
 
@@ -90,6 +114,7 @@ class ProxyStats(_Counters):
     tokens_saved: int
     ratio: float | None
     provider_usage: ProviderUsageStats
+    collection_cache_write_tokens: int
     summaries: SummaryStats
     history_rewinds: int
     history_restarts: int
@@ -125,33 +150,33 @@ def render_stats(stats: ProxyStats, base_url: str) -> str:
         return "\n".join([*lines, INDENT + "No requests yet: point a client at this address and send a message.", ""])
 
     lines += _totals(stats)
-    lines += _measured_elsewhere(stats)
     for session in stats.client_sessions:
         lines += _client_session(session)
     if stats.other_conversations:
         lines += ["", INDENT + style("Conversations no client session named", bold=True)]
         lines += _table([(conversation.conversation_id, conversation) for conversation in stats.other_conversations])
-    notes = ["Sent and Saved are counted with LLM-GC's own tokenizer, the same way on both sides; "
-             "the provider's line is its own count, what it bills."]
+    notes = []
+    if any(c.traffic.last_reply is not None and c.traffic.last_reply.token_rate for c in _all_conversations(stats)):
+        notes.append(_RATE_NOTE)
     if any(c.collections_not_yet_sent for c in _all_conversations(stats)):
         notes.append("A collection not yet sent has saved nothing yet: its saving reaches the model with the "
                      "conversation's next request.")
     if any(not c.collected for c in _all_conversations(stats)):
         notes.append("Not collected: a subagent's conversation is recorded and sent as written "
                      "(collect_subagents turns collection on).")
-    wrapped = [style(line, dim=True) for note in notes
-               for line in textwrap.wrap(note, _NOTE_WIDTH, initial_indent=INDENT, subsequent_indent=INDENT)]
-    return "\n".join([*lines, "", *wrapped, ""])
+    wrapped = [line for note in notes for line in _dim_lines(note, INDENT)]
+    return "\n".join([*lines, *([""] + wrapped if wrapped else []), ""])
 
 
 def _totals(stats: ProxyStats) -> list[str]:
-    share = "" if stats.ratio is None else f" ({stats.ratio:.0%})"
-    sections: list[tuple[str, list[tuple[int, str]]]] = [
-        ("Tokens", [
-            (stats.tokens_from_client, "your clients sent " + _note("whole requests: system prompt, tools and messages")),
-            (stats.tokens_forwarded, f"LLM-GC forwarded{share}"),
-            (stats.tokens_saved, _describe_saving(stats)),
-        ]),
+    """LLM-GC's own count, then the provider's, each under its name; then what the proxy handled."""
+    tokens: Section = ("Tokens", [
+        (stats.tokens_from_client, "your clients sent " + _note("each request whole, added up: system prompt, "
+                                                                "tools and messages")),
+        (stats.tokens_forwarded, "LLM-GC forwarded"),
+        (stats.tokens_saved, _describe_saving(stats)),
+    ])
+    handled: list[Section] = [
         ("Requests", [
             (stats.requests, "received"),
             (stats.gc_applied, "through LLM-GC"),
@@ -168,33 +193,52 @@ def _totals(stats: ProxyStats) -> list[str]:
               if stats.history_restarts else []),
         ]),
     ]
-    width = max(len(f"{count:,}") for _, rows in sections for count, _ in rows)
-    lines: list[str] = []
-    for title, rows in sections:
-        for index, (count, text) in enumerate(rows):
-            # Padded before styling: escape codes would count towards the width.
-            label = style((title if index == 0 else "").ljust(_SECTION_WIDTH), bold=True)
-            lines.append(f"{INDENT}{label}{count:>{width},}  {text}")
-        lines.append("")
-    return lines
+    # One width for every count, so magnitudes compare at a glance across sections.
+    width = max(len(f"{count:,}") for _, rows in (tokens, *handled) for count, _ in rows)
+    lines = [_heading(*_OWN_COUNT), *_section(tokens, width), "",
+             _heading(*_PROVIDER_COUNT), *_provider_counts(stats), ""]
+    for section in handled:
+        lines += [*_section(section, width), ""]
+    return lines[:-1]
 
 
-def _measured_elsewhere(stats: ProxyStats) -> list[str]:
-    """What the provider reported, and what LLM-GC's own calls spent: neither is LLM-GC's own count of a request."""
-    usage, spent = stats.provider_usage, stats.summaries
+def _heading(name: str, meaning: str) -> str:
+    return INDENT + style(name, bold=True, underline=True) + style(f"  {meaning}", dim=True)
+
+
+def _section(section: Section, width: int) -> list[str]:
+    title, rows = section
+    # Padded before styling: escape codes would count towards the width.
+    return [f"{INDENT}{style((title if index == 0 else '').ljust(_SECTION_WIDTH), bold=True)}{count:>{width},}  {text}"
+            for index, (count, text) in enumerate(rows)]
+
+
+def _provider_counts(stats: ProxyStats) -> list[str]:
+    """What the provider reported on the client's replies and on LLM-GC's own calls: set beside the saving, never netted."""
+    usage, spent, carried = stats.provider_usage, stats.summaries, stats.collection_cache_write_tokens
+    on_collections = f" ({carried:,} on requests that carried a collection)" if carried else ""
     provider = (f"Reported on {usage.replies:,} replies: {usage.input_tokens:,} input, "
-                f"{usage.cache_read_input_tokens:,} cache read, {usage.cache_creation_input_tokens:,} cache write, "
-                f"{usage.output_tokens:,} output." if usage.replies else "No reply has reported its usage yet.")
+                f"{usage.cache_read_input_tokens:,} cache read, {usage.cache_creation_input_tokens:,} cache write"
+                f"{on_collections}, {usage.output_tokens:,} output." if usage.replies
+                else "No reply has reported its usage yet.")
     own = (f"{spent.calls:,} calls to summarise and read facts: {spent.input_tokens:,} tokens in, "
            f"{spent.output_tokens:,} out." if spent.calls else "None yet: nothing has been summarised.")
-    return [INDENT + style("Provider".ljust(_SECTION_WIDTH), bold=True) + provider,
-            INDENT + style("LLM-GC's calls".ljust(_SECTION_WIDTH), bold=True) + own]
+    note = " ".join([_NOT_NETTED, *([_WEIGHED_AGAINST] if carried else [])])
+    return [*_labelled("Provider", provider), *_labelled("LLM-GC's calls", own),
+            *(_dim_lines(note, INDENT + " " * _SECTION_WIDTH) if spent.calls else [])]
+
+
+def _labelled(label: str, text: str) -> list[str]:
+    """A section's label and its text, wrapped under the text's first line."""
+    under = INDENT + " " * _SECTION_WIDTH
+    first, *rest = textwrap.wrap(text, _NOTE_WIDTH, initial_indent=under, subsequent_indent=under)
+    return [INDENT + style(label.ljust(_SECTION_WIDTH), bold=True) + first.lstrip(), *rest]
 
 
 def _client_session(session: ClientSessionStats) -> list[str]:
     traffic = session.traffic
-    saved = (f"saved {traffic.tokens_saved:,} of {traffic.tokens_from_client:,} "
-             f"({traffic.tokens_saved / traffic.tokens_from_client:.0%})" if traffic.tokens_from_client else "")
+    saved = (f"by LLM-GC's count, saved {traffic.tokens_saved:,} of {traffic.tokens_from_client:,} "
+             f"({_share(traffic.tokens_saved, traffic.tokens_from_client)})" if traffic.tokens_from_client else "")
     span = f"{_clock(session.first_request_at)} to {_clock(session.last_request_at)}"
     header = f"Claude Code session {session.client_session[:_SHORT_ID_CHARS]}"
     lines = ["", INDENT + style(header, bold=True) + style(f"  {span} · {traffic.requests:,} requests · {saved}", dim=True)]
@@ -215,18 +259,24 @@ def _client_session(session: ClientSessionStats) -> list[str]:
 def _table(rows: list[tuple[str, ConversationStats | TrafficStats]]) -> list[str]:
     cells = []
     for label, row in rows:
-        collections = window = ""
+        collections = window = rate = ""
         if isinstance(row, ConversationStats):
             collections = "not collected" if not row.collected else f"{row.collections}" + (
                 f" ({row.collections_not_yet_sent} not yet sent)" if row.collections_not_yet_sent else "")
             window = _window(row.context_window)
-        cells.append((label, row.traffic if isinstance(row, ConversationStats) else row, collections, window))
-    width = max(len("Collections"), *(len(collections) for _, _, collections, _ in cells)) + 2
-    head = f"{'Conversation':<{_LABEL_WIDTH}}{'Requests':>9}{'Sent':>12}{'Saved':>11}  {'Collections':<{width}}Window"
-    lines = [INDENT * 2 + style(head, dim=True)]
-    for label, traffic, collections, window in cells:
+            last = row.traffic.last_reply
+            rate = f"{last.token_rate:.2f}×" if last is not None and last.token_rate else ""
+        cells.append((label, row.traffic if isinstance(row, ConversationStats) else row, collections, window, rate))
+    width = max(len("Collections"), *(len(cell[2]) for cell in cells)) + 2
+    window_width = max(len("Window"), *(len(cell[3]) for cell in cells)) + 2
+    # Only once a reply has measured a rate: a column of blanks would say nothing.
+    rate_head = "Model count" if any(cell[4] for cell in cells) else ""
+    head = (f"{'Conversation':<{_LABEL_WIDTH}}{'Requests':>9}{'Sent':>12}{'Saved':>11}  {'Collections':<{width}}"
+            f"{'Window':<{window_width}}{rate_head}")
+    lines = [INDENT * 2 + style(head.rstrip(), dim=True)]
+    for label, traffic, collections, window, rate in cells:
         lines.append(f"{INDENT * 2}{label:<{_LABEL_WIDTH}}{traffic.requests:>9,}{traffic.tokens_from_client:>12,}"
-                     f"{traffic.tokens_saved:>11,}  {collections:<{width}}{window}".rstrip())
+                     f"{traffic.tokens_saved:>11,}  {collections:<{width}}{window:<{window_width}}{rate}".rstrip())
     return lines
 
 
@@ -248,11 +298,26 @@ def _clock(moment: datetime) -> str:
 
 
 def _describe_saving(stats: ProxyStats) -> str:
-    if stats.tokens_saved == 0:
+    if stats.tokens_saved == 0 or not stats.tokens_from_client:
         return "saved " + _note("nothing condensed yet")
-    share = "" if stats.ratio is None else f" ({1 - stats.ratio:.0%})"
-    return f"saved{share}"
+    return f"saved ({_share(stats.tokens_saved, stats.tokens_from_client)})"
+
+
+def _share(part: int, whole: int) -> str:
+    """A whole percent, from the counts rather than the served ratio, which is already rounded. A saving too
+    small to round to 1% reads "<1%", never "0%" beside the tokens it saved.
+
+    Halves round up, as the dashboard's `Math.round` does, so both show the same figure; `round()` would
+    round them to even.
+    """
+    percent = math.floor(part / whole * 100 + 0.5)
+    return "<1%" if part > 0 and percent == 0 else f"{percent}%"
 
 
 def _note(text: str) -> str:
     return style(f"({text})", dim=True)
+
+
+def _dim_lines(text: str, indent: str) -> list[str]:
+    return [style(line, dim=True)
+            for line in textwrap.wrap(text, _NOTE_WIDTH, initial_indent=indent, subsequent_indent=indent)]

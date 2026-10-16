@@ -1,4 +1,5 @@
 import logging
+import math
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
@@ -240,8 +241,9 @@ class GcService:
         snapshot = state.snapshot
         young = _in_order(snapshot.young)
         cut = find_cut_point(young, self.gc_config.last_n_turns_to_keep)
-        window = state.context_window or self.gc_config.context_window
-        planned, _ = self._estimate(snapshot, young, cut, self.gc_config.recap_budget(window))
+        own_window = self._window_in_own_count(state)
+        recap_budget = self.gc_config.recap_budget(own_window)
+        planned, _ = self._estimate(snapshot, young, cut, recap_budget)
         preview = planned.preview(self.gc_config.min_cut_tokens, front_exists=bool(snapshot.old))
         if not state.collection_enabled:
             # Nothing will be collected, so nothing is forecast to change.
@@ -255,20 +257,36 @@ class GcService:
             next_cut=preview,
             aging_in_flight=state.aging_in_flight,
             last_activity=state.last_updated_at,
-            context_window=window,
-            recap_budget=self.gc_config.recap_budget(window),
+            context_window=state.context_window or self.gc_config.context_window,
+            recap_budget=recap_budget,
             collection_enabled=state.collection_enabled,
             staged=self._switch_preview(state, snapshot.staged, cache) if snapshot.staged is not None else None,
+            token_rate=state.token_rate,
+            window_in_own_count=own_window,
         )
 
     def use_context_window(self, session_id: str, context_window: int) -> None:
-        """Size this session's recap for the window of the model its requests name now.
+        """Size this session's recap for the window of the model its requests name now, in that model's tokens.
 
         Read at the next collection. A session that never hears of one uses the configured window.
         """
         state = self.session_manager.store.get(session_id)
         if state is not None:
             state.context_window = context_window
+
+    def use_token_rate(self, session_id: str, token_rate: float) -> None:
+        """Note how many of the model's tokens one of LLM-GC's is, as measured on this session's newest reply.
+
+        The window is in the model's tokens; the recap and stale weight are in LLM-GC's own. The
+        window is converted at this rate before the recap budget and the stale bound are taken from
+        it, so each is the share of the window its setting names. Until a reply is measured, the
+        window is used as it is.
+        """
+        if not (math.isfinite(token_rate) and token_rate > 0):
+            raise ValueError(f"a token rate is a positive number, not {token_rate}")
+        state = self.session_manager.store.get(session_id)
+        if state is not None:
+            state.token_rate = token_rate
 
     def pause_model_calls(self, retry_after_s: float | None, reason: str) -> None:
         """Make no model call of LLM-GC's own until the upstream's pressure has passed.
@@ -402,7 +420,7 @@ class GcService:
             young = _in_order(base.young)
             cut = find_cut_point(young, keep_last)
             # Sized for the window of the model this conversation's requests name now.
-            recap_budget = self.gc_config.recap_budget(state.context_window)
+            recap_budget = self.gc_config.recap_budget(self._window_in_own_count(state))
             estimated, drafts = self._estimate(base, young, cut, recap_budget)
             if not batch_worth_cutting(cut, estimated.compactable_tokens, min_cut_tokens):
                 return self._unchanged_result(base, gc_run_id, GCStatus.BYPASSED_BATCH_TOO_SMALL, start)
@@ -572,7 +590,7 @@ class GcService:
         if len(tail) < self.gc_config.last_n_turns_to_keep:
             return None
         rewritten = staged.front_tokens + sum(turn.token_count for turn in tail)
-        bound = self.gc_config.stale_bound(state.context_window)
+        bound = self.gc_config.stale_bound(self._window_in_own_count(state))
         share = self.gc_config.min_saving_share
         decision = decide_switch(saving_tokens=staged.saving_tokens, rewritten_tokens=rewritten,
                                  stale_tokens=staged.stale_tokens, stale_bound_tokens=bound, min_saving_share=share,
@@ -580,6 +598,12 @@ class GcService:
         return SwitchPreview(saving_tokens=staged.saving_tokens, rewritten_tokens=rewritten,
                              stale_tokens=staged.stale_tokens, stale_bound_tokens=bound, min_saving_share=share,
                              cache=cache, decision=decision)
+
+    def _window_in_own_count(self, state: SessionState) -> int:
+        """The window of the model this session uses, counted as LLM-GC counts: what its recap budget and
+        stale bound are shares of, since what they are set against is counted that way."""
+        window = state.context_window or self.gc_config.context_window
+        return int(window / state.token_rate) if state.token_rate is not None else window
 
     def _switched_result(self, before: GenerationSnapshot, after: GenerationSnapshot, staged: StagedCut,
                          reason: SwitchReason, start: float) -> GCResult:

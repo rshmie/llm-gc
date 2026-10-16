@@ -185,7 +185,7 @@ function tokenLines(k) {
     last ? h("p", { class: "sum-tokens" }, "Last request, as the provider counted it: ", h("b", {}, fmt(last.provider_prompt_tokens)),
       " tokens with the system prompt and tools", windowMeter,
       h("span", { class: "secondary" }, ` · ${compact(last.usage.cache_read_input_tokens)} read from its cache, ${compact(last.usage.cache_creation_input_tokens)} written to it, ${compact(last.usage.input_tokens)} sent plainly`,
-        ratio ? `. LLM-GC counted the same request at ${fmt(last.tokens_forwarded)}: the provider's count runs ${ratio.toFixed(2)}× LLM-GC's estimate here.` : ".")) : null,
+        ratio ? `. LLM-GC counted the same request at ${fmt(last.tokens_forwarded)}: the provider's count runs ${ratio.toFixed(2)}× LLM-GC's estimate here${k.token_rate ? ", and the recap's budget and the stale bound are sized at that rate" : ""}.` : ".")) : null,
     lastCollection ? h("p", { class: "sum-tokens secondary" }, `Last collection ${agoTs(lastCollection.gc_completed_at)}${lastCollection.outcome ? `: ${describeOutcome(lastCollection.outcome)}` : ""}. `,
       h("button", { class: "link-btn", type: "button", onclick: toEngine("moves") }, "What moved →")) : null,
     t ? h("p", { class: "sum-tokens secondary" }, `So far: ${plural(t.requests, "request")}, ${fmt(t.tokens_from_client)} tokens sent overall by LLM-GC's count, ${t.tokens_saved ? `${fmt(t.tokens_saved)} saved (${share(t.tokens_saved, t.tokens_from_client)}%)` : "nothing saved yet"}.`) : null,

@@ -220,7 +220,8 @@ Here every span is one exchange of two turns.
   the panel shows as not paying is one the pass skips — and measured again
   on the real summaries; when that refuses a cut, the panel shows the attempt's
   figures too. Once a cut is staged the card also says what decides its switch: its stale
-  weight against the bound, its saving against the share times what it would rewrite, the
+  weight against the bound, both in LLM-GC's count, with the bound's share of the model's
+  window and that window converted at the measured rate; its saving against the share times what it would rewrite, the
   cache state and the gap behind it, and the reason it switched or is waiting
   ([when-to-collect.md](../generational-memory/when-to-collect.md)). *Rejected: a progress meter alone.* It reads as a promise, and on a conversation of short messages the
   meter filled, Run GC now was pressed, and nothing happened, with nothing on the

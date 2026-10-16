@@ -227,6 +227,17 @@ class TestTheInspectionShowsTheSwitchsVerdict:
         assert service.gc_switch(SESSION, CacheState.COLD).switch_reason is cold.decision.reason
         assert service.inspect(SESSION).staged is None, "nothing waits once it is switched in"
 
+    def test_the_stale_bound_is_its_share_of_the_window_counted_as_the_stale_weight_is(self):
+        """Stale weight is LLM-GC's count; at 2 of the model's tokens per LLM-GC token, the bound halves."""
+        service, _ = _service(context_window=10_000, max_stale_ratio=0.1, min_saving_share=1000.0)
+        _record(service, 0, 1, 2, 3)
+        _prepare(service)
+        assert service.inspect(SESSION, cache=CacheState.WARM).staged.stale_bound_tokens == 1_000
+
+        service.use_token_rate(SESSION, 2.0)
+
+        assert service.inspect(SESSION, cache=CacheState.WARM).staged.stale_bound_tokens == 500
+
     def test_it_shows_the_measures_the_policy_weighs(self):
         service, _ = _service(**PATIENT)
         state = _record(service, 0, 1, 2, 3)

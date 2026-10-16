@@ -9,7 +9,7 @@ from llm_gc.llm import ModelUsage
 from llm_gc.models import ClientOrigin
 from llm_gc.proxy.anthropic_translation import (ReplyOutline, StreamOutlineReader, ToolCall, fixed_prompt_tokens,
                                                 read_reply)
-from llm_gc.proxy.traffic import ProviderUsage, TrafficLedger
+from llm_gc.proxy.traffic import ProviderUsage, TrafficLedger, token_rate
 from llm_gc.utils import count_tokens
 
 MAIN = ClientOrigin(session_id="cc-1")
@@ -96,6 +96,16 @@ class TestWhatTheProviderReported:
         assert ledger.total.provider.cache_read_input_tokens == 900
         assert _session(ledger)["traffic"]["provider"]["cache_read_input_tokens"] == 900
         assert _conversation(ledger, "s_1")["traffic"]["provider"]["cache_read_input_tokens"] == 900
+
+    def test_the_rate_is_the_providers_whole_prompt_per_token_llm_gc_forwarded(self):
+        usage = ProviderUsage(replies=1, input_tokens=40, cache_read_input_tokens=900, cache_creation_input_tokens=540,
+                              output_tokens=7)
+        assert token_rate(1_000, usage) == 1.48, "every prompt token counts, cached or not; output does not"
+
+    @pytest.mark.parametrize(("forwarded", "usage"), [(0, ProviderUsage(input_tokens=10)),
+                                                      (1_000, ProviderUsage(output_tokens=10))])
+    def test_a_request_with_either_count_at_zero_measures_no_rate(self, forwarded, usage):
+        assert token_rate(forwarded, usage) is None
 
     def test_a_late_reply_to_a_first_request_still_reaches_the_conversation_that_claimed_it(self):
         ledger = _ledger()

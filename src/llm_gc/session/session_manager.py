@@ -85,7 +85,7 @@ class SessionManager:
         changes planned against a conversation that has since been rewound.
         """
         fresh = SessionState(session_id=state.session_id, snapshot=snapshot, context_window=state.context_window,
-                             collection_enabled=state.collection_enabled)
+                             token_rate=state.token_rate, collection_enabled=state.collection_enabled)
         self._store.put(fresh)
         self.retip(fresh)
         return fresh

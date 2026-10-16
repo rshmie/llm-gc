@@ -38,8 +38,10 @@ UPSTREAM_OK = {
     "model": "claude-sonnet-5",
     "content": [{"type": "text", "text": "Postgres, partitioned by day."}],
     "stop_reason": "end_turn",
-    "usage": {"input_tokens": 120, "output_tokens": 18},
 }
+# The default reply reports no usage, as a gateway that strips it would: no rate is measured, so the
+# engine's budgets stay in LLM-GC's own count, which each test's small window is sized in.
+USAGE = {"input_tokens": 120, "output_tokens": 18}
 
 SUMMARY = LLMResponse(
     text="Earlier turns settled the storage layer and the retention window.",
@@ -1312,11 +1314,11 @@ class TestTrafficIsMeasured:
         assert whole["ratio"] > bare["ratio"]
 
     def test_the_providers_usage_is_added_up_from_every_reply(self):
-        stats = self._converse(_proxy()[0], 3)
+        stats = self._converse(_proxy(lambda request: httpx2.Response(200, json={**UPSTREAM_OK, "usage": USAGE}))[0], 3)
 
         assert stats["provider_usage"]["replies"] == 3
-        assert stats["provider_usage"]["input_tokens"] == 3 * UPSTREAM_OK["usage"]["input_tokens"]
-        assert stats["provider_usage"]["output_tokens"] == 3 * UPSTREAM_OK["usage"]["output_tokens"]
+        assert stats["provider_usage"]["input_tokens"] == 3 * USAGE["input_tokens"]
+        assert stats["provider_usage"]["output_tokens"] == 3 * USAGE["output_tokens"]
 
     def test_a_streamed_replys_usage_is_read_as_it_passes(self):
         def event(payload: dict) -> str:
@@ -1630,7 +1632,7 @@ class TestTheCacheIsWatched:
         assert watch.state(session_id) is CacheState.WARM
 
     def test_a_conversation_whose_replies_use_no_cache_is_cold(self):
-        watch, _, session_id = self._answered(UPSTREAM_OK["usage"])
+        watch, _, session_id = self._answered(USAGE)
         assert watch.state(session_id) is CacheState.COLD
 
     def test_a_refused_request_tells_nothing_about_the_cache(self):
@@ -1711,4 +1713,24 @@ class TestTheNewestRequestIsCountedBothWays:
 
         assert last["tokens_forwarded"] == conversation["traffic"]["tokens_forwarded"], "its only request"
         assert last["provider_prompt_tokens"] == 40 + 900 + 60
+
+    def test_each_reply_tells_the_engine_how_the_models_count_runs_against_llm_gcs(self):
+        usage = {"input_tokens": 40, "cache_read_input_tokens": 900, "cache_creation_input_tokens": 60, "output_tokens": 7}
+        client, service, _, _ = _proxy(lambda request: httpx2.Response(200, json={**UPSTREAM_OK, "usage": usage}))
+        _post(client, _body(("user", "about databases"), ("assistant", "ok"), ("user", "go on")))
+        [session_id] = service.session_manager.store.active_session_ids()
+
+        conversation = next(c for c in client.get("/stats").json()["other_conversations"]
+                            if c["conversation_id"] == session_id)
+        last = conversation["traffic"]["last_reply"]
+
+        assert service.session_manager.store.get(session_id).token_rate == 1_000 / last["tokens_forwarded"]
+        assert last["token_rate"] == 1_000 / last["tokens_forwarded"]
+
+    def test_a_reply_that_reports_no_usage_measures_no_rate(self):
+        client, service, _, _ = _proxy()
+        _post(client, _body(("user", "about databases"), ("assistant", "ok"), ("user", "go on")))
+        [session_id] = service.session_manager.store.active_session_ids()
+
+        assert service.session_manager.store.get(session_id).token_rate is None
 

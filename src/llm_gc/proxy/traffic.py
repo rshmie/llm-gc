@@ -53,6 +53,11 @@ class ProviderUsage:
                    cache_creation_input_tokens=tokens("cache_creation_input_tokens"),
                    output_tokens=tokens("output_tokens"))
 
+    @property
+    def prompt_tokens(self) -> int:
+        """The whole prompt as the provider counted it: read in full, read from its cache, and written to it."""
+        return self.input_tokens + self.cache_read_input_tokens + self.cache_creation_input_tokens
+
     def add(self, other: "ProviderUsage") -> None:
         self.replies += other.replies
         self.input_tokens += other.input_tokens
@@ -74,8 +79,22 @@ class LastReply:
 
     @property
     def provider_prompt_tokens(self) -> int:
-        """The whole prompt as the provider counted it: read in full, read from its cache, and written to it."""
-        return self.usage.input_tokens + self.usage.cache_read_input_tokens + self.usage.cache_creation_input_tokens
+        return self.usage.prompt_tokens
+
+    @property
+    def token_rate(self) -> float | None:
+        return token_rate(self.tokens_forwarded, self.usage)
+
+
+def token_rate(tokens_forwarded: int, usage: ProviderUsage) -> float | None:
+    """How many tokens the provider counted for each of LLM-GC's, on one request counted both ways.
+
+    The provider's tokenizer is its own and differs by model, so the rate is measured, never assumed.
+    None when either count is zero: a reply that reported no prompt measures nothing.
+    """
+    if tokens_forwarded <= 0 or usage.prompt_tokens <= 0:
+        return None
+    return usage.prompt_tokens / tokens_forwarded
 
 
 @dataclass(slots=True)
@@ -86,6 +105,8 @@ class Traffic:
     tokens_from_client: int = 0    # each request whole as the client sent it: system prompt, tools and messages
     tokens_forwarded: int = 0      # the same requests as LLM-GC forwarded them
     provider: ProviderUsage = field(default_factory=ProviderUsage)
+    # Of the provider's cache writes, those on requests that carried a collection: what to set a saving against.
+    collection_cache_write_tokens: int = 0
     summaries: ModelUsage = field(default_factory=ModelUsage)   # LLM-GC's own model calls
     last_reply: LastReply | None = None   # the newest answered request: not added up, replaced
 
@@ -98,12 +119,14 @@ class Traffic:
         self.tokens_from_client += other.tokens_from_client
         self.tokens_forwarded += other.tokens_forwarded
         self.provider.add(other.provider)
+        self.collection_cache_write_tokens += other.collection_cache_write_tokens
         self.summaries.add(other.summaries)
 
     def as_dict(self) -> dict[str, Any]:
         last = self.last_reply
         return {**asdict(self), "tokens_saved": self.tokens_saved,
-                "last_reply": None if last is None else {**asdict(last), "provider_prompt_tokens": last.provider_prompt_tokens}}
+                "last_reply": None if last is None else {**asdict(last), "provider_prompt_tokens": last.provider_prompt_tokens,
+                                                         "token_rate": last.token_rate}}
 
 
 @dataclass(slots=True)
@@ -198,14 +221,18 @@ class TrafficLedger:
         return tuple(targets)
 
     @staticmethod
-    def record_usage(targets: RequestTargets, usage: ProviderUsage, tokens_forwarded: int | None = None) -> None:
+    def record_usage(targets: RequestTargets, usage: ProviderUsage, tokens_forwarded: int | None = None, *,
+                     carried_collection: bool = False) -> None:
         """Add what the provider reported for one reply to everything its request was counted in.
 
         With `tokens_forwarded`, LLM-GC's own count of that request, the pair becomes each target's
-        newest answered request.
+        newest answered request. A request that `carried_collection` also adds its cache writes to
+        those collections' requests made.
         """
         for target in targets:
             target.provider.add(usage)
+            if carried_collection:
+                target.collection_cache_write_tokens += usage.cache_creation_input_tokens
             if tokens_forwarded is not None:
                 target.last_reply = LastReply(tokens_forwarded=tokens_forwarded, usage=usage)
 
@@ -309,4 +336,6 @@ def _difference(whole: Traffic, part: Traffic) -> Traffic:
     return Traffic(requests=whole.requests - part.requests,
                    tokens_from_client=whole.tokens_from_client - part.tokens_from_client,
                    tokens_forwarded=whole.tokens_forwarded - part.tokens_forwarded,
-                   provider=minus(whole.provider, part.provider), summaries=minus(whole.summaries, part.summaries))
+                   provider=minus(whole.provider, part.provider),
+                   collection_cache_write_tokens=whole.collection_cache_write_tokens - part.collection_cache_write_tokens,
+                   summaries=minus(whole.summaries, part.summaries))

@@ -154,7 +154,7 @@ Three zones on one axis:
    to prepare      │ it is switched in only when the cache is cold, │ switched in at the next
                    │ or when the saving repays the rewrite          │ request, whatever it costs
                    │                                                │
-   min_cut_tokens ─┘                    max_stale_ratio × the model's window ─┘
+   min_cut_tokens ─┘          max_stale_ratio × the model's window, in LLM-GC's count ─┘
 ```
 
 While a request is being built with a cut staged, the policy takes these in order and
@@ -229,7 +229,9 @@ also differs between models of one vendor and between releases, so none of it is
 | `max_stale_ratio` | At most how much stale weight, as a share of the model's window, may the model carry before a switch is forced? | 0.10 |
 
 All three are drafts, to be tuned by watching the dashboard and against the benchmarks.
-The window is read per model, as the recap's budget is.
+The window is read per model and converted to LLM-GC's count at the rate the
+conversation's replies measure, as the recap's budget is
+([detail levels](detail-levels.md)).
 
 ### What the dashboard shows
 
@@ -267,6 +269,13 @@ limit.
 - **The bound counts stale weight, not window fill.** It counts what the plan says has gone
   quiet, which is the generational premise, and it scales with the model through the
   window.
+- **The bound and the stale weight are counted alike.** Stale weight is LLM-GC's count and
+  the window the model's, so the bound is taken of the window converted at the measured
+  rate; otherwise 10% would mean about 15% of a Claude window, and something else on each
+  model. *Rejected: the bound as a share of the prompt instead of the window* — it needs no
+  conversion, but it fires hardest when the saving is smallest: a 10,000-token
+  conversation with 2,000 gone quiet is at 20%, and a warm cache would be rewritten to
+  save little.
 - **The share is a ratio of tokens, not a price.** A ratio and an observed cache state need
   no rates, and rates differ between models, vendors and releases.
 - **A cut is switched in whole.** The rewrite does not depend on how much is cut, so a

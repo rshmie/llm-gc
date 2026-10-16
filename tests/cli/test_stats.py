@@ -17,12 +17,14 @@ from llm_gc.proxy import ProxyMetrics
 URL = "http://127.0.0.1:9900/stats"
 
 
-def _traffic(requests=0, sent=0, forwarded=0, **provider) -> dict:
+def _traffic(requests=0, sent=0, forwarded=0, rate=None, **provider) -> dict:
     usage = {"replies": 0, "input_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
              "output_tokens": 0, **provider}
+    last = None if rate is None else {"tokens_forwarded": 1_000, "provider_prompt_tokens": round(1_000 * rate),
+                                      "token_rate": rate}
     return {"requests": requests, "tokens_from_client": sent, "tokens_forwarded": forwarded,
-            "tokens_saved": sent - forwarded, "provider": usage,
-            "summaries": {"calls": 0, "input_tokens": 0, "output_tokens": 0}}
+            "tokens_saved": sent - forwarded, "provider": usage, "collection_cache_write_tokens": 0,
+            "summaries": {"calls": 0, "input_tokens": 0, "output_tokens": 0}, "last_reply": last}
 
 
 def _conversation(conversation_id, part, agent=None, window=(1_000_000, True), collections=0, not_sent=0,
@@ -40,6 +42,7 @@ def _counters(**overrides) -> dict:
             "sessions_seeded": 0, "ratio": 0.199,
             "provider_usage": {"replies": 12, "input_tokens": 120, "cache_read_input_tokens": 40_000,
                                "cache_creation_input_tokens": 6_000, "output_tokens": 2_500},
+            "collection_cache_write_tokens": 0,
             "summaries": {"calls": 3, "input_tokens": 9_400, "output_tokens": 600},
             "client_sessions": [], "other_conversations": []}
     return {**base, **overrides}
@@ -94,14 +97,24 @@ def test_a_proxy_that_has_seen_nothing_reports_that_instead_of_zeros():
 
 def test_the_report_gives_each_counter_and_what_it_does_not_claim(no_color):
     output = _report()
-    assert "21,666  your clients sent (whole requests: system prompt, tools and messages)" in output
-    assert "4,310  LLM-GC forwarded (20%)" in output and "17,356  saved (80%)" in output
+    assert "21,666  your clients sent (each request whole, added up: system prompt, tools and messages)" in output
+    assert "4,310  LLM-GC forwarded" in output and "17,356  saved (80%)" in output
     assert "passed on as sent (unreadable, or an error in LLM-GC)" in output
-    assert "the provider's line is its own count, what it bills" in " ".join(output.split())
+
+
+def test_whose_count_each_figure_is_heads_its_figures_not_a_closing_note(no_color):
+    """LLM-GC's tokenizer and the provider's differ; a figure read under the wrong one is misread."""
+    lines = [line.strip() for line in _report().splitlines()]
+
+    sent = next(i for i, line in enumerate(lines) if "your clients sent" in line)
+    provider = next(i for i, line in enumerate(lines) if line.startswith("Provider"))
+    assert lines[sent - 1] == "LLM-GC's own count  an estimate, made the same way on both sides, so the share holds"
+    assert lines[provider - 1] == "The provider's own count  what it bills"
+    assert not any("tokenizer" in line for line in lines[provider:])
 
 
 def test_what_the_provider_billed_and_what_llm_gc_spent_are_their_own_lines(no_color):
-    output = _report()
+    output = " ".join(_report().split())
     assert "Reported on 12 replies: 120 input, 40,000 cache read, 6,000 cache write, 2,500 output." in output
     assert "3 calls to summarise and read facts: 9,400 tokens in, 600 out." in output
 
@@ -109,6 +122,30 @@ def test_what_the_provider_billed_and_what_llm_gc_spent_are_their_own_lines(no_c
                                     "cache_creation_input_tokens": 0, "output_tokens": 0},
                     summaries={"calls": 0, "input_tokens": 0, "output_tokens": 0})
     assert "No reply has reported its usage yet." in quiet and "None yet: nothing has been summarised." in quiet
+
+
+def test_llm_gcs_own_calls_say_why_they_are_not_taken_from_the_saving(no_color):
+    """A saved token and a spent one are different kinds, on different models: no net figure is printed."""
+    spent = " ".join(_report().split())
+    assert "Not taken from the saving: the two are not worth the same." in spent
+    assert "net" not in spent.lower().split()
+
+    none_spent = _report(summaries={"calls": 0, "input_tokens": 0, "output_tokens": 0})
+    assert "Not taken from the saving" not in none_spent
+
+
+@pytest.mark.parametrize(("saved", "shown"), [(4_000, "<1%"), (5_000, "1%"), (25_000, "3%")])
+def test_shares_round_as_the_dashboard_does_and_a_saving_never_reads_zero(no_color, saved, shown):
+    """0.4% read "0%" beside 4,000 saved tokens. Halves round up, as `Math.round` does; `round()` gives 0% and 2%."""
+    sent = 1_000_000
+    session = _session()
+    session["traffic"] = _traffic(requests=12, sent=sent, forwarded=sent - saved)
+
+    output = _report(tokens_from_client=sent, tokens_forwarded=sent - saved, tokens_saved=saved,
+                     ratio=round((sent - saved) / sent, 3), client_sessions=[session])
+
+    assert f"{saved:,}  saved ({shown})" in output
+    assert f"saved {saved:,} of 1,000,000 ({shown})" in output
 
 
 def test_each_client_session_lists_its_conversations_by_their_part(no_color):
@@ -140,9 +177,8 @@ def test_every_total_ends_in_the_same_column(no_color):
     """Right-aligned, so magnitudes compare at a glance: 1,843,210 against 702,115."""
     output = _report(tokens_from_client=1_843_210, tokens_forwarded=702_115, tokens_saved=1_141_095,
                      requests=9, history_rewinds=3)
-    totals = output.split("Provider")[0]
-    ends = {match.end(1) for line in totals.splitlines() if (match := re.search(r"(\d[\d,]*)  \D", line))}
-    assert len(ends) == 1
+    ends = {match.end(1) for line in output.splitlines() if (match := re.search(r"(\d[\d,]*)  \D", line))}
+    assert len(ends) == 1 and "1,843,210" in output and "      9  received" in output
 
 
 def test_a_valid_answer_is_parsed():
@@ -231,3 +267,32 @@ def test_a_conversation_that_is_not_collected_says_so_instead_of_zero_collection
 
     assert any(line.strip().startswith("Subagent 1") and "not collected" in line for line in output.splitlines())
     assert "a subagent's conversation is recorded and sent as written" in " ".join(output.split())
+
+
+def test_cache_written_on_requests_that_carried_a_collection_is_what_the_saving_is_weighed_against(no_color):
+    """The tokens removed would mostly have been cache reads; a collection's cost is the cache written again."""
+    quiet = " ".join(_report().split())
+    assert "carried a collection" not in quiet, "no collection carried yet: nothing to weigh against"
+
+    output = " ".join(_report(collection_cache_write_tokens=5_200).split())
+
+    assert "6,000 cache write (5,200 on requests that carried a collection), 2,500 output." in output
+    assert "To weigh the saving, set it against the cache written on requests that carried a collection." in output
+
+
+def test_each_conversation_shows_the_rate_its_recap_and_stale_bound_are_sized_at(no_color):
+    session = _session()
+    session["conversations"][0]["traffic"] = _traffic(requests=2, sent=3_668, forwarded=3_668, rate=1.48)
+
+    output = _report(client_sessions=[session])
+
+    rows = [line.strip() for line in output.splitlines()]
+    assert any(row.startswith("Conversation") and row.endswith("Window          Model count") for row in rows)
+    assert any(row.startswith("Main") and row.endswith("1M              1.48×") for row in rows)
+    assert any(row.startswith("Subagent 1") and row.endswith("200k (assumed)") for row in rows), "not measured: blank"
+    assert "LLM-GC sizes the recap and the stale bound at this rate" in " ".join(output.split())
+
+
+def test_with_no_rate_measured_there_is_no_rate_column(no_color):
+    output = _report(client_sessions=[_session()])
+    assert "Model count" not in output
