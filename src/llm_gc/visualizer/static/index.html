@@ -249,21 +249,32 @@
     LLM-GC is a garbage collector for that conversation: it keeps the prompt from growing without limit, and shows
     exactly what the model can still see. Numbers in <b class="cfg">this colour</b> are your proxy's settings.</p>
 
+  <h3>The three tabs</h3>
+  <ul class="guide-tabs">
+    <li><b>Conversation</b>: what the model remembers, what it has forgotten, and whether to worry; then its facts, a map,
+      and every exchange, oldest first, with what the model reads for it.</li>
+    <li><b>Requests</b>: the Claude Code session turn by turn, each request it made, and what it cost by the provider's own count.</li>
+    <li><b>Engine</b>: when the next collection comes and why, why each exchange is at its level, and every check.</li>
+  </ul>
+  <p class="guide-note">Hover any <b>ⓘ</b> or dotted phrase for a short meaning; click an ⓘ for the full one, at the foot of this guide.</p>
+
   <h3>What one request carries</h3>
-  <div class="anatomy" aria-hidden="true"><div class="blk">recap</div><div class="msgx">recent</div><div class="newx">your new message</div></div>
-  <div class="anatomy-caption" aria-hidden="true"><div style="flex:1.5">the old generation: every exchange at its level (the front)</div><div style="flex:1">the young generation: at least the newest <b class="cfg" data-config="last_n_turns_to_keep">…</b>, as written</div><div style="flex:1">&nbsp;</div></div>
+  <div class="anatomy" aria-hidden="true"><div class="sysx">system prompt · tools</div><div class="blk">recap</div><div class="msgx">recent</div><div class="newx">your new message</div></div>
+  <div class="anatomy-caption" aria-hidden="true"><div style="flex:1">your client's own, sent unchanged every time</div><div style="flex:1.5">the old generation: every exchange at its level (the front)</div><div style="flex:1">the young generation: at least the newest <b class="cfg" data-config="last_n_turns_to_keep">…</b>, as written</div><div style="flex:1">&nbsp;</div></div>
+  <p class="guide-note">The provider caches a request from its first byte. The system prompt and tools never change, so they stay
+    cached; a collection changes the recap, so everything after it is cached again.</p>
 
   <h3>How a message moves through the generations</h3>
   <div class="gflow" role="img" aria-label="Every message starts in the young generation. A collection moves older messages into the old generation as exchanges, each shown quoted, summarised or archived by its score and decided again at every collection. The facts read from each exchange are filed in the permanent generation, and shown on its line.">
     <div class="gnode g-young"><b>Young generation</b><span>Every message starts here, recent: sent as its own message, exactly as written.</span></div>
     <div class="gcut">↓ <b>a collection</b> takes the older messages as exchanges, each shown by its score</div>
     <div class="grows">
-      <div class="grow"><span class="band">≥ <b class="cfg" data-config="keep_threshold">…</b></span><b class="verb">quoted</b><span class="to t-old">word for word, marked [Quoted exactly]</span></div>
-      <div class="grow"><span class="band">between</span><b class="verb">summarised</b><span class="to t-old">opening line, facts and summary, marked [Summarised]</span></div>
-      <div class="grow"><span class="band">&lt; <b class="cfg" data-config="archive_threshold">…</b></span><b class="verb">archived</b><span class="to t-old">opening line and facts, marked [Archived]</span></div>
+      <div class="grow"><span class="band">≥ <b class="cfg" data-config="keep_threshold">…</b></span><b class="verb">quoted</b><span class="to t-old">word for word</span></div>
+      <div class="grow"><span class="band">between</span><b class="verb">summarised</b><span class="to t-old">opening line, facts and summary</span></div>
+      <div class="grow"><span class="band">&lt; <b class="cfg" data-config="archive_threshold">…</b></span><b class="verb">archived</b><span class="to t-old">opening line and facts</span></div>
     </div>
     <div class="gdest">
-      <div class="gnode g-old"><b>Old generation</b><span>Every exchange at its level, decided again at every collection. The recap spends up to <b class="cfg" data-config="max_recap_tokens">…</b> tokens on them; over that, the coldest lose detail first.</span></div>
+      <div class="gnode g-old"><b>Old generation</b><span>Every exchange at its level, decided again at every collection. The recap spends up to <b class="cfg" data-config="max_recap_ratio" data-format="percent">…</b> of the model's window on them; over that, the coldest lose detail first.</span></div>
       <div class="gcold">facts read<br>once →</div>
       <div class="gnode g-perm"><b>Permanent generation</b><span>The facts read from every exchange, and what replaced what. A summarised or archived exchange shows its facts on its line; a quoted one has them in its words.</span></div>
     </div>
@@ -279,8 +290,8 @@
     <li><b>It is switched in</b> as a later request is built, which is the first to carry it:
       <ul class="guide-sub">
         <li>at once if the provider's <b>cache is cold</b>: that request is read in full anyway, so the change costs nothing extra;</li>
-        <li>on a <b>warm</b> cache, once it saves at least <b class="cfg" data-config="min_saving_share">…</b> times what it makes
-          the provider cache again;</li>
+        <li>on a <b>warm</b> cache, once it saves at least <b class="cfg" data-config="min_saving_share" data-format="times">…</b> what it
+          makes the provider cache again;</li>
         <li>or once the model carries too much that has gone quiet: its <b>stale weight</b> reaches
           <b class="cfg" data-config="max_stale_ratio" data-format="percent">…</b> of the window, whatever the cache costs.</li>
       </ul></li>
@@ -300,9 +311,13 @@
     <li><b>A dot on a message</b>: it changes form at the next collection, in the colour it will become. Earlier exchanges move
       too: up when the conversation comes back to them, down when it has moved on.</li>
     <li><b>Search</b> says whether the model still receives the words you type, and if not, what it reads instead.</li>
-    <li><b>A yellow banner</b>: something to look at, such as exchanges out of view, or part of a collection that fell short
-      (a summary request that failed, say). Each says what the model gets instead; nothing is lost. Dismiss one with ×
-      and it stays hidden until there is more of it.</li>
+    <li><b>Should you worry?</b>, at the top of the Conversation tab: everything worth a look, such as messages out of view,
+      facts the model can't see, or part of a collection that fell short. Each links to its evidence; nothing is lost.
+      Dismiss one with × and it stays hidden until there is more of it.</li>
+    <li><b>The two chips beside the picker</b>: the provider's cache, warm with the time left or cold, and the next collection,
+      from "not enough yet" to "switches in next request". Click the second for the Next collection card.</li>
+    <li><b>Two counts of tokens</b>: LLM-GC's own counts are estimates by its own tokenizer; the provider's count of the last
+      request is what it bills. The page names whose count each figure is.</li>
   </ol>
 
   <h3>The words, in the code and on screen</h3>
@@ -316,11 +331,13 @@
       <tr><td>CacheState</td><td>cache warm / cold</td><td>whether the provider still remembers the prompt</td></tr>
       <tr><td>stale weight</td><td>stale weight</td><td>what is still sent word for word that a prepared collection would condense</td></tr>
       <tr><td>front</td><td>recap</td><td>the first message of every request: every exchange at its level</td></tr>
+      <tr><td>session</td><td>conversation</td><td>one conversation LLM-GC tracks and collects: a main conversation or a subagent's</td></tr>
+      <tr><td>client session</td><td>Claude Code session</td><td>the piece of work a Claude Code window runs, holding several conversations</td></tr>
       <tr><td>span</td><td>exchange</td><td>a message of yours and everything up to your next one</td></tr>
       <tr><td>young generation (verbatim)</td><td>recent</td><td>not collected yet: each sent as its own message, exactly as written</td></tr>
       <tr><td>kept</td><td>quoted</td><td>its exchange quoted word for word, marked [Quoted exactly]</td></tr>
       <tr><td>compacted</td><td>summarised</td><td>its exchange's opening line, facts and summary, marked [Summarised]</td></tr>
-      <tr><td>archived</td><td>archived</td><td>its exchange's opening line and facts</td></tr>
+      <tr><td>archived</td><td>archived</td><td>its exchange's opening line and facts, marked [Archived]</td></tr>
       <tr><td>out_of_view</td><td>out of view</td><td>folded with its neighbours behind one line</td></tr>
     </tbody>
   </table>
@@ -331,8 +348,10 @@
 
   <h3>The colours</h3>
   <div class="colours" id="guide-colours"></div>
-  <h3>More terms</h3>
+  <h3>Every term, in full</h3>
   <dl class="glossary" id="glossary"></dl>
+  <h3>Every card, in full</h3>
+  <dl class="glossary" id="card-glossary"></dl>
 </aside>
 </div>
 <div id="tooltip" role="tooltip" hidden></div>

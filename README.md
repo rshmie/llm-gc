@@ -472,11 +472,14 @@ go whole — never worse than without LLM-GC.
 
 ### The dashboard
 
-The **?** button explains the page. The **Conversation** tab shows every turn as it
-was said beside what the model still has of it — word for word, kept, compacted,
-archived, or out of view — and each fact exactly as the model is sent it. The
-**Engine** tab shows the three generations, how each turn is scored, every check
-and collection, and the proxy's counters. **Run GC now** prepares a cut for the selected
+The **Conversation** tab opens with three answers: what the model remembers, what it has
+forgotten, and whether to worry. Below them come each fact as the model is sent it, a map
+of the conversation, and every exchange oldest first, with what the model reads for it —
+recent, quoted, summarised, archived or out of view — beside what was said. The
+**Requests** tab traces a Claude Code session turn by turn, with what it cost by the
+provider's own count, and the **Engine** tab shows the three generations, how each
+exchange is scored, every check and collection, and the proxy's counters. Hover any ⓘ for
+a short meaning; click it, or **?**, for the full explanation. **Run GC now** prepares a cut for the selected
 conversation without waiting for the minimum and switches it in at once. With `min_saving_share`
 set to 0, every prepared cut is switched in as soon as it saves something; together with
 `llm-gc start --dashboard --min-cut-tokens 300`, collections happen within a short conversation.

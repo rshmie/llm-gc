@@ -284,52 +284,50 @@ implementation.
 
 The dashboard runs inside the proxy process, beside it rather than within it:
 the same engine and the same event loop, on its own localhost port. It has three
-views, one per question. The picker at the top chooses a client session; the session's
-view opens first, and the other two show one of its conversations:
+views, one per question. One picker at the top chooses a conversation, grouped by
+the Claude Code session it ran in; the Conversation view opens first:
 
 | View | Answers | Shows |
 |---|---|---|
-| **The session** | What did this piece of work do, and what did it cost? | The session turn by turn: each turn's requests on a waterfall in time, each subagent under the request that started it, side requests folded away; the session's totals and the provider's count; one row per conversation |
-| **The conversation** | What does the model know, at what fidelity, and what has it lost? | Every exchange with exactly what the model reads for it — quoted word for word, its summary, its opening line and facts, or one shared line when folded out of view — every message as it was said, and every fact, by who stated it, with how it reaches the model |
-| **LLM-GC at work** | What did LLM-GC do, and did it work? | What the next collection would take; why every exchange is at its level, in the planner's own steps (the band its score earns, the margin, a level no cheaper than a richer one, the budget); every pass and its outcome, degradations, transitions, the proxy's counters, and the settings in effect |
+| **Conversation** | What does the model remember, what has it forgotten, and should I worry? | Those three questions answered in words at the top, with the token counts beneath, each named for whose count it is; then every fact, by who stated it, with how it reaches the model; a map of the conversation; and every exchange, oldest first, with exactly what the model reads for it and what was said |
+| **Requests** | What did this piece of work do, and what did it cost? | The Claude Code session turn by turn, oldest first: each turn's requests on a waterfall in time, each subagent under the request that started it, side requests folded away; the session's totals by LLM-GC's count and by the provider's; one row per conversation |
+| **Engine** | What did LLM-GC do, and did it work? | What the next collection would take, and what decides when it is switched in; why every exchange is at its level, in the planner's own steps; every pass and its outcome, degradations, transitions, the proxy's counters, and the settings in effect |
 
-It polls once a second, and fetches a session's content again only when it has
-changed. Server-push (WebSocket) delivery is a planned upgrade of the transport,
-not of the split.
+Above every view, beside the picker, two chips say the conversation's state in a few
+words: the provider's cache, warm or cold and for how long, and the next collection,
+from "not enough yet" to "switches in next request".
 
-**One vocabulary, explained where it appears.** The interface uses the code's
-words for how much of a span the model sees, its *level* — *kept*, *compacted*,
-*archived*, *out of view* — and for where a message lives, the *young*, *old* and
-*permanent* generations. Four words are plainer on screen than in the code, and
-each one's explanation names the code's word: a *collection* is a cut (a check that
-moves messages out of the young generation), the *recap* is the front (the first
-message of every request), a *check* is a pass, and a *recent* message is a verbatim
-one, still in the young generation. Every term carries a short explanation where it
-appears — hovering any category says what it means — and the guide maps each
-on-screen word to the code's.
+It polls once a second, and fetches a conversation's content again only when it has
+changed, or when its cache turns from warm to cold, which can change the verdict on a
+prepared collection. Server-push (WebSocket) delivery is a planned upgrade of the
+transport, not of the split.
+
+**The screen says what the model reads.** For how much of an exchange the model sees,
+its *level*, the screen uses the words of the marker the model itself reads in the
+recap: *quoted* for an exchange marked `[Quoted exactly]`, *summarised* for
+`[Summarised]`, *archived* for `[Archived]`, and *out of view*. A message not yet
+collected is *recent*. The code keeps its own names, and the guide maps them once:
 
 ```
-code      cut          front    pass    KEPT   COMPACTED   ARCHIVED   OUT_OF_VIEW   VERBATIM (young)
-screen    collection   recap    check   kept   compacted   archived   out of view   recent
-model     —            —        —       [Quoted exactly]  [Summarised]  [Archived]  [Out of view]
+model     [Quoted exactly]  [Summarised]  [Archived]  (one shared line)   (its own message)
+screen    quoted            summarised    archived    out of view         recent
+code      KEPT              COMPACTED     ARCHIVED    OUT_OF_VIEW         VERBATIM (young)
 ```
 
-The last row is what the model reads in the front. Its markers say what each line
-*is* — a quote, a summary — because a model reading `[Compacted]` has to guess what
-was done; the dashboard explains *compacted* as summarised.
+Four more words are plainer on screen than in the code, and each one's explanation
+names the code's word: a *collection* is a cut, the *recap* is the front, a *check* is
+a pass, and a *prepared* collection is a staged cut, *switched in* by a request. The
+provider's cache is *warm* or *cold*, as the design docs say.
 
-*Rejected: "word for word" for the young generation.* A kept exchange is quoted word
+*Rejected: the code's level names on screen.* A badge saying *compacted* beside a
+recap line marked `[Summarised]` gave one level two names, and a reader translated
+twice. *Rejected: "word for word" for the young generation.* A quoted exchange is word
 for word too, so the label could not tell a collected message from one no collection
-has taken — which is the difference that matters: a recent message is sent as its
-own message, and a kept one is quoted inside the recap and can lose detail later.
-
-*Rejected: a separate plain vocabulary* (clean-up, condensed block, quoted whole,
-kept as facts): read beside the code, two vocabularies for one system confuse more
-than either, and "clean-up" reads as something that triggers GC rather than what GC
-does after a reply. *Rejected: the code's words alone*: "cut" reads as truncation
-and "front" means nothing on its own. *Rejected: the design vocabulary with a
-glossary page*: a reader who must leave the screen to decode it has been handed
-engine telemetry again. *Cost accepted:* cut and front differ between screen and
+has taken, which is the difference that matters. *Rejected: a separate plain
+vocabulary* (clean-up, condensed block, kept as facts): read beside the docs, two
+vocabularies for one system confuse more than either. *Rejected: the design vocabulary
+with a glossary page*: a reader who must leave the screen to decode it has been
+handed engine telemetry again. *Cost accepted:* five words differ between screen and
 code, and the guide maps them. Token
 figures compare like with like: the conversation as written is the session's
 recorded messages at their own sizes, counted as the engine counts them. The newest
@@ -627,30 +625,48 @@ collected, so a change of plan in one of them reaches the model in its words whi
 fact here still shows the old value. Headed "current", a value the conversation had
 already changed would read as still in force.
 
-### A banner only for what needs a look
+### The page answers three questions before it shows numbers
 
-The top of the conversation view carries a banner only for something the reader
-should act on or know about: messages the model can no longer see, and a collection
-that fell short — plus a passing line while a collection runs. Everything else is said
-in the panel it is about: that nothing is out of view, in the message counts; that a
-collection runs after the next reply, beside them; replaced facts, in their own column of the
-facts panel. A warning can be dismissed, and returns only when there is more of what
-it warns about: the reader has seen this loss, not every future one. *Rejected:
-standing banners for good news and routine state.* Three of them sat above the
-page on every visit, and a warning among them was one more line to skim past.
+The project's promise is to show what the model remembers, what it has forgotten, and
+when to worry, so the Conversation view opens with exactly those three, in words:
 
-One banner cannot be dismissed: the upstream is refusing LLM-GC's own credential. A
+```
+ WHAT THE MODEL REMEMBERS          WHAT IT HAS FORGOTTEN               SHOULD YOU WORRY?
+ 9 recent messages, as written      20 messages no longer word for word  ✓ No. Every fact reaches
+ 12 messages as 3 summaries         ✓ nothing out of view                  the model, nothing is out
+ 8 by their opening line and facts  ! 21 messages' facts couldn't        of view, and no collection
+ 6 of 7 facts told to it              be read                              fell short.
+ ─────────────────────────────────────────────────────────────────────────────────────────────
+ Next request ≈ 3,207 tokens of conversation · 71% less than as written
+ Last request 55,712 tokens by the provider's count · 28% of the model's window · 1.48× LLM-GC's count
+ Last collection 3 min ago · What moved →  · So far 16 requests, 29% saved
+```
+
+- **Each count names what it counts**, in the level words above, and the numbers come
+  beneath the words, each named for whose count it is: LLM-GC's own tokenizer is an
+  estimate, the provider's is what it bills.
+- **"Should you worry?" holds every warning**, in one place, each linking to its
+  evidence: messages out of view, facts the model can't see, a collection that fell
+  short, a window more than 80% full, and a rate-limit pause. Stale weight near its
+  bound is mentioned without alarm. A warning can be dismissed and returns only when
+  there is more of what it warns about.
+- **The all-clear is said only when it is true**, never because the warnings were
+  dismissed: then it says that nothing is new since.
+
+One warning cannot be dismissed: the upstream is refusing LLM-GC's own credential. A
 single summary that falls short is harmless and passes, but a refused credential makes
-every later collection fall short, so the prompt silently stops getting smaller while
-each collection reads as "skipped: it would have made the prompt bigger". Each
+every later collection fall short, so the prompt silently stops getting smaller. Each
 shortfall alone says nothing about the cause; only together do they say the credential
-is bad. The banner is shown on both tabs, in the critical tone, with the upstream's own
-words, and it says what still holds (what was already condensed stays) and what to do
-(check the credential and restart, since it is read once at startup). It is found from
-the engine's error code on the shortfalls, not by matching message text, and it clears
-as soon as a later collection finishes with nothing falling short, because that means a
-call went through. *Rejected: leaving it to the list of shortfalls,* where the cause is
-the same line repeated per exchange and the instruction to act is nowhere.
+is bad. It is shown first, in the critical tone, says what still holds and what to do,
+is found from the engine's error code rather than by matching text, and clears as soon
+as a later collection finishes with nothing falling short.
+
+*Rejected: opening on the prompt's size.* A token count answers "how big", which is
+not the question a reader brings, and the promise was hidden three cards down.
+*Rejected: standing banners for good news and routine state.* Above the page on every
+visit, a warning among them was one more line to skim past. *Rejected: an aggregated
+health score* (see *Signals, not an aggregated score*): the three answers are each a
+signal stated plainly.
 
 ### What lifts is what opens something
 
@@ -664,73 +680,86 @@ read, not things to open, and a panel that rose under the pointer would promise 
 click that does nothing, which teaches the reader to stop trusting the lift where it
 does mean something.
 
-### The map gives every message room
+### Explanations come in two lengths
 
-The map draws one bar per message, its width the message's size in tokens, so what the
-model holds is drawn to scale. Squeezed into the card's width, a long conversation turns
-its bars into slivers that cannot be told apart, hovered or clicked. So each message is
-given a minimum, about 14 pixels of track and never a bar under 10, and past the card's
-width the map scrolls sideways.
-
-- **One scroller moves every row.** The group labels, the bars, the Sent row under them and
-  the axis share a single scroll area, so they cannot drift apart. Each row's name sticks to
-  the left edge, and the label covers its row's full height so bars sliding under it are
-  hidden whole.
-- **It opens at the newest end**, where the live action is, and a conversation opened
-  afterwards does the same. After that the reader's place is kept, except that a reader
-  already at the newest end stays there as messages arrive.
-- **The edges fade, and the header says it scrolls**, so bars out of view are not read as
-  the start or end of the conversation. Nothing else on the page changes when it scrolls.
-- **The floor is solved, not applied once.** Widening the small bars narrows the rest a
-  little, which raises the floor they need, so it is found by repeating the step until it
-  settles. Done once, the smallest bars still came out near 6 pixels.
-
-Widths stay proportional to tokens above the floor, so one huge pasted message still shows
-as the wide bar it is. *Rejected: merging small messages into one bar,* which loses a bar per
-message and its hover and click, the thing the map is for; the exchange list below already
-folds runs where folding helps. *Rejected: giving every message the same width,* which
-loses the scale that shows a one-line reply beside a pasted file. *Rejected: a zoom
-control,* another thing to learn while the default stays unreadable. *Rejected: a scrollbar
-per row kept in step by script,* which drifts and stutters. *Accepted cost:* a very long
-conversation is a long strip, and only part of it is in view at once; the group labels say
-where the collected messages end and the recent ones begin.
-
-### The page opens on the session, and a conversation is one part of it
-
-One Claude Code session reaches the proxy as several conversations — its main one, one
-per subagent, and a new main one after `/compact` or an edited message — each collected
-on its own (see [the proxy](../proxy/overview.md)). The person thinks of the session as
-one piece of work, so that is what the page is organised by:
+Every term, card and status carries an explanation where it appears, in two lengths.
+A tooltip gives the short one: what this is, in a sentence or two, about thirty words
+at most. The guide holds the full one: every term and every card, in a reference at its
+foot, and clicking any ⓘ opens the guide at that entry. On the page itself, a card says
+what it needs to in one line, and a phrase underlined with dots holds the rest of it,
+on hover or focus.
 
 ```
-top bar     Session ▾ Claude Code session 6d84277c · since 10:56 · 30 requests
-            [ Session | Conversation | Engine ]
-Session     the session's totals → its turns, newest first → its conversations, one row each
-Conversation / Engine
-            Conversation ▾ Main · Subagent 1 · Subagent 2 · Earlier main      [Run GC now]
-            one conversation: what the model receives, and what LLM-GC did to it
+ hover an ⓘ     →  title · one or two sentences · "Click for the full explanation →"
+ click it       →  the guide opens at that entry, marked briefly
+ dotted phrase  →  the detail a one-line note left out
 ```
 
-- **The picker chooses a session.** Each Claude Code session the proxy counted or a live
-  conversation names, the most recently active first; conversations whose client names
-  no session are one more entry, listed without a trace.
-- **The conversation bar names its part.** Above the Conversation and Engine tabs, a
-  switcher lists only the picked session's conversations, by their part: the newest main
-  conversation is *Main*, the one in use; subagents by the order they started; a
-  replaced main conversation is *Earlier main*. *Run GC now* sits beside it, because it
-  acts on the conversation shown, not on the session.
-- **The main conversation is followed.** Until the person picks a conversation, the one
-  shown is the session's main conversation, and when `/compact` replaces it the page
-  moves to the new one. A conversation the person picked stays shown.
+*Rejected: the full explanation in every tooltip.* Some ran past a hundred words,
+read while holding the pointer still, and one gluing two explanations together ran
+longer still; a reader stops reading long before the end. *Rejected: dropping the long
+explanations.* The project exists to explain what happened to the model's context, so
+the detail stays, one click away.
+
+### The map draws what the model reads
+
+The map draws one bar for each exchange in the recap and one for each recent message: the
+units the model reads, an entry of the recap or a message of its own. A bar's width is
+its size as written, in tokens, and its height how much of it the model still has, so a
+summarised exchange is a short bar as wide as what it replaced. A collected exchange's
+bar names its messages, and clicking it opens the exchange in the list below.
+
+- **It fits a long conversation.** A collection turns many messages into a few
+  exchanges, so the map grows with what the model reads rather than with every message
+  ever sent. Each bar still keeps a minimum width, never under 10 pixels, solved by
+  repeating the step until it settles, so a one-line message stays clickable.
+- **Past the card's width it scrolls sideways as one.** The group labels, the bars, the
+  Sent row under them and the axis share a single scroll area. It opens at the newest
+  end, where the live action is, and the edges fade so bars out of view are not read as
+  the start or end of the conversation.
+- **The map and every card below it fold**, and each remembers how it was left.
+
+*Rejected: one bar per message, collected or not.* A long conversation became a strip
+of slivers, and for collected messages it drew a distinction the model doesn't have: it
+reads one recap entry for the whole exchange. *Rejected: giving every bar the same width,*
+which loses the scale that shows a one-line reply beside a pasted file. *Rejected: a zoom
+control,* another thing to learn while the default stays unreadable.
+
+### One picker, and the page opens on the conversation
+
+One Claude Code session reaches the proxy as several conversations: its main one, one
+per subagent, and a new main one after `/compact` or an edited message, each collected
+on its own (see [the proxy](../proxy/overview.md)). One picker lists them all, grouped
+by the session they ran in, and the page opens on what the model remembers:
+
+```
+top bar     [ Conversation | Requests | Engine ]
+bar         Conversation ▾  Claude Code session 6d84277c · since 10:56
+                              Main · Find where requests are validated · 28 messages · 2 collections
+                              Subagent 1 · Survey every place a request body is read
+                              Earlier main · …
+            Cache warm · 3 min left   Collection: not enough yet · 986 of 1,000 tokens   [Run GC now]
+```
+
+- **One choice drives every tab.** The picked conversation is shown on the Conversation
+  and Engine tabs, and the session it ran in on the Requests tab. A session whose
+  conversations have all closed is still listed, for its requests alone; conversations
+  whose client names no session are grouped on their own.
+- **Each conversation is named by its part.** The newest main conversation is *Main*,
+  the one in use; subagents by the order they started; a replaced main conversation is
+  *Earlier main*.
+- **The main conversation is followed.** Until the person picks another, the one shown
+  is the session's main conversation, and when `/compact` replaces it the page moves to
+  the new one.
 - **The trace opens a conversation where it matters.** *Open this message* shows the
-  turn's message in its conversation, and a subagent's *Open* shows its conversation,
-  each with a way back to the session.
+  turn's message in its conversation, with a way back to the Requests tab.
 
-*Rejected: a dropdown of every conversation, grouped by session* — it was the only place
-a session's shape appeared, and a list cannot show which call started which subagent.
-*Rejected: the trace as a third tab beside a conversation dropdown* — two pickers with
-two scopes on one page. *Rejected: hiding subagent conversations* — they are prompts
-LLM-GC forwards and records, and hiding them would hide what it does.
+*Rejected: a session picker with a conversation switcher under it.* Two pickers with two
+scopes, and "session" meant both a Claude Code session and, in the code, a conversation.
+*Rejected: opening on the request trace.* It answers what a piece of work cost, not what
+the model knows, which is the question the project exists for. *Rejected: hiding subagent
+conversations.* They are prompts LLM-GC forwards and records, and hiding them would hide
+what it does.
 
 ### Measured and forecast are never one number
 
@@ -739,26 +768,26 @@ mixed:
 
 | Scope | Where | Measured: what requests carried | Forecast: what the next request will |
 |---|---|---|---|
-| One conversation | Conversation tab, top panels | *So far*: its requests, sent whole, and saved | *The next request*: the recap and recent messages, against the conversation as written |
-| One client session | Session tab: its totals, its turns, its conversations | Every request it made, by turn and by conversation; the provider's usage; LLM-GC's own calls | — |
+| One conversation | Conversation tab, the summary's foot | *Last request*, by the provider's count; *so far*, its requests and saving | *Next request*: the recap and recent messages, against the conversation as written |
+| One client session | Requests tab: its totals, its turns, its conversations | Every request it made, by turn and by conversation; the provider's usage; LLM-GC's own calls | — |
 | The proxy | Engine tab, *across all conversations* | Every request since the proxy started, the provider's usage, LLM-GC's own calls | — |
 
 Where each sits on the page:
 
 ```
-┌ Session tab ──────────────────────────────────────── MEASURED · the session ──────┐
-│ Claude Code session 6d84277c · 30 requests · sent 146,108 · saved 32,655 (22%)    │
+┌ Requests tab ────────────────────────────────────── MEASURED · the session ───────┐
+│ SENT 146,108 · FORWARDED 113,453 · READ FROM CACHE 1M · WRITTEN 32k · …  (tiles)   │
+│ ▶ Turn 1 "The checkout tests fail…" · 18 requests · 2 subagents                   │
+│ ▶ Turn 2 "Good. Add a regression test…" · 5 requests · −27,556 · ◆ 2 collections  │
 │ ▼ Turn 3 "This session is being continued…" · 3 requests     ← newest, open       │
 │     Your message ▕█▏  Tool results  ▕▏  Tool results     ▕▏                       │
-│ ▶ Turn 2 "Good. Add a regression test…" · 5 requests · −27,556 · ◆ 2 collections  │
-│ ▶ Turn 1 "The checkout tests fail…" · 18 requests · 2 subagents                   │
 │ Conversations in this session: Main · Subagent 1 · Subagent 2 · Earlier main      │
 └───────────────────────────────────────────────────────────────────────────────────┘
 ┌ Conversation tab ─────────────────────────────────────────────────────────────────┐
-│ THE NEXT REQUEST      FORECAST │ HOW EACH MESSAGE IS SENT │ THE MODEL'S WINDOW    │
-│ 3,647 tokens                   │ recent 5 · compacted 5   │ 0.4% of 1,000,000     │
-│ ↓ 2,818 · 44% less than written│                          │ as the provider       │
-│ So far: 6 requests,  MEASURED  │                          │ reports it            │
+│ REMEMBERS · FORGOTTEN · SHOULD YOU WORRY?                         (in words)      │
+│ Next request ≈ 3,647 tokens of conversation          FORECAST, LLM-GC's count     │
+│ Last request 5,410 tokens · 0.5% of the window       MEASURED, the provider's     │
+│ So far 6 requests, 44% saved                         MEASURED, LLM-GC's count     │
 └───────────────────────────────────────────────────────────────────────────────────┘
 ┌ Engine tab ───────────────────────── MEASURED · every conversation, since start ──┐
 │ requests · total sent · what the provider reported · LLM-GC's own model calls     │
@@ -779,7 +808,7 @@ The model's window is the one the provider reports for the conversation's model,
 configured one, said to be assumed.
 
 A subagent's conversation, recorded but not collected, says so wherever a collection
-would be forecast: its Collections cell reads *not collected*, the panels and the
+would be forecast: its Collections cell reads *not collected*, the summary and the
 *Next collection* card name the reason instead of a forecast, and *Run GC now* explains
 rather than collects. Its map and messages are shown as for any conversation, every
 message sent as written.
@@ -801,6 +830,9 @@ Turn 1 · "Use two subagents in parallel: …" · 11 requests
 Turn 2 · "Thanks. Which test runner do we use?"
 ```
 
+- **Oldest turn first, the newest open.** The trace reads in the order things happened,
+  as the conversation does; earlier turns fold behind *Show N earlier turns* above them,
+  as a chat loads older messages.
 - **A turn is a span of the main conversation's time.** It begins at a message the
   person typed that the conversation kept, and runs to the next. A retry of the same
   message does not begin another, and a typed message whose place another request took

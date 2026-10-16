@@ -17,14 +17,6 @@ export function showTab(name) {
   if (name === "engine") renderChart();
 }
 
-export function setGuide(open) {
-  const drawer = $("guide");
-  drawer.classList.toggle("open", open);
-  drawer.inert = !open;
-  $("backdrop").hidden = !open;
-  if (open) $("close-guide").focus();
-}
-
 export const THEMES = { system: ["◐", "Theme: follow the system"], light: ["☀", "Theme: light"], dark: ["☾", "Theme: dark"] };
 export function applyTheme(theme) {
   if (theme === "system") delete document.documentElement.dataset.theme;
@@ -65,6 +57,7 @@ export function fillConfigValues(config) {
   for (const el of document.querySelectorAll("[data-config]")) {
     const value = config[el.dataset.config];
     if (typeof value !== "number") continue;
-    el.textContent = el.dataset.format === "percent" ? `${+(value * 100).toFixed(1)}%` : Number.isInteger(value) ? fmt(value) : value.toFixed(2);
+    el.textContent = el.dataset.format === "percent" ? `${+(value * 100).toFixed(1)}%`
+      : el.dataset.format === "times" ? `${+value.toFixed(2)}×` : Number.isInteger(value) ? fmt(value) : value.toFixed(2);
   }
 }

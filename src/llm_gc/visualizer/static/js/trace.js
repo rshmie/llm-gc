@@ -57,7 +57,7 @@ function traceHead(trace) {
   return [
     h("div", { class: "card-head" }, h("div", {},
       h("h2", {}, `Claude Code session ${shortId(trace.client_session)}`),
-      h("p", { class: "sub" }, `Since ${clock(trace.started_at)} · ${plural(trace.turns.length, "turn")} · ${plural(t.requests, "request")} · ${plural(subagents, "subagent")}. Oldest turn first; the newest is open, and each opens to every request it made.`))),
+      h("p", { class: "sub" }, `Since ${clock(trace.started_at)} · ${plural(trace.turns.length, "turn")} · ${plural(t.requests, "request")} · ${plural(subagents, "subagent")} · oldest first`))),
     h("div", { class: "trace-stats" },
       stat("Claude Code sent", fmt(t.tokens_from_client), "tokens, by LLM-GC's count"),
       stat("LLM-GC forwarded", fmt(t.tokens_forwarded), saved(t)),
@@ -174,7 +174,7 @@ function requestLine(row, window, depth) {
 // What a collection's request wrote to the cache, for the ◆'s explanation.
 function rewriteNote(row) {
   if (!row.provider || !row.provider.cache_creation_input_tokens) return "";
-  return ` The provider wrote ${fmt(row.provider.cache_creation_input_tokens)} tokens of this request to its cache: the recap changed, so everything after the system prompt was cached again. A cache write costs more than sending the tokens plainly.`;
+  return ` The recap changed, so the provider cached everything after the system prompt again: ${fmt(row.provider.cache_creation_input_tokens)} tokens written.`;
 }
 
 function subagentLines(agent, window, actions) {

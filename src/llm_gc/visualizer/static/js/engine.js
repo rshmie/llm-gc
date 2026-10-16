@@ -5,7 +5,7 @@
 import { BECOMES, CARD_INFO, CATS, CHART_HEIGHT, CHECKS_SHOWN, CREDENTIAL_REFUSED_TEXT, CREDENTIAL_REFUSED_TITLE, MAX_EXCHANGE_LINKS, MOVES_SHOWN, NOT_COLLECTED_TEXT, NOT_MOVED, OUTCOME_LINES, PAUSED_TEXT, STATUS, SWITCH_REASON, describeOutcome, swatch } from "./vocabulary.js";
 import { $, agoTs, compact, countEl, fill, fmt, h, meterBar, plural, reducedMotion, setChildren, storeGet, storeSet, svg } from "./dom.js";
 import { credentialRefusal, keepLast, preview, state, ui } from "./state.js";
-import { hideTooltip, info, placeTooltip, showTooltip, tipQuote, tooltipContent, hoverTip } from "./tooltip.js";
+import { explain, hideTooltip, hint, info, placeTooltip, showTooltip, tipQuote, tooltipContent, hoverTip } from "./tooltip.js";
 import { jumpTo, messagesLabel, trace } from "./conversation.js";
 import { showTab } from "./shell.js";
 
@@ -72,13 +72,7 @@ export function initCards() {
       storeSet(CARDS_KEY, JSON.stringify(cardState));
     });
   }
-  for (const button of document.querySelectorAll("[data-info]")) {
-    const [title, text] = CARD_INFO[button.dataset.info];
-    button.addEventListener("pointerenter", (e) => showTooltip(e, title, text));
-    button.addEventListener("pointerleave", hideTooltip);
-    button.addEventListener("focus", (e) => showTooltip(e, title, text));
-    button.addEventListener("blur", hideTooltip);
-  }
+  for (const button of document.querySelectorAll("[data-info]")) explain(button, `card-${button.dataset.info}`, CARD_INFO[button.dataset.info]);
 }
 
 export function openCard(key, scroll = false) {
@@ -190,7 +184,7 @@ function renderPreparing(k) {
   const saving = cut.estimated_saving;
   const lede = state.pause ? `Paused until ${new Date(state.pause.until).toLocaleTimeString()}: LLM-GC is yielding to the upstream's rate limit, so no cut is prepared.`
     : !taking.length ? "Nothing to collect yet."
-    : !cut.batch_ready ? `Waiting for ${fmt(cut.min_cut_tokens - cut.compactable_tokens)} more tokens of messages to compact or archive.`
+    : !cut.batch_ready ? `Waiting for ${fmt(cut.min_cut_tokens - cut.compactable_tokens)} more tokens of messages to summarise or archive.`
     : saving > 0 ? "Ready: a cut is prepared after the next reply."
     : "Enough to collect, but collecting now would make the prompt bigger, so it waits.";
 
@@ -202,16 +196,16 @@ function renderPreparing(k) {
         h("ul", { class: "ck-list" },
           checkItem(cut.batch_ready ? "good" : "wait", cut.batch_ready ? "✓" : "…", "Enough to collect",
             h("span", { class: "num" }, countEl("next-ready", cut.compactable_tokens), ` tokens · ${fmt(cut.min_cut_tokens)} needed`),
-            meterOf("next-ready", cut.compactable_tokens, cut.min_cut_tokens, "Tokens of messages to compact or archive"),
+            meterOf("next-ready", cut.compactable_tokens, cut.min_cut_tokens, "Tokens of messages to summarise or archive"),
             h("p", {}, "Only messages to be summarised or archived count. Quoting a message word for word saves nothing.")),
           !taking.length
             ? checkItem("wait", "…", "Makes the prompt smaller", null, h("p", {}, "Nothing to estimate: no older messages are waiting."))
             : saving > 0
               ? checkItem("good", "✓", "Makes the prompt smaller", h("span", { class: "num" }, `about ${fmt(saving)} tokens smaller`),
-                h("p", {}, "An estimate, made before any summary is paid for. The pass checks again with the real summaries, and prepares nothing if the result would be bigger."),
+                h("p", {}, "Estimated before any summary is paid for, and checked again on the real ones."),
                 refused ? h("p", {}, `The last try, ${agoTs(refused.gc_completed_at)}, was skipped on its real summaries: ${fmt(refused.tokens_before)} → ${fmt(refused.abandoned_cut.context_tokens_after)} tokens.`) : null)
               : checkItem("warn", "!", "Makes the prompt smaller", h("span", { class: "num" }, `about ${fmt(-saving)} tokens bigger`),
-                h("p", {}, "Every exchange in the recap carries a marker and its opening line, so collecting these few, short messages would cost more than it saves. It waits until there is more to condense.")))),
+                h("p", {}, "The recap's markers and opening lines would cost more than these short messages save, so it waits for more.")))),
       wouldDo(k, taking, "What it would do now", [`Counts toward the ${fmt(k.next_cut.min_cut_tokens)}`, "Doesn't count"])));
 }
 
@@ -225,7 +219,7 @@ function renderStaged(k) {
   const cold = cache ? cache.state === "cold" : true;
   const lede = s.switches
     ? `Prepared: switched in with the next request, because ${SWITCH_REASON[s.reason] || s.reason}.`
-    : `Prepared and waiting. The cache is warm, and switching now would make the provider cache ${fmt(s.rewritten_tokens)} tokens again to save ${fmt(s.saving_tokens)}. Until it is switched in, the model gets these messages word for word.`;
+    : `Prepared, waiting for the right request: switching now would make the provider cache ${fmt(s.rewritten_tokens)} tokens again to save ${fmt(s.saving_tokens)}. Meanwhile the model gets these messages word for word.`;
   const cacheSays = !cache ? "No proxy reads the cache beside this dashboard, so it counts as cold."
     : cache.uses_cache === false ? "This conversation's replies use no prompt cache: every request is read in full, so a smaller prompt is always cheaper."
     : cache.uses_cache === null ? "No request has been answered yet, so nothing says the cache is cold. Until something does, it counts as warm."
@@ -245,12 +239,12 @@ function renderStaged(k) {
           checkItem(repays ? "good" : "wait", repays ? "✓" : "…", "It repays its rewrite",
             h("span", { class: "num" }, countEl("next-repays", s.saving_tokens), ` tokens saved · ${fmt(needed)} needed`),
             meterOf("next-repays", s.saving_tokens, needed, "Tokens the switch saves, against the tokens it must save"),
-            h("p", {}, `Switching makes the provider cache the recap and the newest messages again, ${fmt(s.rewritten_tokens)} tokens; on a warm cache the switch must save ${fmt(s.min_saving_share)} times that.`)),
+            h("p", {}, `On a warm cache it must save ${fmt(s.min_saving_share)}× the ${fmt(s.rewritten_tokens)} tokens the provider would cache again.`)),
           checkItem(overdue ? "good" : "wait", overdue ? "✓" : "…", "Stale weight at its bound",
             h("span", { class: "num" }, countEl("next-stale", s.stale_tokens), ` of ${fmt(s.stale_bound_tokens)} tokens, by LLM-GC's count`),
             meterOf("next-stale", s.stale_tokens, s.stale_bound_tokens, "Stale weight, against its bound"),
-            h("p", {}, "What the model still gets word for word that the prepared cut would condense. At the bound, the cut is switched in for the model's sake, whatever the cache costs. ",
-              boundFrom(k))))),
+            h("p", {}, "Gone-quiet material the model still gets word for word. At the ",
+              boundFrom(k) ? hint("bound", "Where the bound comes from", boundFrom(k)) : "bound", ", it is switched in whatever the cache costs.")))),
       wouldDo(k, taking, "What switching it in would do", ["Condensed", "Sent as they are"],
         unprepared ? h("p", { class: "note" }, `${plural(unprepared, "message")} below ${unprepared === 1 ? "is" : "are"} not prepared yet: the next pass condenses ${unprepared === 1 ? "it" : "them"} first.`) : null)));
 }
@@ -604,7 +598,7 @@ export function renderSettings() {
   if (!c) return;
   // The flag is how to change a setting while watching here; the rest are GCConfig fields.
   const rows = [
-    ["Collection size", "min_cut_tokens", c.min_cut_tokens, "tokens of messages to compact or archive before a cut is prepared", "--min-cut-tokens"],
+    ["Collection size", "min_cut_tokens", c.min_cut_tokens, "tokens of messages to summarise or archive before a cut is prepared", "--min-cut-tokens"],
     ["Saving share", "min_saving_share", c.min_saving_share, "with the provider's cache warm, how many times what a switch makes it cache again the cut must save before it is switched in"],
     ["Stale bound", "max_stale_ratio", c.max_stale_ratio, "share of the window the model may carry that a prepared cut would condense; at it, the cut is switched in whatever the cache costs. The window is in the model's tokens, so it is converted to LLM-GC's count first, at the rate the conversation's replies measure"],
     ["Always recent", "last_n_turns_to_keep", c.last_n_turns_to_keep, "newest messages never collected: each sent as its own message, as written", "--keep-last"],

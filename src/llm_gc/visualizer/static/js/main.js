@@ -1,10 +1,11 @@
 // Entry point: polling, the conversation picker, and wiring the controls.
 
-import { CATS, GLOSSARY, GUIDE_TERMS, ORDER, swatch } from "./vocabulary.js";
+import { CARD_INFO, CATS, GLOSSARY, ORDER, swatch } from "./vocabulary.js";
 import { $, clearMotionCaches, fill, h, plural, setChildren, storeGet, storeSet } from "./dom.js";
 import { OTHER, collecting, getJSON, sessionPath, state, ui } from "./state.js";
 import { hideTooltip } from "./tooltip.js";
-import { THEMES, applyTheme, fillConfigValues, offerReturn, setGuide, setLive, showCleanupNotice, showTab } from "./shell.js";
+import { THEMES, applyTheme, fillConfigValues, offerReturn, setLive, showCleanupNotice, showTab } from "./shell.js";
+import { setGuide } from "./guide.js";
 import { celebrateCleanup, clearMapCache, jumpTo, jumpToNewest, renderBar, renderChips, renderFacts, renderFactsGuide, renderHero, renderMap, renderMessages, renderPrompt, renderSummary, renderTimeline, setPromptView } from "./conversation.js";
 import { initCards, openCard, renderChart, renderChecks, renderEngineStatus, renderGenerations, renderHistory, renderNext, renderProblems, renderProxy, renderRelevance, renderSettings } from "./engine.js";
 import { renderRunGcButton, runGcNow } from "./run-gc.js";
@@ -311,7 +312,10 @@ renderFactsGuide();
 
 applyTheme(storeGet("llmgc.theme") || "system");
 $("intro").hidden = storeGet("llmgc.intro") === "dismissed";
-fill("glossary", GUIDE_TERMS.map((term) => [h("dt", {}, GLOSSARY[term][0]), h("dd", {}, GLOSSARY[term][1])]));
+// The guide's reference: every term and every card in full, each an ⓘ's target.
+const reference = (kind) => ([key, [title, short, more]]) => [h("dt", { id: `ref-${kind}-${key}` }, title), h("dd", {}, more || short)];
+fill("glossary", Object.entries(GLOSSARY).map(reference("term")));
+fill("card-glossary", Object.entries(CARD_INFO).map(reference("card")));
 fill("guide-colours", ORDER.map((key) => h("div", {}, swatch(key), h("div", {}, h("b", {}, CATS[key].label), h("span", {}, ` — ${GLOSSARY[key][1]}`)))),
   h("div", {}, h("span", { class: "qdot", style: "margin:3px 2px 0" }), h("div", {}, h("b", {}, "Changes at the next collection"), h("span", {}, " — a dot on the message's bar, in the colour it will become. On the map, a bar's height shows how much of the message the model still has, and its width how long the message is."))));
 

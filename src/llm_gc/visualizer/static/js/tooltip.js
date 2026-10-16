@@ -2,6 +2,7 @@
 
 import { GLOSSARY } from "./vocabulary.js";
 import { $, h, setChildren } from "./dom.js";
+import { openReference } from "./guide.js";
 
 export function placeTooltip(rect) {
   const tip = $("tooltip");
@@ -24,10 +25,22 @@ export const tipQuote = (text) => text ? h("div", { class: "tip-quote" }, text) 
 // What clicking does, as the last line of a tooltip.
 export const tipAction = (text) => h("div", { class: "tip-action" }, text, h("span", { class: "tip-arrow", "aria-hidden": "true" }, " →"));
 export const hoverTip = (title, ...rows) => ({ onpointerenter: (e) => showTooltip(e, title, ...rows), onpointerleave: hideTooltip });
+// A phrase on the page with more behind it: underlined with dots, the rest on hover or focus.
+export const hint = (text, title, ...rows) => h("span", { class: "hint", tabindex: "0", ...hoverTip(title, ...rows),
+  onfocus: (e) => showTooltip(e, title, ...rows), onblur: hideTooltip }, text);
 
 export function info(term) {
-  const [title, text] = GLOSSARY[term];
-  return h("button", { class: "info", type: "button", "aria-label": `What is ${title}?`,
-    onpointerenter: (e) => showTooltip(e, title, text), onpointerleave: hideTooltip,
-    onfocus: (e) => showTooltip(e, title, text), onblur: hideTooltip }, "i");
+  const button = h("button", { class: "info", type: "button", "aria-label": `What is ${GLOSSARY[term][0]}?` }, "i");
+  explain(button, `term-${term}`, GLOSSARY[term]);
+  return button;
+}
+
+// An ⓘ shows the short meaning on hover or focus; a click opens the guide at the full one.
+export function explain(button, id, [title, short, more]) {
+  const rows = [short, more ? tipAction("Click for the full explanation") : null];
+  button.addEventListener("pointerenter", (e) => showTooltip(e, title, ...rows));
+  button.addEventListener("pointerleave", hideTooltip);
+  button.addEventListener("focus", (e) => showTooltip(e, title, ...rows));
+  button.addEventListener("blur", hideTooltip);
+  button.addEventListener("click", () => { hideTooltip(); openReference(id); });
 }

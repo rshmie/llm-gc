@@ -6,7 +6,7 @@
 import { BECOMES, CATS, CLAMP_CHARS, CREDENTIAL_REFUSED_TEXT, CREDENTIAL_REFUSED_TITLE, FAR_JUMP_SCREENS, MAP_PX_PER_MESSAGE, EARLIER_SHOWN, GLOSSARY, HEIGHT, MIN_BAR_PX, NOT_COLLECTED_TEXT, ORDER, RUN_MIN, FACT_STATUS, SWITCH_REASON, categoryOf, describeOutcome, swatch } from "./vocabulary.js";
 import { $, agoTs, compact, countEl, fill, fmt, h, meterBar, plural, ranges, reducedMotion, setChildren, share, storeGet, storeSet } from "./dom.js";
 import { collecting, countCats, credentialRefusal, factsByTurn, has, instructionTokens, marked, newestReply, pendingTurns, preview, query, recapLimit, state, trafficOf, turnMatches, ui, writtenTokens } from "./state.js";
-import { hideTooltip, info, showTooltip, tipAction, tipQuote, hoverTip } from "./tooltip.js";
+import { hideTooltip, hint, info, showTooltip, tipAction, tipQuote, hoverTip } from "./tooltip.js";
 import { offerReturn, showTab } from "./shell.js";
 import { openCard, showWhy, whyText } from "./engine.js";
 
@@ -120,7 +120,7 @@ function worries(k, counts, facts) {
   // First, and with no way to hide it: unlike the others, it does not pass until someone acts.
   if (credentialRefusal()) items.push(sumLine("critical", [h("b", {}, CREDENTIAL_REFUSED_TITLE), ` ${CREDENTIAL_REFUSED_TEXT}`], ["See why", toEngine("notmoved")]));
   if (counts.out_of_view > (hidden.out_of_view ?? 0)) items.push(sumLine("warn",
-    [h("b", {}, `It can no longer see ${plural(counts.out_of_view, "message")}.`), ` The recap reached its budget of ${recapLimit()} with every exchange at its least detail, so the oldest were folded into one line.`],
+    [h("b", {}, `It can no longer see ${plural(counts.out_of_view, "message")}.`), ` The recap is over its budget of ${recapLimit()}, so the oldest are folded into one line.`],
     ["Show them", toMessages("out_of_view")], ["out_of_view", counts.out_of_view]));
   if (unseenFacts) items.push(sumLine("warn", [h("b", {}, `${plural(unseenFacts, "fact")} ${unseenFacts === 1 ? "doesn't" : "don't"} reach it.`), " Their exchanges are out of view."], ["Show", toFacts]));
   if (latestShortfall > (hidden.shortfalls ?? 0)) items.push(sumLine("warn",
@@ -180,15 +180,18 @@ function tokenLines(k) {
     h("span", { class: "meter mini", role: "meter", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(Math.round(use.share * 100)), "aria-label": "Share of the model's window" },
       meterBar("window-share", use.share * 100))) : null;
   return [
-    h("p", { class: "sum-tokens" }, "Next request: ", h("b", {}, `≈ ${fmt(k.context_tokens)}`), " tokens of conversation, by LLM-GC's estimate", info("size"), ` · ${saving}`,
+    h("p", { class: "sum-tokens" }, "Next request ", h("b", {}, `≈ ${fmt(k.context_tokens)}`), " tokens of conversation", info("size"), ` · ${saving}`,
       last ? null : windowMeter),
-    last ? h("p", { class: "sum-tokens" }, "Last request, as the provider counted it: ", h("b", {}, fmt(last.provider_prompt_tokens)),
-      " tokens with the system prompt and tools", windowMeter,
-      h("span", { class: "secondary" }, ` · ${compact(last.usage.cache_read_input_tokens)} read from its cache, ${compact(last.usage.cache_creation_input_tokens)} written to it, ${compact(last.usage.input_tokens)} sent plainly`,
-        ratio ? `. LLM-GC counted the same request at ${fmt(last.tokens_forwarded)}: the provider's count runs ${ratio.toFixed(2)}× LLM-GC's estimate here${k.token_rate ? ", and the recap's budget and the stale bound are sized at that rate" : ""}.` : ".")) : null,
-    lastCollection ? h("p", { class: "sum-tokens secondary" }, `Last collection ${agoTs(lastCollection.gc_completed_at)}${lastCollection.outcome ? `: ${describeOutcome(lastCollection.outcome)}` : ""}. `,
-      h("button", { class: "link-btn", type: "button", onclick: toEngine("moves") }, "What moved →")) : null,
-    t ? h("p", { class: "sum-tokens secondary" }, `So far: ${plural(t.requests, "request")}, ${fmt(t.tokens_from_client)} tokens sent overall by LLM-GC's count, ${t.tokens_saved ? `${fmt(t.tokens_saved)} saved (${share(t.tokens_saved, t.tokens_from_client)}%)` : "nothing saved yet"}.`) : null,
+    last ? h("p", { class: "sum-tokens" }, "Last request ",
+      hint(h("b", {}, fmt(last.provider_prompt_tokens)), "The last request, by the provider's count",
+        `${compact(last.usage.cache_read_input_tokens)} read from its cache, ${compact(last.usage.cache_creation_input_tokens)} written to it and ${compact(last.usage.input_tokens)} sent plainly, the system prompt and tools included.`),
+      " tokens by the provider's count", windowMeter,
+      ratio ? [" · ", hint(`${ratio.toFixed(2)}× LLM-GC's count`, "Two counts of one request",
+        `LLM-GC counted it at ${fmt(last.tokens_forwarded)} with its own tokenizer, an estimate.${k.token_rate ? " The recap's budget and the stale bound are sized at this rate." : ""}`)] : null) : null,
+    h("p", { class: "sum-tokens secondary" },
+      lastCollection ? [`Last collection ${agoTs(lastCollection.gc_completed_at)}${lastCollection.outcome ? `: ${describeOutcome(lastCollection.outcome)}` : ""} · `,
+        h("button", { class: "link-btn", type: "button", onclick: toEngine("moves") }, "What moved →")] : "No collection yet",
+      t ? ` · So far ${plural(t.requests, "request")}, ${t.tokens_saved ? `${share(t.tokens_saved, t.tokens_from_client)}% saved` : "nothing saved yet"}` : null),
   ];
 }
 
@@ -198,26 +201,33 @@ const duration = (seconds) => seconds < 90 ? `${Math.round(seconds)} s` : second
 
 // Each chip says one thing in a few words; hovering says the rest.
 export function renderBar(k) {
+  // A chip's tooltip says what it means right now, in a sentence; a clickable chip says where it leads.
   const chip = (tone, label, title, text, onclick = null) => h(onclick ? "button" : "span",
-    { class: `bar-chip${tone ? ` tone-${tone}` : ""}`, ...(onclick ? { type: "button", onclick } : {}), ...hoverTip(title, text) }, label);
+    { class: `bar-chip${tone ? ` tone-${tone}` : ""}`, ...(onclick ? { type: "button", onclick } : {}),
+      ...hoverTip(title, text, onclick ? tipAction("Click for the Next collection card") : null) }, label);
   const cache = state.cache;
+  const keeps = cache && cache.lifetime_s ? duration(cache.lifetime_s) : "";
   const cacheChip = !cache ? null
-    : cache.uses_cache === null ? chip("", "Cache: no reply yet", GLOSSARY.cache[0], GLOSSARY.cache[1])
-    : cache.uses_cache === false ? chip("", "Cache: not used", GLOSSARY.cache[0], "This conversation's replies use no prompt cache, so every request is read in full and a smaller prompt is always cheaper. " + GLOSSARY.cache[1])
-    : cache.state === "warm" ? chip("good", `Cache warm · ${duration(Math.max(0, cache.lifetime_s - cache.idle_s))} left`, GLOSSARY.cache[0],
-      `${duration(cache.idle_s)} since the last request; the provider keeps this conversation cached for ${duration(cache.lifetime_s)} after each one. ${GLOSSARY.cache[1]}`)
-    : chip("cold", `Cache cold · idle ${duration(cache.idle_s)}`, GLOSSARY.cache[0],
-      `Idle longer than the ${duration(cache.lifetime_s)} the provider keeps this conversation cached. ${GLOSSARY.cache[1]}`);
+    : cache.uses_cache === null ? chip("", "Cache: no reply yet", "The provider's prompt cache",
+      "No request has been answered yet, so nothing says whether the provider caches this conversation.")
+    : cache.uses_cache === false ? chip("", "Cache: not used", "No prompt cache",
+      "This conversation's replies use no prompt cache: every request is read in full, so a smaller prompt is always cheaper.")
+    : cache.state === "warm" ? chip("good", `Cache warm · ${duration(Math.max(0, cache.lifetime_s - cache.idle_s))} left`, "Cache warm",
+      `The provider still remembers this prompt, so the next request is cheap if its start is unchanged. It forgets ${keeps} after the last request.`)
+    : chip("cold", `Cache cold · idle ${duration(cache.idle_s)}`, "Cache cold",
+      `Idle past the ${keeps} the provider remembers a prompt, so the next request is read in full anyway: a free moment to switch a collection in.`);
   const s = k && k.staged;
+  const cut = k && k.next_cut;
   const next = !k ? null
     : !k.collected ? chip("", "Not collected", "Not collected", NOT_COLLECTED_TEXT)
-    : collecting() ? chip("", "Preparing a collection…", GLOSSARY.prepared[0], GLOSSARY.prepared[1], toEngine("next"))
-    : s && s.switches ? chip("good", "Collection: switches in next request", GLOSSARY.prepared[0], `${capitalised(SWITCH_REASON[s.reason] || s.reason)}. ${GLOSSARY.prepared[1]}`, toEngine("next"))
-    : s ? chip("", "Collection: prepared, waiting", GLOSSARY.prepared[0], `The cache is warm and switching now would make the provider cache ${fmt(s.rewritten_tokens)} tokens again to save ${fmt(s.saving_tokens)}. ${GLOSSARY.prepared[1]}`, toEngine("next"))
-    : k.next_cut.batch_ready ? chip("", "Collection: prepared after the next reply", GLOSSARY.check[0], GLOSSARY.check[1], toEngine("next"))
-    : k.next_cut.compactable_tokens ? chip("", `Collection: not enough yet · ${fmt(k.next_cut.compactable_tokens)} of ${fmt(k.next_cut.min_cut_tokens)} tokens`, GLOSSARY.check[0],
-      `A collection is prepared once the older messages to be summarised or archived add up to ${fmt(k.next_cut.min_cut_tokens)} tokens. ${GLOSSARY.check[1]}`, toEngine("next"))
-    : chip("", "Collection: nothing to collect yet", GLOSSARY.check[0], GLOSSARY.check[1], toEngine("next"));
+    : collecting() ? chip("", "Preparing a collection…", "Preparing a collection", "Summaries and facts are being written; nothing the model is sent changes yet.", toEngine("next"))
+    : s && s.switches ? chip("good", "Collection: switches in next request", "Switched in with your next request", `${capitalised(SWITCH_REASON[s.reason] || s.reason)}.`, toEngine("next"))
+    : s ? chip("", "Collection: prepared, waiting", "Prepared, waiting",
+      `The cache is warm: switching now would make the provider cache ${fmt(s.rewritten_tokens)} tokens again to save ${fmt(s.saving_tokens)}.`, toEngine("next"))
+    : cut.batch_ready ? chip("", "Collection: prepared after the next reply", "Ready to prepare", "Enough has gone quiet: a collection is prepared after your next reply.", toEngine("next"))
+    : cut.compactable_tokens ? chip("", `Collection: not enough yet · ${fmt(cut.compactable_tokens)} of ${fmt(cut.min_cut_tokens)} tokens`, "Not enough yet",
+      `Prepared once the older messages to condense reach ${fmt(cut.min_cut_tokens)} tokens.`, toEngine("next"))
+    : chip("", "Collection: nothing to collect yet", "Nothing to collect yet", "Nothing older than the newest messages has gone quiet yet.", toEngine("next"));
   fill("bar-chips", cacheChip, next);
 }
 
@@ -788,11 +798,9 @@ export function renderPrompt(k) {
   } }, "Copy");
   // In the order the model reads it, as the other view is: the recap, then the recent messages, oldest first.
   setChildren($("prompt"),
-    h("div", { class: "prompt-head" }, h("div", { class: "note" }, "The conversation as LLM-GC forwards it, before your next message, in the order the model reads it. ",
-      tail.some((t) => t.tool_calls || t.tool_results) ? "Recent messages go exactly as your client sent them; tool calls and results are shown in the text form LLM-GC reads them in. " : null,
-      "Your client's own instructions are not shown – its system prompt, its tools, and what it puts inside messages – and go word for word with every request; those from collected messages open the recap. ",
-      k.front_text ? "The recap stays byte for byte the same until the next collection is switched in, so the provider can keep it cached."
-        : "Nothing has been collected, so your app's own request is forwarded untouched."), copy),
+    h("div", { class: "prompt-head" }, h("div", { class: "note" }, "Exactly what LLM-GC forwards before your next message, in the order the model reads it. ",
+      hint("Your client's own instructions aren't shown", "Not shown here", "Your client's system prompt, its tools and the instructions it puts inside messages. They go word for word with every request; tool calls and results appear in the text form LLM-GC reads them in."),
+      k.front_text ? ". The recap stays the same until the next collection." : ". Nothing is collected yet, so your client's own request goes untouched."), copy),
     k.front_text ? h("div", { class: "prompt-msg front" }, h("div", { class: "msg-head" }, h("span", { class: "who" }, "user"),
       h("span", { class: "tag" }, h("span", { class: "key block" }), `the recap · ${plural(k.front_tokens, "token")}`), info("block")), promptText(k.front_text, "prompt-front")) : null,
     tail.map((t) => h("div", { class: "prompt-msg" }, h("div", { class: "msg-head" }, h("span", { class: "who" }, t.role),
@@ -885,18 +893,15 @@ export function renderFacts(k) {
   // An exchange made while its facts couldn't be read holds none, whatever its messages settled.
   const unreadTurns = k.spans.filter((s) => s.facts_unread).flatMap((s) => s.turns);
   const unread = unreadTurns.length ? h("p", { class: "facts-unread" },
-    h("b", {}, h("span", { class: "st warn" }, "⚠ "), `Not read from ${messagesLabel(unreadTurns)}. `),
-    "Their facts couldn't be read when they were collected, so none are listed here, and a later collection doesn't read them again. ",
-    "The model still reads these messages at their level in the recap: word for word, as a summary, or by their opening line alone.") : null;
+    h("span", { class: "st warn" }, "⚠ "), "Facts couldn't be read from ", hint(messagesLabel(unreadTurns), "Facts not read",
+      "None are listed for them, and a later collection doesn't retry. The model still reads those messages at their level in the recap."), ".") : null;
   if (!k.facts.length) {
     fill("facts");
     fill("facts-head", unread || h("p", { class: "facts-note" }, collecting()
       ? "A collection is reading this conversation now; the facts it reads appear here when it finishes."
-      : !k.cuts ? "Nothing has been collected yet, so the model is sent every message word for word. Facts are read from messages when a collection takes them."
-      : readsAssistant() ? "The collection read the collected messages and found no settled facts in them. A fact is a topic with a value, such as “database: Postgres”, and appears here only when a message states one; the model still reads each message in the recap, at its level."
-      : "No facts found. Facts are read from your messages only here, as they are when LLM-GC runs without a model, by simple "
-        + "patterns that catch statements such as “The database is Postgres.”; none of the collected messages has one. "
-        + "The model reads them in the recap, at their level."));
+      : !k.cuts ? "Nothing collected yet: facts are read from messages when a collection takes them."
+      : readsAssistant() ? "No settled facts in the collected messages yet. A fact is a topic with a value, such as “database: Postgres”."
+      : "No facts found. Without a model, only your own messages are read, for statements such as “The database is Postgres.”"));
     return;
   }
   fill("facts-head",
@@ -907,9 +912,9 @@ export function renderFacts(k) {
       replaced.length ? h("span", {}, h("b", {}, fmt(replaced.length)), ` earlier ${replaced.length === 1 ? "value" : "values"} replaced`)
         : h("span", {}, "nothing replaced")),
     h("p", { class: "facts-note" },
-      collected.length ? `Facts are read from ${messagesLabel(collected)}.` : null,
-      recent.length ? ` ${capitalised(messagesLabel(recent))} ${recent.length === 1 ? "is" : "are"} sent word for word and read `
-        + "only once collected, so a fact here may be out of date: a value changed there reaches the model now, and shows here then." : null),
+      collected.length ? `Read from ${messagesLabel(collected)}. ` : null,
+      recent.length ? hint("Newer messages are read once collected.", "Facts can lag the newest messages",
+        `${capitalised(messagesLabel(recent))} ${recent.length === 1 ? "is" : "are"} sent word for word, so a value changed there reaches the model now and shows here once collected.`) : null),
     unread);
   const assistantFacts = readsAssistant() ? active.filter((f) => f.speaker === "assistant").sort(lookFirst) : null;
   const scrolled = new Map([...$("facts").querySelectorAll(".facts-col .list")].map((list) => [list.dataset.col, list.scrollTop]));

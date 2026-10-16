@@ -147,7 +147,8 @@ def create_dashboard_app(
             config={"context_window": config.context_window, "min_cut_tokens": config.min_cut_tokens,
                     "last_n_turns_to_keep": config.last_n_turns_to_keep, "keep_threshold": config.keep_threshold,
                     "archive_threshold": config.archive_threshold, "level_margin": config.level_margin,
-                    "max_recap_tokens": config.max_recap_tokens, "min_saving_share": config.min_saving_share,
+                    "max_recap_tokens": config.max_recap_tokens, "max_recap_ratio": config.max_recap_ratio,
+                    "min_saving_share": config.min_saving_share,
                     "max_stale_ratio": config.max_stale_ratio,
                     # Whose turns facts are read from: without a model, only the user's.
                     "facts_read_from": sorted(gc_service.generational_memory.fact_reader.speakers)},
