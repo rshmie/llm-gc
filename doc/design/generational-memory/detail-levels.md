@@ -81,7 +81,7 @@ The planner knows what each level of each span would cost, in tokens, as rendere
     is postgres."                                                      longer than its words
 ```
 
-A span without a summary — too short for a summary to beat its words, or one whose summary failed — cannot be summarised; in that band it is kept rather than archived, so a failure never costs detail. The same holds for facts: a span whose facts could not be read is never archived, since archived it would be only its opening line. It is summarised if it has a summary and kept otherwise, and a span archived that way before is raised at the next collection.
+A span without a summary — too short for a summary to beat its words, or one whose summary failed — cannot be summarised; in that band it is kept rather than archived, so a failure never costs detail. The same holds for facts: a span whose facts could not be read is never archived, since archived it would be only its opening line. It is summarised if it has a summary and kept otherwise. The next collection reads its facts again, in a call of its own so its content cannot fail the new spans' facts; once they are read, it can be archived like any span. A span archived without its facts before this rule held is raised at the next collection.
 
 ### The planner
 

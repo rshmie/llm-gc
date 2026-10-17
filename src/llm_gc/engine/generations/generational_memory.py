@@ -61,15 +61,20 @@ class GenerationalMemory:
         return [replace(draft, facts=tuple(fact for fact in read if fact.message_turn in _turns_of(draft)),
                         facts_error=error) for draft in await self._summarise_all(drafts)]
 
-    async def _read_facts(self, drafts: Sequence[Condensed], on_record: Sequence[KnowledgeEntry]
-                          ) -> tuple[list[KnowledgeEntry], Exception | None]:
-        if not drafts:
+    async def read_facts(self, turn_groups: Sequence[Sequence[Message]], on_record: Sequence[KnowledgeEntry]
+                         ) -> tuple[list[KnowledgeEntry], Exception | None]:
+        """Read the facts of these groups of turns in one call: the facts, or why none could be read."""
+        if not turn_groups:
             return [], None
         try:
-            return await self.fact_reader.read([draft.turns for draft in drafts], on_record), None
+            return await self.fact_reader.read(list(turn_groups), on_record), None
         except Exception as err:
             # Any reader's failure, a third party's included: the spans are still made.
             return [], err
+
+    async def _read_facts(self, drafts: Sequence[Condensed], on_record: Sequence[KnowledgeEntry]
+                          ) -> tuple[list[KnowledgeEntry], Exception | None]:
+        return await self.read_facts([draft.turns for draft in drafts], on_record)
 
     async def _summarise_all(self, drafts: Sequence[Condensed]) -> list[Condensed]:
         return [await self._summarise_one(draft) for draft in drafts]

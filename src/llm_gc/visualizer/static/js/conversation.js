@@ -101,7 +101,7 @@ function forgotten(k, counts, facts) {
       : sumLine("good", "Nothing out of view"),
     unseen ? sumLine("warn", [h("b", {}, fmt(unseen)), ` ${unseen === 1 ? "fact" : "facts"} it can't see`], ["Show", toFacts])
       : facts.length ? sumLine("good", "Every fact still reaches it") : null,
-    unread ? sumLine("warn", [h("b", {}, fmt(unread)), ` ${unread === 1 ? "message's" : "messages'"} facts couldn't be read: it gets their summary or opening line without them`], ["Show", toFacts]) : null,
+    unread ? sumLine("warn", [h("b", {}, fmt(unread)), ` ${unread === 1 ? "message's" : "messages'"} facts couldn't be read yet: it gets them quoted or summarised until the next collection reads them`], ["Show", toFacts]) : null,
     replaced ? sumLine("", [h("b", {}, fmt(replaced)), ` earlier ${replaced === 1 ? "value" : "values"} replaced, and marked so`]) : null,
     h("li", { class: "sum-note" }, "Every word is stored: a later collection shows it in more detail again if the conversation comes back to it."),
   ].filter(Boolean);
@@ -957,7 +957,7 @@ export function renderFacts(k) {
   const unreadTurns = k.spans.filter((s) => s.facts_unread).flatMap((s) => s.turns);
   const unread = unreadTurns.length ? h("p", { class: "facts-unread" },
     h("span", { class: "st warn" }, "⚠ "), "Facts couldn't be read from ", hint(messagesLabel(unreadTurns), "Facts not read",
-      "None are listed for them, and a later collection doesn't retry. Without their facts they are never archived: the model reads them word for word, or as their summary."), ".") : null;
+      "None are listed for them yet: the next collection reads them again. Until then they are never archived: the model reads them word for word, or as their summary."), ".") : null;
   if (!k.facts.length) {
     fill("facts");
     fill("facts-head", unread || h("p", { class: "facts-note" }, collecting()

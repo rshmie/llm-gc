@@ -19,7 +19,10 @@ from llm_gc.engine.pause import ModelCallPause
 from llm_gc.events import EventBus, EventType
 from llm_gc.exceptions import LLMAuthError, LLMRateLimitError, LLMResponseError
 from llm_gc.llm import FakeProvider
+from llm_gc.engine.switch_policy import CacheState
+from llm_gc.extraction import PatternFactReader
 from llm_gc.models.generation_snapshot import DetailLevel
+from llm_gc.models.knowledge_entry import KnowledgeStatus
 from llm_gc.utils import count_tokens
 from tests.engine.support import ARCHIVED_SCORE, COMPACTED_SCORE, KEPT_SCORE, SUMMARY, collect, make_service, turn
 
@@ -625,3 +628,80 @@ class TestLlmGcPausesWhenItsOwnCallsCannotSucceed:
         _converse(service, 4)
 
         assert service.model_calls.current() is None
+
+
+class _RecoveringReader:
+    """Reads facts by patterns, failing for the turns in `failing`; records the turns each call read."""
+
+    speakers = PatternFactReader.speakers
+
+    def __init__(self, failing: set[int]) -> None:
+        self.failing = failing
+        self.calls: list[list[int]] = []
+        self._patterns = PatternFactReader()
+
+    async def read(self, spans, on_record):
+        turns = [message.turn_index for span in spans for message in span]
+        self.calls.append(turns)
+        if self.failing & set(turns):
+            raise RuntimeError("fact reader unavailable")
+        return await self._patterns.read(spans, on_record)
+
+
+def _said_turns(service, *openings: tuple[int, str]) -> None:
+    for index, opening in openings:
+        _record(service, turn(index, opening=opening))
+
+
+class TestFactsThatFailedAreReadAgain:
+    """Turn 0 says Postgres while the reader is down; turn 2 changes it to MySQL after it recovers. Read late
+    and filed by reading order, Postgres would replace MySQL."""
+
+    def _after_the_outage(self, **config):
+        reader = _RecoveringReader(failing={0})
+        service, _, _ = make_service(GCConfig(**{"min_cut_tokens": 0, "last_n_turns_to_keep": 1, **config}),
+                                     fact_reader=reader, default_score=ARCHIVED_SCORE)  # type: ignore[arg-type]
+        _said_turns(service, (0, "The database is Postgres."), (1, "Turn 1 is about storage."))
+        asyncio.run(collect(service, "s"))
+        assert [span.facts_unread for span in _snapshot(service).old] == [True]
+        reader.failing = set()
+        _said_turns(service, (2, "Change of plan: the database is MySQL."), (3, "Turn 3 is about storage."))
+        return service, reader
+
+    def test_the_next_collection_reads_them_again_and_files_them_in_their_place(self):
+        service, reader = self._after_the_outage()
+
+        asyncio.run(collect(service, "s"))
+
+        assert [0] in reader.calls[1:], "read again, in a call of its own"
+        knowledge = _snapshot(service).knowledge
+        assert [(e.message_turn, e.content, e.knowledge_status) for e in knowledge if e.topic_label == "database"] == [
+            (0, "Postgres", KnowledgeStatus.SUPERSEDED), (2, "MySQL", KnowledgeStatus.ACTIVE)]
+        assert not any(span.facts_unread for span in _snapshot(service).old)
+        assert _levels(service)[0] is ARCHIVED, "with its facts read, it can be archived again"
+
+    def test_a_failed_reread_leaves_it_marked_and_costs_the_new_facts_nothing(self):
+        service, reader = self._after_the_outage()
+        reader.failing = {0}
+
+        asyncio.run(collect(service, "s"))
+
+        assert [span.facts_unread for span in _snapshot(service).old][0] is True
+        assert [e.content for e in _snapshot(service).knowledge if e.topic_label == "database"] == ["MySQL"]
+
+    def test_a_staged_cut_keeps_what_it_read_again_until_it_is_switched_in(self):
+        """A warm cache can hold a prepared cut over several passes; the read is made once and survives each."""
+        service, reader = self._after_the_outage(min_saving_share=1000.0, max_stale_ratio=1.0)
+        asyncio.run(service.gc_age("s"))
+        assert service.gc_switch("s", CacheState.WARM) is None, "prepared, waiting"
+        reads_of_turn_0 = sum(0 in call for call in reader.calls)
+        _said_turns(service, (4, "Turn 4 is about storage."), (5, "Turn 5 is about storage."))
+
+        asyncio.run(service.gc_age("s"))
+        switched = service.gc_switch("s", CacheState.COLD)
+
+        assert switched is not None
+        assert sum(0 in call for call in reader.calls) == reads_of_turn_0, "not read a second time"
+        assert not _snapshot(service).old[0].facts_unread
+        assert [e.content for e in _snapshot(service).knowledge if e.knowledge_status is KnowledgeStatus.ACTIVE
+                and e.topic_label == "database"] == ["MySQL"]

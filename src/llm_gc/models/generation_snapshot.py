@@ -183,10 +183,14 @@ class AgingDelta:
     new_spans: tuple[Span, ...] = ()
     level_changes: tuple[tuple[Span, DetailLevel], ...] = ()
     new_knowledge: tuple[KnowledgeEntry, ...] = ()
+    # Old spans, as they stand, whose facts were read again after an earlier reading failed.
+    # Their facts are in `new_knowledge`; applied, the spans are no longer marked unread.
+    facts_read: tuple[Span, ...] = ()
 
     @property
     def is_empty(self) -> bool:
-        return not (self.departed_turns or self.new_spans or self.level_changes or self.new_knowledge)
+        return not (self.departed_turns or self.new_spans or self.level_changes or self.new_knowledge
+                    or self.facts_read)
 
 
 @dataclass(frozen=True)
@@ -245,6 +249,11 @@ def apply_aging(snapshot: GenerationSnapshot, delta: AgingDelta) -> AppliedAging
         raise ValueError(f"turns {sorted(delta.departed_turns)} depart but new spans hold {sorted(landed)}: "
                          "every departing turn must land in exactly one span")
     old = list(snapshot.old)
+    # Before the level changes, which name these spans as they are once read.
+    for span in delta.facts_read:
+        if span not in old:
+            raise ValueError(f"aging delta reads the facts of a span not in the old generation: turn {span.first_turn}")
+        old[old.index(span)] = replace(span, facts_unread=False)
     for span, level in delta.level_changes:
         if span not in old:
             raise ValueError(f"aging delta changes a span not in the old generation: turn {span.first_turn}")
@@ -264,43 +273,63 @@ def apply_aging(snapshot: GenerationSnapshot, delta: AgingDelta) -> AppliedAging
 def file_knowledge(
     knowledge: tuple[KnowledgeEntry, ...], new_entries: tuple[KnowledgeEntry, ...]
 ) -> tuple[tuple[KnowledgeEntry, ...], tuple[Supersession, ...]]:
-    """File entries in order; each entry that can supersede retires active ones on its topic.
+    """File each entry at its place in the conversation; it retires the active values stated before it on its topic.
 
-    Sequential, so an entry filed earlier in the same batch can be superseded by a
-    later one: the conversation changed its mind, and the later statement wins.
-    Topic-less entries supersede nothing - see `KnowledgeEntry.can_supersede`. An
-    entry that only restates an active one - same topic, same value - is not filed:
+    Entries are kept in conversation order: by the turn each was read from, and in reading
+    order within a turn. A new fact is usually newer than everything on record, so it goes
+    last and the later statement wins. A fact read late, such as one whose first reading
+    failed, takes its own place instead: it retires only values stated before it, and is
+    filed as already replaced when a later value on its topic is on record.
+
+    Topic-less entries supersede nothing - see `KnowledgeEntry.can_supersede`. An entry that
+    only restates the value in force at its turn - same topic, same value - is not filed:
     nothing changed, and filing it would tell the model the value was replaced by itself.
-    A value the assistant states on a topic the user decided is not filed: only the
-    user changes their own decision, and a labelled recommendation beside an
-    unlabelled decision reads as the answer. The recommendation stays in its
-    exchange's words and summary.
+    A value the assistant states on a topic the user had decided is not filed: only the
+    user changes their own decision, and a labelled recommendation beside an unlabelled
+    decision reads as the answer. The recommendation stays in its exchange's words and summary.
     """
     filed = list(knowledge)
     supersessions: list[Supersession] = []
     for new_entry in new_entries:
-        if any(_restates(new_entry, existing) or _contradicts_users_decision(new_entry, existing) for existing in filed):
+        at = next((index for index, entry in enumerate(filed) if entry.message_turn > new_entry.message_turn),
+                  len(filed))
+        if any(_restates(new_entry, existing) or _contradicts_users_decision(new_entry, existing)
+               for existing in _in_force(filed[:at])):
             continue
+        replaced_later = new_entry.can_supersede and any(
+            later.topic_label == new_entry.topic_label and later.can_supersede for later in filed[at:])
         if new_entry.can_supersede:
             superseded = []
-            for i, existing in enumerate(filed):
-                if existing.topic_label == new_entry.topic_label and existing.knowledge_status == KnowledgeStatus.ACTIVE:
-                    filed[i] = replace(existing, knowledge_status=KnowledgeStatus.SUPERSEDED)
+            for index, existing in enumerate(filed[:at]):
+                if existing.topic_label == new_entry.topic_label and existing.knowledge_status is KnowledgeStatus.ACTIVE:
+                    filed[index] = replace(existing, knowledge_status=KnowledgeStatus.SUPERSEDED)
                     superseded.append(existing)
             if superseded:
                 supersessions.append(Supersession(new_entry=new_entry, superseded=tuple(superseded)))
-        filed.append(new_entry)
+        filed.insert(at, replace(new_entry, knowledge_status=KnowledgeStatus.SUPERSEDED) if replaced_later else new_entry)
     return tuple(filed), tuple(supersessions)
 
 
+def _in_force(entries: Sequence[KnowledgeEntry]) -> list[KnowledgeEntry]:
+    """Return the entries no later one among them replaces: what was in force after the last of them."""
+    topics_replaced: set[str] = set()
+    in_force = []
+    for entry in reversed(entries):
+        if entry.can_supersede:
+            if entry.topic_label in topics_replaced:
+                continue
+            topics_replaced.add(entry.topic_label)
+        in_force.append(entry)
+    return in_force
+
+
 def _restates(new: KnowledgeEntry, existing: KnowledgeEntry) -> bool:
-    return (existing.knowledge_status is KnowledgeStatus.ACTIVE and existing.topic_label == new.topic_label
-            and _same_value(existing.content, new.content))
+    return existing.topic_label == new.topic_label and _same_value(existing.content, new.content)
 
 
 def _contradicts_users_decision(new: KnowledgeEntry, existing: KnowledgeEntry) -> bool:
     return (new.speaker == "assistant" and existing.speaker == "user" and new.can_supersede
-            and existing.knowledge_status is KnowledgeStatus.ACTIVE and existing.topic_label == new.topic_label)
+            and existing.topic_label == new.topic_label)
 
 
 def _same_value(a: str, b: str) -> bool:

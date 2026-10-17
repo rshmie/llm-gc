@@ -466,6 +466,15 @@ class GcService:
             on_record = [entry for entry in filed if entry.knowledge_status is KnowledgeStatus.ACTIVE]
             condensed = await self.generational_memory.complete(drafts, on_record)
             degradations.extend(self._report_failures(session_id, condensed))
+            # Facts an earlier pass failed to read are read again, in their own call, so one exchange's
+            # content cannot fail the new spans' facts. Spans this staged cut has read again already are not.
+            carried = base.staged.delta.facts_read if base.staged is not None else ()
+            unread = [span for span in base.old if span.facts_unread and span not in carried]
+            reread, reread_error = await self.generational_memory.read_facts([span.turns for span in unread], on_record)
+            if reread_error is not None:
+                logger.info("facts of earlier exchanges could not be read again; they stay marked",
+                            extra={"session_id": session_id, "gc_run_id": gc_run_id,
+                                   "error_type": type(reread_error).__name__})
 
             # No await from here to the staging: plan against the snapshot as it is now.
             current_stage = "plan"
@@ -481,14 +490,23 @@ class GcService:
             held = {turn.turn_index for span in material for turn in span.turns}
             facts = [fact for fact in (*estimated.new_facts, *(f for draft in condensed for f in draft.facts))
                      if fact.message_turn in held]
-            planned = self._plan(current, now_young, cut_now, material, facts, drafts_from=len(material),
-                                 recap_budget=recap_budget)
+            # Spans whose facts were read again, now or by the pass that staged this cut, as the snapshot still
+            # holds them; planned as readable, so they can be archived again.
+            read_again = tuple(span for span in (*carried, *(unread if reread_error is None else ()))
+                               if span in current.old)
+            read_turns = {turn.turn_index for span in read_again for turn in span.turns}
+            staged_facts = current.staged.delta.new_knowledge if current.staged is not None else ()
+            late_facts = [fact for fact in (*staged_facts, *reread) if fact.message_turn in read_turns]
+            readable = replace(current, old=tuple(replace(span, facts_unread=False) if span in read_again else span
+                                                   for span in current.old)) if read_again else current
+            planned = self._plan(readable, now_young, cut_now, material, [*facts, *late_facts],
+                                 drafts_from=len(material), recap_budget=recap_budget)
             if planned.plan.over_budget:
                 degradations.append(self._record_degradation(
                     session_id, DegradationReason.RECAP_OVER_BUDGET, sorted(held),
                     LLMGCError(f"the folded front needs {planned.plan.tokens} tokens of a "
                                f"{recap_budget}-token recap budget")))
-            delta = planned.delta()
+            delta = replace(planned.delta(), facts_read=read_again)
             # The cut must pay for itself: its new spans, measured on the context
             # they would produce, against the turns they replace - a quote's marker
             # can cost more than the turn did. Re-planned older spans are left out:

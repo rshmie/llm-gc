@@ -51,7 +51,7 @@ Today's evidence is a 37-question check on scripted conversations and a few live
 - [ ] **Whatever the benchmark shows losing quality.** If a lost answer traces back to how a span was scored, fix that signal before release. One miss is already known: relevance matches words, so "datastore" never finds "database", and a span the conversation returns to in other words stays at its low level. Embedding relevance behind the existing `Relevance` seam fixes it without training anything.
 - [ ] **Scoring runs on the proxy's event loop**, and is O(n²) in messages per pass. While a pass scores a long conversation, every other request the proxy handles waits. Make it linear, and move it off the loop.
 - [ ] **A collection's summaries run one after another** (132 s cold on one live run). Run them concurrently if the latency measurement confirms they are the cost.
-- [ ] **A retry policy for LLM-GC's own model calls:** retryable errors only (timeouts, 429, 5xx), exponential backoff with jitter, a cap on attempts, and `Retry-After` honoured. Today a failed call is shown as a degradation and a rate limit pauses collections, but nothing retries.
+- [ ] **A retry policy for LLM-GC's own model calls, for one-off failures only:** timeouts, dropped connections and 5xx answers other than 529, with exponential backoff and jitter, a cap on attempts, and `Retry-After` honoured. A rate limit (429) or an overload (529) is not retried: LLM-GC's calls share the client's limit, so it pauses instead (`doc/design/proxy/overview.md`). An overload on one of LLM-GC's own calls should pause it too; today only a client's 529 does. Nothing retries today, and a later collection does not repeat a failed fact read, so one timeout leaves an exchange without its facts for good (it stays summarised or quoted, so no detail is lost).
 - [ ] **The dashboard groups conversations into sessions twice**, in its own script and on the server. Use the server's grouping only, so the two cannot disagree.
 - [ ] **Small fixes:**
   - [ ] `--context-window`'s help still calls it the proxied model's window. It is the fallback used when the Models API does not know the model.
@@ -82,7 +82,6 @@ Each is accepted for the first release, stated in the docs, and fixed after it.
 - **The proxy speaks only Anthropic's wire format.** Clients that speak OpenAI's cannot use it yet.
 - **Without a model, facts are read by patterns** that catch few phrasings. This affects offline runs only.
 - **A relayed subagent report is not tied to the subagent that wrote it.**
-- **Facts that failed to be read are not read again** by a later collection; their span stays marked.
 
 ## After the first version release
 

@@ -2,13 +2,13 @@
 
 ## What It Is
 
-A `KnowledgeEntry` is one unit of knowledge read from a conversation turn — a fact, a decision or a preference. Every turn is read once, from its own words, when a collection makes its span; the entries are filed in the session's permanent generation and kept for the session's life. They are what an archived span shows beside its opening line, and the record of what the conversation later changed its mind about.
+A `KnowledgeEntry` is one unit of knowledge read from a conversation turn — a fact, a decision or a preference. Every turn is read from its own words when a collection makes its span, and read again by a later collection if that reading failed; the entries are filed in the session's permanent generation and kept for the session's life. They are what an archived span shows beside its opening line, and the record of what the conversation later changed its mind about.
 
 ## How an entry reaches the model
 
 ```
  turn 5: "Let's use PostgreSQL for the database."
-            │ read once, when its span is made
+            │ read when its span is made (again later, if that failed)
             ▼
  KnowledgeEntry(topic="database", content="postgresql", message_turn=5, ACTIVE)
             │
@@ -87,6 +87,17 @@ Turn 5:  KnowledgeEntry(content="Database is PostgreSQL", topic_label="database"
 Turn 8:  KnowledgeEntry(content="Database is MySQL", topic_label="database", status=ACTIVE)
          → Turn 5 entry becomes SUPERSEDED
 ```
+
+**Entries are filed in conversation order**, by the turn each was read from, so an entry replaces only values stated before it. A new entry is almost always the newest, and goes last. One read late — its first reading failed, and a later collection read it again — takes its own place: if a later value on its topic is on record, it is filed as already replaced, and the chain of replacements reads in the order the conversation said them.
+
+```
+on record:     turn 40  database: mysql       ACTIVE
+read late:     turn 12  database: postgres
+filed:         turn 12  database: postgres    SUPERSEDED   (turn 40 replaced it)
+               turn 40  database: mysql       ACTIVE
+```
+
+*Rejected: filing in reading order* — a value read late would replace every newer one on its topic, and the model would be told the conversation went back on a decision it never revisited.
 
 Because entries are frozen (immutable), supersession creates a *new copy* of the old entry with `knowledge_status=SUPERSEDED` using `dataclasses.replace()`. The original object is never mutated.
 

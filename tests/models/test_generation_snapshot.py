@@ -277,3 +277,57 @@ class TestARewindKeepsNewThinkingValid:
     def test_before_the_front_is_first_sent_it_stays_unset(self):
         """The front's first request sets it, from the history that request carries."""
         assert self._ten_turns(thinking_valid_from=None).rewound_to(6).thinking_valid_from is None
+
+
+def _said(turn: int, content: str, speaker: str = "user", topic: str = "database") -> KnowledgeEntry:
+    return KnowledgeEntry(message_turn=turn, content=content, topic_label=topic,
+                          knowledge_type=KnowledgeType.DECISION, speaker=speaker)
+
+
+class TestAFactReadLateTakesItsPlaceInTheConversation:
+    """A fact whose first reading failed is read later, after newer ones are on record. Filed by reading order,
+    turn 12's "Postgres" would replace turn 40's "MySQL", and the model would be told the wrong database."""
+
+    @staticmethod
+    def _filed(record: tuple[KnowledgeEntry, ...], *late: KnowledgeEntry) -> list[tuple[int, str, KnowledgeStatus]]:
+        filed, _ = file_knowledge(record, late)
+        return [(entry.message_turn, entry.content, entry.knowledge_status) for entry in filed]
+
+    def test_an_older_value_read_late_is_filed_as_already_replaced(self):
+        record, _ = file_knowledge((), (_said(40, "MySQL"),))
+
+        assert self._filed(record, _said(12, "Postgres")) == [
+            (12, "Postgres", KnowledgeStatus.SUPERSEDED), (40, "MySQL", KnowledgeStatus.ACTIVE)]
+
+    def test_it_replaces_only_what_was_stated_before_it(self):
+        record, _ = file_knowledge((), (_said(5, "SQLite"),))
+
+        filed, supersessions = file_knowledge(record, (_said(12, "Postgres"),))
+
+        assert [(e.content, e.knowledge_status) for e in filed] == [
+            ("SQLite", KnowledgeStatus.SUPERSEDED), ("Postgres", KnowledgeStatus.ACTIVE)]
+        assert [s.new_entry.content for s in supersessions] == ["Postgres"]
+
+    def test_between_two_values_it_takes_its_place_in_the_chain(self):
+        """The page names what replaced a fact as the next one on its topic in the list, so order is the chain."""
+        record, _ = file_knowledge((), (_said(5, "SQLite"), _said(40, "MySQL")))
+
+        assert self._filed(record, _said(12, "Postgres")) == [
+            (5, "SQLite", KnowledgeStatus.SUPERSEDED), (12, "Postgres", KnowledgeStatus.SUPERSEDED),
+            (40, "MySQL", KnowledgeStatus.ACTIVE)]
+
+    def test_a_restatement_is_judged_against_the_value_in_force_at_its_turn(self):
+        record, _ = file_knowledge((), (_said(5, "Postgres"), _said(40, "MySQL")))
+
+        assert [content for _, content, _ in self._filed(record, _said(12, "postgres."))] == ["Postgres", "MySQL"]
+
+    def test_an_assistant_value_stated_before_the_users_decision_is_kept_as_replaced(self):
+        record, _ = file_knowledge((), (_said(20, "MySQL"),))
+
+        assert self._filed(record, _said(10, "Postgres", speaker="assistant")) == [
+            (10, "Postgres", KnowledgeStatus.SUPERSEDED), (20, "MySQL", KnowledgeStatus.ACTIVE)]
+
+    def test_facts_read_in_any_order_file_as_the_conversation_said_them(self):
+        in_order = self._filed((), _said(5, "SQLite"), _said(12, "Postgres"), _said(40, "MySQL"))
+
+        assert self._filed((), _said(40, "MySQL"), _said(5, "SQLite"), _said(12, "Postgres")) == in_order

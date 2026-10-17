@@ -671,7 +671,7 @@ export function renderGenerations(k) {
     box("old", "Old generation", "the recap: every exchange at its level", plural(k.spans.length, "exchange"),
       `${levels.map((level) => `${at(level).length} ${CATS[level].tag}`).join(" · ") || "none yet"} · ${fmt(k.front_tokens)} of its ${fmt(k.recap_budget)}-token budget, by LLM-GC's count`,
       levels.map((level) => h("div", {}, `${CATS[level].tag}: `, exchangeLinks(at(level).map((span) => span.turns), () => renderGenerations(k))))),
-    arrow("facts read once", "as each exchange is made"),
+    arrow("facts read", "as each exchange is made"),
     box("permanent", "Permanent generation", "facts, and what replaced what", plural(active.length, "current fact"),
       [sent ? `${fmt(sent)} on their exchange's line` : null, inWords ? `${fmt(inWords)} in quoted words` : null,
         active.length - sent - inWords ? `${fmt(active.length - sent - inWords)} out of view` : null,

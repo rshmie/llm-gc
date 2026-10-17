@@ -197,7 +197,7 @@ export const FACT_STATUS = {
 export const NOT_MOVED = {
   compaction_refused: ["Summary rejected by the safeguard", "Its exchange has no summary, so it is quoted word for word or archived instead. Nothing is lost."],
   compaction_failed: ["Summary request failed", "Its exchange has no summary, so it is quoted word for word or archived instead. Nothing is lost."],
-  archive_failed: ["Facts couldn't be read", "Its exchange has no facts, so it is summarised or quoted instead of archived. Nothing is lost."],
+  archive_failed: ["Facts couldn't be read", "Its exchange is summarised or quoted instead of archived until the next collection reads its facts again. Nothing is lost."],
   recap_over_budget: ["Recap over its budget", "Every exchange is folded out of view and the recap still doesn't fit: the budget is too small for this conversation."],
 };
 // Said where a refused credential shows: on both tabs, so it is not found only by opening a card.
