@@ -165,8 +165,9 @@ export function renderSummary(k) {
 
 // The token figures, each named for whose count it is: LLM-GC's own tokenizer is an estimate, the provider's is what it bills.
 function tokenLines(k) {
-  const written = writtenTokens(k);
-  const less = written - k.context_tokens;
+  // Both sides include the model's earlier thinking: without LLM-GC, every reply's would be sent.
+  const written = writtenTokens(k) + (k.written_thinking_tokens ?? 0);
+  const less = written - k.context_tokens - (k.thinking_tokens ?? 0);
   const c = trafficOf(state.selected);
   const t = c && c.traffic;
   const last = t && t.last_reply;
@@ -180,14 +181,16 @@ function tokenLines(k) {
     h("span", { class: "meter mini", role: "meter", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(Math.round(use.share * 100)), "aria-label": "Share of the model's window" },
       meterBar("window-share", use.share * 100))) : null;
   return [
-    h("p", { class: "sum-tokens" }, "Next request ", h("b", {}, `≈ ${fmt(k.context_tokens)}`), " tokens of conversation", info("size"), ` · ${saving}`,
+    h("p", { class: "sum-tokens" }, "Next request ", h("b", {}, `≈ ${fmt(k.context_tokens)}`), " tokens of conversation", info("size"),
+      k.thinking_tokens ? [" + ", h("b", {}, `≈ ${fmt(k.thinking_tokens)}`), " of the model's earlier thinking", info("thinking")] : null,
+      ` · ${saving}`,
       last ? null : windowMeter),
     last ? h("p", { class: "sum-tokens" }, "Last request ",
       hint(h("b", {}, fmt(last.provider_prompt_tokens)), "The last request, by the provider's count",
         `${compact(last.usage.cache_read_input_tokens)} read from its cache, ${compact(last.usage.cache_creation_input_tokens)} written to it and ${compact(last.usage.input_tokens)} sent plainly, the system prompt and tools included.`),
       " tokens by the provider's count", windowMeter,
       ratio ? [" · ", hint(`${ratio.toFixed(2)}× LLM-GC's count`, "Two counts of one request",
-        `LLM-GC counted it at ${fmt(last.tokens_forwarded)} with its own tokenizer, an estimate.${k.token_rate ? " LLM-GC sizes the recap's budget and the stale limit at this rate." : ""}`)] : null) : null,
+        `LLM-GC counted it at ${fmt(last.tokens_forwarded)} with its own tokenizer, its estimate of the model's earlier thinking included.${k.token_rate ? ` LLM-GC sizes the recap's budget and the stale limit at ${k.token_rate.toFixed(2)}×, measured on its latest request that carried no thinking.` : ""}`)] : null) : null,
     h("p", { class: "sum-tokens secondary" },
       lastCollection ? [`Last collection ${agoTs(lastCollection.gc_completed_at)}${lastCollection.outcome ? `: ${describeOutcome(lastCollection.outcome)}` : ""} · `,
         h("button", { class: "link-btn", type: "button", onclick: toEngine("moves") }, "What moved →")] : "No collection yet",
@@ -375,13 +378,16 @@ export function renderMap(k) {
   const pend = items.filter((x) => x.pending);
   const sum = (list) => list.reduce((n, x) => n + width(x), 0);
   const saved = writtenTokens(k) - k.context_tokens;
+  const thinkingSaved = Math.max(0, (k.written_thinking_tokens ?? 0) - (k.thinking_tokens ?? 0));
   const condW = sum(cond);
   const blockW = condW && saved > 0 ? (condW * k.front_tokens) / (k.front_tokens + saved) : condW;
   const recent = k.context_tokens - k.front_tokens;
   const pendTok = pend.reduce((n, x) => n + (x.tok ?? 0), 0);
   const parts = {
     block: [blockW, `The recap · ${plural(k.front_tokens, "token")}`, "Stands in for the collected messages above it.", cond],
-    saved: [condW - blockW, `Saved · ${plural(Math.max(0, saved), "token")}`, "What collections took out of every request.", cond],
+    saved: [condW - blockW, `Saved · ${plural(Math.max(0, saved), "token")}`, thinkingSaved
+      ? `What collections took out of every request, besides ≈${fmt(thinkingSaved)} tokens of the model's earlier thinking (an estimate).`
+      : "What collections took out of every request.", cond],
     recent: [sum(verb), `Recent messages · ${plural(recent, "token")}`, "Not collected yet: each sent as its own message, as written.", verb],
     pending: [sum(pend), `Newest request · ${plural(pendTok, "token")}`, "Its own message, sent on top of the recorded ones; not in the conversation yet.", pend],
   };

@@ -294,3 +294,87 @@ class TestAnOpenToolRound:
 
         assert service.gc_switch(SESSION, CacheState.WARM) is None, "waits for payback, as any warm cut"
         assert state.switch_requested is False
+
+
+def _record_thinking(service, thinking: dict[int, int], *indices):
+    """Record turns, giving the ones named in `thinking` that many tokens of the model's thinking."""
+    state = service.session_manager.get_or_create(SESSION)
+    for index in indices:
+        recorded = turn(index, role="assistant" if index in thinking else "user")
+        state.snapshot = state.snapshot.with_turn(recorded.model_copy(update={"thinking_tokens": thinking.get(index, 0)}))
+    return state
+
+
+class TestThinkingIsWeighed:
+    """A switch stops sending every turn's thinking. Left out, the saving was undercounted and cuts waited too long."""
+
+    def test_the_thinking_a_switch_drops_is_part_of_its_saving_measured_at_the_switch(self):
+        service, _ = _service(**PATIENT)
+        state = _record_thinking(service, {1: 100, 3: 300}, 0, 1, 2, 3)
+        _prepare(service)
+        _record_thinking(service, {5: 500}, 4, 5)       # a reply after staging adds thinking too
+
+        preview = service.inspect(SESSION, cache=CacheState.WARM).staged
+
+        assert preview.thinking_dropped_tokens == 100 + 300 + 500
+        assert preview.saving_tokens == state.snapshot.staged.saving_tokens + 900
+        tail = [t for t in state.snapshot.young if t.turn_index not in state.snapshot.staged.delta.departed_turns]
+        assert preview.rewritten_tokens == state.snapshot.staged.front_tokens + sum(t.token_count for t in tail), \
+            "nothing sends its thinking after a switch, so none of it is cached again"
+
+    def test_only_the_condensed_turns_thinking_is_stale(self):
+        service, _ = _service(**PATIENT)
+        state = _record_thinking(service, {1: 100, 3: 300}, 0, 1, 2, 3)
+        _prepare(service)
+
+        preview = service.inspect(SESSION, cache=CacheState.WARM).staged
+
+        assert preview.stale_thinking_tokens == 100, "turn 3 stays word for word in the tail"
+        assert preview.stale_tokens == state.snapshot.staged.stale_tokens + 100
+
+    def test_thinking_already_stripped_is_not_counted_again(self):
+        service, _ = _service(**PATIENT)
+        state = _record_thinking(service, {1: 100, 3: 300}, 0, 1, 2, 3)
+        state.snapshot = replace(state.snapshot, thinking_valid_from=2)
+        _prepare(service)
+
+        assert service.inspect(SESSION, cache=CacheState.WARM).staged.thinking_dropped_tokens == 300
+
+    def test_thinking_can_make_a_waiting_cut_repay_its_rewrite(self):
+        service, _ = _service(min_saving_share=10.0, max_stale_ratio=1.0)
+        _record_thinking(service, {1: 0, 3: 0}, 0, 1, 2, 3)
+        _prepare(service)
+        assert service.inspect(SESSION, cache=CacheState.WARM).staged.decision.reason is SwitchReason.WAITING_FOR_PAYBACK
+
+        thinking, _ = _service(min_saving_share=10.0, max_stale_ratio=1.0)
+        _record_thinking(thinking, {1: 50_000, 3: 0}, 0, 1, 2, 3)
+        _prepare(thinking)
+        result = thinking.gc_switch(SESSION, CacheState.WARM)
+
+        assert result is not None and result.switch_reason is SwitchReason.REPAYS_REWRITE
+
+    def test_a_condensed_turns_thinking_can_bring_stale_weight_to_the_bound(self):
+        config = {"context_window": 10_000, "max_stale_ratio": 0.1, "min_saving_share": 1000.0}
+        reasons = {}
+        for where in (None, 3, 1):     # no thinking, thinking in the tail, thinking in a condensed turn
+            service, _ = _service(**config)
+            _record_thinking(service, {where: 2_000} if where is not None else {}, 0, 1, 2, 3)
+            _prepare(service)
+            reasons[where] = service.inspect(SESSION, cache=CacheState.WARM).staged.decision.reason
+
+        assert reasons[None] is reasons[3] is SwitchReason.WAITING_FOR_PAYBACK
+        assert reasons[1] is SwitchReason.STALE_WEIGHT_AT_BOUND
+
+    def test_the_collection_reports_the_thinking_it_dropped_and_newer_thinking_is_sent(self):
+        service, _ = _service()
+        _record_thinking(service, {1: 100, 3: 300}, 0, 1, 2, 3)
+        _prepare(service)
+        assert service.inspect(SESSION).thinking_tokens == 400
+
+        result = service.gc_switch(SESSION, CacheState.COLD)
+
+        assert result.thinking_dropped_tokens == 400
+        assert service.inspect(SESSION).thinking_tokens == 0, "the request carrying the front sends none"
+        service.mark_front_sent(SESSION, history_turns=4)
+        _record_thinking(service, {4: 70}, 4)
+        assert service.inspect(SESSION).thinking_tokens == 70, "a reply to the new front keeps its thinking"

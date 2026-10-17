@@ -184,6 +184,16 @@ request N+1  the switch happens; first to carry it       sends reply N back  -> 
 request N+2  same front                                   reply N+1 keeps its thinking
 ```
 
+**A rewind moves the boundary back, never forward.** When the person edits a turn the
+front does not stand in for, every turn after the edit is discarded, and the replies that
+follow are produced against the front still in place, so they keep their thinking. Left
+where it was, the boundary stripped valid thinking from each new reply up to it, and from
+one mid tool round the provider could refuse the request. Before the front's first request
+the boundary is not set yet, and that request sets it from the history it carries.
+
+The thinking a switch drops is part of what it saves, which the switch policy weighs
+([when to collect](when-to-collect.md)).
+
 The same stability is what lets the provider cache the prompt: a cached prefix is
 billed at a fraction of the input price and answered faster, but only if it is
 byte-identical. Between collections, every request's conversation is the previous
@@ -293,7 +303,3 @@ occasionally, is the one rewrite both accept.
   on real conversations.
 - **Non-text content inside the front.** A condensed turn's images and tool calls
   survive only as the text that described them.
-- **A collection can become visible in the middle of a tool round.** When the first
-  request carrying a new front is a tool result, the reply that made the call loses
-  its thinking for that step. The switch policy could hold a cut back from such a
-  request unless the cache is cold or the cut is overdue.

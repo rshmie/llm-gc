@@ -252,3 +252,28 @@ class TestAStagedCutFollowsTheHistory:
     def test_recording_new_turns_keeps_it(self):
         snapshot = self._staged_over_turns_0_and_1()
         assert snapshot.with_turns([_turn(6)], ["h6"]).staged is snapshot.staged
+
+
+class TestARewindKeepsNewThinkingValid:
+    """A rewind below the turn thinking is valid from used to strip valid thinking from every new reply."""
+
+    @staticmethod
+    def _ten_turns(thinking_valid_from: int | None) -> GenerationSnapshot:
+        snapshot = GenerationSnapshot().with_turns([_turn(i) for i in range(10)], [f"h{i}" for i in range(10)])
+        return replace(snapshot, thinking_valid_from=thinking_valid_from)
+
+    def test_replies_recorded_after_a_rewind_below_it_keep_their_thinking(self):
+        rewound = self._ten_turns(thinking_valid_from=10).rewound_to(6)
+        reply = Message(role="assistant", content="turn 7", token_count=5, turn_index=7, thinking_tokens=500)
+
+        continued = rewound.with_turns([_turn(6), reply], ["x6", "x7"])
+
+        assert continued.thinking_valid_from == 6
+        assert continued.sent_thinking_tokens() == 500
+
+    def test_a_rewind_above_it_changes_nothing(self):
+        assert self._ten_turns(thinking_valid_from=4).rewound_to(8).thinking_valid_from == 4
+
+    def test_before_the_front_is_first_sent_it_stays_unset(self):
+        """The front's first request sets it, from the history that request carries."""
+        assert self._ten_turns(thinking_valid_from=None).rewound_to(6).thinking_valid_from is None

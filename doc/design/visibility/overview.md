@@ -637,7 +637,7 @@ when to worry, so the Conversation view opens with exactly those three, in words
  8 by their opening line and facts  ! 21 messages' facts couldn't        of view, and no collection
  6 of 7 facts told to it              be read                              fell short.
  ─────────────────────────────────────────────────────────────────────────────────────────────
- Next request ≈ 3,207 tokens of conversation · 71% less than as written
+ Next request ≈ 3,207 tokens of conversation + ≈ 1,840 of the model's earlier thinking · 71% less than as written
  Last request 55,712 tokens by the provider's count · 28% of the model's window · 1.48× LLM-GC's count
  Last collection 3 min ago · What moved →  · So far 16 requests, 29% saved
 ```
@@ -645,6 +645,14 @@ when to worry, so the Conversation view opens with exactly those three, in words
 - **Each count names what it counts**, in the level words above, and the numbers come
   beneath the words, each named for whose count it is: LLM-GC's own tokenizer is an
   estimate, the provider's is what it bills.
+- **The model's earlier thinking is shown apart from the text.** It has no text, so its
+  size is LLM-GC's estimate from each reply's usage
+  ([the proxy](../proxy/overview.md#the-models-hidden-thinking)), a rougher kind of figure
+  than a tokenizer's count. Wherever it is part of a number, it is said beside it: the next
+  request's thinking, the share saved against the conversation as written, a prepared
+  collection's saving and stale weight, and the thinking each collection stopped sending.
+  *Rejected: folding it into the text figures* — one number would then mix a count with an
+  estimate, and a reader could not tell how much of it to trust.
 - **"Should you worry?" holds every warning**, in one place, each linking to its
   evidence: messages out of view, facts the model can't see, a collection that fell
   short, a window more than 80% full, and a rate-limit pause. Stale weight near its

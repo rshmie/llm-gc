@@ -60,5 +60,5 @@ export function renderSessionCard(select) {
         h("th", { class: i && i < 5 ? "num" : "" }, label)))),
       h("tbody", {}, rows))),
     h("p", { class: "note" }, hint("How these are counted", "How these are counted",
-      "Every request whole, system prompt and tools included, by LLM-GC's own tokenizer; the provider's own count is in the tiles above. A window marked assumed is the configured one: the provider hasn't reported that model's.")));
+      "Every request whole, system prompt and tools included, by LLM-GC's own tokenizer, with its estimate of the model's earlier thinking; the provider's own count is in the tiles above. A window marked assumed is the configured one: the provider hasn't reported that model's.")));
 }

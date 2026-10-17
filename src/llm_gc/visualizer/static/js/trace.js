@@ -167,7 +167,7 @@ function requestLine(row, window, depth) {
   return h("div", { class: `wf-row kind-${row.kind}${depth ? " nested" : ""}`, role: "row" },
     h("span", { class: "wf-label", role: "cell" },
       h("span", { class: "wf-kind", ...hoverTip(label, about) }, label),
-      h("span", { class: "wf-tokens", ...(kept > 0 ? hoverTip("Tokens", `Claude Code sent ${fmt(row.tokens_from_client)}; LLM-GC condensed ${fmt(kept)} of them, so the model got ${fmt(row.tokens_forwarded)}.`) : {}) },
+      h("span", { class: "wf-tokens", ...(kept > 0 ? hoverTip("Tokens", `Claude Code sent ${fmt(row.tokens_from_client)}; LLM-GC took out ${fmt(kept)}, so the model got ${fmt(row.tokens_forwarded)}. Both include LLM-GC's estimate of the model's earlier thinking, which a collection stops sending.`) : {}) },
         ` · ${fmt(row.tokens_from_client)}`, kept > 0 ? [" → ", h("span", { class: "good" }, fmt(row.tokens_forwarded))] : null),
       row.tool_calls.length ? h("span", { class: "wf-calls" }, ` · then ${calls(row.tool_calls)}`) : null,
       row.resent_as_written ? h("span", { class: "st warn", ...hoverTip("Sent as written",

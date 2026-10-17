@@ -6,6 +6,7 @@ stubbed is the socket.
 """
 
 import asyncio
+from dataclasses import replace
 import hashlib
 import json
 import logging
@@ -1160,6 +1161,35 @@ class TestTheCutShape:
         assert sum(1 for i, m in enumerate(forwarded[1:], 1) if m[0] != forwarded[i - 1][0]) >= 2, "two cuts at least"
         assert any(_is_front(m[0]) and _thinking_blocks(m) for m in forwarded), \
             "replies produced against the current front keep their thinking"
+
+    def test_after_a_rewind_a_new_reply_keeps_its_thinking(self):
+        """Editing a turn kept since the last cut used to strip valid thinking from every reply after the edit."""
+        client, service, _, seen = _proxy(upstream=_front_binding_provider)
+        history: list[dict] = []
+
+        def ask(text: str) -> list[dict]:
+            history.append({"role": "user", "content": text})
+            response = client.post("/v1/messages", json={"model": "m", "max_tokens": 64, "messages": history},
+                                   headers={"x-api-key": API_KEY, SESSION_HEADER: "s"})
+            assert response.status_code == 200
+            history.append({"role": "assistant", "content": response.json()["content"]})
+            return json.loads(seen[-1].content)["messages"]
+
+        for i in range(30):
+            if _is_front(ask(f"question {i}: we went over the storage layer, retention, and the rollout plan again")[0]):
+                break
+        state = service.session_manager.store.get("s")
+        edited_at = state.snapshot.thinking_valid_from - 2       # a turn kept word for word when the cut was made
+        # Hold collection still, so no new front strips the reply this test is about.
+        service.pause_model_calls(3600, "test")
+        state.snapshot = replace(state.snapshot, staged=None)
+
+        del history[edited_at:]
+        ask("question edited: what about the retention window instead?")
+        sent = ask("and how long do we keep backups?")
+
+        assert _is_front(sent[0]), "the same front is still in place"
+        assert _thinking_blocks(sent), "the reply to the edited turn was answered with this front"
 
     def test_a_cut_that_commits_after_the_next_request_left_is_still_safe(self):
         """Compaction is a model call, so a pass can commit after the next request

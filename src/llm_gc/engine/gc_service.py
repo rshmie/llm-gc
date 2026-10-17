@@ -274,6 +274,7 @@ class GcService:
                     if snapshot.staged is not None else None),
             token_rate=state.token_rate,
             window_in_own_count=own_window,
+            thinking_tokens=snapshot.sent_thinking_tokens(),
         )
 
     def use_context_window(self, session_id: str, context_window: int) -> None:
@@ -597,18 +598,25 @@ class GcService:
         """
         if not state.collection_enabled:
             return None
-        tail = [turn for turn in state.snapshot.young if turn.turn_index not in staged.delta.departed_turns]
+        snapshot = state.snapshot
+        tail = [turn for turn in snapshot.young if turn.turn_index not in staged.delta.departed_turns]
         if len(tail) < self.gc_config.last_n_turns_to_keep:
             return None
+        # After a switch no turn sends its thinking, so only text is cached again.
         rewritten = staged.front_tokens + sum(turn.token_count for turn in tail)
+        # Measured now, not at staging: every reply since then has added thinking the switch would drop.
+        dropped = snapshot.sent_thinking_tokens()
+        stale_thinking = snapshot.sent_thinking_tokens(
+            turn for span in staged.delta.new_spans if span.level is not DetailLevel.KEPT for turn in span.turns)
+        saving, stale = staged.saving_tokens + dropped, staged.stale_tokens + stale_thinking
         bound = self.gc_config.stale_bound(self._window_in_own_count(state))
         share = self.gc_config.min_saving_share
-        decision = decide_switch(saving_tokens=staged.saving_tokens, rewritten_tokens=rewritten,
-                                 stale_tokens=staged.stale_tokens, stale_bound_tokens=bound, min_saving_share=share,
-                                 cache=cache, requested=requested, tool_round_open=tool_round_open)
-        return SwitchPreview(saving_tokens=staged.saving_tokens, rewritten_tokens=rewritten,
-                             stale_tokens=staged.stale_tokens, stale_bound_tokens=bound, min_saving_share=share,
-                             cache=cache, decision=decision)
+        decision = decide_switch(saving_tokens=saving, rewritten_tokens=rewritten, stale_tokens=stale,
+                                 stale_bound_tokens=bound, min_saving_share=share, cache=cache, requested=requested,
+                                 tool_round_open=tool_round_open)
+        return SwitchPreview(saving_tokens=saving, rewritten_tokens=rewritten, stale_tokens=stale,
+                             stale_bound_tokens=bound, min_saving_share=share, cache=cache, decision=decision,
+                             thinking_dropped_tokens=dropped, stale_thinking_tokens=stale_thinking)
 
     def _window_in_own_count(self, state: SessionState) -> int:
         """The window of the model this session uses, counted as LLM-GC counts: what its recap budget and
@@ -642,6 +650,7 @@ class GcService:
             degradations=list(staged.degradations),
             outcome=_outcome([(span, span.level) for span in delta.new_spans], delta.level_changes),
             switch_reason=reason,
+            thinking_dropped_tokens=before.sent_thinking_tokens(),
         )
 
     def _context_tokens(self, snapshot: GenerationSnapshot) -> int:

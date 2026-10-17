@@ -210,6 +210,9 @@ function renderPreparing(k) {
       wouldDo(k, taking, "What it would do now", [`Counts toward the ${fmt(k.next_cut.min_cut_tokens)}-token minimum`, "Does not count"])));
 }
 
+// A collection's figures count text; the model's earlier thinking it stopped sending is an estimate, said apart.
+const droppedThinking = (p) => p.thinking_dropped_tokens ? `, and ≈${fmt(p.thinking_dropped_tokens)} of earlier thinking dropped` : "";
+
 function renderStaged(k) {
   const s = k.staged;
   const cache = k.cache;
@@ -242,12 +245,14 @@ function renderStaged(k) {
           checkItem(repays ? "good" : "wait", repays ? "✓" : "…", "The saving covers the cost",
             h("span", { class: "num" }, countEl("next-repays", s.saving_tokens), ` tokens saved · ${fmt(needed)} needed`),
             meterOf("next-repays", s.saving_tokens, needed, "Tokens applying it saves, against the tokens it must save"),
-            h("p", {}, `Applying it makes the provider cache ${fmt(s.rewritten_tokens)} tokens again. On a warm cache, it must save at least ${fmt(s.min_saving_share)}× that.`)),
+            h("p", {}, `Applying it makes the provider cache ${fmt(s.rewritten_tokens)} tokens again. On a warm cache, it must save at least ${fmt(s.min_saving_share)}× that.`,
+              s.thinking_dropped_tokens ? ` The saving includes ≈${fmt(s.thinking_dropped_tokens)} tokens of the model's earlier thinking, an estimate: applying it stops sending all of it.` : "")),
           checkItem(overdue ? "good" : "wait", overdue ? "✓" : "…", "Stale tokens at their limit",
             h("span", { class: "num" }, countEl("next-stale", s.stale_tokens), ` of ${fmt(s.stale_bound_tokens)} tokens, by LLM-GC's count`),
             meterOf("next-stale", s.stale_tokens, s.stale_bound_tokens, "Stale tokens, against their limit"),
             h("p", {}, "Older messages the model still gets word for word, which this collection would condense. At the ",
-              boundFrom(k) ? hint("limit", "Where the limit comes from", boundFrom(k)) : "limit", ", LLM-GC applies it, even if the provider must cache the prompt again.")))),
+              boundFrom(k) ? hint("limit", "Where the limit comes from", boundFrom(k)) : "limit", ", LLM-GC applies it, even if the provider must cache the prompt again.",
+              s.stale_thinking_tokens ? ` Includes ≈${fmt(s.stale_thinking_tokens)} tokens of those messages' thinking, an estimate.` : "")))),
       wouldDo(k, taking, "What applying it would do", ["Condensed", "Sent as they are"],
         unprepared ? h("p", { class: "note" }, `${plural(unprepared, "message")} below ${unprepared === 1 ? "is" : "are"} not prepared yet. The next check condenses ${unprepared === 1 ? "it" : "them"} first.`) : null)));
 }
@@ -399,7 +404,7 @@ export function renderHistory() {
       const replaced = facts.filter((f) => f.status === "superseded" && taken.has(f.superseded_by_turn));
       return h("li", {},
         h("div", { class: "event-head" }, h("b", {}, "Collection"),
-          h("span", { class: "when" }, `${agoTs(p.gc_completed_at)} · ${fmt(p.tokens_before)} → ${fmt(p.tokens_before - p.tokens_saved)} tokens`)),
+          h("span", { class: "when" }, `${agoTs(p.gc_completed_at)} · ${fmt(p.tokens_before)} → ${fmt(p.tokens_before - p.tokens_saved)} tokens${droppedThinking(p)}`)),
         h("div", { class: "event-lines" },
           OUTCOME_LINES.filter(([key]) => o[key].length).map(([key, label, colour]) => h("div", {},
             h("span", { class: "k" }, colour ? swatch(colour) : null, label), h("span", {}, messageLinks(o[key])))),
@@ -585,7 +590,8 @@ export function renderChecks() {
         h("td", {}, statusChip(p.gc_status), g.items.length > 1 ? h("span", { class: "times" }, `×${g.items.length}`) : null,
           cut && p.outcome ? h("div", { class: "muted", style: "font-weight:400;font-size:12.5px" }, describeOutcome(p.outcome)) : null,
           p.degradations.length ? h("div", { style: "font-weight:400" }, h("span", { class: "st warn" }, "⚠ "), plural(p.degradations.length, "move"), " didn't happen") : null),
-        h("td", { class: "num", style: "white-space:nowrap" }, cut ? `${fmt(p.tokens_before)} → ${fmt(p.tokens_before - p.tokens_saved)}`
+        h("td", { class: "num", style: "white-space:nowrap" }, cut ? [`${fmt(p.tokens_before)} → ${fmt(p.tokens_before - p.tokens_saved)}`,
+            p.thinking_dropped_tokens ? h("div", { class: "muted", style: "font-size:12px" }, `≈${fmt(p.thinking_dropped_tokens)} of earlier thinking dropped`) : null]
           : p.abandoned_cut ? [fmt(p.tokens_before), h("div", { class: "muted", style: "font-size:12px" }, `would have been ${fmt(p.abandoned_cut.context_tokens_after)}`)]
           : span(fmt(oldest.tokens_before), fmt(p.tokens_before))),
         h("td", { class: "num", style: "white-space:nowrap" }, `${took} ms`));

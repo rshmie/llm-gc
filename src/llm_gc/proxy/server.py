@@ -19,7 +19,7 @@ import logging
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 import httpx2
@@ -42,6 +42,7 @@ from llm_gc.proxy.anthropic_translation import (
     extract_instructions,
     ReplyOutline,
     StreamOutlineReader,
+    ThinkingSizer,
     cache_lifetime_s,
     extract_messages,
     fixed_prompt_tokens,
@@ -51,10 +52,13 @@ from llm_gc.proxy.anthropic_translation import (
     refusal_reason,
     reply_text,
     rewrite_messages,
+    sends_thinking,
+    sent_thinking_tokens,
 )
 from llm_gc.proxy.cache_watch import CacheWatch
 from llm_gc.proxy.model_windows import ModelWindow, ModelWindows, WindowLookup
 from llm_gc.proxy.session_identity import SESSION_HEADER, chain_hashes, client_origin
+from llm_gc.proxy.reply_thinking import ReplyThinking
 from llm_gc.proxy.request_log import RequestLog, RequestRecord, newest_kind
 from llm_gc.proxy.subagent_links import SpawnLinker
 from llm_gc.proxy.traffic import TrafficLedger, token_rate
@@ -222,6 +226,7 @@ def create_app(
     app.state.model_windows = ModelWindows(gc_service.gc_config.context_window, window_lookup, app.state.schedule)
     app.state.collect_subagents = collect_subagents
     app.state.spawn_linker = SpawnLinker() if link_subagents else None
+    app.state.reply_thinking = ReplyThinking()
     gc_service.event_bus.subscribe(EventType.GC_FINISHED, lambda event: _count_collection(app, event))
 
     @app.get("/health")
@@ -281,7 +286,7 @@ async def _handle(app: FastAPI, request: Request) -> Response:
 
     try:
         payload = _parse_json(body)
-        client_messages = extract_messages(payload)
+        client_messages = extract_messages(payload, size_thinking=_thinking_sizer(app, payload))
         instructions = extract_instructions(payload)
     except (ConfigError, ValueError) as err:
         # The provider is the authority on its own API and may accept something we
@@ -294,11 +299,13 @@ async def _handle(app: FastAPI, request: Request) -> Response:
     streaming = payload.get("stream") is True
     history, new_turn = client_messages[:-1], client_messages[-1]
     # The system prompt, the tools and the instructions count on both sides of the ratio:
-    # they are sent, whole, either way.
+    # they are sent, whole, either way. Thinking counts too, because the provider bills it as input.
     fixed_tokens = fixed_prompt_tokens(payload)
     client_tokens = (sum(message.token_count for message in client_messages)
+                     + sent_thinking_tokens(client_messages)
                      + instruction_tokens(client_messages)
                      + sum(instruction.token_count for instruction in instructions) + fixed_tokens)
+    client_sends_thinking = sends_thinking(client_messages)
 
     # Everything LLM-GC does before forwarding sits inside this one guard, so no
     # failure of ours can stop the conversation: the worst case is no GC.
@@ -319,23 +326,24 @@ async def _handle(app: FastAPI, request: Request) -> Response:
             _observe_history(app, session_id, client_messages, origin)
             app.state.gc_service.use_context_window(session_id, window.tokens)
             app.state.gc_service.set_collection_enabled(session_id, collected)
-        forward_body, conversation_tokens = await _apply_gc(app, session_id, history, new_turn, payload, body,
-                                                            instructions)
+        forwarded = await _apply_gc(app, session_id, history, new_turn, payload, body, instructions)
     except Exception as err:
         logger.exception("GC failed on the request path; forwarding the original",
                          extra={"session_id": session_id, "error_type": type(err).__name__})
         metrics.gc_bypassed += 1
         # Counted as forwarded whole, so a bypass does not look free in /stats.
         on_outline, _ = _measure_request(app, session_id, origin, payload, client_messages, hashes, client_tokens,
-                                         client_tokens, window, collected, carries_front=False)
+                                         client_tokens, window, collected, sends_thinking=client_sends_thinking,
+                                         carries_front=False)
         response = await _send(app, body, headers, streaming, target, on_outline=on_outline)
         _log_answer(response.status_code, payload, client_tokens, client_tokens, session_id)
         return response
 
     metrics.gc_applied += 1
-    forwarded_tokens = conversation_tokens + fixed_tokens
+    forward_body = forwarded.body
+    forwarded_tokens = forwarded.tokens + fixed_tokens
     on_outline, _ = _measure_request(app, session_id, origin, payload, client_messages, hashes, client_tokens,
-                                     forwarded_tokens, window, collected)
+                                     forwarded_tokens, window, collected, sends_thinking=forwarded.sends_thinking)
     response = await _send(app, forward_body, headers, streaming, target,
                            on_complete=_reply_observer(app, session_id, new_turn, streaming), on_outline=on_outline)
     if response.status_code == _REFUSED_AS_INVALID and forward_body is not body:
@@ -345,7 +353,8 @@ async def _handle(app: FastAPI, request: Request) -> Response:
         metrics.rewrites_refused += 1
         forwarded_tokens = client_tokens
         on_outline, record = _measure_request(app, session_id, origin, payload, client_messages, hashes, client_tokens,
-                                              client_tokens, window, collected, carries_front=False)
+                                              client_tokens, window, collected, sends_thinking=client_sends_thinking,
+                                              carries_front=False)
         if record is not None:
             record.resent_as_written = True
         response = await _send(app, body, headers, streaming, target,
@@ -413,10 +422,11 @@ def _collected(app: FastAPI, origin: ClientOrigin | None) -> bool:
 
 def _measure_request(app: FastAPI, session_id: str | None, origin: ClientOrigin | None, payload: dict[str, Any],
                      client_messages: Sequence[Message], hashes: Sequence[str] | None, from_client: int,
-                     forwarded: int, window: ModelWindow | None, collected: bool, *, carries_front: bool = True
-                     ) -> tuple[OutlineHandler | None, RequestRecord | None]:
+                     forwarded: int, window: ModelWindow | None, collected: bool, *, sends_thinking: bool,
+                     carries_front: bool = True) -> tuple[OutlineHandler | None, RequestRecord | None]:
     """Count a request in the ledger and open its record; return what to do with its reply's outline, and the record.
 
+    `sends_thinking`: the forwarded request still contains thinking blocks.
     `carries_front` False: the request goes as the client wrote it, so it carries no collection.
     Never fails the request: a failure here costs the counts, not the answer.
     """
@@ -454,17 +464,32 @@ def _measure_request(app: FastAPI, session_id: str | None, origin: ClientOrigin 
             metrics.traffic.restore_waiting(session_id, carried)
         if outline.usage is not None:
             TrafficLedger.record_usage(counted, outline.usage, forwarded, carried_collection=bool(carried))
+            # Only a request without thinking gives a clean rate: the count of thinking is itself an estimate.
+            rate = token_rate(forwarded, outline.usage) if not sends_thinking else None
+            if rate is not None:
+                app.state.reply_thinking.observe_rate(model, rate)
             if session_id is not None:
                 metrics.cache_watch.observe(session_id, started_at=started_at, lifetime_s=lifetime_s,
                                             usage=outline.usage)
                 # The window is in the model's tokens; this is how LLM-GC sets its own counts against it.
-                if (rate := token_rate(forwarded, outline.usage)) is not None:
+                if rate is not None:
                     app.state.gc_service.use_token_rate(session_id, rate)
+            if outline.finished and outline.thinking_key is not None:
+                # The thinking's size is worked out when the client sends this reply back.
+                app.state.reply_thinking.remember(outline.thinking_key, output_tokens=outline.usage.output_tokens,
+                                                  model=model)
         metrics.request_log.finish(record, outline)
         if linker is not None and origin is not None and prompts:
             linker.offer_calls(origin.session_id, record, prompts)
 
     return (lambda outline, prompts: _never_blocking(close, outline, prompts)), record
+
+
+def _thinking_sizer(app: FastAPI, payload: dict[str, Any]) -> ThinkingSizer:
+    """Return a function that sizes the thinking in this request's turns, for the model it names."""
+    reply_thinking: ReplyThinking = app.state.reply_thinking
+    model = _model_name(payload)
+    return lambda keys, visible_tokens: reply_thinking.tokens(keys, visible_tokens, model)
 
 
 def _count_collection(app: FastAPI, event: Event) -> None:
@@ -580,7 +605,7 @@ async def _apply_gc(
     payload: dict[str, Any],
     original_body: bytes,
     instructions: Sequence[Instruction] = (),
-) -> tuple[bytes, int]:
+) -> "_Forwarded":
     """The body to forward, and its conversation's token count.
 
     When the collected context is exactly the client's history - nothing has been
@@ -590,9 +615,11 @@ async def _apply_gc(
     """
     sent_whole = sum(instruction.token_count for instruction in instructions)
     client_tokens = (sum(message.token_count for message in history) + new_turn.token_count
+                     + sent_thinking_tokens([*history, new_turn])
                      + instruction_tokens([*history, new_turn]) + sent_whole)
+    whole = _Forwarded(original_body, client_tokens, sends_thinking([*history, new_turn]))
     if session_id is None:
-        return original_body, client_tokens
+        return whole
 
     gc_service: GcService = app.state.gc_service
     metrics: ProxyMetrics = app.state.metrics
@@ -603,7 +630,7 @@ async def _apply_gc(
                          tool_round_open=bool(tool_result_ids(new_turn)))
     collected = await gc_service.gc_collect(session_id)
     if [message.turn_index for message in collected] == list(range(len(history))):
-        return original_body, client_tokens
+        return whole
 
     # No await since the collect, so this describes the front being forwarded.
     valid_from = gc_service.mark_front_sent(session_id, len(history))
@@ -618,7 +645,19 @@ async def _apply_gc(
     forwarded = [carry_instructions(message, stood_in) if message.turn_index < 0
                  else sent_now.get(message.turn_index, message) for message in collected] + [new_turn]
     body = rewrite_messages(payload, forwarded, strip_thinking_before=valid_from, instructions=instructions)
-    return _dump_json(body), sum(m.token_count for m in forwarded) + instruction_tokens(forwarded) + sent_whole
+    forwarded_tokens = (sum(message.token_count for message in forwarded)
+                        + sent_thinking_tokens(forwarded, strip_thinking_before=valid_from)
+                        + instruction_tokens(forwarded) + sent_whole)
+    return _Forwarded(_dump_json(body), forwarded_tokens, sends_thinking(forwarded, strip_thinking_before=valid_from))
+
+
+@dataclass(frozen=True, slots=True)
+class _Forwarded:
+    """The request body LLM-GC forwards, as `_apply_gc` built it."""
+
+    body: bytes
+    tokens: int              # its conversation's tokens, thinking included
+    sends_thinking: bool     # whether any thinking block is left in it
 
 
 async def _age(app: FastAPI, session_id: str) -> None:

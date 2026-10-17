@@ -10,7 +10,7 @@ as it likes, across any number of `await`s, with no lock. Writers build the next
 snapshot and swap the session's reference in one synchronous step.
 """
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from enum import Enum
 
@@ -115,6 +115,19 @@ class GenerationSnapshot:
         return max(seen, default=-1) + 1
 
     @property
+    def thinking_sent_from(self) -> int:
+        """The first turn whose thinking is still sent with it; earlier turns are sent without theirs.
+
+        From a cut until its front is first sent, this is past every turn recorded so far.
+        """
+        return self.thinking_valid_from if self.thinking_valid_from is not None else self.recorded_turn_count
+
+    def sent_thinking_tokens(self, turns: Iterable[Message] | None = None) -> int:
+        """Estimated thinking tokens still sent with the young turns, or with the given turns."""
+        start = self.thinking_sent_from
+        return sum(turn.thinking_tokens for turn in (self.young if turns is None else turns) if turn.turn_index >= start)
+
+    @property
     def tip(self) -> str | None:
         """The chain hash of the last recorded turn, or None before any."""
         return self.lineage[-1] if self.lineage else None
@@ -143,12 +156,16 @@ class GenerationSnapshot:
         staged = self.staged
         if staged is not None and any(index >= turn_count for index in staged.delta.departed_turns):
             staged = None
+        # Turns recorded after the rewind are answered with the current front, so their thinking is valid.
+        # None stays None: the front has not been sent yet, and its first request sets the turn.
+        valid_from = self.thinking_valid_from
         return replace(
             self,
             young=tuple(m for m in self.young if m.turn_index < turn_count),
             lineage=self.lineage[:turn_count],
             version=self.version + 1,
             staged=staged,
+            thinking_valid_from=min(valid_from, turn_count) if valid_from is not None else None,
         )
 
 
@@ -180,8 +197,9 @@ class StagedCut:
     the one owner of a session's conversation. Nothing the model is sent changes until it
     is switched in.
 
-    `saving_tokens` is what its cut removes from the prompt. `stale_tokens` is what the
-    turns it condenses add up to: what the model carries that has gone quiet.
+    `saving_tokens` is the text its cut removes from the prompt. `stale_tokens` is the
+    text of the turns it condenses: what the model carries that has gone quiet. Both
+    leave out thinking, which keeps changing until the switch and is measured then.
     `front_tokens` is the front it would render; with the tail at the moment of the switch,
     it is what the provider would have to cache again. `degradations` is what preparing it
     fell short of - a refused summary, facts not read - so the collection that takes effect
