@@ -5,7 +5,7 @@
 
 import { BECOMES, CATS, CLAMP_CHARS, CREDENTIAL_REFUSED_TEXT, CREDENTIAL_REFUSED_TITLE, FAR_JUMP_SCREENS, MAP_PX_PER_MESSAGE, EARLIER_SHOWN, GLOSSARY, HEIGHT, MIN_BAR_PX, NOT_COLLECTED_TEXT, ORDER, RUN_MIN, FACT_STATUS, SWITCH_REASON, TOOL_ROUND_TEXT, categoryOf, describeOutcome, swatch } from "./vocabulary.js";
 import { $, agoTs, compact, countEl, fill, fmt, h, meterBar, plural, ranges, reducedMotion, setChildren, share, storeGet, storeSet } from "./dom.js";
-import { collecting, countCats, credentialRefusal, factsByTurn, has, instructionTokens, marked, newestReply, pendingTurns, preview, query, recapLimit, state, trafficOf, turnMatches, ui, writtenTokens } from "./state.js";
+import { LIST_ORDER_KEY, collecting, countCats, credentialRefusal, factsByTurn, has, instructionTokens, marked, newestReply, pendingTurns, preview, query, recapLimit, state, trafficOf, turnMatches, ui, writtenTokens } from "./state.js";
 import { hideTooltip, hint, info, showTooltip, tipAction, tipQuote, hoverTip } from "./tooltip.js";
 import { offerReturn, showTab } from "./shell.js";
 import { openCard, showWhy, whyText } from "./engine.js";
@@ -537,15 +537,52 @@ const isQueued = (row) => row.kind === "turn" && !!row.turn.becomes;
 const RECAP_ROWS_SHOWN = 3;   // recap rows shown before "Show N older messages"
 const isCondensed = (row) => row.kind === "run" || row.kind === "span" || row.kind === "folded";
 
+const ORDER_NOTE = {
+  newest: "Newest first. The model reads it the other way round, the recap before the recent messages. For each exchange: what the model reads, and what was said.",
+  oldest: "Oldest first, as the model reads it: for each exchange, what the model reads and what was said.",
+};
+
+// The control says the order now showing, and the subtitle says how that order relates to the model's.
+export function renderOrderControl() {
+  const now = ui.newestFirst ? "Newest first" : "Oldest first";
+  const other = ui.newestFirst ? "oldest first" : "newest first";
+  setChildren($("order-label"), now);
+  $("order").setAttribute("aria-label", `${now}. Switch to ${other}`);
+  $("order").title = `Switch to ${other}`;
+  setChildren($("messages-sub"), ui.newestFirst ? ORDER_NOTE.newest : ORDER_NOTE.oldest);
+}
+
+export function setOrder(newestFirst) {
+  ui.newestFirst = newestFirst;
+  storeSet(LIST_ORDER_KEY, newestFirst ? "newest" : "oldest");
+  renderOrderControl();
+  if (state.knowledge && !ui.promptView) renderTimeline(state.knowledge);
+  // Turning the list over leaves a reader who had scrolled into it with no place to be: start them at its head.
+  if ($("messages").getBoundingClientRect().top < 0) $("messages").scrollIntoView({ behavior: "auto", block: "start" });
+}
+
+// The list is rebuilt on every change, and newest first grows at its head, so a redraw would push down
+// whatever a reader had scrolled to. Put the first row in view back where it was. A row a collection has
+// folded away is gone, and the reader is left where the page puts them.
+function keepPlace(redraw) {
+  if (!ui.newestFirst || $("timeline").getBoundingClientRect().top >= 0) return redraw();
+  const anchor = [...$("timeline").querySelectorAll("article.msg[id]")].find((row) => row.getBoundingClientRect().bottom > 0);
+  const before = anchor?.getBoundingClientRect().top;
+  redraw();
+  const same = anchor && $(anchor.id);
+  if (same) window.scrollBy({ top: same.getBoundingClientRect().top - before, behavior: "instant" });
+}
+
 export function renderTimeline(k) {
   const facts = factsByTurn(k);
   const visible = buildRows(k).filter((row) => rowVisible(row, facts));
-  // Oldest first, as a chat reads and as the model reads the prompt: the recap, then the recent messages.
+  // Folding works on the rows oldest first, as the model reads the prompt: the recap, then the recent messages.
+  // Only the order they are laid out in follows the viewer's choice.
   const folded = foldRuns(visible);
   const filtered = ui.filter !== "all" || query();
   // Unfiltered, a long conversation shows its newest rows and the last few of the recap; the earlier ones
-  // sit behind a button at the top, as a chat loads older messages above. Filtering, searching or jumping
-  // to a message shows everything that matches.
+  // sit behind a button at the far end from the newest, as a chat loads older messages. Filtering, searching
+  // or jumping to a message shows everything that matches.
   const lastCondensed = folded.findLastIndex(isCondensed);
   const keep = Math.max(EARLIER_SHOWN, lastCondensed === -1 ? 0 : folded.length - lastCondensed - 1 + RECAP_ROWS_SHOWN);
   const canFold = !filtered && folded.length - keep >= RUN_MIN;
@@ -555,12 +592,12 @@ export function renderTimeline(k) {
   const queued = k.turns.filter((t) => t.fidelity === "verbatim" && t.becomes).length;
   const items = [];
   let part = null;
-  for (const row of shown) {
+  for (const row of ui.newestFirst ? shown.toReversed() : shown) {
     const now = isCondensed(row) ? "recap" : row.kind === "pending" || row.kind === "reply" ? "newest" : "recent";
     if (!filtered && now !== part) {
       items.push(h("div", { class: "boundary" }, h("span", {},
         now === "recap" ? ["In the recap · ", h("b", {}, fmt(k.front_tokens)), " tokens, standing in for every older exchange"]
-          : now === "recent" ? ["Recent, sent as written", queued ? ` · the next collection takes the first ${plural(queued, "message")}` : ""]
+          : now === "recent" ? ["Recent, sent as written", queued ? ` · the next collection takes the oldest ${queued === 1 ? "message" : plural(queued, "message")}` : ""]
             : "Not in the conversation yet")));
       part = now;
     }
@@ -581,23 +618,17 @@ export function renderTimeline(k) {
     renderTimeline(state.knowledge);
     $("earlier-toggle")?.scrollIntoView({ block: "nearest" });
   };
-  const earlierBtn = canFold ? h("div", { class: "earlier-row" },
+  const earlierBtn = canFold ? h("div", { class: `earlier-row${ui.newestFirst ? " last" : ""}` },
     h("button", { class: "link-btn", id: "earlier-toggle", type: "button", "aria-expanded": String(!foldEarlier), onclick: () => setEarlier(foldEarlier) },
       foldEarlier ? `Show ${plural(earlierCount, "earlier message")}` : "Show fewer messages")) : null;
-  setChildren(timeline, earlierBtn, items.length ? items : h("p", { class: "empty", style: "padding:14px 0" },
-    filtered ? "No message matches." : "No messages recorded yet."));
+  const rows = items.length ? items : h("p", { class: "empty", style: "padding:14px 0" },
+    filtered ? "No message matches." : "No messages recorded yet.");
+  keepPlace(() => setChildren(timeline, ui.newestFirst ? [rows, earlierBtn] : [earlierBtn, rows]));
   for (const row of timeline.querySelectorAll("[data-turns]")) {
     const ids = row.dataset.turns.split(",").map(Number);
     row.addEventListener("pointerenter", () => trace(ids));
     row.addEventListener("pointerleave", () => trace(null));
   }
-}
-
-// The newest message is at the foot of the list, as in a chat; one click takes you there.
-export function jumpToNewest() {
-  openCard("messages");
-  const rows = $("timeline").querySelectorAll("article.msg");
-  rows[rows.length - 1]?.scrollIntoView({ behavior: smooth(), block: "center" });
 }
 
 function rowElement(row, facts) {
@@ -747,6 +778,8 @@ export function runRow(run) {
   const first = run.turns[0].turn_index, last = run.turns.at(-1).turn_index;
   const key = `run-${first}`;
   const open = ui.open.has(key);
+  // Opened, its exchanges follow the page's order; what was said inside each still reads as it was spoken.
+  const rows = ui.newestFirst ? run.rows.toReversed() : run.rows;
   return h("div", { class: `run${open ? " open" : ""}` },
     h("button", { class: "run-head", type: "button", "aria-expanded": String(open),
       onclick: () => { if (open) ui.open.delete(key); else ui.open.add(key); renderTimeline(state.knowledge); } },
@@ -757,7 +790,7 @@ export function runRow(run) {
         h("span", { class: "run-sub" }, h("span", { class: "minis" }, run.rows.map(() => h("span", { class: "mini f-archived" }))),
           plural(run.turns.length, "message"))),
       h("span", { class: "run-toggle" }, open ? "Hide" : "Show")),
-    open ? run.rows.map(spanRow) : null);
+    open ? rows.map(spanRow) : null);
 }
 
 export function jumpTo(turnIndex) {
@@ -865,6 +898,8 @@ export function setPromptView(on) {
   $("prompt").hidden = !on;
   $("timeline").hidden = on;
   $("chips").hidden = on;
+  // The prompt is shown in the order the model reads it, whichever the list uses.
+  $("order").hidden = on;
   $("filter-note").hidden = on || (ui.filter === "all" && !query());
   if (state.knowledge) { if (on) renderPrompt(state.knowledge); else renderTimeline(state.knowledge); }
 }

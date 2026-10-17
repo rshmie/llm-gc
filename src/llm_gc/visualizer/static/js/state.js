@@ -2,7 +2,7 @@
 // grouping and search over them.
 
 import { ORDER, categoryOf } from "./vocabulary.js";
-import { $, h } from "./dom.js";
+import { $, h, storeGet } from "./dom.js";
 
 // `selected` is the conversation picked at the top, shown on the Conversation and Engine tabs, and `clientSession`
 // the Claude Code session it ran in, whose requests the Requests tab shows - or OTHER for conversations no client
@@ -12,7 +12,11 @@ export const state = { config: null, proxy: null, pause: null, sessions: [], cli
   knowledge: null, transcript: null, activity: null,
   // The shown conversation's cache as the proxy reads it now, from the overview: it ages every second.
   cache: null };
+// Where the viewer's choice of list order is kept. Newest first unless they chose otherwise: what they open the
+// dashboard to check is what just happened, and the recap that leads the other order is the part read least.
+export const LIST_ORDER_KEY = "llmgc.order";
 export const ui = { tab: "conversation", filter: "all", query: "", promptView: false, open: new Set(), chartKey: null, earlierOpen: false,
+  newestFirst: storeGet(LIST_ORDER_KEY) !== "oldest",
   stayOpen: false, allChecks: false, allMoves: false, allProblems: false, mapSession: null,
   turnOpen: new Map(), openAgents: new Set(), showSide: new Set(), pendingJump: null, turnsEarlierOpen: false,
   // Whether the shown conversation follows the session's main one: true until the person picks another.

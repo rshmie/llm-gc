@@ -474,7 +474,7 @@ go whole — never worse than without LLM-GC.
 
 The **Conversation** tab opens with three answers: what the model remembers, what it has
 forgotten, and whether to worry. Below them come each fact as the model is sent it, a map
-of the conversation, and every exchange oldest first, with what the model reads for it —
+of the conversation, and every exchange, newest first unless you switch it, with what the model reads for it —
 recent, quoted, summarised, archived or out of view — beside what was said. The
 **Requests** tab traces a Claude Code session turn by turn, with what it cost by the
 provider's own count, and the **Engine** tab shows the three generations, how each

@@ -289,7 +289,7 @@ the Claude Code session it ran in; the Conversation view opens first:
 
 | View | Answers | Shows |
 |---|---|---|
-| **Conversation** | What does the model remember, what has it forgotten, and should I worry? | Those three questions answered in words at the top, with the token counts beneath, each named for whose count it is; then every fact, by who stated it, with how it reaches the model; a map of the conversation; and every exchange, oldest first, with exactly what the model reads for it and what was said |
+| **Conversation** | What does the model remember, what has it forgotten, and should I worry? | Those three questions answered in words at the top, with the token counts beneath, each named for whose count it is; then every fact, by who stated it, with how it reaches the model; a map of the conversation; and every exchange, newest first unless switched, with exactly what the model reads for it and what was said |
 | **Requests** | What did this piece of work do, and what did it cost? | The Claude Code session turn by turn, oldest first: each turn's requests on a waterfall in time, each subagent under the request that started it, side requests folded away; the session's totals by LLM-GC's count and by the provider's; one row per conversation |
 | **Engine** | What did LLM-GC do, and did it work? | What the next collection would take, and what decides when it is switched in; why every exchange is at its level, in the planner's own steps; every pass and its outcome, degradations, transitions, the proxy's counters, and the settings in effect |
 
@@ -724,6 +724,38 @@ of slivers, and for collected messages it drew a distinction the model doesn't h
 reads one recap entry for the whole exchange. *Rejected: giving every bar the same width,*
 which loses the scale that shows a one-line reply beside a pasted file. *Rejected: a zoom
 control,* another thing to learn while the default stays unreadable.
+
+### The exchange list opens on what just happened
+
+Under the map, the exchanges are listed newest first, and a control beside them turns the
+list over; the choice is kept in the browser. A reader opens the dashboard to check what
+the model has just received. Oldest first, that is at the foot of a list whose first
+screen is the recap, the part read least. The map already opens at its newest end, and
+the list now agrees with it about which end matters.
+
+- **The order is only how the rows are laid out.** What is folded, and where each part of
+  the prompt begins, are worked out oldest first, as the model reads it. The rows are then
+  laid out in the chosen order, so each part's label leads it either way, and the button
+  that loads earlier messages sits at the end farthest from the newest. An opened run of
+  archived exchanges follows the list's order; what was said inside one exchange still
+  reads as it was spoken.
+- **The page says how its order relates to the model's.** The subtitle names the order
+  showing and, newest first, says the model reads it the other way round. A phrase that
+  meant "first" says "oldest": the next collection takes the oldest recent messages.
+- **The exact-prompt view does not turn over.** Its claim is the order the model reads,
+  and its copy button copies in that order, so the control is hidden there.
+- **A redraw keeps the reader's place.** The list is rebuilt whenever the conversation
+  changes, and newest first grows at its head, which would push down whatever a reader had
+  scrolled to. The first row in view is put back where it was. A row a collection has
+  folded into the recap is gone, and the reader is left where the page puts them.
+
+*Cost accepted:* the map still runs oldest to newest from left to right, so the list and
+the map run opposite ways; hovering a row or a bar still marks its counterpart.
+*Rejected: a "jump to newest" button on an oldest-first list.* The page still opened on
+the part read least, and the button only worked around that. *Rejected: reversing the rows
+with the stylesheet.* It turns the picture over but not the order that keyboard focus and
+screen readers follow. *Rejected: turning over the exact-prompt view too,* which would make
+a view that claims the model's own order say otherwise.
 
 ### One picker, and the page opens on the conversation
 

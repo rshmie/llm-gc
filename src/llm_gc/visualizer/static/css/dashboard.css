@@ -193,7 +193,8 @@ main > * + * , .view > * + * { margin-top: 16px; }
 .map-card .card-head { margin-bottom: 0; }
 .card-head-tools { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap; }
 .map-card.collapsed .card-head, #messages.collapsed .card-head { margin-bottom: 0; }
-#messages.collapsed .card-head .sub, #messages.collapsed #jump-newest, #messages.collapsed .toggle { display: none; }
+#messages.collapsed .card-head .sub, #messages.collapsed #order, #messages.collapsed .toggle { display: none; }
+.link-btn.order { display: inline-flex; align-items: center; gap: 6px; }
 /* The map: a bar per message, oldest left. Width is its size in tokens, height how much the model
    still has. The Sent row beneath uses the same scale, so the recap and the saving sit
    under the messages they came from. Cells carry no padding or border, so the three rows'
@@ -271,6 +272,7 @@ main > * + * , .view > * + * { margin-top: 16px; }
 .chip-btn .count { font-variant-numeric: tabular-nums; opacity: 0.75; }
 .filter-note { font-size: 12.5px; color: var(--ink-3); display: flex; gap: 10px; align-items: baseline; padding: 4px 0; }
 .earlier-row { padding: 12px 0 2px 78px; }
+.earlier-row.last { padding: 2px 0 12px 78px; }
 .list-toggle { display: inline-grid; place-items: center; width: 27px; height: 27px; padding: 0; border: 1px solid var(--border); background: transparent; border-radius: 999px; color: var(--ink-2); }
 .list-toggle:hover { background: var(--raised); color: var(--ink); }
 .list-toggle svg { transition: transform .2s ease; }

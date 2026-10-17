@@ -6,7 +6,7 @@ import { OTHER, collecting, getJSON, sessionPath, state, ui } from "./state.js";
 import { hideTooltip } from "./tooltip.js";
 import { THEMES, applyTheme, fillConfigValues, offerReturn, setLive, showCleanupNotice, showTab } from "./shell.js";
 import { setGuide } from "./guide.js";
-import { celebrateCleanup, clearMapCache, jumpTo, jumpToNewest, renderBar, renderChips, renderFacts, renderFactsGuide, renderHero, renderMap, renderMessages, renderPrompt, renderSummary, renderTimeline, setPromptView } from "./conversation.js";
+import { celebrateCleanup, clearMapCache, jumpTo, renderBar, renderChips, renderFacts, renderFactsGuide, renderHero, renderMap, renderMessages, renderOrderControl, renderPrompt, renderSummary, renderTimeline, setOrder, setPromptView } from "./conversation.js";
 import { initCards, openCard, renderChart, renderChecks, renderEngineStatus, renderGenerations, renderHistory, renderNext, renderProblems, renderProxy, renderRelevance, renderSettings } from "./engine.js";
 import { renderRunGcButton, runGcNow } from "./run-gc.js";
 import { renderSessionCard } from "./session.js";
@@ -263,7 +263,7 @@ $("tab-requests").addEventListener("click", () => { showTab("requests"); renderT
 $("tab-conversation").addEventListener("click", () => showTab("conversation"));
 $("tab-engine").addEventListener("click", () => showTab("engine"));
 $("view-timeline").addEventListener("click", () => setPromptView(false));
-$("jump-newest").addEventListener("click", jumpToNewest);
+$("order").addEventListener("click", () => setOrder(!ui.newestFirst));
 $("view-prompt").addEventListener("click", () => setPromptView(true));
 $("run-gc").addEventListener("click", () => runGcNow(refresh));
 $("open-guide").addEventListener("click", () => setGuide(true));
@@ -311,6 +311,7 @@ initCards();
 renderFactsGuide();
 
 applyTheme(storeGet("llmgc.theme") || "system");
+renderOrderControl();
 $("intro").hidden = storeGet("llmgc.intro") === "dismissed";
 // The guide's reference: every term and every card in full, each an ⓘ's target.
 const reference = (kind) => ([key, [title, short, more]]) => [h("dt", { id: `ref-${kind}-${key}` }, title), h("dd", {}, more || short)];

@@ -119,10 +119,10 @@
       <div class="card-head">
         <div>
           <h2 id="messages-title">The conversation</h2>
-          <div class="sub">Oldest first, as the model reads it: for each exchange, what the model reads and what was said.</div>
+          <div class="sub" id="messages-sub">Newest first. The model reads it the other way round, the recap before the recent messages. For each exchange: what the model reads, and what was said.</div>
         </div>
         <div class="card-head-tools">
-          <button class="link-btn" id="jump-newest" type="button">Jump to newest ↓</button>
+          <button class="link-btn order" id="order" type="button" title="Switch to oldest first" aria-label="Newest first. Switch to oldest first"><svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 13V3M2 6l3-3 3 3M11 3v10M8 10l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span id="order-label">Newest first</span></button>
           <div class="toggle" role="group" aria-label="View">
             <button id="view-timeline" aria-pressed="true">As it happened</button>
             <button id="view-prompt" aria-pressed="false">Exactly what the model receives</button>
@@ -252,7 +252,7 @@
   <h3>The three tabs</h3>
   <ul class="guide-tabs">
     <li><b>Conversation</b>: what the model remembers, what it has forgotten, and whether to worry; then its facts, a map,
-      and every exchange, oldest first, with what the model reads for it.</li>
+      and every exchange, newest first unless you switch it, with what the model reads for it.</li>
     <li><b>Requests</b>: the Claude Code session turn by turn, each request it made, and what it cost by the provider's own count.</li>
     <li><b>Engine</b>: when the next collection comes and why, why each exchange is at its level, and every check.</li>
   </ul>
