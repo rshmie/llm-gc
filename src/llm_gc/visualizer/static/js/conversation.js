@@ -543,9 +543,16 @@ const isQueued = (row) => row.kind === "turn" && !!row.turn.becomes;
 const RECAP_ROWS_SHOWN = 3;   // recap rows shown before "Show N older messages"
 const isCondensed = (row) => row.kind === "run" || row.kind === "span" || row.kind === "folded";
 
+// What each view says about its order. Both views honour the one switch; each says how its order relates to the model's.
 const ORDER_NOTE = {
-  newest: "Newest first. The model reads it the other way round, the recap before the recent messages. For each exchange: what the model reads, and what was said.",
-  oldest: "Oldest first, as the model reads it: for each exchange, what the model reads and what was said.",
+  timeline: {
+    newest: "Newest first. The model reads it the other way round, the recap before the recent messages. For each exchange: what the model reads, and what was said.",
+    oldest: "Oldest first, as the model reads it: for each exchange, what the model reads and what was said.",
+  },
+  prompt: {
+    newest: "Newest first. The model reads it the other way round, the recap before the recent messages. Copy takes it in the model's order.",
+    oldest: "Oldest first, as the model reads it: the recap, then the recent messages.",
+  },
 };
 
 // The control says the order now showing, and the subtitle says how that order relates to the model's.
@@ -555,24 +562,26 @@ export function renderOrderControl() {
   setChildren($("order-label"), now);
   $("order").setAttribute("aria-label", `${now}. Switch to ${other}`);
   $("order").title = `Switch to ${other}`;
-  setChildren($("messages-sub"), ui.newestFirst ? ORDER_NOTE.newest : ORDER_NOTE.oldest);
+  const notes = ui.promptView ? ORDER_NOTE.prompt : ORDER_NOTE.timeline;
+  setChildren($("messages-sub"), ui.newestFirst ? notes.newest : notes.oldest);
 }
 
 export function setOrder(newestFirst) {
   ui.newestFirst = newestFirst;
   storeSet(LIST_ORDER_KEY, newestFirst ? "newest" : "oldest");
   renderOrderControl();
-  if (state.knowledge && !ui.promptView) renderTimeline(state.knowledge);
+  if (state.knowledge) { if (ui.promptView) renderPrompt(state.knowledge); else renderTimeline(state.knowledge); }
   // Turning the list over leaves a reader who had scrolled into it with no place to be: start them at its head.
   if ($("messages").getBoundingClientRect().top < 0) $("messages").scrollIntoView({ behavior: "auto", block: "start" });
 }
 
 // The list is rebuilt on every change, and newest first grows at its head, so a redraw would push down
 // whatever a reader had scrolled to. Put the first row in view back where it was. A row a collection has
-// folded away is gone, and the reader is left where the page puts them.
-function keepPlace(redraw) {
-  if (!ui.newestFirst || $("timeline").getBoundingClientRect().top >= 0) return redraw();
-  const anchor = [...$("timeline").querySelectorAll("article.msg[id]")].find((row) => row.getBoundingClientRect().bottom > 0);
+// folded away is gone, and the reader is left where the page puts them. `rows` selects the rows of
+// `list` that carry an id to find again after the redraw.
+function keepPlace(list, rows, redraw) {
+  if (!ui.newestFirst || list.getBoundingClientRect().top >= 0) return redraw();
+  const anchor = [...list.querySelectorAll(rows)].find((row) => row.getBoundingClientRect().bottom > 0);
   const before = anchor?.getBoundingClientRect().top;
   redraw();
   const same = anchor && $(anchor.id);
@@ -629,7 +638,7 @@ export function renderTimeline(k) {
       foldEarlier ? `Show ${plural(earlierCount, "earlier message")}` : "Show fewer messages")) : null;
   const rows = items.length ? items : h("p", { class: "empty", style: "padding:14px 0" },
     filtered ? "No message matches." : "No messages recorded yet.");
-  keepPlace(() => setChildren(timeline, ui.newestFirst ? [rows, earlierBtn] : [earlierBtn, rows]));
+  keepPlace(timeline, "article.msg[id]", () => setChildren(timeline, ui.newestFirst ? [rows, earlierBtn] : [earlierBtn, rows]));
   for (const row of timeline.querySelectorAll("[data-turns]")) {
     const ids = row.dataset.turns.split(",").map(Number);
     row.addEventListener("pointerenter", () => trace(ids));
@@ -832,20 +841,23 @@ export function jumpTo(turnIndex) {
 export function renderPrompt(k) {
   const tail = k.turns.filter((t) => t.fidelity === "verbatim");
   const whole = [k.front_text ? `[user]\n${k.front_text}` : null, ...tail.map((t) => `[${t.role}]\n${t.text || ""}`)].filter(Boolean).join("\n\n");
-  const copy = h("button", { class: "btn", type: "button", onclick: async () => {
+  // Copy always takes the prompt in the order the model reads it, whichever way the list is laid out.
+  const copy = h("button", { class: "btn", type: "button", title: "Copies the prompt in the order the model reads it", onclick: async () => {
     try { await navigator.clipboard.writeText(whole); copy.textContent = "Copied"; } catch { copy.textContent = "Could not copy"; }
     setTimeout(() => { copy.textContent = "Copy"; }, 1500);
   } }, "Copy");
-  // In the order the model reads it, as the other view is: the recap, then the recent messages, oldest first.
-  setChildren($("prompt"),
-    h("div", { class: "prompt-head" }, h("div", { class: "note" }, "Exactly what LLM-GC forwards before your next message, in the order the model reads it. ",
-      hint("Your client's own instructions aren't shown", "Not shown here", "Your client's system prompt, its tools and the instructions it puts inside messages. They go word for word with every request; tool calls and results appear in the text form LLM-GC reads them in."),
-      k.front_text ? ". The recap stays the same until the next collection." : ". Nothing is collected yet, so your client's own request goes untouched."), copy),
-    k.front_text ? h("div", { class: "prompt-msg front" }, h("div", { class: "msg-head" }, h("span", { class: "who" }, "user"),
+  const head = h("div", { class: "prompt-head" }, h("div", { class: "note" }, "Exactly what LLM-GC forwards before your next message. ",
+    hint("Your client's own instructions aren't shown", "Not shown here", "Your client's system prompt, its tools and the instructions it puts inside messages. They go word for word with every request; tool calls and results appear in the text form LLM-GC reads them in."),
+    k.front_text ? ". The recap stays the same until the next collection." : ". Nothing is collected yet, so your client's own request goes untouched."), copy);
+  // Built as the model reads it, the recap then the recent messages; only the layout follows the viewer's choice.
+  const messages = [
+    k.front_text ? h("div", { class: "prompt-msg front", id: "prompt-recap" }, h("div", { class: "msg-head" }, h("span", { class: "who" }, "user"),
       h("span", { class: "tag" }, h("span", { class: "key block" }), `the recap · ${plural(k.front_tokens, "token")}`), info("block")), promptText(k.front_text, "prompt-front")) : null,
-    tail.map((t) => h("div", { class: "prompt-msg" }, h("div", { class: "msg-head" }, h("span", { class: "who" }, t.role),
+    ...tail.map((t) => h("div", { class: "prompt-msg", id: `prompt-turn-${t.turn_index}` }, h("div", { class: "msg-head" }, h("span", { class: "who" }, t.role),
       t.tool_results ? toolTag("tool results") : t.tool_calls ? toolTag("tool calls") : null, instructionsTag(t),
-      h("span", { class: "num" }, `message ${t.turn_index} · ${plural(t.tokens, "token")}`)), promptText(t.text || "(no text)", `prompt-${t.turn_index}`))));
+      h("span", { class: "num" }, `message ${t.turn_index} · ${plural(t.tokens, "token")}`)), promptText(t.text || "(no text)", `prompt-${t.turn_index}`))),
+  ];
+  keepPlace($("prompt"), ".prompt-msg[id]", () => setChildren($("prompt"), head, ui.newestFirst ? messages.toReversed() : messages));
 }
 
 // A long block starts folded, as messages do elsewhere; Copy still takes the whole prompt.
@@ -904,8 +916,8 @@ export function setPromptView(on) {
   $("prompt").hidden = !on;
   $("timeline").hidden = on;
   $("chips").hidden = on;
-  // The prompt is shown in the order the model reads it, whichever the list uses.
-  $("order").hidden = on;
+  // Both views follow the one order switch; its subtitle differs, so it is redrawn with the view.
+  renderOrderControl();
   $("filter-note").hidden = on || (ui.filter === "all" && !query());
   if (state.knowledge) { if (on) renderPrompt(state.knowledge); else renderTimeline(state.knowledge); }
 }
