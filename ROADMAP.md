@@ -83,14 +83,15 @@ Today's evidence is a 37-question check on scripted conversations and a few live
   the `license` field in `pyproject.toml`.
 - [ ] **Format the code base once with `ruff format`** (128 files change today), in a commit with nothing else in it, listed in `.git-blame-ignore-revs` so `git blame` skips
   it. Then add **pre-commit hooks** for Ruff.
-- [ ] **CI on every pull request:** `ruff check`, `ruff format --check`, `mypy` and `pytest` on every supported Python version, plus the benchmark's regression check.
+- [ ] **Finish CI.** Pull requests already run `ruff check`, `mypy` and `pytest` on Python 3.13. Still to add: `ruff format --check` (after the formatting commit),
+  every supported Python version, the benchmark's regression check, and a rule that the checks must pass before a merge.
 - [ ] **Optional extras.** The proxy, dashboard and CLI dependencies (`fastapi`,
   `uvicorn`, `click`, `pydantic-settings`) move to `llm-gc[proxy]`, so someone using only the library does not install a web server.
 - [ ] **Integration tests:** the proxy tested end to end over HTTP against a stand-in upstream, async tests on `pytest-asyncio`, and coverage reported.
 - [ ] **A Docker image** that starts a working proxy, with its port published to
   localhost only by default.
 - [ ] **PyPI publishing through trusted publishing**, with no long-lived token.
-- [ ] **Dependency scanning:** Dependabot, and `pip-audit` in CI.
+- [ ] **Dependency scanning:** Dependabot for the Python dependencies (today it watches only the GitHub Actions), and `pip-audit` in CI.
 - [ ] **Project files:** `SECURITY.md` (with a private channel for reports),
   `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, and `CHANGELOG.md` in the Keep a Changelog
   format.

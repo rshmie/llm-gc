@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# The jobs only read the repository, so their token gets no more than that.
+permissions:
+  contents: read
+
+# A newer push to a pull request supersedes its older run. Each commit on main has a group of
+# its own, so none of those runs is cancelled or skipped.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# One job per check, so each one is its own row on a pull request and a lint failure does not
+# hide the test result. The jobs repeat the same setup; Dependabot bumps every copy of a pinned
+# action in one pull request, so the copies cannot drift apart. A required status check refers
+# to a job by its name, so renaming a job means updating that rule too.
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    # A hung step would otherwise hold the runner for the six-hour default.
+    timeout-minutes: 10
+    steps:
+      # Actions are pinned to a commit, not a tag: a tag can be moved after the fact.
+      # Dependabot proposes the bumps (.github/dependabot.yml).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing later pushes, so the token need not stay in .git/config.
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          # uv is pinned too: an unpinned tool is a moving part in a build meant to be repeatable.
+          version: "0.11.28"
+          python-version: "3.13"
+
+      # --locked fails if uv.lock no longer matches pyproject.toml, so the two cannot drift. It
+      # also gives every job the ruff, mypy and pytest versions the lockfile names.
+      - name: Install dependencies
+        run: uv sync --locked --extra dev
+
+      - name: Lint
+        run: uv run --no-sync ruff check .
+
+  types:
+    name: Type-check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.11.28"
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --locked --extra dev
+
+      - name: Type-check
+        run: uv run --no-sync mypy
+
+  test:
+    name: Test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.11.28"
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --locked --extra dev
+
+      - name: Test
+        run: uv run --no-sync pytest
