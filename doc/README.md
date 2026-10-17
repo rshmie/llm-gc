@@ -1,7 +1,6 @@
 # LLM-GC Documentation
 
-Start with **[overview.md](overview.md)** — what the problem is, why cleanup
-demands transparency, and the principles the system is held to.
+Start with **[overview.md](overview.md)** — what the problem is, why cleanup demands transparency, and the principles the system is held to.
 
 ## Which doc answers which question
 
@@ -13,10 +12,7 @@ demands transparency, and the principles the system is held to.
 
 ## `design/` — how the system works
 
-One living doc per area. Each covers **How it works**, **Why it exists**, and
-**Why this shape** — including the alternatives that were rejected and the
-reason they lost. These describe the system as it is; where an area is not built
-yet, the doc says so at the top.
+One living doc per area. Each covers **How it works**, **Why it exists**, and **Why this shape** — including the alternatives that were rejected and the reason they lost. These describe the system as it is; where an area is not built yet, the doc says so at the top.
 
 ```
 design/

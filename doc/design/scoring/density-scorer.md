@@ -71,33 +71,23 @@ Signals found:
 5. `2` — number
 6. `https://fastapi.tiangolo.com` — URL
 
-Signal count: **6**
-Token count (via tiktoken): **~12**
-Density ratio: 6 / 12 = **0.50**
-Score: min(0.50 / 0.50, 1.0) = **1.00**
+Signal count: **6** Token count (via tiktoken): **~12** Density ratio: 6 / 12 = **0.50** Score: min(0.50 / 0.50, 1.0) = **1.00**
 
 **Message**: `"ok sounds good let me try that"`
 
-Signals found: **0** (no capitalized words, numbers, code, or URLs)
-Token count: **~7**
-Density ratio: 0 / 7 = **0.00**
-Score: **0.00**
+Signals found: **0** (no capitalized words, numbers, code, or URLs) Token count: **~7** Density ratio: 0 / 7 = **0.00** Score: **0.00**
 
 The contrast is exactly what we want — the first keeps its detail longer, the second can drop to its opening line as soon as it goes quiet. Because the score is a ratio, it does not grow just because a span is long.
 
 ## Design Decisions
 
-**Why regex instead of NLP / named entity recognition?**
-Regex is fast (~microseconds), deterministic, and requires no model loading. For now it's the right trade-off: good enough to separate "ok" from "Use PostgreSQL with pgvector", and NLP-based detection can replace it later. The scorer interface stays the same — only the internal detection logic changes.
+**Why regex instead of NLP / named entity recognition?** Regex is fast (~microseconds), deterministic, and requires no model loading. For now it's the right trade-off: good enough to separate "ok" from "Use PostgreSQL with pgvector", and NLP-based detection can replace it later. The scorer interface stays the same — only the internal detection logic changes.
 
-**Why count capitalized words as signals?**
-In technical conversations, capitalized words strongly correlate with named entities — tools (`FastAPI`), languages (`Python`), services (`AWS`), concepts (`JWT`). This is a heuristic, not perfect — it will match sentence-starting words too. But across a conversation, the signal-to-noise ratio is good enough. The architecture doc's original design also listed "named entity count" as a density indicator.
+**Why count capitalized words as signals?** In technical conversations, capitalized words strongly correlate with named entities — tools (`FastAPI`), languages (`Python`), services (`AWS`), concepts (`JWT`). This is a heuristic, not perfect — it will match sentence-starting words too. But across a conversation, the signal-to-noise ratio is good enough. The architecture doc's original design also listed "named entity count" as a density indicator.
 
-**Why is `max_density` configurable?**
-Different conversation styles have different natural density. A code-heavy conversation might have higher baseline density than a brainstorming session. Making it configurable lets benchmarking find optimal values per conversation type.
+**Why is `max_density` configurable?** Different conversation styles have different natural density. A code-heavy conversation might have higher baseline density than a brainstorming session. Making it configurable lets benchmarking find optimal values per conversation type.
 
-**Edge case — empty messages:**
-If `token_count` is 0 (empty message), the scorer returns 0.0 instead of dividing by zero. This is handled explicitly in the implementation.
+**Edge case — empty messages:** If `token_count` is 0 (empty message), the scorer returns 0.0 instead of dividing by zero. This is handled explicitly in the implementation.
 
 ## Signals Emitted
 

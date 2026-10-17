@@ -2,22 +2,15 @@
 
 ## The problem
 
-LLM conversations grow linearly. A 100-turn conversation at 300 tokens a turn is
-30,000 tokens, and every request sends all of it again. Context windows have hard
-limits, every token costs money and time, and long prompts dilute the model's
-attention. When a conversation gets long, the usual answers are:
+LLM conversations grow linearly. A 100-turn conversation at 300 tokens a turn is 30,000 tokens, and every request sends all of it again. Context windows have hard limits, every token costs money and time, and long prompts dilute the model's attention. When a conversation gets long, the usual answers are:
 
 - **Truncate from the top** — early turns are lost for good.
 - **A sliding window (keep the last N)** — the same loss, at a predictable moment.
-- **Summarise everything** — smaller, but the detail inside each summary is gone,
-  and summaries of summaries lose more each time.
+- **Summarise everything** — smaller, but the detail inside each summary is gone, and summaries of summaries lose more each time.
 
-All three share one failure: **information is destroyed, and nothing can bring it
-back** when the conversation returns to it. The system cannot promise that a
-decision from turn 5 still reaches the model at turn 500.
+All three share one failure: **information is destroyed, and nothing can bring it back** when the conversation returns to it. The system cannot promise that a decision from turn 5 still reaches the model at turn 500.
 
-LLM-GC's answer is to **never destroy anything**, and instead decide, again and
-again, **how much detail of each part of the conversation the model is sent**.
+LLM-GC's answer is to **never destroy anything**, and instead decide, again and again, **how much detail of each part of the conversation the model is sent**.
 
 ---
 
@@ -46,11 +39,8 @@ again, **how much detail of each part of the conversation the model is sent**.
 
 - Every turn is kept, word for word, for the life of the session.
 - The newest turns are sent exactly as written.
-- Older turns are grouped into **spans** — one exchange each — and every span is
-  shown at one of four **detail levels**.
-- At every collection, LLM-GC re-scores every span by how much it matters **now**
-  and re-picks its level. A span the conversation returns to is shown in full
-  again, from its own words.
+- Older turns are grouped into **spans** — one exchange each — and every span is shown at one of four **detail levels**.
+- At every collection, LLM-GC re-scores every span by how much it matters **now** and re-picks its level. A span the conversation returns to is shown in full again, from its own words.
 
 ---
 
@@ -62,10 +52,7 @@ again, **how much detail of each part of the conversation the model is sent**.
 | **Old** | Every older turn, grouped into spans, each with its original words | The front: each span at its detail level |
 | **Permanent** | The facts, decisions and preferences read from every turn, active or replaced | On their span's line, and as "replaced later" notes |
 
-Turns move from young to old once, when a collection takes them. They never move
-into the permanent generation: **the permanent generation holds knowledge about
-turns, not turns.** A span never leaves the old generation either; it is only
-shown with more or less detail.
+Turns move from young to old once, when a collection takes them. They never move into the permanent generation: **the permanent generation holds knowledge about turns, not turns.** A span never leaves the old generation either; it is only shown with more or less detail.
 
 ```
    young generation                old generation                   permanent generation
@@ -80,14 +67,9 @@ shown with more or less detail.
 
 ## Spans: what a collection makes
 
-A **span** is one exchange: something the user said or asked, and everything that
-came back before they spoke again.
+A **span** is one exchange: something the user said or asked, and everything that came back before they spoke again.
 
-Think of the minutes of a meeting. Each agenda item — a question raised, and the
-discussion that settled it — is one entry. Minutes can record an item in full, as a
-short paragraph, or as a one-line decision, but they never record half an item.
-LLM-GC treats a conversation the same way: the span is the item, and its detail
-level is how fully it is recorded.
+Think of the minutes of a meeting. Each agenda item — a question raised, and the discussion that settled it — is one entry. Minutes can record an item in full, as a short paragraph, or as a one-line decision, but they never record half an item. LLM-GC treats a conversation the same way: the span is the item, and its detail level is how fully it is recorded.
 
 ```
  turn  who         what was said                                     span
@@ -104,8 +86,7 @@ level is how fully it is recorded.
 
 ### What a span carries
 
-When a collection makes span 6–7, it stores everything any level will ever need,
-once:
+When a collection makes span 6–7, it stores everything any level will ever need, once:
 
 ```
  span 6–7
@@ -118,35 +99,20 @@ once:
                        Stripe takes it before the payout."
 ```
 
-The [four detail levels](#the-four-detail-levels) are four ways of showing this one
-span, so choosing between them later costs no model call.
+The [four detail levels](#the-four-detail-levels) are four ways of showing this one span, so choosing between them later costs no model call.
 
-- **No summary is made** when the span is too short for any summary to be shorter
-  than its words; such a span is kept or archived, never summarised.
-- **Facts are read from the original turns**, never from the summary, so a mistake
-  in a summary cannot become a fact.
+- **No summary is made** when the span is too short for any summary to be shorter than its words; such a span is kept or archived, never summarised.
+- **Facts are read from the original turns**, never from the summary, so a mistake in a summary cannot become a fact.
 
 ### Why the unit is an exchange, not a single message
 
-- **A question and its answer only mean something together.** "Seven minutes" on its
-  own answers nothing; "What should the seat hold be?" on its own has no answer.
-  Condensed apart, the answer's summary loses what it answered, and the question
-  cannot be shortened at all. Together, the opening line names the subject in the
-  user's own words and the summary says what was settled.
-- **It is how a conversation is returned to.** A user comes back to "the seat-hold
-  question", not to turn 5. Relevance compares what they ask now with whole
-  exchanges, and raises a whole exchange: question, answer and all.
-- **It is always safe to quote back.** The provider requires every tool result to
-  follow its tool call immediately. A span never separates them, so any span can be
-  shown word for word without breaking the request.
-- **Fewer, better summaries.** One per exchange rather than one per message: fewer
-  model calls, and each summary reads as one story.
-- **Fixed boundaries make every later choice free.** A span's boundaries never
-  change, so its summary, facts and opening line are made once. Raising or lowering
-  it later only changes how it is rendered.
+- **A question and its answer only mean something together.** "Seven minutes" on its own answers nothing; "What should the seat hold be?" on its own has no answer. Condensed apart, the answer's summary loses what it answered, and the question cannot be shortened at all. Together, the opening line names the subject in the user's own words and the summary says what was settled.
+- **It is how a conversation is returned to.** A user comes back to "the seat-hold question", not to turn 5. Relevance compares what they ask now with whole exchanges, and raises a whole exchange: question, answer and all.
+- **It is always safe to quote back.** The provider requires every tool result to follow its tool call immediately. A span never separates them, so any span can be shown word for word without breaking the request.
+- **Fewer, better summaries.** One per exchange rather than one per message: fewer model calls, and each summary reads as one story.
+- **Fixed boundaries make every later choice free.** A span's boundaries never change, so its summary, facts and opening line are made once. Raising or lowering it later only changes how it is rendered.
 
-A collection never cuts between them either: it cuts only where a span may begin
-(see [the-cut.md](the-cut.md#why-this-shape)).
+A collection never cuts between them either: it cuts only where a span may begin (see [the-cut.md](the-cut.md#why-this-shape)).
 
 ### The precise rule
 
@@ -155,11 +121,7 @@ A collection never cuts between them either: it cuts only where a span may begin
  └──────────────────── one span ──────────────────────────┘ └── next span ───┘
 ```
 
-A tool result arrives as a user-role message, but it continues the exchange; it
-does not start a new one. So does a subagent's relayed report: Claude Code adds a
-background subagent's findings to the main conversation under the user role, and
-the report joins the exchange that started the subagent. Only a turn the person
-wrote opens an exchange.
+A tool result arrives as a user-role message, but it continues the exchange; it does not start a new one. So does a subagent's relayed report: Claude Code adds a background subagent's findings to the main conversation under the user role, and the report joins the exchange that started the subagent. Only a turn the person wrote opens an exchange.
 
 ```
  user ─ assistant → Agent ×2 ─ (tool result: "started") ─ assistant … ─ report ─ assistant ─ report ─ assistant
@@ -177,15 +139,7 @@ Each level shows everything the level below it shows, so **showing a span with
 more detail never takes anything away**.
 
 ```
- kept         [Quoted exactly] (turn 6, user) Let's use Stripe for payments, with a 4% fee…
-              [Quoted exactly] (turn 7, assistant) Agreed. Stripe takes the fee…
-                                                                          ▲ more detail
- summarised   [Summarised] (turns 6–7) Let's use Stripe for payments, with a 4% fee. · fee: 4%
-              The user chose Stripe with a 4% fee; the assistant agreed, noting…
-                                                                          │
- archived     [Archived] (turns 6–7) Let's use Stripe for payments, with a 4% fee. · fee: 4%
-                                                                          │
- out of view  [Out of view] (turns 0–3) 2 earlier exchanges, folded…      ▼ fewer tokens
+ kept         [Quoted exactly] (turn 6, user) Let's use Stripe for payments, with a 4% fee… [Quoted exactly] (turn 7, assistant) Agreed. Stripe takes the fee… ▲ more detail summarised   [Summarised] (turns 6–7) Let's use Stripe for payments, with a 4% fee. · fee: 4% The user chose Stripe with a 4% fee; the assistant agreed, noting… │ archived     [Archived] (turns 6–7) Let's use Stripe for payments, with a 4% fee. · fee: 4% │ out of view  [Out of view] (turns 0–3) 2 earlier exchanges, folded…      ▼ fewer tokens
 ```
 
 Kept, summarised and archived are chosen by the score. **Out of view is not:** it
@@ -202,18 +156,7 @@ works this way are in [detail-levels.md](detail-levels.md#out-of-view-the-floor-
 **The score decides the level; the budget caps the total.**
 
 ```
- every span ──► SCORE: how much does it matter now?
-                  liveness   = the larger of  recency (slow decay)
-                                              relevance to what the user is discussing
-                + importance = decisions and specifics it states
-                     │
-                     ▼
-               PLAN:  score ≥ 0.7 → kept · ≥ 0.3 → summarised · below → archived
-                      (a span moves only once its score clears a line by 0.05)
-                     │
-                     ▼
-               over the recap budget?  lower the coldest span one level, repeat;
-                                       when nothing can go lower, fold the oldest
+ every span ──► SCORE: how much does it matter now? liveness   = the larger of  recency (slow decay) relevance to what the user is discussing + importance = decisions and specifics it states │ ▼ PLAN:  score ≥ 0.7 → kept · ≥ 0.3 → summarised · below → archived (a span moves only once its score clears a line by 0.05) │ ▼ over the recap budget?  lower the coldest span one level, repeat; when nothing can go lower, fold the oldest
 ```
 
 - **Liveness** is the larger of recency and relevance, not their sum: a span is
@@ -228,8 +171,7 @@ works this way are in [detail-levels.md](detail-levels.md#out-of-view-the-floor-
 
 ```
                     collection 3   collection 6   collection 9   collection 12
- span D relevance       0.55           0.25           0.20       0.80  ← the user asks about it
- span D level         summarised     archived       archived     kept  ← restored from its own words
+ span D relevance       0.55           0.25           0.20       0.80  ← the user asks about it span D level         summarised     archived       archived     kept  ← restored from its own words
 ```
 
 ---
@@ -239,17 +181,7 @@ works this way are in [detail-levels.md](detail-levels.md#out-of-view-the-floor-
 The context sent to the model is **the front, then the verbatim tail**:
 
 ```
-┌──────────────────────────────────────────────────────┐
-│ System prompt (the client's, unchanged)              │
-│                                                      │
-│ FRONT — one user-role message, present after a cut   │
-│   a header naming the levels                         │
-│   every span, in conversation order, at its level    │
-│                                                      │
-│ TAIL — every later turn, exactly as the client sent  │
-│                                                      │
-│ The new turn (unchanged)                             │
-└──────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐ │ System prompt (the client's, unchanged)              │ │                                                      │ │ FRONT — one user-role message, present after a cut   │ │   a header naming the levels                         │ │   every span, in conversation order, at its level    │ │                                                      │ │ TAIL — every later turn, exactly as the client sent  │ │                                                      │ │ The new turn (unchanged)                             │ └──────────────────────────────────────────────────────┘
 ```
 
 The front changes only when a collection commits; between collections its bytes
@@ -270,11 +202,7 @@ have that" instead of a confident guess.
 ## Why nothing is lost
 
 ```
- a detail stated at turn 7
-        │
-        ├─ the span holding turn 7 keeps turn 7's words, always
-        ├─ its facts are read from turn 7's words, once
-        └─ its level can rise again: kept shows the words themselves
+ a detail stated at turn 7 │ ├─ the span holding turn 7 keeps turn 7's words, always ├─ its facts are read from turn 7's words, once └─ its level can rise again: kept shows the words themselves
 ```
 
 Three properties together make the no-loss promise hold:
@@ -300,12 +228,9 @@ permanent generation, where a newer fact on the same topic **supersedes** the
 older one instead of sitting beside it:
 
 ```
-Turn 5:  "Let's use PostgreSQL"
-         → KnowledgeEntry(topic="database", content="postgresql", message_turn=5, ACTIVE)
+Turn 5:  "Let's use PostgreSQL" → KnowledgeEntry(topic="database", content="postgresql", message_turn=5, ACTIVE)
 
-Turn 15: "Actually, switch to MySQL"
-         → KnowledgeEntry(topic="database", content="mysql", message_turn=15, ACTIVE)
-         → turn 5's entry is replaced by a copy marked SUPERSEDED
+Turn 15: "Actually, switch to MySQL" → KnowledgeEntry(topic="database", content="mysql", message_turn=15, ACTIVE) → turn 5's entry is replaced by a copy marked SUPERSEDED
 ```
 
 - Superseded entries are kept: the record of what a conversation contradicted is
@@ -350,14 +275,7 @@ one call reads every span the collection makes, given the facts already on recor
 `topic: value`.
 
 ```
- facts on record                     the collection's turns
- cloud: Google Cloud                 [turn 8] user: Change of plan: we're moving to AWS.
- payments: Stripe                    [turn 9] assistant: Done — the plan now assumes AWS.
-            └──────────────┬──────────────┘
-                           ▼  one call
-              {"facts": [{"turn": 8, "topic": "cloud", "value": "AWS"}]}
-                           ▼  filed under the topic on record
- cloud: AWS        ↳ the span stating Google Cloud now carries "Replaced later (turn 8)"
+ facts on record                     the collection's turns cloud: Google Cloud                 [turn 8] user: Change of plan: we're moving to AWS. payments: Stripe                    [turn 9] assistant: Done — the plan now assumes AWS. └──────────────┬──────────────┘ ▼  one call {"facts": [{"turn": 8, "topic": "cloud", "value": "AWS"}]} ▼  filed under the topic on record cloud: AWS        ↳ the span stating Google Cloud now carries "Replaced later (turn 8)"
 ```
 
 - **A change is filed under the topic it changes**, so filing it marks the old value
@@ -416,11 +334,7 @@ suggestion stays in its exchange's summary, where the model reads it in context,
 never becomes a note on a topic you decided.
 
 ```
- you:   "Let's use 9 shards."               → note: index shards: 9   (you)
- AI:    "I'd recommend 3 instead."          → no note: a suggestion against your decision
-                                              stays in this exchange's summary
- you:   (never replied about it)
- recap: index shards: 9, and no "Replaced later" — as in the conversation itself
+ you:   "Let's use 9 shards."               → note: index shards: 9   (you) AI:    "I'd recommend 3 instead."          → no note: a suggestion against your decision stays in this exchange's summary you:   (never replied about it) recap: index shards: 9, and no "Replaced later" — as in the conversation itself
 ```
 
 | What happens | What the model is told |
@@ -545,21 +459,9 @@ stands *now* is read from the session's state, not from events — see
 ## Where it fits: hot path and cold path
 
 ```
-COLD PATH · gc_age(session)                                after the response
-═════════════════════════════════════════════════════════════════════════════
-  turns older than the tail
-          │
-          ▼  draft spans (grouping, facts, opening lines — no model call)
-          ▼  score every span, plan every level, estimate the saving
-          │      not worth a collection? stop here, having paid for nothing
-          ▼  summarise the new spans (model calls)
-          ▼  plan again with the real summaries
-          ▼  the cut pays for itself? commit, onto the CURRENT snapshot
+COLD PATH · gc_age(session)                                after the response ═════════════════════════════════════════════════════════════════════════════ turns older than the tail │ ▼  draft spans (grouping, facts, opening lines — no model call) ▼  score every span, plan every level, estimate the saving │      not worth a collection? stop here, having paid for nothing ▼  summarise the new spans (model calls) ▼  plan again with the real summaries ▼  the cut pays for itself? commit, onto the CURRENT snapshot
 
-HOT PATH · gc_collect(session)                             before forwarding
-═════════════════════════════════════════════════════════════════════════════
-  read the session's snapshot once — no lock, no scoring, no model call
-        [ FRONT ]  +  [ TAIL ]  ──►  LLM
+HOT PATH · gc_collect(session)                             before forwarding ═════════════════════════════════════════════════════════════════════════════ read the session's snapshot once — no lock, no scoring, no model call [ FRONT ]  +  [ TAIL ]  ──►  LLM
 ```
 
 **The cold path** runs after a response, off the request's critical path. It

@@ -66,8 +66,7 @@ Phrases found:
 2. `decided to` — explicit decision
 3. `final choice` — conclusion
 
-Decision signal count: **3**
-Score: min(3 / 3, 1.0) = **1.00**
+Decision signal count: **3** Score: min(3 / 3, 1.0) = **1.00**
 
 ---
 
@@ -76,21 +75,17 @@ Score: min(3 / 3, 1.0) = **1.00**
 Phrases found:
 1. `we should use` — commitment
 
-Decision signal count: **1**
-Score: min(1 / 3, 1.0) = **0.33**
+Decision signal count: **1** Score: min(1 / 3, 1.0) = **0.33**
 
 ---
 
 **Message**: `"Hello, how are you doing today?"`
 
-Phrases found: **0**
-Score: **0.00**
+Phrases found: **0** Score: **0.00**
 
 ## How It Interacts With the Rest of the Score
 
-A span's score is `0.6 × liveness + 0.2 × decision + 0.2 × density` (see
-[overview.md](overview.md)). The decision part works by **lifting** a span that
-liveness alone would let go:
+A span's score is `0.6 × liveness + 0.2 × decision + 0.2 × density` (see [overview.md](overview.md)). The decision part works by **lifting** a span that liveness alone would let go:
 
 ```
 An old span stating a decision, which nobody is discussing now
@@ -103,24 +98,17 @@ An old span stating a decision, which nobody is discussing now
   without its decisions:  0.6(0.10) + 0.2(0.70) = 0.20   → archived (opening line and facts)
 ```
 
-Importance alone tops out at 0.4, under the keep line (0.7): stating a decision
-keeps a span summarised longer, but never word for word unless the conversation is
-also discussing it. Whatever its level, the decision itself is also filed in the
-permanent generation when the span is made, and an archived span shows it on its line.
+Importance alone tops out at 0.4, under the keep line (0.7): stating a decision keeps a span summarised longer, but never word for word unless the conversation is also discussing it. Whatever its level, the decision itself is also filed in the permanent generation when the span is made, and an archived span shows it on its line.
 
 ## Design Decisions
 
-**Why regex instead of an LLM call to detect decisions?**
-LLM calls are expensive (~100ms+), require API access, and add a dependency on external services for a core scoring function. Regex is ~microseconds, deterministic, and works offline. The trade-off: regex misses nuanced decisions like "I'm leaning towards option B" or "Probably PostgreSQL." A trained classifier would address this — the scorer interface stays identical.
+**Why regex instead of an LLM call to detect decisions?** LLM calls are expensive (~100ms+), require API access, and add a dependency on external services for a core scoring function. Regex is ~microseconds, deterministic, and works offline. The trade-off: regex misses nuanced decisions like "I'm leaning towards option B" or "Probably PostgreSQL." A trained classifier would address this — the scorer interface stays identical.
 
-**Why these specific phrases?**
-They were chosen to be high-precision (few false positives) rather than high-recall (catching every possible decision). "let's go with" is almost always a decision. "I think" is often just hedging. We'd rather miss some soft decisions than flag every opinion as a decision. The phrase list can be expanded as benchmarking surfaces false negatives.
+**Why these specific phrases?** They were chosen to be high-precision (few false positives) rather than high-recall (catching every possible decision). "let's go with" is almost always a decision. "I think" is often just hedging. We'd rather miss some soft decisions than flag every opinion as a decision. The phrase list can be expanded as benchmarking surfaces false negatives.
 
-**Why `max_decision = 3` as default?**
-Empirically, most decision-bearing messages in real conversations contain 1–3 decision phrases. Setting the threshold at 3 means a single decision phrase still gets a meaningful score (0.33), while messages with 3+ hit the maximum. This was a judgment call, still to be validated against real conversation data.
+**Why `max_decision = 3` as default?** Empirically, most decision-bearing messages in real conversations contain 1–3 decision phrases. Setting the threshold at 3 means a single decision phrase still gets a meaningful score (0.33), while messages with 3+ hit the maximum. This was a judgment call, still to be validated against real conversation data.
 
-**Why is "uncertain" in the pattern?**
-Expressions of uncertainty ("I'm uncertain about the database choice") are meta-decisions — they signal that a decision is pending or unresolved. These are worth preserving because they provide context for later decisions and prevent the model from assuming certainty where none exists.
+**Why is "uncertain" in the pattern?** Expressions of uncertainty ("I'm uncertain about the database choice") are meta-decisions — they signal that a decision is pending or unresolved. These are worth preserving because they provide context for later decisions and prevent the model from assuming certainty where none exists.
 
 ## Signals Emitted
 
