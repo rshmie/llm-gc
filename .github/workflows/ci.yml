@@ -1,5 +1,3 @@
-# Lints, type-checks and tests every change. The README's "Developing LLM-GC" lists the same
-# commands, so a red run reproduces locally.
 name: CI
 
 on:
