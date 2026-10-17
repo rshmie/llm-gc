@@ -1,0 +1,10 @@
+# Keeps the commit-pinned actions in .github/workflows current. A release is proposed only after
+# it has been out for two weeks, long enough for a compromised one to be noticed and pulled.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
