@@ -2,7 +2,7 @@
 // requests on a waterfall in time, each subagent under the request whose reply started it. Measured, never
 // forecast: every number is a request that happened.
 
-import { PAUSED_TEXT, SWITCH_REASON, TRACE_KINDS } from "./vocabulary.js";
+import { SWITCH_REASON, TRACE_KINDS, pauseNote } from "./vocabulary.js";
 import { $, compact, fill, fmt, h, plural, share } from "./dom.js";
 import { state, ui } from "./state.js";
 import { hoverTip, info } from "./tooltip.js";
@@ -74,9 +74,9 @@ function traceHead(trace) {
 // While LLM-GC yields to a rate limit, the session's page says so first.
 function paused() {
   if (!state.pause) return null;
-  return h("div", { class: "status-line tone-warn trace-paused" }, h("span", { class: "badge", "aria-hidden": "true" }, "⏸"),
-    h("span", { class: "msg-text", ...hoverTip("Paused", PAUSED_TEXT) }, h("b", {}, `LLM-GC is paused by a rate limit until ${new Date(state.pause.until).toLocaleTimeString()}.`),
-      ` ${state.pause.reason[0].toUpperCase()}${state.pause.reason.slice(1)}, so LLM-GC makes no model calls of its own and starts no collection meanwhile. Your requests go through as normal.`));
+  const pause = pauseNote(state.pause);
+  return h("div", { class: `status-line tone-${pause.tone} trace-paused` }, h("span", { class: "badge", "aria-hidden": "true" }, pause.badge),
+    h("span", { class: "msg-text", ...hoverTip(...pause.tip) }, h("b", {}, pause.title), ` ${pause.text}`));
 }
 
 function before(trace, actions) {

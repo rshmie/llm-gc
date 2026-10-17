@@ -1,6 +1,7 @@
 """A collection: condense what aged out of the tail, score every span, give each its level."""
 
 import asyncio
+from dataclasses import replace
 import math
 from datetime import datetime, timedelta, timezone
 
@@ -16,7 +17,7 @@ from llm_gc.engine.gc_result import CutOutcome
 from llm_gc.engine.gc_status import GCStatus
 from llm_gc.engine.pause import ModelCallPause
 from llm_gc.events import EventBus, EventType
-from llm_gc.exceptions import LLMRateLimitError
+from llm_gc.exceptions import LLMAuthError, LLMRateLimitError, LLMResponseError
 from llm_gc.llm import FakeProvider
 from llm_gc.models.generation_snapshot import DetailLevel
 from llm_gc.utils import count_tokens
@@ -268,6 +269,11 @@ class TestLevelsAreReplannedAtEveryCollection:
         assert _levels(service) == {0: COMPACTED, 1: KEPT, 2: KEPT, 3: ARCHIVED}
 
 
+class _FailingReader:
+    async def read(self, spans, on_record):
+        raise RuntimeError("extraction unavailable")
+
+
 class TestFailuresAreReportedAndLoseNothing:
     def test_a_failed_summary_keeps_the_span_whole_and_says_so(self):
         service, _, _ = make_service(compactor=_FailingCompactor(event_bus=None),
@@ -278,20 +284,39 @@ class TestFailuresAreReportedAndLoseNothing:
         assert _levels(service) == {0: KEPT, 1: ARCHIVED}, "kept rather than lose detail to a failed summary"
         assert (DegradationReason.COMPACTION_FAILED, [0]) in [(d.reason, d.turn_indices) for d in result.degradations]
 
-    def test_a_failed_extraction_still_makes_the_span(self):
-        class _FailingReader:
-            async def read(self, spans, on_record):
-                raise RuntimeError("extraction unavailable")
-
+    def test_a_failed_extraction_still_makes_the_span_and_never_archives_it(self):
+        """Live run: with its facts unread, an archived exchange was only its opening line. Like a failed
+        summary, a failed fact read now costs no detail: the span is shown at the next richer level."""
         service, _, _ = make_service(fact_reader=_FailingReader(), default_score=ARCHIVED_SCORE)  # type: ignore[arg-type]
 
         result = _converse(service, 2)[-1]
 
-        assert _levels(service) == {0: ARCHIVED}
+        assert _levels(service) == {0: COMPACTED}, "its summary was written, so it is summarised"
         assert [d.reason for d in result.degradations] == [DegradationReason.ARCHIVE_FAILED]
-        assert "[Archived] (turn 0) Turn 0 is about storage." in asyncio.run(service.gc_collect("s"))[0].content
+        assert "[Archived]" not in asyncio.run(service.gc_collect("s"))[0].content
         # Kept on the span, so the dashboard can say why it has no facts after the warning has scrolled away.
         assert [span.facts_unread for span in service.session_manager.store.get("s").snapshot.old] == [True]
+
+    def test_a_span_archived_without_its_facts_is_shown_in_more_detail_at_the_next_collection(self):
+        """A conversation archived before this rule held keeps those spans; the next plan raises them."""
+        service, _, _ = make_service(fact_reader=_FailingReader(), default_score=ARCHIVED_SCORE)  # type: ignore[arg-type]
+        _converse(service, 2)
+        state = service.session_manager.store.get("s")
+        state.snapshot = replace(state.snapshot, old=tuple(replace(span, level=ARCHIVED) for span in state.snapshot.old))
+
+        _converse(service, 2, start=2)
+
+        assert _levels(service)[0] is COMPACTED
+
+    def test_with_neither_its_summary_nor_its_facts_a_span_is_kept_whole(self):
+        """Both calls failed, as when the summary account ran out of credit."""
+        service, _, _ = make_service(compactor=_FailingCompactor(event_bus=None), fact_reader=_FailingReader(),  # type: ignore[arg-type]
+                                     default_score=ARCHIVED_SCORE)
+
+        results = _converse(service, 3)
+
+        assert _levels(service) == {}, "nothing is reduced to its opening line"
+        assert results[-1].status is GCStatus.BYPASSED_NO_SAVING, "quoting everything saves nothing, so none is made"
 
     def test_a_failing_scorer_changes_nothing_and_never_escapes(self):
         """gc_age runs fire-and-forget: an exception that escaped it would vanish unseen."""
@@ -537,3 +562,66 @@ class TestLlmGcYieldsToTheUpstreamsRateLimit:
 
         pause = service.model_calls.current()
         assert pause is not None and "LLM-GC's own calls" in pause.reason
+
+
+# What the provider answered when the account LLM-GC summarises with ran out of credit.
+NO_CREDIT = LLMResponseError("anthropic returned 400: Your credit balance is too low to access the Anthropic API.",
+                             provider="anthropic", status_code=400, retryable=False)
+
+
+class _Refusing:
+    """A summariser and a fact reader whose every call fails with the given error."""
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    async def read(self, spans, on_record):
+        raise self.error
+
+
+class _RefusingCompactor(_FailingCompactor):
+    def __init__(self, error: Exception) -> None:
+        super().__init__(event_bus=None)
+        self.error = error
+
+    async def compact(self, messages):
+        raise self.error
+
+
+class TestLlmGcPausesWhenItsOwnCallsCannotSucceed:
+    """Live run: with the summary account out of credit, every pass called again, failed again, and the page
+    showed ordinary shortfalls rather than saying something needed fixing."""
+
+    def _service(self, summary_error: Exception | None, facts_error: Exception | None):
+        service, _, _ = make_service(compactor=_RefusingCompactor(summary_error) if summary_error else None,
+                                     fact_reader=_Refusing(facts_error) if facts_error else None,  # type: ignore[arg-type]
+                                     default_score=COMPACTED_SCORE)
+        return service
+
+    @pytest.mark.parametrize("error", [NO_CREDIT, LLMAuthError("anthropic rejected our credentials (401)")])
+    def test_every_call_failing_for_a_lasting_reason_pauses_collection_and_says_why(self, error):
+        service = self._service(error, error)
+
+        results = _converse(service, 4)
+
+        pause = service.model_calls.current()
+        assert pause is not None and pause.lasting and str(error) in pause.reason
+        assert results[-1].status is GCStatus.BYPASSED_PAUSED, "no more calls that would fail the same way"
+
+    def test_a_pass_in_which_a_call_worked_does_not_pause(self):
+        service = self._service(NO_CREDIT, None)
+
+        _converse(service, 4)
+
+        assert service.model_calls.current() is None
+
+    @pytest.mark.parametrize("error", [
+        LLMResponseError("anthropic returned 503: overloaded", status_code=503, retryable=True),
+        RuntimeError("a third-party summariser broke"),
+    ])
+    def test_a_failure_retrying_could_fix_does_not_pause(self, error):
+        service = self._service(error, error)
+
+        _converse(service, 4)
+
+        assert service.model_calls.current() is None

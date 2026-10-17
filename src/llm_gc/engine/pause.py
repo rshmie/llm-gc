@@ -1,9 +1,11 @@
-"""Pausing LLM-GC's own model calls while the upstream pushes back.
+"""Pausing LLM-GC's own model calls while the upstream pushes back, or while they cannot succeed.
 
 LLM-GC's summaries and fact reads sometimes go to the same upstream as the client's own requests,
 often under the same credential, so they share its rate limit. When the upstream answers
 "too many requests" or "overloaded", LLM-GC stops adding to it: no collection starts until
-the pause ends. The client's requests are never held back; only LLM-GC's extra calls wait.
+the pause ends. It also pauses when every call of a collection failed in a way only a person can
+fix, such as a refused key or an account out of credit, and tries again when the pause ends.
+The client's requests are never held back; only LLM-GC's extra calls wait.
 """
 
 from collections.abc import Callable
@@ -23,6 +25,7 @@ def _now() -> datetime:
 class Pause:
     until: datetime
     reason: str
+    lasting: bool = False    # True when LLM-GC's own calls are failing, not when the upstream is busy
 
 
 class ModelCallPause:
@@ -32,17 +35,18 @@ class ModelCallPause:
         self._clock = clock
         self._pause: Pause | None = None
 
-    def pause(self, retry_after_s: float | None, reason: str) -> bool:
+    def pause(self, retry_after_s: float | None, reason: str, *, lasting: bool = False) -> bool:
         """Pause for the upstream's Retry-After, or the default; extend a pause already running.
 
-        Returns True when a pause begins, False when one was already running.
+        `lasting` marks a pause because the calls themselves are failing. Returns True when a
+        pause begins, False when one was already running.
         """
         now = self._clock()
         wait = timedelta(seconds=retry_after_s) if retry_after_s is not None and retry_after_s > 0 else DEFAULT_PAUSE
         until = now + min(wait, MAX_PAUSE)
         began = self.current() is None
         if self._pause is None or until > self._pause.until:
-            self._pause = Pause(until=until, reason=reason)
+            self._pause = Pause(until=until, reason=reason, lasting=lasting)
         return began
 
     def current(self) -> Pause | None:

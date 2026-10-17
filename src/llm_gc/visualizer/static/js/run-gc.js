@@ -1,6 +1,6 @@
 // Run GC now: the dashboard's one action, and the explanation of its outcome.
 
-import { ACTION_HEADER, NOT_COLLECTED_TEXT, PAUSED_TEXT, STATUS, TOOL_ROUND_TEXT, describeOutcome } from "./vocabulary.js";
+import { ACTION_HEADER, FAILING_TEXT, NOT_COLLECTED_TEXT, PAUSED_TEXT, STATUS, TOOL_ROUND_TEXT, describeOutcome } from "./vocabulary.js";
 import { $, fmt, h, plural, setChildren } from "./dom.js";
 import { keepLast, sessionPath, state } from "./state.js";
 import { showTab } from "./shell.js";
@@ -44,7 +44,9 @@ export function explainResult(r, before) {
   // Mid tool round the collection is prepared but held, so the button reports the preparation.
   if (r.status === "staged") return { tone: "muted", title: "◷ Prepared. LLM-GC applies it once the model finishes using tools", body: [TOOL_ROUND_TEXT] };
   if (r.status === "bypassed_aging_in_flight") return { tone: "muted", title: "– A collection is already running", body: ["LLM-GC is already collecting this conversation. Try again in a moment."] };
-  if (r.status === "bypassed_paused") return { tone: "muted", title: "⏸ Paused by a rate limit", body: [PAUSED_TEXT, pauseEnds()] };
+  if (r.status === "bypassed_paused") return state.pause?.lasting
+    ? { tone: "muted", title: "! LLM-GC can't call its model, so it has stopped condensing", body: [FAILING_TEXT, pauseEnds()] }
+    : { tone: "muted", title: "⏸ Paused by a rate limit", body: [PAUSED_TEXT, pauseEnds()] };
   if (r.status === "bypassed_not_collected") return { tone: "muted", title: "– Not collected", body: [NOT_COLLECTED_TEXT] };
   if (r.status === "bypassed_on_error") return { tone: "critical", title: "✕ The collection failed, and nothing changed", body: ["The conversation is exactly as it was. The error is in the proxy's log."] };
   return { tone: "muted", title: STATUS[r.status]?.text || r.status, body: [] };

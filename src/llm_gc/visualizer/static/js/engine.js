@@ -2,7 +2,7 @@
 // runs and why each message gets what it gets, what collections did and couldn't do, every check,
 // and last the proxy's totals and settings, which apply to every conversation.
 
-import { BECOMES, CARD_INFO, CATS, CHART_HEIGHT, CHECKS_SHOWN, CREDENTIAL_REFUSED_TEXT, CREDENTIAL_REFUSED_TITLE, MAX_EXCHANGE_LINKS, MOVES_SHOWN, NOT_COLLECTED_TEXT, NOT_MOVED, OUTCOME_LINES, PAUSED_TEXT, STATUS, SWITCH_REASON, TOOL_ROUND_TEXT, describeOutcome, swatch } from "./vocabulary.js";
+import { BECOMES, CARD_INFO, CATS, CHART_HEIGHT, CHECKS_SHOWN, CREDENTIAL_REFUSED_TEXT, CREDENTIAL_REFUSED_TITLE, MAX_EXCHANGE_LINKS, MOVES_SHOWN, NOT_COLLECTED_TEXT, NOT_MOVED, OUTCOME_LINES, STATUS, SWITCH_REASON, TOOL_ROUND_TEXT, describeOutcome, pauseNote, swatch } from "./vocabulary.js";
 import { $, agoTs, compact, countEl, fill, fmt, h, meterBar, plural, reducedMotion, setChildren, storeGet, storeSet, svg } from "./dom.js";
 import { credentialRefusal, keepLast, preview, state, ui } from "./state.js";
 import { explain, hideTooltip, hint, info, placeTooltip, showTooltip, tipQuote, tooltipContent, hoverTip } from "./tooltip.js";
@@ -36,10 +36,15 @@ const rangeLink = (first, last) =>
 
 // One link per exchange, never merged: neighbouring exchanges at one level are still separate
 // exchanges, and a link can only open the first message of the range it names.
-function exchangeLinks(exchanges) {
-  const shown = exchanges.slice(0, MAX_EXCHANGE_LINKS);
+// A long list shows its first few; the rest open in place, and `rerender` draws the card again.
+function exchangeLinks(exchanges, rerender) {
+  const all = ui.allExchanges;
+  const shown = all ? exchanges : exchanges.slice(0, MAX_EXCHANGE_LINKS);
   const out = shown.flatMap((turns, i) => [i ? ", " : "", rangeLink(turns[0], turns[turns.length - 1])]);
-  if (exchanges.length > shown.length) out.push(`, and ${fmt(exchanges.length - shown.length)} more`);
+  if (exchanges.length > MAX_EXCHANGE_LINKS) {
+    out.push(", ", h("button", { class: "link-btn", type: "button", onclick: () => { ui.allExchanges = !all; rerender(); } },
+      all ? "show fewer" : `and ${fmt(exchanges.length - shown.length)} more`));
+  }
   return out;
 }
 
@@ -131,14 +136,16 @@ export function renderEngineStatus() {
   $("view-engine").classList.toggle("has-problems", problems > 0);
   const failed = !!last && last.gc_status === "bypassed_on_error";
   const refusal = credentialRefusal();
-  const tone = failed || refusal ? "critical" : problems || state.pause ? "warn" : "good";
-  const lastText = state.pause ? `LLM-GC's own model calls are paused until ${new Date(state.pause.until).toLocaleTimeString()}. Reason: ${state.pause.reason}. Your requests go through as normal.`
+  const pause = state.pause ? pauseNote(state.pause) : null;
+  // Red only when a check itself broke; LLM-GC being unable to call its model costs the conversation nothing.
+  const tone = failed ? "critical" : refusal || pause || problems ? "warn" : "good";
+  const lastText = pause ? pause.text
     : state.knowledge && !state.knowledge.collected ? "This is a subagent's conversation. LLM-GC records it and sends it as written, and never collects it."
     : last ? `Last check ${agoTs(last.gc_completed_at)}: ${STATUS[last.gc_status]?.text || last.gc_status}, ${last.duration_ms.toFixed(0)} ms.`
     : "No checks yet. LLM-GC checks after every reply.";
   fill("eng-status", h("div", { class: `status-line tone-${tone}` },
-    h("span", { class: "badge", "aria-hidden": "true" }, failed || refusal ? "✕" : problems ? "!" : state.pause ? "⏸" : "✓"),
-    h("span", { class: "msg-text", ...(state.pause ? hoverTip("Paused", PAUSED_TEXT) : {}) }, h("b", {}, refusal ? CREDENTIAL_REFUSED_TITLE : failed ? "The last check failed, and nothing changed." : problems ? `${plural(problems, "part")} of a collection fell short.` : state.pause ? "LLM-GC is paused by a rate limit." : "LLM-GC is working normally."),
+    h("span", { class: "badge", "aria-hidden": "true" }, failed ? "✕" : refusal ? "!" : pause ? pause.badge : problems ? "!" : "✓"),
+    h("span", { class: "msg-text", ...(pause ? hoverTip(...pause.tip) : {}) }, h("b", {}, refusal ? CREDENTIAL_REFUSED_TITLE : failed ? "The last check failed, and nothing changed." : pause ? pause.title : problems ? `${plural(problems, "part")} of a collection fell short.` : "LLM-GC is working normally."),
       refusal ? ` ${CREDENTIAL_REFUSED_TEXT} The provider said: ${refusal.degradation.detail}` : ` ${lastText}`,
       !refusal && failed && last.failure_reason ? ` ${last.failure_stage}: ${last.failure_reason}` : null),
     problems ? h("button", { class: "link-btn", type: "button", onclick: () => openCard("notmoved", true) }, "See why →")
@@ -183,7 +190,7 @@ function renderPreparing(k) {
   const taking = k.turns.filter((t) => t.fidelity === "verbatim" && t.becomes);
   const refused = lastAttempt()?.abandoned_cut ? lastAttempt() : null;
   const saving = cut.estimated_saving;
-  const lede = state.pause ? `Paused until ${new Date(state.pause.until).toLocaleTimeString()}. The provider is rate-limiting requests, so LLM-GC prepares no collection.`
+  const lede = state.pause ? `Paused until ${new Date(state.pause.until).toLocaleTimeString()}. ${state.pause.lasting ? "LLM-GC's own model calls are failing" : "The provider is rate-limiting requests"}, so LLM-GC prepares no collection.`
     : !taking.length ? "Nothing to collect yet."
     : !cut.batch_ready ? `Waiting for ${fmt(cut.min_cut_tokens - cut.compactable_tokens)} more tokens of messages to summarise or archive.`
     : saving > 0 ? "Ready. LLM-GC prepares a collection after the next reply."
@@ -417,14 +424,27 @@ export function renderHistory() {
   ] : h("p", { class: "empty" }, "No collections in the recent checks yet."));
 }
 
+// The same shortfall met again by later checks is one entry, said once: how often, and when last. Newest first.
+function sameShortfalls(records) {
+  const groups = new Map();
+  for (const r of records) {
+    const d = r.degradation;
+    const key = JSON.stringify([d.reason, d.turn_indices, d.detail]);
+    if (groups.has(key)) groups.get(key).times += 1;
+    else groups.set(key, { r, times: 1 });
+  }
+  return [...groups.values()];
+}
+
 export function renderProblems() {
-  const problems = state.activity ? state.activity.recent_degradations.slice().reverse() : [];
+  const problems = sameShortfalls(state.activity ? state.activity.recent_degradations.slice().reverse() : []);
   const shown = ui.allProblems ? problems : problems.slice(0, MOVES_SHOWN);
   fill("problems", problems.length ? [
-    h("ul", { class: "events" }, shown.map((r) => {
+    h("ul", { class: "events" }, shown.map(({ r, times }) => {
       const [label, instead] = NOT_MOVED[r.degradation.reason] || [r.degradation.reason.replaceAll("_", " "), null];
+      const when = times > 1 ? `${times} times, last ${agoTs(r.occurred_at)}` : agoTs(r.occurred_at);
       return h("li", {},
-        h("div", { class: "event-head" }, h("span", { class: "st warn" }, "⚠"), h("b", {}, label), h("span", { class: "when" }, agoTs(r.occurred_at))),
+        h("div", { class: "event-head" }, h("span", { class: "st warn" }, "⚠"), h("b", {}, label), h("span", { class: "when" }, when)),
         h("div", { class: "event-lines" },
           h("div", {}, h("span", { class: "k" }, "Exchange"), h("span", {}, messageLinks(r.degradation.turn_indices))),
           instead ? h("div", {}, h("span", { class: "k" }, "Instead"), h("span", {}, instead)) : null,
@@ -650,7 +670,7 @@ export function renderGenerations(k) {
     arrow(`collection${k.cuts ? ` ×${fmt(k.cuts)}` : ""}`, "in exchanges, each by its score"),
     box("old", "Old generation", "the recap: every exchange at its level", plural(k.spans.length, "exchange"),
       `${levels.map((level) => `${at(level).length} ${CATS[level].tag}`).join(" · ") || "none yet"} · ${fmt(k.front_tokens)} of its ${fmt(k.recap_budget)}-token budget, by LLM-GC's count`,
-      levels.map((level) => h("div", {}, `${CATS[level].tag}: `, exchangeLinks(at(level).map((span) => span.turns))))),
+      levels.map((level) => h("div", {}, `${CATS[level].tag}: `, exchangeLinks(at(level).map((span) => span.turns), () => renderGenerations(k))))),
     arrow("facts read once", "as each exchange is made"),
     box("permanent", "Permanent generation", "facts, and what replaced what", plural(active.length, "current fact"),
       [sent ? `${fmt(sent)} on their exchange's line` : null, inWords ? `${fmt(inWords)} in quoted words` : null,

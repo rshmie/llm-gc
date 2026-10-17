@@ -17,7 +17,7 @@ export const state = { config: null, proxy: null, pause: null, sessions: [], cli
 export const LIST_ORDER_KEY = "llmgc.order";
 export const ui = { tab: "conversation", filter: "all", query: "", promptView: false, open: new Set(), chartKey: null, earlierOpen: false,
   newestFirst: storeGet(LIST_ORDER_KEY) !== "oldest",
-  stayOpen: false, allChecks: false, allMoves: false, allProblems: false, mapSession: null,
+  stayOpen: false, allChecks: false, allMoves: false, allExchanges: false, allProblems: false, mapSession: null,
   turnOpen: new Map(), openAgents: new Set(), showSide: new Set(), pendingJump: null, turnsEarlierOpen: false,
   // Whether the shown conversation follows the session's main one: true until the person picks another.
   followMain: true };

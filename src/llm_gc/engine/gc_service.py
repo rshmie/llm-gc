@@ -24,9 +24,9 @@ from llm_gc.engine.generations.generational_memory import GenerationalMemory
 from llm_gc.engine.generations.planning import Bands, LevelOptions, Plan, plan_levels
 from llm_gc.engine.inspection import CutPreview, SessionInspection, SwitchPreview, batch_worth_cutting
 from llm_gc.events import Event, EventBus, EventType
-from llm_gc.engine.pause import ModelCallPause
+from llm_gc.engine.pause import MAX_PAUSE, ModelCallPause
 from llm_gc.engine.switch_policy import CacheState, SwitchReason, decide_switch
-from llm_gc.exceptions import CompactionRefused, LLMGCError, LLMRateLimitError
+from llm_gc.exceptions import CompactionRefused, LLMAuthError, LLMGCError, LLMRateLimitError, LLMResponseError
 from llm_gc.llm.metering import measure_model_usage
 from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.knowledge_entry import KnowledgeStatus
@@ -318,14 +318,15 @@ class GcService:
         if state is not None:
             state.rewrite_overhead_tokens = tokens
 
-    def pause_model_calls(self, retry_after_s: float | None, reason: str) -> None:
+    def pause_model_calls(self, retry_after_s: float | None, reason: str, *, lasting: bool = False) -> None:
         """Make no model call of LLM-GC's own until the upstream's pressure has passed.
 
         For the upstream's Retry-After when it gave one, a minute otherwise; a later call
-        extends the pause. Collections skipped meanwhile are reported as paused, with the
-        reason. The client's own requests are never held back.
+        extends the pause. `lasting` marks a pause because LLM-GC's own calls are failing.
+        Collections skipped meanwhile are reported as paused, with the reason. The client's
+        own requests are never held back.
         """
-        if self.model_calls.pause(retry_after_s, reason):
+        if self.model_calls.pause(retry_after_s, reason, lasting=lasting):
             pause = self.model_calls.current()
             logger.warning("LLM-GC pauses its own model calls until %s: %s",
                            f"{pause.until.astimezone():%H:%M:%S}" if pause is not None else "?", reason,
@@ -566,7 +567,8 @@ class GcService:
                 # A summarised span shows its archived line too, so its summary costs on top of that.
                 compacted = archived + int(kept * DEFAULT_COMPACTION_TARGET_RATIO)
             options.append(LevelOptions(score=score, current=None if is_new else span.level, kept_tokens=kept,
-                                        compacted_tokens=compacted, archived_tokens=archived))
+                                        compacted_tokens=compacted, archived_tokens=archived,
+                                        archivable=not span.facts_unread))
 
         fold = count_tokens(folded_line(spans[0].first_turn, spans[-1].turns[-1].turn_index, len(spans))) if spans else 0
         plan = plan_levels(options, self._bands, recap_budget - FRONT_OVERHEAD_TOKENS, fold)
@@ -600,6 +602,10 @@ class GcService:
             if isinstance(error, LLMRateLimitError):
                 self.pause_model_calls(error.retry_after_s, "the upstream rate-limited one of LLM-GC's own calls")
                 break
+        # Every call failed in a way retrying cannot fix: calling again each pass would fail the same way.
+        if (lasting := _failure_needing_a_person(condensed)) is not None:
+            self.pause_model_calls(MAX_PAUSE.total_seconds(), f"every one of its model calls failed: {lasting}",
+                                   lasting=True)
         unread = [(draft, draft.facts_error) for draft in condensed if draft.facts_error is not None]
         if unread:
             turns = [turn.turn_index for draft, _ in unread for turn in draft.turns]
@@ -768,6 +774,28 @@ class GcService:
             )
         )
         return degradation
+
+
+def _failure_needing_a_person(condensed: Sequence[Condensed]) -> LLMGCError | None:
+    """The error every model call of a pass failed with, when only a person can fix it; None otherwise.
+
+    That is a refused key, or a request refused for a reason other than its rate or its size,
+    such as an account out of credit. A pass in which any call worked, or any failure was
+    one that retrying can fix, returns None.
+    """
+    errors = [error for draft in condensed for error in (draft.summary_error, draft.facts_error) if error is not None]
+    worked = any(draft.summary is not None or draft.facts_error is None for draft in condensed)
+    if worked or not errors or not all(map(_needs_a_person, errors)):
+        return None
+    first = errors[0]
+    return first if isinstance(first, LLMGCError) else None
+
+
+def _needs_a_person(error: Exception) -> bool:
+    if isinstance(error, LLMAuthError):
+        return True
+    status = error.status_code if isinstance(error, LLMResponseError) else None
+    return isinstance(error, LLMResponseError) and not error.retryable and status is not None and 400 <= status < 500
 
 
 def _in_order(messages: Sequence[Message]) -> list[Message]:

@@ -421,6 +421,9 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.6 ui-monosp
 .proxy-line b { color: var(--ink); font-weight: 650; font-variant-numeric: tabular-nums; }
 .proxy-line .sep { color: var(--baseline); }
 .eng-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+/* Two cards read as one row: equal heights, bottoms aligned. A collapsed card shrinks to its header. */
+.eng-grid.pair { align-items: stretch; }
+.eng-grid.pair > .collapsed { align-self: start; }
 .eng-stack { display: grid; gap: 16px; }
 @media (max-width: 960px) { .eng-grid { grid-template-columns: minmax(0, 1fr); } }
 .eng-card .card-head { margin-bottom: 8px; }
@@ -556,7 +559,7 @@ tr.cut td { font-weight: 600; }
 .event-head { display: flex; gap: 8px; align-items: baseline; font-size: 13px; }
 .event-head .when { margin-left: auto; color: var(--ink-3); font-size: 12px; white-space: nowrap; }
 .event-lines { margin-top: 6px; display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--ink-2); }
-.event-lines > div { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 10px; align-items: baseline; }
+.event-lines > div { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 10px; align-items: baseline; }
 @media (max-width: 520px) { .event-lines > div { grid-template-columns: minmax(0, 1fr); gap: 0; } }
 .event-lines .k { color: var(--ink-3); display: inline-flex; gap: 6px; align-items: center; }
 .event-lines .link-btn { font-size: 13px; }

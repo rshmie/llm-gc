@@ -42,7 +42,9 @@ class LevelOptions:
     """One span as the planner sees it: its score, where it stands, and what each level costs.
 
     `compacted_tokens` is None when the span has no summary, so it cannot be
-    compacted. `current` is None for a span the collection has just made.
+    compacted. `archivable` is False when its facts could not be read: archived, it
+    would be only its opening line. `current` is None for a span the collection has
+    just made.
     """
 
     score: float
@@ -50,6 +52,7 @@ class LevelOptions:
     kept_tokens: int
     compacted_tokens: int | None
     archived_tokens: int
+    archivable: bool = True
 
     def cost(self, level: DetailLevel) -> int:
         """Tokens the front spends on this span at `level`; a folded span costs nothing of its own."""
@@ -64,6 +67,8 @@ class LevelOptions:
     def worthwhile(self, level: DetailLevel) -> bool:
         """Whether the span can be shown at `level`, for less than at every richer level it can be shown at."""
         if level is DetailLevel.COMPACTED and self.compacted_tokens is None:
+            return False
+        if level is DetailLevel.ARCHIVED and not self.archivable:
             return False
         richer = [self.cost(other) for other in _RICHEST_FIRST
                   if _RANK[other] > _RANK[level] and (other is not DetailLevel.COMPACTED or self.compacted_tokens is not None)]

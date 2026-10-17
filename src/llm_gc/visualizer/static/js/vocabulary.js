@@ -141,7 +141,7 @@ export const STATUS = {
   bypassed_on_error:        { tone: "critical", icon: "✕", text: "failed: nothing changed" },
   discarded_session_closed: { tone: "", icon: "–", text: "discarded: the conversation had closed" },
   bypassed_not_collected:   { tone: "", icon: "–", text: "not collected: recorded and sent as written" },
-  bypassed_paused:          { tone: "", icon: "⏸", text: "paused: the provider is rate-limiting requests" },
+  bypassed_paused:          { tone: "", icon: "⏸", text: "paused: LLM-GC made no model calls of its own" },
 };
 // Why a prepared collection is applied to the next request, in the switch policy's order.
 export const SWITCH_REASON = {
@@ -154,6 +154,22 @@ export const SWITCH_REASON = {
 export const TOOL_ROUND_TEXT = "While the model uses tools, each request sends the model's last reply back, with its thinking. The provider rejects that thinking if any earlier message has changed. A collection changes earlier messages, so LLM-GC waits until the model replies without calling a tool. It applies the collection with the request after that, usually your next message. Run GC now waits too.";
 // While the upstream is rate-limiting or overloaded, LLM-GC makes no model calls of its own.
 export const PAUSED_TEXT = "The provider refused a request because of a rate limit or overload. Until the pause ends, LLM-GC makes no model calls of its own, so it does not compete with you. Your requests go through as normal.";
+export const FAILING_TEXT = "Every model call LLM-GC made in its last check failed in a way that retrying won't fix, such as a refused key or an account out of credit. It stops calling until the pause ends, then tries again. Nothing is lost meanwhile: what is already condensed stays as it is, and new messages are sent as written, as they would be without LLM-GC. Your requests go through as normal.";
+
+// What a pause means: the provider is busy, which passes on its own, or LLM-GC's own calls are failing, which someone must fix.
+// Both are warnings, not failures: the conversation loses nothing either way. What needs a person is said in the words.
+// `short` is for the summary's narrow column; `text` is the full account, for the full-width status lines.
+export function pauseNote(pause) {
+  const until = new Date(pause.until).toLocaleTimeString();
+  const reason = `${pause.reason[0].toUpperCase()}${pause.reason.slice(1)}`.replace(/[.\s]+$/, "");
+  return pause.lasting
+    ? { tone: "warn", badge: "!", title: "LLM-GC can't call its model, so it has stopped condensing.", tip: ["Calls failing", FAILING_TEXT],
+        short: "Nothing is lost. Check the key or account it summarises with.",
+        text: `${reason}. It tries again at ${until}. Nothing is lost: new messages are sent as written. Check the key or account LLM-GC summarises with.` }
+    : { tone: "warn", badge: "⏸", title: `LLM-GC is paused by a rate limit until ${until}.`, tip: ["Paused", PAUSED_TEXT],
+        short: "It prepares no collection until then. Your requests go through as normal.",
+        text: `${reason}, so LLM-GC makes no model calls of its own and starts no collection meanwhile. Your requests go through as normal.` };
+}
 
 // Why a conversation is recorded but never collected: today, only a subagent's.
 export const NOT_COLLECTED_TEXT = "This is a subagent's conversation. LLM-GC records and shows it, and sends it as written. A subagent usually finishes before a collection would save more than it costs. The collect_subagents setting turns collection on.";
@@ -181,12 +197,13 @@ export const FACT_STATUS = {
 export const NOT_MOVED = {
   compaction_refused: ["Summary rejected by the safeguard", "Its exchange has no summary, so it is quoted word for word or archived instead. Nothing is lost."],
   compaction_failed: ["Summary request failed", "Its exchange has no summary, so it is quoted word for word or archived instead. Nothing is lost."],
-  archive_failed: ["Facts couldn't be read", "Its exchange has no facts: shown summarised or archived, the model reads it without them."],
+  archive_failed: ["Facts couldn't be read", "Its exchange has no facts, so it is summarised or quoted instead of archived. Nothing is lost."],
   recap_over_budget: ["Recap over its budget", "Every exchange is folded out of view and the recap still doesn't fit: the budget is too small for this conversation."],
 };
 // Said where a refused credential shows: on both tabs, so it is not found only by opening a card.
 export const CREDENTIAL_REFUSED_TITLE = "The provider refuses LLM-GC's credential.";
-export const CREDENTIAL_REFUSED_TEXT = "LLM-GC cannot write summaries, so the prompt no longer shrinks. What is already condensed stays condensed. Check the credential LLM-GC was started with, then restart LLM-GC.";
+export const CREDENTIAL_REFUSED_SHORT = "Nothing is lost. Check the credential LLM-GC was started with, then restart it.";
+export const CREDENTIAL_REFUSED_TEXT = "LLM-GC cannot write summaries or read facts, so it has stopped condensing. Nothing is lost: what is already condensed stays as it is, and new messages are sent as written. Check the credential LLM-GC was started with, then restart LLM-GC.";
 // How much of a message the model still has, drawn as the height of its bar (percent of full).
 export const HEIGHT = { verbatim: 100, kept: 100, compacted: 52, archived: 24, out_of_view: 10 };
 // The ⓘ beside each card, shaped as the glossary is: [title, short, more].

@@ -3,7 +3,7 @@
 // Every value comes from an endpoint; this view formats and explains, and derives
 // nothing beyond grouping, counting, and sums and differences of numbers it was given.
 
-import { BECOMES, CATS, CLAMP_CHARS, CREDENTIAL_REFUSED_TEXT, CREDENTIAL_REFUSED_TITLE, FAR_JUMP_SCREENS, MAP_PX_PER_MESSAGE, EARLIER_SHOWN, GLOSSARY, HEIGHT, MIN_BAR_PX, NOT_COLLECTED_TEXT, ORDER, RUN_MIN, FACT_STATUS, SWITCH_REASON, TOOL_ROUND_TEXT, categoryOf, describeOutcome, swatch } from "./vocabulary.js";
+import { BECOMES, CATS, CLAMP_CHARS, CREDENTIAL_REFUSED_SHORT, CREDENTIAL_REFUSED_TITLE, FAR_JUMP_SCREENS, MAP_PX_PER_MESSAGE, EARLIER_SHOWN, GLOSSARY, HEIGHT, MIN_BAR_PX, NOT_COLLECTED_TEXT, ORDER, RUN_MIN, FACT_STATUS, SWITCH_REASON, TOOL_ROUND_TEXT, categoryOf, describeOutcome, swatch, pauseNote } from "./vocabulary.js";
 import { $, agoTs, compact, countEl, fill, fmt, h, meterBar, plural, ranges, reducedMotion, setChildren, share, storeGet, storeSet } from "./dom.js";
 import { LIST_ORDER_KEY, collecting, countCats, credentialRefusal, factsByTurn, has, instructionTokens, keepLast, marked, newestReply, pendingTurns, preview, query, recapLimit, state, trafficOf, turnMatches, ui, writtenTokens } from "./state.js";
 import { hideTooltip, hint, info, showTooltip, tipAction, tipQuote, hoverTip } from "./tooltip.js";
@@ -118,7 +118,12 @@ function worries(k, counts, facts) {
   const staged = k.staged;
   const items = [];
   // First, and with no way to hide it: unlike the others, it does not pass until someone acts.
-  if (credentialRefusal()) items.push(sumLine("critical", [h("b", {}, CREDENTIAL_REFUSED_TITLE), ` ${CREDENTIAL_REFUSED_TEXT}`], ["See why", toEngine("notmoved")]));
+  // A refused key is the more specific of the two, and says to restart; it stands for the pause it causes.
+  if (credentialRefusal()) items.push(sumLine("warn", [h("b", {}, CREDENTIAL_REFUSED_TITLE), ` ${CREDENTIAL_REFUSED_SHORT}`], ["See why", toEngine("notmoved")]));
+  else if (state.pause?.lasting) {
+    const pause = pauseNote(state.pause);
+    items.push(sumLine(pause.tone, [h("b", {}, pause.title), ` ${pause.short}`], ["Why", toEngine("next")]));
+  }
   if (counts.out_of_view > (hidden.out_of_view ?? 0)) items.push(sumLine("warn",
     [h("b", {}, `It can no longer see ${plural(counts.out_of_view, "message")}.`), ` The recap is over its budget of ${recapLimit()}, so the oldest are folded into one line.`],
     ["Show them", toMessages("out_of_view")], ["out_of_view", counts.out_of_view]));
@@ -130,9 +135,13 @@ function worries(k, counts, facts) {
   if (staged && staged.stale_tokens >= STALE_NOTE * staged.stale_bound_tokens && !staged.switches) items.push(sumLine("",
     [`The model still gets ${plural(staged.stale_tokens, "stale token")}, ${Math.round((100 * staged.stale_tokens) / staged.stale_bound_tokens)}% of their limit. At the limit, LLM-GC applies the prepared collection.`],
     ["Why", toEngine("next")]));
-  if (state.pause) items.push(sumLine("warn", [h("b", {}, `LLM-GC is paused by a rate limit until ${new Date(state.pause.until).toLocaleTimeString()}.`), " It prepares no collection until then. Your requests go through as normal."], ["Why", toEngine("next")]));
+  if (state.pause && !state.pause.lasting) {
+    const pause = pauseNote(state.pause);
+    items.push(sumLine(pause.tone, [h("b", {}, pause.title), ` ${pause.short}`], ["Why", toEngine("next")]));
+  }
   if (collecting()) items.push(sumLine("", "Preparing a collection now: this updates when it finishes."));
-  const clear = !counts.out_of_view && !unseenFacts && !shortfalls.length && !credentialRefusal() && !(fill_ && fill_.share >= WINDOW_WARN);
+  const clear = !counts.out_of_view && !unseenFacts && !shortfalls.length && !credentialRefusal() && !state.pause?.lasting
+    && !(fill_ && fill_.share >= WINDOW_WARN);
   if (clear) items.unshift(sumLine("good", [h("b", {}, "No."), facts.length ? " Every fact reaches the model," : "", " nothing is out of view, and no collection fell short."]));
   else if (!items.some((item) => /tone-(warn|critical)/.test(item.className))) items.unshift(sumLine("", "Nothing new since you dismissed what was here."));
   return items;
@@ -948,7 +957,7 @@ export function renderFacts(k) {
   const unreadTurns = k.spans.filter((s) => s.facts_unread).flatMap((s) => s.turns);
   const unread = unreadTurns.length ? h("p", { class: "facts-unread" },
     h("span", { class: "st warn" }, "⚠ "), "Facts couldn't be read from ", hint(messagesLabel(unreadTurns), "Facts not read",
-      "None are listed for them, and a later collection doesn't retry. The model still reads those messages at their level in the recap."), ".") : null;
+      "None are listed for them, and a later collection doesn't retry. Without their facts they are never archived: the model reads them word for word, or as their summary."), ".") : null;
   if (!k.facts.length) {
     fill("facts");
     fill("facts-head", unread || h("p", { class: "facts-note" }, collecting()

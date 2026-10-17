@@ -109,7 +109,7 @@ The span is **still made**:
                                  each shows its opening line alone
 ```
 
-Both are reported as degradations, and nothing is lost: the span holds its turns. The staged cut keeps them, so the collection that later switches it in reports them too, not only the pass that met them. Keeping a span whole costs tokens, so a collection whose only new span lost its summary usually no longer pays for itself, and is reported as "no saving" with the failure beside it. A span made while the provider was down keeps no summary; a later collection does not retry it.
+Both are reported as degradations, and nothing is lost: the span holds its turns, and neither failure lowers it — without a summary it is not summarised, and without its facts it is not archived, so the model reads it in more detail instead. The staged cut keeps them, so the collection that later switches it in reports them too, not only the pass that met them. Keeping a span whole costs tokens, so a collection whose only new span lost its summary usually no longer pays for itself, and is reported as "no saving" with the failure beside it. A span made while the provider was down keeps no summary; a later collection does not retry it.
 
 ### Thinking blocks and the provider's cache
 
