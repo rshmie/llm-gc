@@ -3,7 +3,7 @@
 // Every value comes from an endpoint; this view formats and explains, and derives
 // nothing beyond grouping, counting, and sums and differences of numbers it was given.
 
-import { BECOMES, CATS, CLAMP_CHARS, CREDENTIAL_REFUSED_TEXT, CREDENTIAL_REFUSED_TITLE, FAR_JUMP_SCREENS, MAP_PX_PER_MESSAGE, EARLIER_SHOWN, GLOSSARY, HEIGHT, MIN_BAR_PX, NOT_COLLECTED_TEXT, ORDER, RUN_MIN, FACT_STATUS, SWITCH_REASON, categoryOf, describeOutcome, swatch } from "./vocabulary.js";
+import { BECOMES, CATS, CLAMP_CHARS, CREDENTIAL_REFUSED_TEXT, CREDENTIAL_REFUSED_TITLE, FAR_JUMP_SCREENS, MAP_PX_PER_MESSAGE, EARLIER_SHOWN, GLOSSARY, HEIGHT, MIN_BAR_PX, NOT_COLLECTED_TEXT, ORDER, RUN_MIN, FACT_STATUS, SWITCH_REASON, TOOL_ROUND_TEXT, categoryOf, describeOutcome, swatch } from "./vocabulary.js";
 import { $, agoTs, compact, countEl, fill, fmt, h, meterBar, plural, ranges, reducedMotion, setChildren, share, storeGet, storeSet } from "./dom.js";
 import { collecting, countCats, credentialRefusal, factsByTurn, has, instructionTokens, marked, newestReply, pendingTurns, preview, query, recapLimit, state, trafficOf, turnMatches, ui, writtenTokens } from "./state.js";
 import { hideTooltip, hint, info, showTooltip, tipAction, tipQuote, hoverTip } from "./tooltip.js";
@@ -222,6 +222,7 @@ export function renderBar(k) {
     : !k.collected ? chip("", "Not collected", "Not collected", NOT_COLLECTED_TEXT)
     : collecting() ? chip("", "Preparing a collection…", "Preparing a collection", "Summaries and facts are being written; nothing the model is sent changes yet.", toEngine("next"))
     : s && s.switches ? chip("good", "Collection: switches in next request", "Switched in with your next request", `${capitalised(SWITCH_REASON[s.reason] || s.reason)}.`, toEngine("next"))
+    : s && s.reason === "tool_round_open" ? chip("", "Collection: prepared, waiting for the tool round", "Waiting for the tool round", TOOL_ROUND_TEXT, toEngine("next"))
     : s ? chip("", "Collection: prepared, waiting", "Prepared, waiting",
       `The cache is warm: switching now would make the provider cache ${fmt(s.rewritten_tokens)} tokens again to save ${fmt(s.saving_tokens)}.`, toEngine("next"))
     : cut.batch_ready ? chip("", "Collection: prepared after the next reply", "Ready to prepare", "Enough has gone quiet: a collection is prepared after your next reply.", toEngine("next"))

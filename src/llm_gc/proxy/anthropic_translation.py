@@ -327,6 +327,9 @@ class ToolCall:
     call_id: str
 
 
+# A refusal's reason is logged up to this length: enough for the provider's sentence, not a payload.
+REFUSAL_REASON_MAX_CHARS = 300
+
 @dataclass(frozen=True, slots=True)
 class ReplyOutline:
     """What a reply did, never what it said: how it ended, the usage it reported, the tools it called."""
@@ -337,6 +340,7 @@ class ReplyOutline:
     usage: ProviderUsage | None = None
     tool_calls: tuple[ToolCall, ...] = ()
     retry_after_s: float | None = None    # the upstream's Retry-After on a refusal, when it gave one
+    error_type: str | None = None         # the provider's name for a refusal, such as invalid_request_error
 
 
 def read_reply(status: int, raw: bytes, *, read_prompts: bool = False) -> tuple[ReplyOutline, dict[str, str]]:
@@ -351,7 +355,8 @@ def read_reply(status: int, raw: bytes, *, read_prompts: bool = False) -> tuple[
     except ValueError:
         return ReplyOutline(status=status), {}
     if status != 200 or not isinstance(body, dict) or body.get("type") != "message":
-        return ReplyOutline(status=status), {}
+        error = body.get("error") if isinstance(body, dict) else None
+        return ReplyOutline(status=status, error_type=_plain(error.get("type")) if isinstance(error, dict) else None), {}
     usage = body.get("usage")
     content = body.get("content")
     blocks: list[Any] = content if isinstance(content, list) else []
@@ -471,6 +476,23 @@ def _tool_call(block: object) -> ToolCall | None:
         return None
     name, call_id = _plain(block.get("name")), _plain(block.get("id"))
     return ToolCall(name=name, call_id=call_id) if name and call_id else None
+
+
+def refusal_reason(raw: bytes) -> str:
+    """What a refusal says was wrong with the request: its error type and message, cut short.
+
+    The provider's message names the request's structure - a message index, a block type, a
+    limit - not its content; it is cut short all the same, since it is written to a log.
+    """
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        return "no readable error"
+    error = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(error, dict):
+        return "no readable error"
+    kind, message = _plain(error.get("type")) or "error", error.get("message")
+    return (f"{kind}: {message}" if isinstance(message, str) else kind)[:REFUSAL_REASON_MAX_CHARS]
 
 
 def _plain(value: object) -> str | None:

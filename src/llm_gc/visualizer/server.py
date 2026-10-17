@@ -102,6 +102,7 @@ def create_dashboard_app(
     transcripts: TranscriptRecorder | None = None,
     read_trace: Callable[[str], dict[str, Any] | None] | None = None,
     read_cache: Callable[[str], CacheReading] | None = None,
+    read_tool_round: Callable[[str], bool] | None = None,
     allowed_hosts: list[str] | None = None,
 ) -> FastAPI:
     """The dashboard over a running engine.
@@ -118,6 +119,9 @@ def create_dashboard_app(
         read_cache: A conversation's prompt cache as the proxy reads it, for the verdict
             on a staged cut. Without it the verdict is for a cold cache, which is what a
             conversation with no proxy reading its cache meets.
+        read_tool_round: Whether a conversation's next request will answer tool calls, as
+            the proxy's request log tells. No cut is switched in while one is open; without
+            a proxy, none ever is.
         allowed_hosts: Host names served; localhost by default.
 
     Every route is `async` on purpose: FastAPI runs plain `def` routes in a thread
@@ -159,7 +163,8 @@ def create_dashboard_app(
     @app.get("/api/sessions/{session_id}", response_model=KnowledgeState)
     async def session_knowledge(session_id: str) -> KnowledgeState | JSONResponse:
         cache = read_cache(session_id) if read_cache is not None else None
-        inspection = gc_service.inspect(session_id, cache=cache.state if cache is not None else CacheState.COLD)
+        inspection = gc_service.inspect(session_id, cache=cache.state if cache is not None else CacheState.COLD,
+                                        tool_round_open=_round_open(read_tool_round, session_id))
         if inspection is None:
             return _session_not_found(session_id)
         return project_knowledge_state(inspection, cache)
@@ -207,7 +212,9 @@ def create_dashboard_app(
         if gc_service.session_manager.store.get(session_id) is None:
             return _session_not_found(session_id)
         prepared = await gc_service.gc_age(session_id, ignore_batch_minimum=True)
-        switched = gc_service.gc_switch(session_id, CacheState.COLD, requested=True)
+        # Mid tool round the switch is held back and made by the first request after the round.
+        switched = gc_service.gc_switch(session_id, CacheState.COLD, requested=True,
+                                        tool_round_open=_round_open(read_tool_round, session_id))
         result = switched if switched is not None else prepared
         return ManualCutResult(status=result.status, tokens_before=result.tokens_before,
                                tokens_after=result.tokens_in_final, outcome=result.outcome,
@@ -215,6 +222,10 @@ def create_dashboard_app(
                                duration_ms=prepared.duration_ms + (switched.duration_ms if switched else 0.0))
 
     return app
+
+
+def _round_open(read_tool_round: Callable[[str], bool] | None, session_id: str) -> bool:
+    return read_tool_round(session_id) if read_tool_round is not None else False
 
 
 def _summarise(state: SessionState, transcripts: TranscriptRecorder | None,

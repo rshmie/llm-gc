@@ -47,9 +47,11 @@ DEFAULT_MAX_RECAP_RATIO = 0.3
 # and only its facts at the next.
 DEFAULT_LEVEL_MARGIN = 0.05
 
-# Session lifecycle timings (rationale in doc/design/session/overview.md).
-DEFAULT_SESSION_TIMEOUT_S = 1800          # close a session idle this many seconds (30 min)
+# Session lifecycle (rationale in doc/design/session/overview.md). A person's break is not the end of a
+# conversation, so idle sessions are held for a day; the cap on how many are held bounds the memory.
+DEFAULT_SESSION_TIMEOUT_S = 86_400        # close a session idle this many seconds (24 h)
 DEFAULT_SESSION_SWEEP_INTERVAL_S = 300    # how often the idle sweeper runs (5 min)
+DEFAULT_MAX_SESSIONS = 64                 # held at once; past it the least recently active is closed
 
 # Port for the context-health dashboard (spec section: Dashboard). The proxy itself will use 9900.
 DEFAULT_DASHBOARD_PORT = 9901

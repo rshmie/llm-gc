@@ -119,6 +119,7 @@ class ProxyStats(_Counters):
     history_rewinds: int
     history_restarts: int
     sessions_seeded: int
+    rewrites_refused: int
     client_sessions: list[ClientSessionStats]
     other_conversations: list[ConversationStats]
 
@@ -181,6 +182,10 @@ def _totals(stats: ProxyStats) -> list[str]:
             (stats.requests, "received"),
             (stats.gc_applied, "through LLM-GC"),
             (stats.gc_bypassed, "passed on as sent " + _note("unreadable, or an error in LLM-GC")),
+            # LLM-GC's own fault, shown only once it has happened; the log has the provider's reason.
+            *([(stats.rewrites_refused, "refused as LLM-GC rewrote them " + _note("each sent again as written; "
+                                                                               "the log says why"))]
+              if stats.rewrites_refused else []),
         ]),
         ("Conversations", [
             (stats.sessions_seeded, "tracked " + _note("new, or picked up again after a restart or an edit")),

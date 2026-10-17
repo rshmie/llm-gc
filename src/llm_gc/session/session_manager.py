@@ -3,7 +3,7 @@ import logging
 from collections.abc import Sequence
 from datetime import datetime, timezone
 
-from llm_gc.config.constants import DEFAULT_SESSION_SWEEP_INTERVAL_S, DEFAULT_SESSION_TIMEOUT_S
+from llm_gc.config.constants import DEFAULT_MAX_SESSIONS, DEFAULT_SESSION_SWEEP_INTERVAL_S, DEFAULT_SESSION_TIMEOUT_S
 from llm_gc.models.generation_snapshot import GenerationSnapshot
 from llm_gc.session.session_state import SessionState
 from llm_gc.session.session_store import SessionStore
@@ -24,10 +24,14 @@ class SessionManager:
         store: SessionStore | None = None,
         session_timeout_s: float = DEFAULT_SESSION_TIMEOUT_S,
         sweep_interval_s: float = DEFAULT_SESSION_SWEEP_INTERVAL_S,
+        max_sessions: int = DEFAULT_MAX_SESSIONS,
     ) -> None:
+        if max_sessions < 1:
+            raise ValueError(f"max_sessions must be at least 1, got {max_sessions}")
         self._store = store if store is not None else SessionStore()
         self._session_timeout_s = session_timeout_s
         self._sweep_interval_s = sweep_interval_s
+        self._max_sessions = max_sessions
         # Chain hash of each session's last recorded turn -> session id, so a
         # request can be matched to the conversation it continues by content.
         self._sessions_by_tip: dict[str, str] = {}
@@ -38,9 +42,15 @@ class SessionManager:
         return self._store
 
     def get_or_create(self, session_id: str) -> SessionState:
-        """The live state for a session, created on first use, with its idle clock reset."""
+        """The live state for a session, created on first use, with its idle clock reset.
+
+        A new session past `max_sessions` closes the least recently active other one.
+        """
+        is_new = self._store.get(session_id) is None
         state = self._store.get_or_create(session_id)
         state.touch()
+        if is_new:
+            self._close_beyond_cap(keep=session_id)
         return state
 
     def is_live(self, state: SessionState) -> bool:
@@ -89,6 +99,15 @@ class SessionManager:
         self._store.put(fresh)
         self.retip(fresh)
         return fresh
+
+    def _close_beyond_cap(self, keep: str) -> None:
+        held = [state for session_id in self._store.active_session_ids() if session_id != keep
+                and (state := self._store.get(session_id)) is not None]
+        excess = len(held) + 1 - self._max_sessions
+        for state in sorted(held, key=lambda s: s.last_updated_at)[:max(0, excess)]:
+            self.close_session(state.session_id)
+            logger.info("closed the least recently active session to stay within the cap",
+                        extra={"session_id": state.session_id, "max_sessions": self._max_sessions})
 
     def close_session(self, session_id: str) -> None:
         """Drop a session and all of its data. A second close is a no-op."""

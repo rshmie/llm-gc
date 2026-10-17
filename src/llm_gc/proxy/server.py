@@ -34,6 +34,7 @@ from llm_gc.events import Event, EventType
 from llm_gc.exceptions import ConfigError
 from llm_gc.llm.metering import ModelUsage
 from llm_gc.models import ClientOrigin, Message
+from llm_gc.models.message import tool_result_ids
 from llm_gc.models.generation_snapshot import GenerationSnapshot
 from llm_gc.proxy.anthropic_translation import (
     Instruction,
@@ -47,13 +48,14 @@ from llm_gc.proxy.anthropic_translation import (
     forwardable_headers,
     instruction_tokens,
     read_reply,
+    refusal_reason,
     reply_text,
     rewrite_messages,
 )
 from llm_gc.proxy.cache_watch import CacheWatch
 from llm_gc.proxy.model_windows import ModelWindow, ModelWindows, WindowLookup
 from llm_gc.proxy.session_identity import SESSION_HEADER, chain_hashes, client_origin
-from llm_gc.proxy.request_log import RequestLog, newest_kind
+from llm_gc.proxy.request_log import RequestLog, RequestRecord, newest_kind
 from llm_gc.proxy.subagent_links import SpawnLinker
 from llm_gc.proxy.traffic import TrafficLedger, token_rate
 
@@ -83,6 +85,8 @@ _MODEL_NAME_MAX_CHARS = 128
 # Answers that say the upstream is under pressure: rate limited, or overloaded. LLM-GC's own model
 # calls share it with the client, so they pause rather than add to it.
 _PRESSURE_STATUSES = {429: "rate-limited", 529: "said it was overloaded on"}
+# The provider's answer to a request it will not run as sent. Decided before any output, so nothing was billed.
+_REFUSED_AS_INVALID = 400
 
 # What to do with a reply once it ends: its outline, and the prompts its tool calls gave subagents.
 OutlineHandler = Callable[[ReplyOutline, Mapping[str, str]], None]
@@ -119,6 +123,8 @@ class ProxyMetrics:
         self.history_rewinds = 0
         self.history_restarts = 0
         self.sessions_seeded = 0
+        # Requests the provider refused as LLM-GC rewrote them; each was sent again as the client wrote it.
+        self.rewrites_refused = 0
         self.traffic = TrafficLedger()
         self.request_log = RequestLog()
         self.cache_watch = CacheWatch()
@@ -140,6 +146,7 @@ class ProxyMetrics:
             "history_rewinds": self.history_rewinds,
             "history_restarts": self.history_restarts,
             "sessions_seeded": self.sessions_seeded,
+            "rewrites_refused": self.rewrites_refused,
             **self.traffic.as_dict(),
         }
 
@@ -319,18 +326,30 @@ async def _handle(app: FastAPI, request: Request) -> Response:
                          extra={"session_id": session_id, "error_type": type(err).__name__})
         metrics.gc_bypassed += 1
         # Counted as forwarded whole, so a bypass does not look free in /stats.
-        on_outline = _measure_request(app, session_id, origin, payload, client_messages, hashes, client_tokens,
-                                      client_tokens, window, collected)
+        on_outline, _ = _measure_request(app, session_id, origin, payload, client_messages, hashes, client_tokens,
+                                         client_tokens, window, collected, carries_front=False)
         response = await _send(app, body, headers, streaming, target, on_outline=on_outline)
         _log_answer(response.status_code, payload, client_tokens, client_tokens, session_id)
         return response
 
     metrics.gc_applied += 1
     forwarded_tokens = conversation_tokens + fixed_tokens
-    on_outline = _measure_request(app, session_id, origin, payload, client_messages, hashes, client_tokens,
-                                  forwarded_tokens, window, collected)
+    on_outline, _ = _measure_request(app, session_id, origin, payload, client_messages, hashes, client_tokens,
+                                     forwarded_tokens, window, collected)
     response = await _send(app, forward_body, headers, streaming, target,
                            on_complete=_reply_observer(app, session_id, new_turn, streaming), on_outline=on_outline)
+    if response.status_code == _REFUSED_AS_INVALID and forward_body is not body:
+        # The provider refused the request as LLM-GC rewrote it. The client's own request is what it
+        # would have sent without LLM-GC, so that goes in its place: never worse than no GC.
+        _log_refused_rewrite(response, payload, session_id)
+        metrics.rewrites_refused += 1
+        forwarded_tokens = client_tokens
+        on_outline, record = _measure_request(app, session_id, origin, payload, client_messages, hashes, client_tokens,
+                                              client_tokens, window, collected, carries_front=False)
+        if record is not None:
+            record.resent_as_written = True
+        response = await _send(app, body, headers, streaming, target,
+                               on_complete=_reply_observer(app, session_id, new_turn, streaming), on_outline=on_outline)
     _log_answer(response.status_code, payload, client_tokens, forwarded_tokens, session_id)
 
     # Aging prepares the next request from the conversation recorded so far; it
@@ -338,6 +357,18 @@ async def _handle(app: FastAPI, request: Request) -> Response:
     if session_id is not None and collected:
         _never_blocking(lambda: app.state.schedule(_age(app, session_id)))
     return response
+
+
+def _log_refused_rewrite(response: Response, payload: dict[str, Any], session_id: str | None) -> None:
+    """Say why the provider refused a request LLM-GC rewrote: the one refusal LLM-GC may have caused.
+
+    Nobody else records it: the client never sees it, since its own request goes in its place.
+    """
+    reason = refusal_reason(bytes(response.body))
+    where = f" in {session_id}" if session_id is not None else ""
+    logger.warning("%s refused the request%s as LLM-GC rewrote it (%s); sent again as the client wrote it",
+                   _model_name(payload) or "?", where, reason,
+                   extra={"session_id": session_id, "status": response.status_code, "reason": reason})
 
 
 def _log_answer(status: int, payload: dict[str, Any], from_client: int, forwarded: int,
@@ -382,10 +413,11 @@ def _collected(app: FastAPI, origin: ClientOrigin | None) -> bool:
 
 def _measure_request(app: FastAPI, session_id: str | None, origin: ClientOrigin | None, payload: dict[str, Any],
                      client_messages: Sequence[Message], hashes: Sequence[str] | None, from_client: int,
-                     forwarded: int, window: ModelWindow | None, collected: bool
-                     ) -> OutlineHandler | None:
-    """Count a request in the ledger and open its record; return what to do with its reply's outline.
+                     forwarded: int, window: ModelWindow | None, collected: bool, *, carries_front: bool = True
+                     ) -> tuple[OutlineHandler | None, RequestRecord | None]:
+    """Count a request in the ledger and open its record; return what to do with its reply's outline, and the record.
 
+    `carries_front` False: the request goes as the client wrote it, so it carries no collection.
     Never fails the request: a failure here costs the counts, not the answer.
     """
     metrics: ProxyMetrics = app.state.metrics
@@ -393,11 +425,11 @@ def _measure_request(app: FastAPI, session_id: str | None, origin: ClientOrigin 
         hashes = hashes if hashes is not None else chain_hashes(client_messages)
         model = _model_name(payload)
         # Read before the ledger counts this request, which marks them sent.
-        carried = metrics.traffic.collections_waiting(session_id) if session_id is not None else 0
+        carried = metrics.traffic.collections_waiting(session_id) if session_id is not None and carries_front else 0
         counted = metrics.traffic.record_request(conversation_id=session_id, origin=origin, model=model,
                                                  opening=hashes[0], tokens_from_client=from_client,
                                                  tokens_forwarded=forwarded, context_window=window,
-                                                 collected=collected)
+                                                 collected=collected, carries_front=carries_front)
         record = metrics.request_log.begin(conversation_id=session_id, origin=origin, hashes=hashes,
                                            newest=newest_kind(client_messages[-1]), model=model,
                                            tokens_from_client=from_client, tokens_forwarded=forwarded,
@@ -410,12 +442,16 @@ def _measure_request(app: FastAPI, session_id: str | None, origin: ClientOrigin 
         started_at, lifetime_s = metrics.cache_watch.now(), cache_lifetime_s(payload)
     except Exception:
         logger.exception("counting the request failed; the request is unaffected", extra={"session_id": session_id})
-        return None
+        return None, None
 
     def close(outline: ReplyOutline, prompts: Mapping[str, str]) -> None:
         if (pressure := _PRESSURE_STATUSES.get(outline.status)) is not None:
             app.state.gc_service.pause_model_calls(outline.retry_after_s,
                                                    f"the upstream {pressure} a request from the client")
+        if carried and outline.status != 200 and session_id is not None:
+            # A refused request reached no model, so the collections it carried still wait for one that does.
+            record.carries_collections = 0
+            metrics.traffic.restore_waiting(session_id, carried)
         if outline.usage is not None:
             TrafficLedger.record_usage(counted, outline.usage, forwarded, carried_collection=carried > 0)
             if session_id is not None:
@@ -428,7 +464,7 @@ def _measure_request(app: FastAPI, session_id: str | None, origin: ClientOrigin 
         if linker is not None and origin is not None and prompts:
             linker.offer_calls(origin.session_id, record, prompts)
 
-    return lambda outline, prompts: _never_blocking(close, outline, prompts)
+    return (lambda outline, prompts: _never_blocking(close, outline, prompts)), record
 
 
 def _count_collection(app: FastAPI, event: Event) -> None:
@@ -560,8 +596,10 @@ async def _apply_gc(
     gc_service: GcService = app.state.gc_service
     metrics: ProxyMetrics = app.state.metrics
     # A staged cut is switched in, or not, as this request is built: then it is the first to carry it.
-    # Whether its cache would serve this request decides whether switching costs a rewrite.
-    gc_service.gc_switch(session_id, metrics.cache_watch.state(session_id))
+    # Whether its cache would serve this request decides whether switching costs a rewrite, and
+    # a request answering tool calls never carries a new front.
+    gc_service.gc_switch(session_id, metrics.cache_watch.state(session_id),
+                         tool_round_open=bool(tool_result_ids(new_turn)))
     collected = await gc_service.gc_collect(session_id)
     if [message.turn_index for message in collected] == list(range(len(history))):
         return original_body, client_tokens

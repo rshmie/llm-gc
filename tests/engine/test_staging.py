@@ -1,6 +1,7 @@
 """A pass stages a cut and the request path switches it in: what each step may change, and when."""
 
 import asyncio
+from dataclasses import replace
 
 from llm_gc.config import GCConfig
 from llm_gc.engine import GCStatus
@@ -252,3 +253,44 @@ class TestTheInspectionShowsTheSwitchsVerdict:
         assert preview.stale_bound_tokens == service.gc_config.stale_bound(state.context_window)
         assert preview.min_saving_share == 1000.0
 
+
+class TestAnOpenToolRound:
+    """The 400 a live run met: a cut switched in on a request answering tool calls stripped the thinking that
+    reply needed. Nothing is switched in until the round ends."""
+
+    def test_no_cut_is_switched_in_until_the_round_ends(self):
+        service, _ = _service()
+        state = _record(service, 0, 1, 2, 3)
+        _prepare(service)
+
+        assert service.gc_switch(SESSION, CacheState.COLD, tool_round_open=True) is None
+        assert state.snapshot.staged is not None, "still prepared"
+        switched = service.gc_switch(SESSION, CacheState.COLD)
+        assert switched is not None and switched.switch_reason is SwitchReason.CACHE_COLD
+
+    def test_run_gc_now_mid_round_is_made_by_the_first_request_after_it(self):
+        """Warm, and the cut does not repay: only the developer's request can switch it in."""
+        service, _ = _service(**PATIENT)
+        _record(service, 0, 1, 2, 3)
+        _prepare(service)
+
+        assert service.gc_switch(SESSION, CacheState.COLD, requested=True, tool_round_open=True) is None
+        verdict = service.inspect(SESSION, cache=CacheState.WARM, tool_round_open=True).staged.decision
+        assert verdict.reason is SwitchReason.TOOL_ROUND_OPEN
+
+        switched = service.gc_switch(SESSION, CacheState.WARM)
+        assert switched is not None and switched.switch_reason is SwitchReason.REQUESTED
+
+    def test_a_held_request_does_not_outlive_the_cut_it_was_for(self):
+        """A rewind discards the prepared cut; the next one must wait for its own reason, not switch in unasked."""
+        service, _ = _service(**PATIENT)
+        state = _record(service, 0, 1, 2, 3)
+        _prepare(service)
+        service.gc_switch(SESSION, CacheState.COLD, requested=True, tool_round_open=True)
+
+        state.snapshot = replace(state.snapshot, staged=None)
+        assert service.gc_switch(SESSION, CacheState.WARM) is None
+        _prepare(service)
+
+        assert service.gc_switch(SESSION, CacheState.WARM) is None, "waits for payback, as any warm cut"
+        assert state.switch_requested is False

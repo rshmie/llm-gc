@@ -7,8 +7,8 @@ from datetime import datetime, timedelta, timezone
 
 from llm_gc.llm import ModelUsage
 from llm_gc.models import ClientOrigin
-from llm_gc.proxy.anthropic_translation import (ReplyOutline, StreamOutlineReader, ToolCall, fixed_prompt_tokens,
-                                                read_reply)
+from llm_gc.proxy.anthropic_translation import (REFUSAL_REASON_MAX_CHARS, ReplyOutline, StreamOutlineReader, ToolCall,
+                                                fixed_prompt_tokens, read_reply, refusal_reason)
 from llm_gc.proxy.traffic import ProviderUsage, TrafficLedger, token_rate
 from llm_gc.utils import count_tokens
 
@@ -182,9 +182,22 @@ class TestReadingTheReplysOutline:
             usage=ProviderUsage(replies=1, input_tokens=3, cache_read_input_tokens=2000, output_tokens=50),
             tool_calls=(ToolCall(name="Agent", call_id="toolu_1"),))
 
-    def test_an_error_body_or_garbage_outlines_only_its_status(self):
+    def test_an_error_body_or_garbage_outlines_only_its_status_and_error_type(self):
         assert read_reply(529, b'{"type": "error", "error": {}}')[0] == ReplyOutline(status=529)
         assert read_reply(200, b"not json")[0] == ReplyOutline(status=200)
+        refused = b'{"type": "error", "error": {"type": "invalid_request_error", "message": "messages.31: bad"}}'
+        assert read_reply(400, refused)[0] == ReplyOutline(status=400, error_type="invalid_request_error")
+
+    def test_a_refusals_reason_is_its_type_and_message_cut_short(self):
+        message = "messages.31.content.0: Invalid `signature` in `thinking` block. " * 20
+        raw = json.dumps({"type": "error", "error": {"type": "invalid_request_error", "message": message}}).encode()
+
+        reason = refusal_reason(raw)
+
+        assert reason.startswith("invalid_request_error: messages.31.content.0: Invalid `signature`")
+        assert len(reason) == REFUSAL_REASON_MAX_CHARS
+        assert refusal_reason(b"<html>bad gateway</html>") == "no readable error"
+        assert refusal_reason(b'{"error": {"type": "overloaded_error"}}') == "overloaded_error"
 
     def test_a_stream_split_anywhere_reads_the_same(self):
         """A chunk boundary can fall inside a line; a reader that parsed per chunk would lose events."""
@@ -297,3 +310,25 @@ class TestTheNewestRequestCountedBothWays:
         TrafficLedger.record_usage(_request(ledger, "c1"), ProviderUsage(replies=1, input_tokens=5))
         assert _conversation(ledger, "c1")["traffic"]["last_reply"] is None
 
+
+class TestCollectionsWaitForARequestThatReachesTheModel:
+    def test_a_request_sent_as_written_leaves_them_waiting(self):
+        ledger = _ledger()
+        _request(ledger, "s_1")
+        ledger.record_collection("s_1", completed=True, spent=ModelUsage())
+
+        ledger.record_request(conversation_id="s_1", origin=MAIN, model="m", opening="h0", tokens_from_client=100,
+                              tokens_forwarded=100, carries_front=False)
+
+        assert ledger.collections_waiting("s_1") == 1
+
+    def test_a_refused_request_gives_back_what_it_was_to_carry(self):
+        ledger = _ledger()
+        _request(ledger, "s_1")
+        ledger.record_collection("s_1", completed=True, spent=ModelUsage())
+        _request(ledger, "s_1")
+        assert ledger.collections_waiting("s_1") == 0, "the request carrying it is on its way"
+
+        ledger.restore_waiting("s_1", 1)
+
+        assert ledger.collections_waiting("s_1") == 1

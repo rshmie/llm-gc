@@ -230,9 +230,21 @@ LLM-GC's background work directly into the user's latency.
   events, and it is what an external store needs to commit with compare-and-set
   ("write version 9 only if the stored version is still 8"), so moving to one
   needs no redesign.
-- **Session ends on idle timeout or explicit close, and reopens on demand.**
-  Without an idle timeout the active set grows without bound when users walk
-  away; without explicit close a library caller has no way to end a session now.
+- **Session ends on idle timeout, the cap, or explicit close, and reopens on demand.**
+  A session idle for a day is closed, and past 64 held sessions the least recently
+  active is closed; without an explicit close a library caller has no way to end a
+  session now. The limit is long because a person's break is not the end of a
+  conversation: closing it throws away the recap, so the next message is sent whole
+  and a new collection pays again for summaries already made, and it does so after a
+  break, when the provider's cache is cold and switching a recap in would cost
+  nothing. The dashboard can only show a session that is held. The cap, not the
+  timer, bounds the memory: a session holds its conversation's text, about half a
+  megabyte for a 100k-token conversation. *Rejected: a 30-minute timeout* — a lunch
+  break closed a live Claude Code conversation, emptied its dashboard, and cost a
+  resend and a fresh collection. *Rejected: keeping a read-only view after closing*
+  — the dashboard would show it, but every break would still cost the resend.
+  *Revisit* if the proxy serves many people at once, or once sessions are stored
+  outside the process.
 - **Looking does not count as activity.** Inspection reads the store without
   touching the session, so a dashboard left open on a conversation does not keep
   it alive, and an inspection of a closed session reports it absent rather than

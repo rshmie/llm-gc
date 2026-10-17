@@ -162,6 +162,18 @@ turns, oldest first, which is the only removal that leaves later blocks valid.
 Replies produced from that request on keep their thinking, because the front they
 were produced against does not change until the next collection.
 
+**Never in the middle of a tool round.** A request that answers a reply's tool calls
+must send that reply back with its thinking intact; stripping it is refused, and
+keeping it after the front changed is refused too, since the history before it is no
+longer the one it was made against. So no cut is switched in on a request whose newest
+message carries tool results, not even one Run GC now asked for: the first request
+after the round carries it. A round can run for many requests, and the cut waits that
+long, with the model sent everything word for word meanwhile. *Rejected: asking the
+provider to drop invalidated thinking instead of refusing (its `drop_block` setting)* —
+it needs a beta header and a request field added to the client's request, which a
+gateway may refuse, and the model would lose the reasoning of the call it is in the
+middle of.
+
 The switch happens as that request is built, so the request that switches is by
 definition the first to carry the front, and the boundary is the turns it sends:
 

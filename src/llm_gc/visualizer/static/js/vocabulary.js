@@ -140,6 +140,8 @@ export const SWITCH_REASON = {
   repays_rewrite: "it removes at least what it makes the provider cache again",
   stale_weight_at_bound: "the model carries as much gone-quiet material as it may, so it is switched in whatever the cache costs",
 };
+// Why a prepared collection waits while a tool round is open, whatever else holds.
+export const TOOL_ROUND_TEXT = "A tool round is open: the next request answers the tool calls in the model's last reply. That reply must go back with its thinking, and the provider refuses thinking once the history before it has changed, so no collection is switched in until the round ends. Run GC now waits for it too.";
 // While the upstream is rate-limiting or overloaded, LLM-GC makes no model calls of its own.
 export const PAUSED_TEXT = "The upstream refused a request as rate-limited or overloaded. LLM-GC makes no model calls of its own until the pause ends, so it doesn't compete with you; your requests go through as normal.";
 

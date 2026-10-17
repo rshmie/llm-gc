@@ -11,10 +11,11 @@ SWITCH, WAIT = True, False
 
 
 def _decide(*, saving=10_000, rewritten=20_000, stale=9_000, bound=20_000, share=1.0, cache=CacheState.WARM,
-            requested=False):
+            requested=False, tool_round_open=False):
     """A warm burst by default: a 10k saving against 20k rewritten, 9k stale of a 20k bound."""
     return decide_switch(saving_tokens=saving, rewritten_tokens=rewritten, stale_tokens=stale,
-                         stale_bound_tokens=bound, min_saving_share=share, cache=cache, requested=requested)
+                         stale_bound_tokens=bound, min_saving_share=share, cache=cache, requested=requested,
+                         tool_round_open=tool_round_open)
 
 
 class TestAWarmBurst:
@@ -151,3 +152,15 @@ class TestInvariants:
             assert cache is CacheState.WARM
             assert saving < share * rewritten
             assert stale < bound
+
+
+class TestAnOpenToolRound:
+    """A reply whose tool calls are being answered must go back with its thinking, which a new front invalidates."""
+
+    @pytest.mark.parametrize("would_switch", [{"requested": True}, {"cache": CacheState.COLD}, {"saving": 25_000},
+                                              {"saving": 6_000, "stale": 21_000}],
+                             ids=["requested", "cold", "repays", "at_bound"])
+    def test_it_holds_back_every_switch_even_a_requested_one(self, would_switch):
+        assert _decide(**would_switch).switch is SWITCH
+        decision = _decide(tool_round_open=True, **would_switch)
+        assert (decision.switch, decision.reason) == (WAIT, SwitchReason.TOOL_ROUND_OPEN)

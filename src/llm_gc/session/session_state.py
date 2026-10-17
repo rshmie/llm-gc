@@ -32,6 +32,8 @@ class SessionState:
     token_rate: float | None = None
     # False for a conversation that is recorded and shown but never collected.
     collection_enabled: bool = True
+    # Run GC now asked for a switch while a tool round was open: the next request outside one makes it.
+    switch_requested: bool = False
 
     def touch(self) -> None:
         """Reset the idle clock; the sweeper measures idleness from here."""

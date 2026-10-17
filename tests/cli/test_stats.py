@@ -39,7 +39,7 @@ def _conversation(conversation_id, part, agent=None, window=(1_000_000, True), c
 def _counters(**overrides) -> dict:
     base = {"requests": 12, "gc_applied": 11, "gc_bypassed": 1, "tokens_from_client": 21_666,
             "tokens_forwarded": 4_310, "tokens_saved": 17_356, "history_rewinds": 0, "history_restarts": 1,
-            "sessions_seeded": 0, "ratio": 0.199,
+            "sessions_seeded": 0, "rewrites_refused": 0, "ratio": 0.199,
             "provider_usage": {"replies": 12, "input_tokens": 120, "cache_read_input_tokens": 40_000,
                                "cache_creation_input_tokens": 6_000, "output_tokens": 2_500},
             "collection_cache_write_tokens": 0,

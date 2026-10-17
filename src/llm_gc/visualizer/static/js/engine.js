@@ -2,7 +2,7 @@
 // runs and why each message gets what it gets, what collections did and couldn't do, every check,
 // and last the proxy's totals and settings, which apply to every conversation.
 
-import { BECOMES, CARD_INFO, CATS, CHART_HEIGHT, CHECKS_SHOWN, CREDENTIAL_REFUSED_TEXT, CREDENTIAL_REFUSED_TITLE, MAX_EXCHANGE_LINKS, MOVES_SHOWN, NOT_COLLECTED_TEXT, NOT_MOVED, OUTCOME_LINES, PAUSED_TEXT, STATUS, SWITCH_REASON, describeOutcome, swatch } from "./vocabulary.js";
+import { BECOMES, CARD_INFO, CATS, CHART_HEIGHT, CHECKS_SHOWN, CREDENTIAL_REFUSED_TEXT, CREDENTIAL_REFUSED_TITLE, MAX_EXCHANGE_LINKS, MOVES_SHOWN, NOT_COLLECTED_TEXT, NOT_MOVED, OUTCOME_LINES, PAUSED_TEXT, STATUS, SWITCH_REASON, TOOL_ROUND_TEXT, describeOutcome, swatch } from "./vocabulary.js";
 import { $, agoTs, compact, countEl, fill, fmt, h, meterBar, plural, reducedMotion, setChildren, storeGet, storeSet, svg } from "./dom.js";
 import { credentialRefusal, keepLast, preview, state, ui } from "./state.js";
 import { explain, hideTooltip, hint, info, placeTooltip, showTooltip, tipQuote, tooltipContent, hoverTip } from "./tooltip.js";
@@ -104,7 +104,8 @@ export function renderProxy() {
     caption ? h("div", { class: "caption" }, caption) : null);
   fill("tiles",
     tile("Requests through the proxy", null, countEl("tile-requests", p.requests),
-      [`${fmt(p.gc_applied)} handled by LLM-GC`, p.gc_bypassed ? [" · ", h("span", { class: "st warn" }, "⚠ "), `${fmt(p.gc_bypassed)} passed on untouched after an error`] : " · none passed on after an error"]),
+      [`${fmt(p.gc_applied)} handled by LLM-GC`, p.gc_bypassed ? [" · ", h("span", { class: "st warn" }, "⚠ "), `${fmt(p.gc_bypassed)} passed on untouched after an error`] : " · none passed on after an error",
+        p.rewrites_refused ? [" · ", h("span", { class: "st warn" }, "⚠ "), `${fmt(p.rewrites_refused)} refused as LLM-GC rewrote ${p.rewrites_refused === 1 ? "it" : "them"}, then sent as written`] : null]),
     tile("Total sent since the proxy started", "forwarded", countEl("tile-forwarded", p.tokens_forwarded),
       `${p.ratio !== null ? `${Math.round(p.ratio * 100)}% of` : "of"} the ${fmt(p.tokens_from_client)} your clients sent, whole requests, all conversations`,
       p.ratio !== null ? h("div", { class: "meter", "aria-hidden": "true" }, meterBar("tile-forwarded-ratio", p.ratio * 100)) : null),
@@ -219,6 +220,8 @@ function renderStaged(k) {
   const cold = cache ? cache.state === "cold" : true;
   const lede = s.switches
     ? `Prepared: switched in with the next request, because ${SWITCH_REASON[s.reason] || s.reason}.`
+    : s.reason === "tool_round_open"
+    ? `Prepared, waiting for the tool round to end. ${TOOL_ROUND_TEXT}`
     : `Prepared, waiting for the right request: switching now would make the provider cache ${fmt(s.rewritten_tokens)} tokens again to save ${fmt(s.saving_tokens)}. Meanwhile the model gets these messages word for word.`;
   const cacheSays = !cache ? "No proxy reads the cache beside this dashboard, so it counts as cold."
     : cache.uses_cache === false ? "This conversation's replies use no prompt cache: every request is read in full, so a smaller prompt is always cheaper."

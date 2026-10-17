@@ -190,12 +190,14 @@ class TrafficLedger:
 
     def record_request(self, *, conversation_id: str | None, origin: ClientOrigin | None, model: str | None,
                        opening: str, tokens_from_client: int, tokens_forwarded: int,
-                       context_window: ModelWindow | None = None, collected: bool = True) -> RequestTargets:
+                       context_window: ModelWindow | None = None, collected: bool = True,
+                       carries_front: bool = True) -> RequestTargets:
         """Count one forwarded request. Returns where its reply's usage is to be added.
 
         `opening` identifies the conversation's first turn. A request with no conversation
         yet is held under it, with its origin, until a conversation opening the same way
-        appears and claims it.
+        appears and claims it. A request sent as the client wrote it (`carries_front` False)
+        carries no collection, so those waiting still wait.
         """
         now = self._clock()
         targets = [self.total]
@@ -205,8 +207,9 @@ class TrafficLedger:
             conversation = self._conversation(conversation_id, origin, model, opening, now)
             conversation.context_window = context_window or conversation.context_window
             conversation.collected = collected
-            # This request carries every collection made so far.
-            conversation.collections_not_yet_sent = 0
+            if carries_front:
+                # This request carries every collection made so far.
+                conversation.collections_not_yet_sent = 0
             targets.append(conversation.traffic)
         else:
             unclaimed = self._unclaimed.get((opening, origin))
@@ -245,6 +248,12 @@ class TrafficLedger:
         """Collections made since the conversation's newest request: the next request carries them."""
         conversation = self._conversations.get(conversation_id)
         return conversation.collections_not_yet_sent if conversation is not None else 0
+
+    def restore_waiting(self, conversation_id: str, collections: int) -> None:
+        """Collections a refused request was to carry: they still wait for a request that reaches the model."""
+        conversation = self._conversations.get(conversation_id)
+        if conversation is not None:
+            conversation.collections_not_yet_sent += collections
 
     def record_collection(self, conversation_id: str, *, completed: bool, spent: ModelUsage) -> None:
         """Count a collection's own model calls, and the collection itself when one was made."""

@@ -245,6 +245,21 @@ calls' own errors* — a refused summary is recorded, but the next collection tr
 again at once, still competing. *Accepted cost:* while paused, the conversation grows
 uncondensed; a collection follows once the pause ends.
 
+**A request the provider refuses as LLM-GC rewrote it goes again as the client wrote
+it.** A 400 to a request LLM-GC changed may be LLM-GC's own doing, and the client must
+never see it: the client's request is what it would have sent without LLM-GC, so that
+goes in its place, once. A 400 is decided before any output and is not billed, so the
+cost is one round trip. The collections the refused request was to carry still wait for
+one that reaches the model, and both requests are recorded, the refused one marked in
+the trace and counted as `rewrites_refused`. The provider's reason is logged at
+WARNING, its error type and message cut to 300 characters: nobody else records it, as a
+live run found when a client retried a refused request silently. The message names the
+request's structure, a message index or a block type, not its content; it is logged
+only for requests LLM-GC changed, and request headers never are. *Rejected: retrying on
+429 or 5xx too* — those are the upstream's state, not LLM-GC's rewrite, and the client's
+own request would meet the same limit. *Accepted cost:* a rewrite the provider keeps
+refusing pays one refused round trip per request, each logged.
+
 A malformed body is forwarded untouched, because the provider is the authority on
 its own API. Guards catch `Exception`, never `BaseException`, so cancellation on
 client disconnect still propagates and the upstream connection is closed.

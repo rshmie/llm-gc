@@ -26,7 +26,7 @@ function calls(names) {
 
 const saved = (t) => t.tokens_saved > 0 ? `saved ${fmt(t.tokens_saved)} (${share(t.tokens_saved, t.tokens_from_client)}%)` : "nothing saved";
 // What an answer other than 200 means, in words.
-const STATUS_WORDS = { 401: "credential refused", 403: "credential refused", 413: "too large", 429: "rate limited",
+const STATUS_WORDS = { 400: "refused as invalid", 401: "credential refused", 403: "credential refused", 413: "too large", 429: "rate limited",
   500: "upstream error", 502: "upstream unreachable", 503: "upstream unavailable", 529: "overloaded" };
 
 // `force` redraws after a toggle; otherwise only when the trace changed, so a poll keeps hover and focus.
@@ -155,7 +155,12 @@ function waterfall(rows, subagents, window, actions, key) {
 function requestLine(row, window, depth) {
   const [label, about] = TRACE_KINDS[row.kind];
   const failed = row.status !== null && row.status !== 200;
-  const status = failed ? h("span", { class: "st critical" }, ` ✕ ${row.status} ${STATUS_WORDS[row.status] || "refused"}`)
+  // A request refused as LLM-GC rewrote it was sent again as written: LLM-GC's fault, which Claude Code never saw.
+  const rewriteRefused = failed && row.status === 400 && row.tokens_forwarded < row.tokens_from_client;
+  const status = rewriteRefused ? h("span", { class: "st critical", ...hoverTip("Refused as LLM-GC rewrote it",
+      `The provider refused this request as LLM-GC rewrote it${row.error_type ? ` (${row.error_type})` : ""}. LLM-GC sent Claude Code's own request in its place, the next row, so Claude Code never saw the refusal. The proxy's log has the provider's reason.`) },
+      ` ✕ ${row.status} refused as LLM-GC rewrote it`)
+    : failed ? h("span", { class: "st critical" }, ` ✕ ${row.status} ${STATUS_WORDS[row.status] || "refused"}`)
     : row.ended_at === null ? h("span", { class: "secondary" }, " … running")
     : !row.finished ? h("span", { class: "st warn", ...hoverTip("Cut short", "The reply did not reach its end: the client stopped reading, or the connection dropped.") }, " cut short") : null;
   const kept = row.tokens_from_client - row.tokens_forwarded;
@@ -165,6 +170,8 @@ function requestLine(row, window, depth) {
       h("span", { class: "wf-tokens", ...(kept > 0 ? hoverTip("Tokens", `Claude Code sent ${fmt(row.tokens_from_client)}; LLM-GC condensed ${fmt(kept)} of them, so the model got ${fmt(row.tokens_forwarded)}.`) : {}) },
         ` · ${fmt(row.tokens_from_client)}`, kept > 0 ? [" → ", h("span", { class: "good" }, fmt(row.tokens_forwarded))] : null),
       row.tool_calls.length ? h("span", { class: "wf-calls" }, ` · then ${calls(row.tool_calls)}`) : null,
+      row.resent_as_written ? h("span", { class: "st warn", ...hoverTip("Sent as written",
+        "The provider refused LLM-GC's rewrite of this request, so LLM-GC sent it as Claude Code wrote it: the model got the whole conversation, as it would without LLM-GC.") }, " · sent as written") : null,
       row.carries_collections ? h("span", { class: "wf-mark", ...hoverTip(TRACE_KINDS.collection[0], TRACE_KINDS.collection[1] + rewriteNote(row)) },
         row.provider && row.provider.cache_creation_input_tokens ? ` ◆ ${fmt(row.provider.cache_creation_input_tokens)} written to the cache` : " ◆") : null,
       status),

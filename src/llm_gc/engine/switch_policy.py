@@ -44,6 +44,9 @@ class SwitchReason(Enum):
     # Forced for the model's health, not for the bill: the one automatic switch that can cost more.
     STALE_WEIGHT_AT_BOUND = "stale_weight_at_bound"
     WAITING_FOR_PAYBACK = "waiting_for_payback"
+    # The request answers the previous reply's tool calls. That reply must go back with its thinking,
+    # which a new front would invalidate, so nothing is switched in until the round ends.
+    TOOL_ROUND_OPEN = "tool_round_open"
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +64,7 @@ def decide_switch(
     min_saving_share: float,
     cache: CacheState,
     requested: bool = False,
+    tool_round_open: bool = False,
 ) -> SwitchDecision:
     """Whether to switch a staged cut into the request being built.
 
@@ -72,6 +76,9 @@ def decide_switch(
       its health debt. `stale_bound_tokens` is the most it may carry.
     - `min_saving_share`: when warm, how many times `rewritten_tokens` the saving must be.
     - `requested`: the developer asked for a collection now.
+    - `tool_round_open`: the request continues a tool round. It holds every switch back,
+      a requested one too: the provider refuses a reply's thinking once the history
+      before it has changed, and a reply whose tool calls are being answered must keep it.
 
     The checks run in order and the first that holds decides, so the reason is the cheapest
     one that applies: a switch labelled `STALE_WEIGHT_AT_BOUND` was warm, did not repay
@@ -83,6 +90,8 @@ def decide_switch(
         if value < 0:
             raise ValueError(f"{name} cannot be negative, got {value}")
 
+    if tool_round_open:
+        return SwitchDecision(False, SwitchReason.TOOL_ROUND_OPEN)
     if saving_tokens <= 0:
         return SwitchDecision(False, SwitchReason.NO_SAVING)
     if requested:

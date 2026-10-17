@@ -172,6 +172,8 @@ def _row(record: RequestRecord, kind: RowKind, spawned: list[str]) -> dict[str, 
             "spawned": spawned, "tokens_from_client": record.tokens_from_client,
             "tokens_forwarded": record.tokens_forwarded, "collected": record.collected,
             "carries_collections": record.carries_collections,
+            "error_type": outline.error_type if outline is not None else None,
+            "resent_as_written": record.resent_as_written,
             "provider": asdict(outline.usage) if outline is not None and outline.usage is not None else None}
 
 

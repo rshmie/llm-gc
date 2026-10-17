@@ -75,6 +75,8 @@ class RequestRecord:
     outline: ReplyOutline | None = None
     # On a subagent conversation's first request: the call that started it, once matched.
     spawned_by: SpawnRef | None = None
+    # Refused as LLM-GC rewrote it, so the client's own request was sent in its place.
+    resent_as_written: bool = False
 
 
 class RequestLog:
@@ -111,6 +113,22 @@ class RequestLog:
     def finish(self, record: RequestRecord, outline: ReplyOutline) -> None:
         record.ended_at = self._clock()
         record.outline = outline
+
+    def tool_round_open(self, conversation_id: str) -> bool:
+        """Whether the conversation's next request will answer tool calls, as far as its requests tell.
+
+        Open while its newest request is unanswered, or once its newest answered reply ended
+        in tool calls. A refused request changes nothing, so it is passed over. Unsure means
+        open: the wrong guess that way delays a switch, the other way gets a request refused.
+        """
+        for record in reversed(self._records):
+            if record.conversation_id != conversation_id:
+                continue
+            if record.outline is None:
+                return True
+            if record.outline.status == 200:
+                return record.outline.stop_reason == "tool_use"
+        return False
 
     def records(self) -> list[RequestRecord]:
         """Every record kept, in the order the requests were forwarded."""

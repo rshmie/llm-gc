@@ -1689,6 +1689,29 @@ class TestAPreparedCutWaitsForTheRightRequest:
         snapshot = service.session_manager.store.get("s").snapshot
         assert snapshot.staged is None and snapshot.cut_count == 1
 
+    def test_a_request_answering_tool_calls_never_carries_a_new_front(self):
+        """Live run, 2026-10-17: the first request to carry a recap answered a Write call, and the provider
+        refused it. Even on a cold cache the cut waits for the round to end."""
+        client, service, seen, clock = self._client(max_stale_ratio=1.0, **self.PATIENT)
+        history: list[dict] = []
+        for _ in range(8):
+            self._ask(client, seen, history)
+        history[-1] = {"role": "assistant", "content": [
+            {"type": "text", "text": "Writing it."},
+            {"type": "tool_use", "id": "toolu_1", "name": "Write", "input": {"path": "TODO.md"}}]}
+        history.append({"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "ok"}]})
+
+        clock[0] += 3600
+        client.post("/v1/messages", json={"model": "m", "max_tokens": 64, "messages": history},
+                    headers={"x-api-key": API_KEY, SESSION_HEADER: "s"})
+        assert not any(_is_front(message) for message in json.loads(seen[-1].content)["messages"])
+        assert service.session_manager.store.get("s").snapshot.staged is not None, "still prepared"
+
+        history.append({"role": "assistant", "content": UPSTREAM_OK["content"]})
+        clock[0] += 3600
+        forwarded = self._ask(client, seen, history)
+        assert _is_front(forwarded[0]), "the first request after the round carries it"
+
     def test_on_a_warm_cache_the_stale_bound_switches_it_in_for_the_models_sake(self):
         client, service, seen, _ = self._client(max_stale_ratio=0.5, **self.PATIENT)
         reasons = []
@@ -1698,6 +1721,52 @@ class TestAPreparedCutWaitsForTheRightRequest:
 
         assert any(_is_front(message) for message in forwarded[-1])
         assert SwitchReason.STALE_WEIGHT_AT_BOUND in reasons and SwitchReason.CACHE_COLD not in reasons
+
+
+class TestARefusedRewriteIsSentAsWritten:
+    """Never worse than no GC: a request the provider refuses as LLM-GC rewrote it goes again as the client wrote it."""
+
+    REFUSAL = {"type": "error", "error": {"type": "invalid_request_error",
+                                          "message": "messages.3.content.0: Invalid `signature` in `thinking` block."}}
+
+    def _converse_until_refused(self, caplog):
+        def upstream(request: httpx2.Request) -> httpx2.Response:
+            if any(_is_front(message) for message in json.loads(request.content)["messages"]):
+                return httpx2.Response(400, json=self.REFUSAL)
+            return httpx2.Response(200, json={**UPSTREAM_OK, "usage": USAGE})
+
+        client, service, _, seen = _proxy(upstream)
+        messages: list[dict] = []
+        statuses = []
+        with caplog.at_level(logging.WARNING, logger="llm_gc.proxy.server"):
+            for index in range(10):
+                messages.append({"role": "user", "content": f"turn {index}: we discussed the storage layer today"})
+                statuses.append(_post(client, {"model": "claude-sonnet-5", "max_tokens": 512,
+                                               "messages": messages}).status_code)
+                messages.append({"role": "assistant", "content": UPSTREAM_OK["content"][0]["text"]})
+        return client, seen, statuses
+
+    def test_the_client_never_sees_the_refusal_and_the_model_gets_its_request_whole(self, caplog):
+        client, seen, statuses = self._converse_until_refused(caplog)
+
+        assert set(statuses) == {200}
+        refused = next(i for i, request in enumerate(seen) if any(
+            _is_front(m) for m in json.loads(request.content)["messages"]))
+        resent = json.loads(seen[refused + 1].content)["messages"]
+        assert not any(_is_front(m) for m in resent), "sent as the client wrote it"
+        assert resent[0]["content"].startswith("turn 0:"), "the whole conversation, from its first turn"
+        assert client.app.state.metrics.rewrites_refused >= 1
+
+    def test_the_providers_reason_is_logged_and_the_collection_still_waits(self, caplog):
+        client, _, _ = self._converse_until_refused(caplog)
+
+        warnings = [r.getMessage() for r in caplog.records if "refused the request" in r.getMessage()]
+        assert warnings and "invalid_request_error: messages.3.content.0: Invalid `signature`" in warnings[0]
+        records = client.app.state.metrics.request_log.records()
+        first_refused = next(r for r in records if r.outline is not None and r.outline.status == 400)
+        assert first_refused.carries_collections == 0, "it reached no model"
+        assert first_refused.outline.error_type == "invalid_request_error"
+        assert records[records.index(first_refused) + 1].resent_as_written is True
 
 
 class TestTheNewestRequestIsCountedBothWays:

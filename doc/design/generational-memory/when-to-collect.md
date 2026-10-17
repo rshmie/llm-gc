@@ -161,6 +161,7 @@ While a request is being built with a cut staged, the policy takes these in orde
 stops at the first that holds:
 
 ```
+ 0  does the request answer tool calls?       yes ─► WAIT    tool round open       (even if requested)
  1  would the switch shrink the prompt?       no ──► WAIT    no saving
  2  did the developer press Run GC now?       yes ─► SWITCH  requested
  3  is the cache cold?                        yes ─► SWITCH  cache cold            (free)
@@ -169,6 +170,12 @@ stops at the first that holds:
  6  otherwise                                     ─► WAIT    waiting for payback
 ```
 
+- **A tool round holds every switch back** ([the cut](the-cut.md)): the reply whose tool
+  calls the request answers must keep its thinking, which a new front invalidates. Run
+  GC now pressed mid round is remembered and made by the first request after it; it is
+  forgotten if the cut it asked for is discarded. The dashboard learns whether a round
+  is open from the proxy's request log: open while the newest request is unanswered, or
+  once its reply ended in tool calls.
 - **Saving** is how many tokens the switch removes from the prompt, measured on the real
   summaries. **Tokens written again** is the size of the messages after the switch.
   The system prompt and tools are read either way and drop out of the comparison.

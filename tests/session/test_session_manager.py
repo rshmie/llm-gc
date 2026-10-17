@@ -79,3 +79,32 @@ class TestIdleSweeper:
         manager = SessionManager(session_timeout_s=1800)
         manager.get_or_create("s1")
         assert manager.sweep_once() == []
+
+
+class TestABreakIsNotTheEndOfAConversation:
+    def test_by_default_a_session_idle_through_a_long_break_is_kept(self):
+        """Live run, 2026-10-17: a 30-minute limit closed a conversation its person was still in."""
+        manager = SessionManager()
+        manager.get_or_create("s")
+        manager.store.get("s").last_updated_at = datetime.now(timezone.utc) - timedelta(hours=3)
+
+        assert manager.sweep_once() == []
+
+    def test_past_the_cap_the_least_recently_active_is_closed(self):
+        manager = SessionManager(max_sessions=2)
+        manager.get_or_create("oldest")
+        manager.get_or_create("newer")
+        manager.store.get("oldest").last_updated_at = datetime.now(timezone.utc) - timedelta(minutes=10)
+
+        manager.get_or_create("newest")
+
+        assert sorted(manager.store.active_session_ids()) == ["newer", "newest"]
+
+    def test_returning_to_a_held_session_closes_nothing(self):
+        manager = SessionManager(max_sessions=2)
+        manager.get_or_create("a")
+        manager.get_or_create("b")
+
+        manager.get_or_create("a")
+
+        assert sorted(manager.store.active_session_ids()) == ["a", "b"]

@@ -123,3 +123,28 @@ def test_a_requests_newest_message_is_named_by_who_wrote_it():
 
     assert [newest_kind(m) for m in (typed, results, report, reply)] == ["typed", "tool_results", "relayed",
                                                                          "assistant"]
+
+
+class TestAnOpenToolRound:
+    """Whether a conversation's next request will answer tool calls, from its own records."""
+
+    def test_open_while_unanswered_and_after_a_reply_that_called_tools(self):
+        log = RequestLog()
+        record = _begin(log, "s_1", "ab")
+        assert log.tool_round_open("s_1") is True, "unsure while the reply is on its way"
+
+        log.finish(record, ReplyOutline(status=200, finished=True, stop_reason="tool_use"))
+        assert log.tool_round_open("s_1") is True
+
+        log.finish(_begin(log, "s_1", "abcd"), ReplyOutline(status=200, finished=True, stop_reason="end_turn"))
+        assert log.tool_round_open("s_1") is False
+
+    def test_a_refused_request_is_passed_over(self):
+        log = RequestLog()
+        log.finish(_begin(log, "s_1", "ab"), ReplyOutline(status=200, finished=True, stop_reason="tool_use"))
+        log.finish(_begin(log, "s_1", "abcd"), ReplyOutline(status=429))
+
+        assert log.tool_round_open("s_1") is True, "the refused request answered nothing"
+
+    def test_a_conversation_with_no_requests_has_no_round_open(self):
+        assert RequestLog().tool_round_open("s_9") is False

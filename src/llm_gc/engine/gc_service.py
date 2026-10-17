@@ -197,20 +197,29 @@ class GcService:
         state = self.session_manager.get_or_create(session_id)
         return self._assemble(state.snapshot)
 
-    def gc_switch(self, session_id: str, cache: CacheState, *, requested: bool = False) -> GCResult | None:
+    def gc_switch(self, session_id: str, cache: CacheState, *, requested: bool = False,
+                  tool_round_open: bool = False) -> GCResult | None:
         """Request path: switch the session's staged cut in, if the switch policy says now. Immediate.
 
         `cache` is the provider cache the request being built would meet; `requested` is
-        the developer asking for a collection now. Returns the collection when one is
-        switched in, None otherwise. The commit is one synchronous step onto the current
-        snapshot with no model call, so the request being built is the first to carry the
-        new front. Emits the collection's events, then GC_FINISHED, after the commit.
+        the developer asking for a collection now; `tool_round_open` says the request
+        answers the previous reply's tool calls. A request the open round holds back is
+        remembered, and made by the first request outside one. Returns the collection when
+        one is switched in, None otherwise. The commit is one synchronous step onto the
+        current snapshot with no model call, so the request being built is the first to
+        carry the new front. Emits the collection's events, then GC_FINISHED, after the commit.
         """
         start = perf_counter()
         state = self.session_manager.store.get(session_id)
-        if state is None or (staged := state.snapshot.staged) is None:
+        if state is None:
             return None
-        preview = self._switch_preview(state, staged, cache, requested)
+        if (staged := state.snapshot.staged) is None:
+            state.switch_requested = False    # the cut it asked for is gone
+            return None
+        requested = requested or state.switch_requested
+        preview = self._switch_preview(state, staged, cache, requested, tool_round_open)
+        held_by_round = preview is not None and preview.decision.reason is SwitchReason.TOOL_ROUND_OPEN
+        state.switch_requested = requested and held_by_round
         if preview is None or not preview.decision.switch:
             return None
         before = state.snapshot
@@ -225,13 +234,14 @@ class GcService:
                                   data={"gc_run_id": result.gc_run_id, "session_id": session_id, "gc_result": result}))
         return result
 
-    def inspect(self, session_id: str, cache: CacheState = CacheState.COLD) -> SessionInspection | None:
+    def inspect(self, session_id: str, cache: CacheState = CacheState.COLD, *,
+                tool_round_open: bool = False) -> SessionInspection | None:
         """A read-only view of one session, or None if there is no such session.
 
         Uses the same rendering as `gc_collect`, the same planning as `gc_age` and
         the same measures as `gc_switch`, so the view cannot drift from what the
-        engine does. `cache` is the state the next request would meet, for the verdict
-        on a staged cut. No model calls, and unlike the request-path methods it never
+        engine does. `cache` is the state the next request would meet, and
+        `tool_round_open` whether it will answer tool calls, for the verdict on a staged cut. No model calls, and unlike the request-path methods it never
         creates a session or resets its idle clock: looking must not change what is
         looked at.
         """
@@ -260,7 +270,8 @@ class GcService:
             context_window=state.context_window or self.gc_config.context_window,
             recap_budget=recap_budget,
             collection_enabled=state.collection_enabled,
-            staged=self._switch_preview(state, snapshot.staged, cache) if snapshot.staged is not None else None,
+            staged=(self._switch_preview(state, snapshot.staged, cache, state.switch_requested, tool_round_open)
+                    if snapshot.staged is not None else None),
             token_rate=state.token_rate,
             window_in_own_count=own_window,
         )
@@ -577,7 +588,7 @@ class GcService:
         return degradations
 
     def _switch_preview(self, state: SessionState, staged: StagedCut, cache: CacheState,
-                        requested: bool = False) -> SwitchPreview | None:
+                        requested: bool = False, tool_round_open: bool = False) -> SwitchPreview | None:
         """The measures the switch policy weighs for the session's staged cut now, and its verdict.
 
         None when it may not be switched in at all: collection is off for the session, or
@@ -594,7 +605,7 @@ class GcService:
         share = self.gc_config.min_saving_share
         decision = decide_switch(saving_tokens=staged.saving_tokens, rewritten_tokens=rewritten,
                                  stale_tokens=staged.stale_tokens, stale_bound_tokens=bound, min_saving_share=share,
-                                 cache=cache, requested=requested)
+                                 cache=cache, requested=requested, tool_round_open=tool_round_open)
         return SwitchPreview(saving_tokens=staged.saving_tokens, rewritten_tokens=rewritten,
                              stale_tokens=staged.stale_tokens, stale_bound_tokens=bound, min_saving_share=share,
                              cache=cache, decision=decision)
