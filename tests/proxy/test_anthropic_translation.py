@@ -15,8 +15,11 @@ from llm_gc.proxy.anthropic_translation import (
     carry_instructions,
     extract_instructions,
     extract_messages,
+    fixed_prompt_tokens,
     reply_text,
     rewrite_messages,
+    rewrite_overhead_tokens,
+    uncached_prefix_tokens,
 )
 from llm_gc.utils import count_tokens
 
@@ -307,3 +310,44 @@ class TestTheCacheLifetimeAsked:
     ])
     def test_no_marker_or_an_unreadable_one_gets_the_default(self, payload):
         assert cache_lifetime_s(payload) == DEFAULT_CACHE_LIFETIME_S
+
+
+MARK = {"type": "ephemeral", "ttl": "1h"}
+STATIC = "You are a careful coding assistant. Follow the repository's conventions. " * 30
+DYNAMIC = "Working directory: /repo. Git status: clean. Today's date: 2026-10-18. " * 20
+TOOL = {"name": "Read", "description": "Reads a file from the local filesystem. " * 10,
+        "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}}}
+
+
+class TestWhatACollectionCachesAgain:
+    """Live run: a collection's re-cache was estimated at 4,101 tokens, and the provider wrote about 17,500
+    of LLM-GC's: the client's instructions and the end of its system prompt were left out."""
+
+    def test_the_system_prompt_after_the_last_cache_marker_is_cached_again(self):
+        payload = {"tools": [TOOL], "system": [{"type": "text", "text": STATIC, "cache_control": MARK},
+                                               {"type": "text", "text": DYNAMIC}]}
+        assert uncached_prefix_tokens(payload) == count_tokens(DYNAMIC)
+
+    def test_nothing_after_a_marker_on_the_last_block(self):
+        payload = {"tools": [TOOL], "system": [{"type": "text", "text": STATIC},
+                                               {"type": "text", "text": DYNAMIC, "cache_control": MARK}]}
+        assert uncached_prefix_tokens(payload) == 0
+
+    def test_a_marker_on_a_tool_leaves_the_whole_system_prompt_after_it(self):
+        payload = {"tools": [{**TOOL, "cache_control": MARK}], "system": STATIC}
+        assert uncached_prefix_tokens(payload) == count_tokens(STATIC)
+
+    def test_with_no_marker_everything_is_cached_again(self):
+        payload = {"tools": [TOOL], "system": [{"type": "text", "text": STATIC}, {"type": "text", "text": DYNAMIC}]}
+        assert uncached_prefix_tokens(payload) == fixed_prompt_tokens(payload)
+
+    def test_each_instruction_counts_once_with_the_instruction_messages(self):
+        payload = {**CLAUDE_CODE, "messages": [
+            {"role": "user", "content": f"{REMINDER}\n\nbuild a CSV converter"},
+            {"role": "assistant", "content": "Done."},
+            {"role": "user", "content": f"{REMINDER}\n\nadd a --pretty flag"},
+            {"role": "system", "content": "# Environment: working directory /tmp/project"}]}
+
+        overhead = rewrite_overhead_tokens(payload, extract_messages(payload), extract_instructions(payload))
+
+        assert overhead == count_tokens(REMINDER) + count_tokens("# Environment: working directory /tmp/project")

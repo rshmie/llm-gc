@@ -396,3 +396,19 @@ class TestTheLogSaysWhatHappened:
         assert any(line.startswith("prepared a collection in s:") and line.endswith("not applied yet") for line in said)
         assert any(line.startswith("applied a collection in s (cache cold)") for line in said)
         assert not any("summarised" in line for line in said), "each summary is detail, logged at debug"
+
+
+class TestWhatASwitchCachesAgain:
+    def test_the_callers_overhead_is_part_of_what_a_switch_must_repay(self):
+        service, _ = _service(min_saving_share=0.5, max_stale_ratio=1.0)
+        state = _record(service, 0, 1, 2, 3)
+        _prepare(service)
+        bare = service.inspect(SESSION, cache=CacheState.WARM).staged
+        assert bare.decision.reason is SwitchReason.REPAYS_REWRITE, "repays on the front and the tail alone"
+
+        overhead = 2 * state.snapshot.staged.saving_tokens
+        service.use_rewrite_overhead(SESSION, overhead)
+        weighed = service.inspect(SESSION, cache=CacheState.WARM).staged
+
+        assert (weighed.rewritten_tokens, weighed.rewrite_overhead_tokens) == (bare.rewritten_tokens + overhead, overhead)
+        assert weighed.decision.reason is SwitchReason.WAITING_FOR_PAYBACK

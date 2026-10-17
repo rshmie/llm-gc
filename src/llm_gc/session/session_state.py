@@ -30,6 +30,9 @@ class SessionState:
     context_window: int | None = None
     # The model's tokens per LLM-GC token, measured on its newest reply; None until one is.
     token_rate: float | None = None
+    # What a switch also makes the provider cache again besides the front and the tail's text,
+    # in LLM-GC's count, as measured on the newest request; 0 until a caller measures it.
+    rewrite_overhead_tokens: int = 0
     # False for a conversation that is recorded and shown but never collected.
     collection_enabled: bool = True
     # Run GC now asked for a switch while a tool round was open: the next request outside one makes it.

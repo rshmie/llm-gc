@@ -287,6 +287,8 @@ the conversation's recap budget = its share (30%) of that window, read at its ne
                                    converted to LLM-GC's count at the rate its replies measure
 ```
 
+**Each request also measures what a collection would make the provider cache again** besides the recap and the recent turns: the client's instructions, each counted once, as the recap carries them, and the part of the system prompt and tools after the client's last cache marker in them, which no cached read reaches once the messages change. The engine adds it to the cost a switch must repay ([when to collect](../generational-memory/when-to-collect.md)).
+
 **The rate between the two counts is measured on requests that send no thinking.** Where a reply's usage is read and its request sent no thinking block, the proxy divides the provider's count of that request's whole prompt (input, cache read and cache write) by LLM-GC's count of the same request, and gives the engine that rate for the conversation. The request that carries a new front sends none, so the rate is measured again at each collection. A conversation's first request sends none either, but it arrives before the conversation is known, so that rate is kept for its model, and a conversation that has not measured its own uses its model's latest. The engine keeps the window in the model's tokens and takes the recap budget and the stale bound from the window converted at the rate ([detail levels](../generational-memory/detail-levels.md)). A reply that reports no usage measures nothing, and the rate stays as it was. The latest such rate for a model also converts that model's replies when their thinking is measured.
 
 ```

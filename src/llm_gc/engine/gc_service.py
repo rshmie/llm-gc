@@ -305,6 +305,19 @@ class GcService:
         if state is not None:
             state.token_rate = token_rate
 
+    def use_rewrite_overhead(self, session_id: str, tokens: int) -> None:
+        """Note what a switch would also make the provider cache again, besides the front and the tail's text.
+
+        Measured by the caller on its newest request: content sent after the prompt's last cached
+        point that a collection never condenses, such as a client's instructions. Added to the
+        cost a switch must repay.
+        """
+        if tokens < 0:
+            raise ValueError(f"a rewrite overhead cannot be negative, got {tokens}")
+        state = self.session_manager.store.get(session_id)
+        if state is not None:
+            state.rewrite_overhead_tokens = tokens
+
     def pause_model_calls(self, retry_after_s: float | None, reason: str) -> None:
         """Make no model call of LLM-GC's own until the upstream's pressure has passed.
 
@@ -609,8 +622,10 @@ class GcService:
         tail = [turn for turn in snapshot.young if turn.turn_index not in staged.delta.departed_turns]
         if len(tail) < self.gc_config.last_n_turns_to_keep:
             return None
-        # After a switch no turn sends its thinking, so only text is cached again.
-        rewritten = staged.front_tokens + sum(turn.token_count for turn in tail)
+        # After a switch no turn sends its thinking, so only text is cached again, with whatever the
+        # caller sends after the prompt's last cached point and never condenses.
+        overhead = state.rewrite_overhead_tokens
+        rewritten = staged.front_tokens + sum(turn.token_count for turn in tail) + overhead
         # Measured now, not at staging: every reply since then has added thinking the switch would drop.
         dropped = snapshot.sent_thinking_tokens()
         stale_thinking = snapshot.sent_thinking_tokens(
@@ -623,7 +638,8 @@ class GcService:
                                  tool_round_open=tool_round_open)
         return SwitchPreview(saving_tokens=saving, rewritten_tokens=rewritten, stale_tokens=stale,
                              stale_bound_tokens=bound, min_saving_share=share, cache=cache, decision=decision,
-                             thinking_dropped_tokens=dropped, stale_thinking_tokens=stale_thinking)
+                             thinking_dropped_tokens=dropped, stale_thinking_tokens=stale_thinking,
+                             rewrite_overhead_tokens=overhead)
 
     def _window_in_own_count(self, state: SessionState) -> int:
         """The window of the model this session uses, counted as LLM-GC counts: what its recap budget and

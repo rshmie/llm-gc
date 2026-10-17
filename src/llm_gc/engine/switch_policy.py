@@ -71,8 +71,9 @@ def decide_switch(
     - `saving_tokens`: what the switch removes from the prompt, on the real summaries,
       including the model's earlier thinking it stops sending. Negative when the cut
       would grow it.
-    - `rewritten_tokens`: the messages after the switch, which the provider must cache
-      again. The system prompt and tools are read either way and are left out.
+    - `rewritten_tokens`: what the provider must cache again after the switch: the messages,
+      and any part of the system prompt and tools the client's cache markers do not cover.
+      The rest of the system prompt and tools is read either way and is left out.
     - `stale_tokens`: what the model carries that the plan has condensed, thinking
       included: the measure of its health debt. `stale_bound_tokens` is the most it may carry.
     - `min_saving_share`: when warm, how many times `rewritten_tokens` the saving must be.

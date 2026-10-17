@@ -52,6 +52,7 @@ from llm_gc.proxy.anthropic_translation import (
     refusal_reason,
     reply_text,
     rewrite_messages,
+    rewrite_overhead_tokens,
     sends_thinking,
     sent_thinking_tokens,
 )
@@ -326,6 +327,9 @@ async def _handle(app: FastAPI, request: Request) -> Response:
             _observe_history(app, session_id, client_messages, origin)
             app.state.gc_service.use_context_window(session_id, window.tokens)
             app.state.gc_service.set_collection_enabled(session_id, collected)
+            # Read before the switch is decided: a switch makes the provider cache these again too.
+            app.state.gc_service.use_rewrite_overhead(session_id,
+                                                      rewrite_overhead_tokens(payload, client_messages, instructions))
         forwarded = await _apply_gc(app, session_id, history, new_turn, payload, body, instructions)
     except Exception as err:
         logger.exception("GC failed on the request path; forwarding the original",

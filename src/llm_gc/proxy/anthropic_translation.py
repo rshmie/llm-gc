@@ -240,6 +240,40 @@ def fixed_prompt_tokens(payload: dict[str, Any]) -> int:
     return _count_repeated(system_text) + _count_repeated(tools_text)
 
 
+def rewrite_overhead_tokens(payload: dict[str, Any], messages: Sequence[Message],
+                            instructions: Sequence[Instruction] = ()) -> int:
+    """Tokens a collection makes the provider cache again besides the recap and the recent turns' text.
+
+    These are the client's instructions, which LLM-GC sends after the system prompt (each
+    counted once, as the recap carries them), and the part of the system prompt and tools
+    that the client's cache markers do not cover.
+    """
+    said_once = dict.fromkeys(text for message in messages for text in message.instructions)
+    return (uncached_prefix_tokens(payload) + sum(count_tokens(text) for text in said_once)
+            + sum(instruction.token_count for instruction in instructions))
+
+
+def uncached_prefix_tokens(payload: dict[str, Any]) -> int:
+    """Tokens of the tools and system prompt after the client's last cache marker in them; all of them if none.
+
+    The provider caches the prompt up to a marker. Once a collection changes the messages, a
+    cached read can reach no further than the last marker before them, so the rest is cached again.
+    """
+    raw_tools, system = payload.get("tools"), payload.get("system")
+    tools: list[Any] = raw_tools if isinstance(raw_tools, list) else []
+    system_blocks: list[Any] = system if isinstance(system, list) else [{"type": "text", "text": system}] if system else []
+    blocks = [*tools, *system_blocks]                 # the provider's prompt order: tools, then system
+    marked = [index for index, block in enumerate(blocks)
+              if isinstance(block, dict) and isinstance(block.get("cache_control"), dict)]
+    start = marked[-1] + 1 if marked else 0
+    later_tools = tools[start:]
+    later_system = system_blocks[max(0, start - len(tools)):]
+    tools_text = json.dumps(later_tools, ensure_ascii=False) if later_tools else ""
+    system_text = "\n".join(block["text"] for block in later_system
+                            if isinstance(block, dict) and isinstance(block.get("text"), str))
+    return _count_repeated(tools_text) + _count_repeated(system_text)
+
+
 @lru_cache(maxsize=_REPEATED_TEXTS_CACHED)
 def _count_repeated(text: str) -> int:
     # Every request of a conversation repeats the same system prompt and tools, often tens of

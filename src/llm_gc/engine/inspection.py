@@ -73,6 +73,8 @@ class SwitchPreview:
     # and the thinking of the turns its cut condenses (in `stale_tokens`).
     thinking_dropped_tokens: int = 0
     stale_thinking_tokens: int = 0
+    # Included in `rewritten_tokens`: what is cached again besides the front and the tail, such as instructions.
+    rewrite_overhead_tokens: int = 0
 
 
 @dataclass(frozen=True)

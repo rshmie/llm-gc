@@ -328,3 +328,19 @@ class TestAModelSwitch:
 
         assert service.session_manager.store.count() == 1, "one conversation, not one per model"
         assert client.get("/stats").json()["sessions_seeded"] == 1
+
+
+class TestWhatASwitchCachesAgain:
+    def test_each_request_tells_the_engine_what_a_switch_would_also_cache_again(self):
+        client, service, _, _ = _proxy()
+        system = [{"type": "text", "text": "You are careful. " * 50, "cache_control": {"type": "ephemeral"}},
+                  {"type": "text", "text": "Working directory: /repo. " * 40}]
+        reminder = "<system-reminder>\nContents of CLAUDE.md: use uv, never pip.\n</system-reminder>"
+        history = [{"role": "user", "content": f"{reminder}\n\nwhich database?"}, {"role": "assistant", "content": "Postgres."},
+                   {"role": "user", "content": "and the retention?"}]
+
+        _post(client, {"model": "m", "max_tokens": 64, "system": system, "messages": history},
+              headers={SESSION_HEADER: "s"})
+
+        expected = count_tokens(system[1]["text"]) + count_tokens(reminder)
+        assert service.session_manager.store.get("s").rewrite_overhead_tokens == expected

@@ -51,22 +51,22 @@ When warm, collecting throws away something that was nearly free; it is worth it
 
 ### What a switch costs, and what it buys
 
-Provider caches match a prompt from its first byte. A switch changes the message after the system prompt and tools, so those still match and everything behind the front does not:
+Provider caches match a prompt from its first byte, up to a cache marker the client placed. A switch changes the messages after the system prompt and tools, so a cached read reaches only as far as the client's last marker before them, and everything after it is written again:
 
 ```
-                      tools + system     the messages
-                      ──────────────     ──────────────────────────────────────────────
- cached before        ▓▓▓ read ▓▓▓       t0 t1 … t39 │ t40 … tN
- a switch                                 └ to become the front
+                      tools + system          the messages
+                      ───────────────────     ─────────────────────────────────────────
+ cached before        ▓▓ read ▓▓ │ ▓ read ▓   t0 t1 … t39 │ t40 … tN
+ a switch                 last marker ┘        └ to become the front
 
- first request        ▓▓▓ read ▓▓▓       [FRONT] t40 … tN [new]
- after a switch                          ░░░░░░░░░░ all written again ░░░░░░░░░░░
+ first request        ▓▓ read ▓▓ │ ░ again ░  [instructions][FRONT] t40 … tN [new]
+ after a switch                   ░░░░░░░░░░░░░░░░░ all written again ░░░░░░░░░░░░░░░░
 
- later requests       ▓▓▓ read ▓▓▓       [FRONT] t40 … tN … tN+k
-                                         ▓▓▓▓▓▓▓▓▓▓ read again ▓▓▓▓▓▓▓▓▓▓ │ new
+ later requests       ▓▓ read ▓▓ │ ▓ read ▓   [instructions][FRONT] t40 … tN … tN+k
+                                  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ read again ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ │ new
 ```
 
-The rewrite is the front plus the tail, **whatever the size of the cut**. Cutting more does not make it dearer; it makes what is rewritten smaller. That is why a staged cut is switched in whole or not at all.
+What is written again is three parts: the front and the tail; the client's instructions, which open the front; and whatever of the system prompt and tools sits after the client's last cache marker in them. Claude Code leaves the end of its system prompt unmarked, and its instructions run to thousands of tokens, so the last two together can outweigh the first. The rewrite is the same **whatever the size of the cut**. Cutting more does not make it dearer; it makes what is rewritten smaller. That is why a staged cut is switched in whole or not at all.
 
 A switch also stops sending the model's earlier thinking. Each reply's thinking is bound to the prompt it was written against, so the first request after a switch sends every earlier turn without it ([the cut](the-cut.md)). That thinking is billed as input on every request until then, so it is part of what a switch saves, and none of it is written again:
 
@@ -76,7 +76,7 @@ A switch also stops sending the model's earlier thinking. Each reply's thinking 
  after a switch       [FRONT] t40 … tN [new]          + no thinking: all of it predates the front
                       └──── written again ────┘
  saving   = what the recap saves against the turns it replaces  +  all the thinking still sent
- rewrite  = the front and the tail, text only
+ rewrite  = the front and the tail, text only, with the instructions and the unmarked system prompt
 ```
 
 In one live conversation, LLM-GC's text alone predicted a drop of about 8,000 of the provider's tokens at a switch; the provider's own count fell by about 24,000.
@@ -138,7 +138,7 @@ While a request is being built with a cut staged, the policy takes these in orde
 ```
 
 - **A tool round holds every switch back** ([the cut](the-cut.md)): the reply whose tool calls the request answers must keep its thinking, which a new front invalidates. Run GC now pressed mid round is remembered and made by the first request after it; it is forgotten if the cut it asked for is discarded. The dashboard learns whether a round is open from the proxy's request log: open while the newest request is unanswered, or once its reply ended in tool calls.
-- **Saving** is how many tokens the switch removes from the prompt: the recap's saving, measured on the real summaries when the cut is staged, plus all the model's earlier thinking still sent, measured as the request is built. **Tokens written again** is the size of the messages after the switch, text only, since no turn sends its thinking then. The system prompt and tools are read either way and drop out of the comparison.
+- **Saving** is how many tokens the switch removes from the prompt: the recap's saving, measured on the real summaries when the cut is staged, plus all the model's earlier thinking still sent, measured as the request is built. **Tokens written again** is the size of the messages after the switch, text only, since no turn sends its thinking then, with the part of the system prompt and tools after the client's last cache marker in them. The proxy measures the instructions and that unmarked part from each request. The rest of the system prompt and tools is read either way and drops out of the comparison.
 - **Thinking is an estimate**, made by the proxy from each reply's usage ([the proxy](../proxy/overview.md)); a conversation without it measures as text alone.
 - **The order only affects the label.** Each switch carries the cheapest reason that holds, so a switch labelled *stale weight at bound* is one that was warm, did not repay its rewrite and was forced: the only automatic kind that can cost more than not collecting.
 - **Setting `min_saving_share` or `max_stale_ratio` to zero** collects as soon as there is a saving, as a pass did when it committed on finishing.
@@ -198,6 +198,7 @@ Cost is not the only force. The project exists so that earlier decisions stay us
 - **A cut is switched in whole.** The rewrite does not depend on how much is cut, so a partial switch costs the same for a smaller saving.
 - **The thinking a switch drops is measured at the switch, not when the cut is staged.** Every reply after staging adds thinking the switch would also drop, so a figure taken at staging would grow stale and keep the cut waiting. The recap's own saving is fixed once its summaries exist, so it is taken at staging. *Rejected: counting thinking in what is written again* — after a switch no turn sends its thinking, and counting it there would cancel the saving it is part of. *Rejected: leaving thinking out* — the saving then reads as a fraction of the real one, and cuts wait far longer than the policy intends.
 - **The cut's own check stays in text.** A pass stages a cut only if its recap is smaller than the turns it replaces. Any switch drops the thinking, so the thinking says nothing about whether this recap is a good one.
+- **What is written again is read from the request, not learned.** The client's instructions and its cache markers are in every request, so the proxy can count what a switch would make the provider cache again before it happens. In one live conversation the front and the tail came to 4,101 tokens while the provider wrote about 17,500 of LLM-GC's: the instructions and the unmarked end of the system prompt made up the rest. *Rejected: learning the overhead from what past switches made the provider write* — it measures the real thing, but the first switch of every conversation has nothing to learn from, and that is the one most often decided on a warm cache.
 - **Unsure means warm.** The wrong guess in that direction costs an opportunity, not money.
 - **Prior art.** A provider's own context editing has the same two controls: a size trigger for when to look, and a minimum to clear, there to decide whether clearing is worth breaking the cache. This adds what such an API cannot know: a cold cache, and a deadline stated in what has gone quiet.
 

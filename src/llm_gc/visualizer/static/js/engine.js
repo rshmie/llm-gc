@@ -246,6 +246,7 @@ function renderStaged(k) {
             h("span", { class: "num" }, countEl("next-repays", s.saving_tokens), ` tokens saved · ${fmt(needed)} needed`),
             meterOf("next-repays", s.saving_tokens, needed, "Tokens applying it saves, against the tokens it must save"),
             h("p", {}, `Applying it makes the provider cache ${fmt(s.rewritten_tokens)} tokens again. On a warm cache, it must save at least ${fmt(s.min_saving_share)}× that.`,
+              s.rewrite_overhead_tokens ? ` Of those, ${fmt(s.rewrite_overhead_tokens)} come after the recap and are never condensed: your client's instructions, and the part of its system prompt and tools its cache markers don't cover.` : "",
               s.thinking_dropped_tokens ? ` The saving includes ≈${fmt(s.thinking_dropped_tokens)} tokens of the model's earlier thinking, an estimate: applying it stops sending all of it.` : "")),
           checkItem(overdue ? "good" : "wait", overdue ? "✓" : "…", "Stale tokens at their limit",
             h("span", { class: "num" }, countEl("next-stale", s.stale_tokens), ` of ${fmt(s.stale_bound_tokens)} tokens, by LLM-GC's count`),

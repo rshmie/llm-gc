@@ -105,6 +105,8 @@ class StagedCutState(BaseModel):
     # and the thinking of the messages it condenses (in `stale_tokens`).
     thinking_dropped_tokens: int = 0
     stale_thinking_tokens: int = 0
+    # Included in `rewritten_tokens`: what is cached again besides the recap and recent messages.
+    rewrite_overhead_tokens: int = 0
 
 
 class CacheReadingState(BaseModel):
@@ -186,7 +188,8 @@ def project_knowledge_state(inspection: SessionInspection, cache: CacheReading |
                               min_saving_share=staged.min_saving_share, switches=staged.decision.switch,
                               reason=staged.decision.reason.value,
                               thinking_dropped_tokens=staged.thinking_dropped_tokens,
-                              stale_thinking_tokens=staged.stale_thinking_tokens) if staged is not None else None,
+                              stale_thinking_tokens=staged.stale_thinking_tokens,
+                              rewrite_overhead_tokens=staged.rewrite_overhead_tokens) if staged is not None else None,
         cache=CacheReadingState(state=cache.state, uses_cache=cache.uses_cache, idle_s=cache.idle_s,
                                 lifetime_s=cache.lifetime_s) if cache is not None else None,
     )
