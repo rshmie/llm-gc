@@ -101,6 +101,10 @@ class StagedCutState(BaseModel):
     min_saving_share: float
     switches: bool                        # whether the next request would switch it in
     reason: str                           # the policy's reason, as `SwitchReason` names it
+    # Estimates included above: the model's earlier thinking applying it stops sending (in `saving_tokens`),
+    # and the thinking of the messages it condenses (in `stale_tokens`).
+    thinking_dropped_tokens: int = 0
+    stale_thinking_tokens: int = 0
 
 
 class CacheReadingState(BaseModel):
@@ -120,6 +124,10 @@ class KnowledgeState(BaseModel):
     recorded_turns: int
     cuts: int
     context_tokens: int
+    # Estimated thinking of earlier replies: sent with the next request on top of `context_tokens`,
+    # and carried by the conversation as written, which is what it would send without LLM-GC.
+    thinking_tokens: int = 0
+    written_thinking_tokens: int = 0
     front_text: str | None                # the front exactly as the model receives it
     front_tokens: int
     spans: list[SpanState]                # oldest first
@@ -151,6 +159,9 @@ def project_knowledge_state(inspection: SessionInspection, cache: CacheReading |
         recorded_turns=snapshot.recorded_turn_count,
         cuts=snapshot.cut_count,
         context_tokens=inspection.context_tokens,
+        thinking_tokens=inspection.thinking_tokens,
+        written_thinking_tokens=(sum(turn.thinking_tokens for turn in snapshot.young)
+                                 + sum(turn.thinking_tokens for span in snapshot.old for turn in span.turns)),
         front_text=inspection.front.message.content if inspection.front is not None else None,
         front_tokens=inspection.front.message.token_count if inspection.front is not None else 0,
         spans=[state for _, state in spans],
@@ -173,7 +184,9 @@ def project_knowledge_state(inspection: SessionInspection, cache: CacheReading |
                               saving_tokens=staged.saving_tokens, rewritten_tokens=staged.rewritten_tokens,
                               stale_tokens=staged.stale_tokens, stale_bound_tokens=staged.stale_bound_tokens,
                               min_saving_share=staged.min_saving_share, switches=staged.decision.switch,
-                              reason=staged.decision.reason.value) if staged is not None else None,
+                              reason=staged.decision.reason.value,
+                              thinking_dropped_tokens=staged.thinking_dropped_tokens,
+                              stale_thinking_tokens=staged.stale_thinking_tokens) if staged is not None else None,
         cache=CacheReadingState(state=cache.state, uses_cache=cache.uses_cache, idle_s=cache.idle_s,
                                 lifetime_s=cache.lifetime_s) if cache is not None else None,
     )

@@ -68,12 +68,13 @@ def decide_switch(
 ) -> SwitchDecision:
     """Whether to switch a staged cut into the request being built.
 
-    - `saving_tokens`: what the switch removes from the prompt, on the real summaries.
-      Negative when the cut would grow it.
+    - `saving_tokens`: what the switch removes from the prompt, on the real summaries,
+      including the model's earlier thinking it stops sending. Negative when the cut
+      would grow it.
     - `rewritten_tokens`: the messages after the switch, which the provider must cache
       again. The system prompt and tools are read either way and are left out.
-    - `stale_tokens`: what the model carries that the plan has condensed, the measure of
-      its health debt. `stale_bound_tokens` is the most it may carry.
+    - `stale_tokens`: what the model carries that the plan has condensed, thinking
+      included: the measure of its health debt. `stale_bound_tokens` is the most it may carry.
     - `min_saving_share`: when warm, how many times `rewritten_tokens` the saving must be.
     - `requested`: the developer asked for a collection now.
     - `tool_round_open`: the request continues a tool round. It holds every switch back,

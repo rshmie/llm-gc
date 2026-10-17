@@ -69,6 +69,10 @@ class SwitchPreview:
     min_saving_share: float     # when warm, how many times `rewritten_tokens` the saving must be
     cache: CacheState           # the state it was decided for
     decision: SwitchDecision
+    # Estimates included in the measures above: the thinking a switch stops sending (in `saving_tokens`),
+    # and the thinking of the turns its cut condenses (in `stale_tokens`).
+    thinking_dropped_tokens: int = 0
+    stale_thinking_tokens: int = 0
 
 
 @dataclass(frozen=True)
@@ -88,6 +92,7 @@ class SessionInspection:
     staged: SwitchPreview | None = None   # set while a prepared cut waits to be switched in
     token_rate: float | None = None       # the model's tokens per LLM-GC token; None until a reply measures it
     window_in_own_count: int = 0          # the window converted at `token_rate`: what the budgets are shares of
+    thinking_tokens: int = 0              # estimated thinking the next request sends on top of `context_tokens`
 
     @property
     def context(self) -> list[Message]:

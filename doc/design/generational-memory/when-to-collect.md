@@ -89,6 +89,23 @@ The rewrite is the front plus the tail, **whatever the size of the cut**. Cuttin
 not make it dearer; it makes what is rewritten smaller. That is why a staged cut is
 switched in whole or not at all.
 
+A switch also stops sending the model's earlier thinking. Each reply's thinking is bound to
+the prompt it was written against, so the first request after a switch sends every earlier
+turn without it ([the cut](the-cut.md)). That thinking is billed as input on every request
+until then, so it is part of what a switch saves, and none of it is written again:
+
+```
+                      the messages, with the thinking each reply carries
+ before a switch      t0 t1 … t39 │ t40 … tN          + thinking of every reply since the last switch
+ after a switch       [FRONT] t40 … tN [new]          + no thinking: all of it predates the front
+                      └──── written again ────┘
+ saving   = what the recap saves against the turns it replaces  +  all the thinking still sent
+ rewrite  = the front and the tail, text only
+```
+
+In one live conversation, LLM-GC's text alone predicted a drop of about 8,000 of the
+provider's tokens at a switch; the provider's own count fell by about 24,000.
+
 What a switch buys: every later request carries fewer tokens, and the model reasons over
 less that has gone quiet. A cached read costs a small fraction of normal input, while
 tokens the provider must write again cost at least normal input (on one provider's
@@ -143,7 +160,8 @@ answer, so the engine has no clock and no knowledge of any provider.
 ### The switch policy
 
 Everything turns on one measure, **stale weight**: the tokens of the staged cut's turns
-that the plan condenses, that is, what the model is still carrying that has gone quiet.
+that the plan condenses, with the thinking those turns still send, that is, what the model
+is still carrying that has gone quiet.
 Three zones on one axis:
 
 ```
@@ -176,9 +194,13 @@ stops at the first that holds:
   forgotten if the cut it asked for is discarded. The dashboard learns whether a round
   is open from the proxy's request log: open while the newest request is unanswered, or
   once its reply ended in tool calls.
-- **Saving** is how many tokens the switch removes from the prompt, measured on the real
-  summaries. **Tokens written again** is the size of the messages after the switch.
+- **Saving** is how many tokens the switch removes from the prompt: the recap's saving,
+  measured on the real summaries when the cut is staged, plus all the model's earlier
+  thinking still sent, measured as the request is built. **Tokens written again** is the
+  size of the messages after the switch, text only, since no turn sends its thinking then.
   The system prompt and tools are read either way and drop out of the comparison.
+- **Thinking is an estimate**, made by the proxy from each reply's usage
+  ([the proxy](../proxy/overview.md)); a conversation without it measures as text alone.
 - **The order only affects the label.** Each switch carries the cheapest reason that
   holds, so a switch labelled *stale weight at bound* is one that was warm, did not repay
   its rewrite and was forced: the only automatic kind that can cost more than not
@@ -287,6 +309,16 @@ limit.
   no rates, and rates differ between models, vendors and releases.
 - **A cut is switched in whole.** The rewrite does not depend on how much is cut, so a
   partial switch costs the same for a smaller saving.
+- **The thinking a switch drops is measured at the switch, not when the cut is staged.**
+  Every reply after staging adds thinking the switch would also drop, so a figure taken at
+  staging would grow stale and keep the cut waiting. The recap's own saving is fixed once
+  its summaries exist, so it is taken at staging. *Rejected: counting thinking in what is
+  written again* — after a switch no turn sends its thinking, and counting it there would
+  cancel the saving it is part of. *Rejected: leaving thinking out* — the saving then reads
+  as a fraction of the real one, and cuts wait far longer than the policy intends.
+- **The cut's own check stays in text.** A pass stages a cut only if its recap is smaller
+  than the turns it replaces. Any switch drops the thinking, so the thinking says nothing
+  about whether this recap is a good one.
 - **Unsure means warm.** The wrong guess in that direction costs an opportunity, not money.
 - **Prior art.** A provider's own context editing has the same two controls: a size trigger
   for when to look, and a minimum to clear, there to decide whether clearing is worth
@@ -327,6 +359,11 @@ limit.
   first: at most one staged cut's worth.
 - **More state.** One staged cut per session, and a switch on the request path.
 - **The default share is patient where writes are free.**
+- **The model loses its recent reasoning at every switch**, the tail's included, and counting
+  the thinking makes switches come sooner. The provider recommends this shape of compaction,
+  and the summary keeps what was decided, but a reply right after a switch may think again
+  to rebuild what it lost. Its output, compared with the replies before the switch, shows
+  how much.
 
 ## Known gaps
 
@@ -339,6 +376,3 @@ limit.
   model) are not yet read as cold.
 - **The bound's default is a draft.** The right value comes from replaying the
   decision-survival check at several bounds and seeing whether recall drops.
-- **A switch can land on a tool-result request**, where the reply that made the call loses
-  its thinking for that step. A policy that is not cold and not overdue could hold back
-  for a request that is not one.

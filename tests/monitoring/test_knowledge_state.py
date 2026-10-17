@@ -300,3 +300,41 @@ class TestWhatTheDashboardSaysIsWhatTheModelReceives:
             taken = set(state.next_cut.turns)
             for turn in verbatim:
                 assert (turn.becomes is not None) == (turn.turn_index in taken)
+
+
+class TestTheModelsEarlierThinking:
+    """The page shows the thinking estimate apart from the text, so a reader can tell the estimate from the count."""
+
+    def test_the_page_is_told_what_is_sent_and_what_the_conversation_as_written_carries(self):
+        service = _service()
+
+        async def scenario() -> None:
+            for index in range(12):
+                turn = _turn(index)
+                if turn.role == "assistant":
+                    turn = turn.model_copy(update={"thinking_tokens": 100})
+                service.gc_record(SESSION, [turn], [f"h{index}"])
+                await collect(service, SESSION)
+                if service.session_manager.store.get(SESSION).snapshot.thinking_valid_from is None:
+                    service.mark_front_sent(SESSION, history_turns=index + 1)
+
+        asyncio.run(scenario())
+        state = project_knowledge_state(service.inspect(SESSION))
+        snapshot = service.session_manager.store.get(SESSION).snapshot
+
+        assert state.cuts >= 1
+        assert state.written_thinking_tokens == 6 * 100, "every reply's thinking, condensed or not"
+        assert state.thinking_tokens == snapshot.sent_thinking_tokens() < state.written_thinking_tokens
+
+    def test_a_waiting_collection_says_how_much_of_its_measures_is_thinking(self):
+        service = _service(min_saving_share=1000.0)
+        for index in range(10):
+            turn = _turn(index)
+            service.gc_record(SESSION, [turn.model_copy(update={"thinking_tokens": 50 * (turn.role == "assistant")})],
+                              [f"h{index}"])
+        asyncio.run(service.gc_age(SESSION, ignore_batch_minimum=True))
+
+        staged = project_knowledge_state(service.inspect(SESSION)).staged
+
+        assert staged is not None and staged.thinking_dropped_tokens == 5 * 50
+        assert 0 < staged.stale_thinking_tokens < staged.thinking_dropped_tokens

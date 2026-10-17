@@ -94,6 +94,10 @@ class GCResult(BaseModel):
     """Set only when a cut was switched in: why then. `STALE_WEIGHT_AT_BOUND` marks one
     switched in for the model's health that may have cost more than it saved."""
 
+    thinking_dropped_tokens: int = Field(default=0, ge=0)
+    """Set only when a cut was switched in: the model's earlier thinking it stopped sending.
+    An estimate, saved on top of `tokens_saved`, which counts text."""
+
     @property
     def tokens_saved(self) -> int:
         return self.tokens_before - self.tokens_in_final

@@ -330,7 +330,8 @@ Each number comes from one place, at one moment in a request's life:
 
   Both sides are counted with LLM-GC's own tokenizer, so the ratio holds while the
   absolute numbers differ from the provider's. The system prompt and tools repeat on
-  every request, so their count is cached by text.
+  every request, so their count is cached by text. Each side also holds the model's
+  earlier thinking as that request sends it ([the model's hidden thinking](#the-models-hidden-thinking)).
 - **The provider's own count rides beside it.** Each reply's `usage` — uncached input,
   cache read, cache write, output — is added wherever its request was counted: from the
   body of an unstreamed reply, or read from a stream's `message_start` and
@@ -499,6 +500,63 @@ restarts appear only once they have happened: only a client sending the session 
 can cause them, so for Claude Code they would be a permanent row of zeros. `--json`
 always has every counter.
 
+### The model's hidden thinking
+
+A model that thinks before it answers puts that thinking in its reply as a block, the
+client sends the block back with every later request, and the provider bills it as input.
+The block carries no text LLM-GC can count: its readable part is empty or a short summary,
+and the thinking itself travels encrypted in the block's signature. Counted as text alone,
+every request looked smaller than it was, the gap grew with the conversation, and a
+switch's saving read as a fraction of the real one.
+
+So LLM-GC measures each reply's thinking once, as the reply passes through, and gives it
+back to the turn whenever the client sends that turn again:
+
+```
+ a reply passes ──► its usage: output tokens, thinking and visible text together
+                    its first thinking block ──► key: a hash of the signature's first characters
+                    remembered: key → the output, the model's rate, the model
+
+ a later request sends the turn back ──► the same block, the same key
+     thinking ≈ output ÷ rate − the turn's visible text, in LLM-GC's count
+     counted only when the request names the model that wrote it
+```
+
+- **Measured from the provider's own number.** A reply's output count holds its thinking
+  and what it shows; LLM-GC counts what it shows and takes that off. Nothing extra is
+  asked of the provider.
+- **Known by its signature.** The signature is unique from its first characters and grows
+  with the thinking, about four characters a token, so a long think streams as one line of
+  hundreds of kilobytes. The stream reader never holds a line that long: it reads the key
+  from the start of the line and lets the rest go. Only a hash is kept, never the
+  signature or the thinking.
+- **Counted as it is sent.** Tokens sent include every turn's thinking, because the client's
+  request carries all of it. Tokens forwarded include only what is left once a collection
+  has stripped it ([after a cut](#after-a-cut)); the count and the rewrite read one rule
+  for which turns keep theirs.
+- **Only for the model that wrote it.** A model that cannot read another model's thinking
+  drops it, and the provider does not bill what it drops. Which models read whose blocks
+  differs by pair and changes with releases; the model that wrote a block always reads it.
+- **Bounded.** 20,000 replies are remembered, and the one sent back least recently goes
+  first, so a conversation in progress keeps its own. A turn whose reply was let go counts
+  as carrying none.
+- **Provider-neutral past the translation.** Only the Anthropic translation knows which
+  blocks are thinking and how to key them; the engine sees one number per turn. A provider
+  whose replies send no thinking back never makes a key, and its turns carry none.
+
+*Rejected: the provider's token-counting endpoint* — exact, but one more call per reply
+against the rate limit the client's own requests share, and a gateway may not offer it.
+*Rejected: reading the size from how much the next request grew* — the noise in one step is
+as large as the thinking. *Rejected: reading the size from the signature's length* — the
+signature's format is the provider's own, undocumented and free to change. *Rejected:
+labelling the counts as text only* — honest, but they could not be set against the
+provider's, and the switch policy would keep undercounting what a switch saves.
+
+*Accepted costs:* the size is an estimate, and the dashboard shows it apart from the text,
+labelled as one. Replies from before LLM-GC started, or before a restart, carry none. A
+model that discards earlier thinking on its own, as older models do, is overcounted; that
+shows as the provider's count falling behind LLM-GC's over a conversation.
+
 ### Each conversation's window
 
 Each conversation names its model on every request, and one session runs several — a
@@ -529,13 +587,32 @@ the conversation's recap budget = its share (30%) of that window, read at its ne
                                    converted to LLM-GC's count at the rate its replies measure
 ```
 
-**Each reply measures the rate between the two counts.** Where a reply's usage is read,
-the proxy divides the provider's count of that request's whole prompt (input, cache read
-and cache write) by LLM-GC's count of the same request, and gives the engine that rate
-for the conversation. The engine keeps the window in the model's tokens and takes the
-recap budget and the stale bound from the window converted at the rate
+**The rate between the two counts is measured on requests that send no thinking.** Where
+a reply's usage is read and its request sent no thinking block, the proxy divides the
+provider's count of that request's whole prompt (input, cache read and cache write) by
+LLM-GC's count of the same request, and gives the engine that rate for the conversation.
+The first request of every conversation sends none, and neither does the request that
+carries a new front, so the rate is measured at each start and again at each collection.
+The engine keeps the window in the model's tokens and takes the recap budget and the stale
+bound from the window converted at the rate
 ([detail levels](../generational-memory/detail-levels.md)). A reply that reports no
-usage measures nothing, and the rate stays as it was. A collection pass is scheduled as
+usage measures nothing, and the rate stays as it was. The latest such rate for a model
+also converts that model's replies when their thinking is measured.
+
+```
+ measured on a request that sends thinking:
+     rate     = the provider's prompt ÷ (text + LLM-GC's thinking estimate)
+     estimate = a reply's output ÷ rate − its text
+ each feeds the other. With a model that does not bill earlier thinking, a smaller rate
+ makes a larger estimate, which makes a smaller rate: in a test, one reply's estimate
+ grew from 397 tokens to 23.8 million in eight turns.
+```
+
+*Rejected: measuring on every request* — the loop above. *Rejected: taking the estimate
+off the provider's prompt before dividing* — the estimate still feeds its own rate.
+*Accepted cost:* the rate changes less often. The first request of a conversation is mostly
+system prompt and tool definitions, so until its first collection the rate fits those better
+than the conversation's text. A collection pass is scheduled as
 its request is sent, so it uses the rate of the reply before; the rate moves little
 between requests.
 
@@ -585,7 +662,8 @@ conversation are tested against what clients actually do.
   sizes, scores, summarises, reads facts from and quotes a turn by its text alone.
   A tool call reads as `[tool call: name] {input}` and its output as
   `[tool result] ...` (`[tool result, error] ...` when the tool failed); an
-  attachment reads as `[image]` or `[document]`; thinking has no text form. In an
+  attachment reads as `[image]` or `[document]`; thinking has no text form, and its
+  size is estimated apart ([the model's hidden thinking](#the-models-hidden-thinking)). In an
   agent's conversation most turns are tool rounds, so reading only the words
   counted them as empty: the prompt looked smaller than it was, summaries were
   written without what the tools did, and a span kept word for word lost every

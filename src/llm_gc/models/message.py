@@ -26,6 +26,11 @@ class Message(BaseModel):
     `relayed` marks a user-role turn the client wrote to relay another agent's
     report - a background subagent's findings - rather than words the person typed.
     It is conversation, condensed like any turn, but never read as the person's.
+
+    `thinking_tokens` is an estimate of the model's hidden thinking inside `raw_content`,
+    in the same units as `token_count`. The provider bills it as input whenever the turn
+    is sent with its thinking, but it has no readable text. It only counts toward prompt
+    cost; scoring and summarising ignore it. It is 0 when unknown.
     """
     role: Literal["user", "assistant", "system"]
     content: str
@@ -34,6 +39,7 @@ class Message(BaseModel):
     raw_content: Any = Field(default=None, exclude=True, repr=False)
     instructions: tuple[str, ...] = Field(default=(), exclude=True, repr=False)
     relayed: bool = False
+    thinking_tokens: int = Field(default=0, ge=0)
 
     def preview(self, max_length: int = 50) -> str:
         if len(self.content) > max_length:

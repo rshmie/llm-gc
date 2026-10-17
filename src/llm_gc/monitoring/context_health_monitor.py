@@ -201,6 +201,7 @@ class ContextHealthMonitor:
                                  archive_count=gc_result.archived_count, keep_tokens=keep_tokens,
                                  compact_tokens=compact_tokens, archive_tokens=archive_tokens,
                                  tokens_before=gc_result.tokens_before, tokens_saved=gc_result.tokens_saved,
+                                 thinking_dropped_tokens=gc_result.thinking_dropped_tokens,
                                  gc_run_id=gc_result.gc_run_id, gc_status=gc_result.status,
                                  gc_completed_at=gc_completed_at, duration_ms=gc_result.duration_ms,
                                  failure_reason=gc_result.failure_reason, failure_stage=gc_result.failure_stage,
