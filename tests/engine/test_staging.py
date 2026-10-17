@@ -1,6 +1,7 @@
 """A pass stages a cut and the request path switches it in: what each step may change, and when."""
 
 import asyncio
+import logging
 from dataclasses import replace
 
 from llm_gc.config import GCConfig
@@ -378,3 +379,20 @@ class TestThinkingIsWeighed:
         service.mark_front_sent(SESSION, history_turns=4)
         _record_thinking(service, {4: 70}, 4)
         assert service.inspect(SESSION).thinking_tokens == 70, "a reply to the new front keeps its thinking"
+
+
+class TestTheLogSaysWhatHappened:
+    """A live run logged "compacted a run with a model" while nothing reached the model."""
+
+    def test_preparing_and_applying_are_one_line_each(self, caplog):
+        service, _ = _service()
+        _record(service, 0, 1, 2, 3)
+
+        with caplog.at_level(logging.INFO, logger="llm_gc"):
+            _prepare(service)
+            service.gc_switch(SESSION, CacheState.COLD)
+
+        said = [record.getMessage() for record in caplog.records if record.levelno >= logging.INFO]
+        assert any(line.startswith("prepared a collection in s:") and line.endswith("not applied yet") for line in said)
+        assert any(line.startswith("applied a collection in s (cache cold)") for line in said)
+        assert not any("summarised" in line for line in said), "each summary is detail, logged at debug"

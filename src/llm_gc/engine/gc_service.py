@@ -228,8 +228,13 @@ class GcService:
                                  cut_count=applied.snapshot.cut_count + 1)
         self._announce(session_id, staged.delta, applied)
         result = self._switched_result(before, state.snapshot, staged, preview.decision.reason, start)
-        logger.debug("collection switched in", extra={"session_id": session_id, "reason": preview.decision.reason.value,
-                                                      "young_remaining": len(state.snapshot.young)})
+        reason = preview.decision.reason.value
+        logger.info("applied a collection in %s (%s): about %s fewer tokens on each request, %s of them earlier "
+                    "thinking", session_id, reason.replace("_", " "), f"{preview.saving_tokens:,}",
+                    f"{preview.thinking_dropped_tokens:,}",
+                    extra={"session_id": session_id, "reason": reason, "saving_tokens": preview.saving_tokens,
+                           "thinking_dropped_tokens": preview.thinking_dropped_tokens,
+                           "young_remaining": len(state.snapshot.young)})
         self.event_bus.emit(Event(event_type=EventType.GC_FINISHED,
                                   data={"gc_run_id": result.gc_run_id, "session_id": session_id, "gc_result": result}))
         return result
@@ -501,8 +506,10 @@ class GcService:
             return self._unchanged_result(base, gc_run_id, GCStatus.DISCARDED_SESSION_CLOSED, start)
 
         state.snapshot = replace(current, staged=staged, version=current.version + 1)
-        logger.debug("cut staged", extra={"session_id": session_id, "gc_run_id": gc_run_id,
-                                          "turns_staged": cut_now, "saving_tokens": saving})
+        logger.info("prepared a collection in %s: %d older turns condensed, %s tokens of text shorter; not applied "
+                    "yet", session_id, cut_now, f"{saving:,}",
+                    extra={"session_id": session_id, "gc_run_id": gc_run_id, "turns_staged": cut_now,
+                           "saving_tokens": saving})
         return self._unchanged_result(state.snapshot, gc_run_id, GCStatus.STAGED, start, degradations=degradations)
 
     def _estimate(self, base: GenerationSnapshot, young: Sequence[Message], cut: int,

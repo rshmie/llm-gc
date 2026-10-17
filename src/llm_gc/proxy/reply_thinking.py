@@ -49,6 +49,10 @@ class ReplyThinking:
         while len(self._rates) > MODELS_REMEMBERED:
             self._rates.popitem(last=False)
 
+    def rate(self, model: str | None) -> float | None:
+        """Return the model's latest token rate, or None if none has been measured."""
+        return self._rates.get(model)
+
     def remember(self, key: str, *, output_tokens: int, model: str | None) -> None:
         """Store a finished reply's output under the key of its first thinking block.
 

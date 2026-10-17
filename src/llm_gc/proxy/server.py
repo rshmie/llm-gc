@@ -472,8 +472,9 @@ def _measure_request(app: FastAPI, session_id: str | None, origin: ClientOrigin 
                 metrics.cache_watch.observe(session_id, started_at=started_at, lifetime_s=lifetime_s,
                                             usage=outline.usage)
                 # The window is in the model's tokens; this is how LLM-GC sets its own counts against it.
-                if rate is not None:
-                    app.state.gc_service.use_token_rate(session_id, rate)
+                session_rate = rate if rate is not None else _rate_until_measured(app, session_id, model)
+                if session_rate is not None:
+                    app.state.gc_service.use_token_rate(session_id, session_rate)
             if outline.finished and outline.thinking_key is not None:
                 # The thinking's size is worked out when the client sends this reply back.
                 app.state.reply_thinking.remember(outline.thinking_key, output_tokens=outline.usage.output_tokens,
@@ -483,6 +484,16 @@ def _measure_request(app: FastAPI, session_id: str | None, origin: ClientOrigin 
             linker.offer_calls(origin.session_id, record, prompts)
 
     return (lambda outline, prompts: _never_blocking(close, outline, prompts)), record
+
+
+def _rate_until_measured(app: FastAPI, session_id: str, model: str | None) -> float | None:
+    """The model's latest rate, for a conversation that has not measured its own yet.
+
+    A conversation's first request carries no thinking, but it arrives before the conversation
+    is known, so its rate is kept only for its model.
+    """
+    state = app.state.gc_service.session_manager.store.get(session_id)
+    return app.state.reply_thinking.rate(model) if state is not None and state.token_rate is None else None
 
 
 def _thinking_sizer(app: FastAPI, payload: dict[str, Any]) -> ThinkingSizer:

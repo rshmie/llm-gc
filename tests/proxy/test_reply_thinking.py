@@ -210,6 +210,20 @@ class TestATurnCarriesItsReplysThinking:
         assert reply.thinking_tokens == (round(900 / rate) - count_tokens("Postgres.") if carried else 0)
         assert len(seen) == 2
 
+    def test_a_conversation_uses_its_models_rate_until_it_measures_its_own(self):
+        """Live run: the first request is clean but comes before the conversation is known, and every later
+        one carries thinking, so the conversation never had a rate and its window went unconverted."""
+        client, service, _, _ = _proxy(_streaming_upstream(_thinking_stream(output_tokens=900)))
+        first = _body(("user", "which database should hold the events?"), stream=True, model=MODEL)
+        _post(client, first)
+        forwarded = client.get("/stats").json()["tokens_forwarded"]
+
+        later = {**first, "messages": [*first["messages"], {"role": "assistant", "content": _sent_back()},
+                                       {"role": "user", "content": "and the retention?"}]}
+        _post(client, later, headers={SESSION_HEADER: "s"})
+
+        assert service.session_manager.store.get("s").token_rate == 300 / forwarded
+
     def test_an_unfinished_or_refused_reply_is_not_measured(self):
         cut_short = _thinking_stream().split(b"event: message_stop")[0]
         client, _, _, _ = _proxy(_streaming_upstream(cut_short))

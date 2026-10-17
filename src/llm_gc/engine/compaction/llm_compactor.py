@@ -141,8 +141,10 @@ class LLMCompactor(BaseCompactor):
             turn_index=first_turn,
         )
 
-        logger.info(
-            "compacted a run with a model",
+        # A summary is bought while a collection is prepared; whether and when it is applied is logged by the service.
+        logger.debug(
+            "summarised turns %d-%d: %d -> %d tokens", first_turn, last_turn, original_token_count,
+            summary_token_count,
             extra={
                 "turn_range": f"{first_turn}-{last_turn}",
                 "original_token_count": original_token_count,
