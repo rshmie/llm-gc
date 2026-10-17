@@ -13,7 +13,7 @@ import re
 from collections.abc import Mapping, Sequence
 
 from llm_gc.models import ClientOrigin, Message
-from llm_gc.proxy.anthropic_translation import lift_instructions
+from llm_gc.proxy.anthropic_translation import is_thinking_block, lift_instructions
 
 SESSION_HEADER = "x-llm-gc-session"
 """Client-supplied session id. Preferred over matching by content."""
@@ -50,10 +50,11 @@ def chain_hashes(messages: Sequence[Message]) -> list[str]:
     turn it recorded against a prefix of an incoming request. Each turn is hashed
     from its role and its provider content (`raw_content`, falling back to the
     text), in canonical form: key order, a plain string against one text block,
-    delivery hints such as `cache_control`, and the client's instructions inside a
-    turn do not count as an edit. A client moves its cache markers onto the newest
-    turns with every request, and Claude Code rewrites the instructions in earlier
-    turns, so a hash that included either saw one conversation as several.
+    delivery hints such as `cache_control`, the client's instructions inside a turn,
+    and the model's thinking do not count as an edit. A client moves its cache markers
+    onto the newest turns with every request, Claude Code rewrites the instructions in
+    earlier turns, and it removes earlier thinking when the conversation moves to
+    another model, so a hash that included any of them saw one conversation as several.
     """
     hashes: list[str] = []
     previous = ""
@@ -71,7 +72,7 @@ _DELIVERY_HINTS = frozenset({"cache_control"})
 
 
 def _as_said(content: object, role: str) -> object:
-    """Content as said: a plain string as its one text block, without delivery hints or instructions, at any depth."""
+    """Content as said: a plain string as its one text block, without delivery hints, instructions or thinking."""
     if isinstance(content, str):
         content = [{"type": "text", "text": content}]
     return _said(content, role)
@@ -82,7 +83,7 @@ def _said(value: object, role: str) -> object:
         return {key: _said(item, role) for key, item in value.items() if key not in _DELIVERY_HINTS}
     if isinstance(value, list):
         # A block that held only instructions is gone, not an empty block.
-        return [said for item in value if not _is_empty_text(said := _said(item, role))]
+        return [said for item in value if not is_thinking_block(item) and not _is_empty_text(said := _said(item, role))]
     if isinstance(value, str):
         return lift_instructions(value, role)[0]
     return value

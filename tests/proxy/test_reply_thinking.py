@@ -305,3 +305,26 @@ class TestThinkingIsCountedAsSent:
 
 def thinking_keys_in(body: dict) -> list[str]:
     return [key for message in body["messages"] for key in thinking_keys(message["content"])]
+
+
+class TestAModelSwitch:
+    def test_the_conversation_continues_when_the_client_drops_earlier_thinking(self):
+        """Live run: moving to another model, Claude Code sent the history without the earlier thinking."""
+        replies = itertools.count()
+
+        def upstream(request: httpx2.Request) -> httpx2.Response:
+            return httpx2.Response(200, json={**UPSTREAM_OK, "content": _sent_back(f"Eq{next(replies):04d}{SIGNATURE}")})
+
+        client, service, _, _ = _proxy(upstream)
+        history: list[dict] = []
+        for index, model in enumerate([MODEL, MODEL, "claude-sonnet-5-5"]):
+            if model != MODEL:
+                history = [{**turn, "content": [b for b in turn["content"] if b["type"] != "thinking"]}
+                           if turn["role"] == "assistant" else turn for turn in history]
+            history.append({"role": "user", "content": f"question {index}: the storage layer and its retention"})
+            reply = client.post("/v1/messages", json={"model": model, "max_tokens": 64, "messages": history},
+                                headers={"x-api-key": API_KEY})
+            history.append({"role": "assistant", "content": reply.json()["content"]})
+
+        assert service.session_manager.store.count() == 1, "one conversation, not one per model"
+        assert client.get("/stats").json()["sessions_seeded"] == 1

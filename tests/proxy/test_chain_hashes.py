@@ -86,6 +86,18 @@ class TestWhatCountsAsTheSameTurn:
         other = "<system-reminder>b</system-reminder> is how Claude Code marks its notes"
         assert chain_hashes([_turn("x", "assistant", quoted)]) != chain_hashes([_turn("x", "assistant", other)])
 
+    def test_thinking_removed_from_an_earlier_reply_is_not_an_edit(self):
+        """Live run: Claude Code removed earlier thinking when the conversation moved to another model, and
+        the conversation was started over, losing the collection already applied."""
+        said = {"type": "text", "text": "Postgres, partitioned by day."}
+        thought = [{"type": "thinking", "thinking": "", "signature": "EqQB" + "x" * 300}, said]
+        redacted = [{"type": "redacted_thinking", "data": "EmwK" + "y" * 300}, said]
+
+        assert chain_hashes([_turn("Postgres.", "assistant", thought)]) == \
+            chain_hashes([_turn("Postgres.", "assistant", [said])])
+        assert chain_hashes([_turn("Postgres.", "assistant", redacted)]) == \
+            chain_hashes([_turn("Postgres.", "assistant", [said])])
+
     def test_non_text_content_is_part_of_the_identity(self):
         """Two turns with the same text but different attached images are not the
         same turn."""

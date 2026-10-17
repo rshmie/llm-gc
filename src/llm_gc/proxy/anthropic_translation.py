@@ -608,7 +608,7 @@ def sent_thinking_tokens(messages: Iterable[Message], strip_thinking_before: int
 def sends_thinking(messages: Iterable[Message], strip_thinking_before: int = 0) -> bool:
     """Return whether any thinking block is left in these turns after `rewrite_messages` strips thinking."""
     return any(_keeps_thinking(message, strip_thinking_before) and isinstance(message.raw_content, list)
-               and any(map(_is_thinking_block, message.raw_content)) for message in messages)
+               and any(map(is_thinking_block, message.raw_content)) for message in messages)
 
 
 def _keeps_thinking(message: Message, strip_thinking_before: int) -> bool:
@@ -616,7 +616,8 @@ def _keeps_thinking(message: Message, strip_thinking_before: int) -> bool:
     return not 0 <= message.turn_index < strip_thinking_before
 
 
-def _is_thinking_block(block: object) -> bool:
+def is_thinking_block(block: object) -> bool:
+    """Return whether a content block is the model's thinking, in either form."""
     return isinstance(block, dict) and isinstance(kind := block.get("type"), str) and kind in _THINKING_BLOCK_TYPES
 
 
@@ -624,7 +625,7 @@ def _render_turn(message: Message, *, strip_thinking: bool) -> dict[str, Any] | 
     """One turn as the provider expects it, or None if nothing is left to send."""
     content = message.raw_content if message.raw_content is not None else message.content
     if strip_thinking and isinstance(content, list):
-        content = [block for block in content if not _is_thinking_block(block)]
+        content = [block for block in content if not is_thinking_block(block)]
         if not content:
             return None
     return {"role": message.role, "content": content}
