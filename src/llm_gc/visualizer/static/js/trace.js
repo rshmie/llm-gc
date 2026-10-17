@@ -2,7 +2,7 @@
 // requests on a waterfall in time, each subagent under the request whose reply started it. Measured, never
 // forecast: every number is a request that happened.
 
-import { PAUSED_TEXT, TRACE_KINDS } from "./vocabulary.js";
+import { PAUSED_TEXT, SWITCH_REASON, TRACE_KINDS } from "./vocabulary.js";
 import { $, compact, fill, fmt, h, plural, share } from "./dom.js";
 import { state, ui } from "./state.js";
 import { hoverTip, info } from "./tooltip.js";
@@ -172,10 +172,22 @@ function requestLine(row, window, depth) {
       row.tool_calls.length ? h("span", { class: "wf-calls" }, ` · then ${calls(row.tool_calls)}`) : null,
       row.resent_as_written ? h("span", { class: "st warn", ...hoverTip("Sent as written",
         "The provider refused LLM-GC's rewrite of this request, so LLM-GC sent it as Claude Code wrote it: the model got the whole conversation, as it would without LLM-GC.") }, " · sent as written") : null,
-      row.carries_collections ? h("span", { class: "wf-mark", ...hoverTip(TRACE_KINDS.collection[0], TRACE_KINDS.collection[1] + rewriteNote(row)) },
+      row.carries_collections ? h("span", { class: reasonsOf(row).includes("stale_weight_at_bound") ? "wf-mark st warn" : "wf-mark",
+        ...hoverTip(TRACE_KINDS.collection[0], TRACE_KINDS.collection[1] + reasonNote(row) + rewriteNote(row)) },
         row.provider && row.provider.cache_creation_input_tokens ? ` ◆ ${fmt(row.provider.cache_creation_input_tokens)} written to the cache` : " ◆") : null,
       status),
     bar(row.forwarded_at, row.ended_at, window, `kind-${row.kind}`, `${clock(row.forwarded_at)} · ${row.ended_at ? seconds(at(row.ended_at) - at(row.forwarded_at)) : "running"}`));
+}
+
+// Why each collection this request carries was applied then, as the switch policy decided it. A proxy
+// started before reasons were recorded sends none, and its page is served the current scripts.
+function reasonsOf(row) {
+  return row.switch_reasons ?? [];
+}
+
+function reasonNote(row) {
+  const reasons = reasonsOf(row).filter((reason) => reason in SWITCH_REASON);
+  return reasons.length ? ` Applied because ${reasons.map((reason) => SWITCH_REASON[reason]).join("; and another because ")}.` : "";
 }
 
 // What a collection's request wrote to the cache, for the ◆'s explanation.

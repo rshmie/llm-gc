@@ -320,15 +320,39 @@ class TestCollectionsWaitForARequestThatReachesTheModel:
         ledger.record_request(conversation_id="s_1", origin=MAIN, model="m", opening="h0", tokens_from_client=100,
                               tokens_forwarded=100, carries_front=False)
 
-        assert ledger.collections_waiting("s_1") == 1
+        assert len(ledger.collections_waiting("s_1")) == 1
 
     def test_a_refused_request_gives_back_what_it_was_to_carry(self):
         ledger = _ledger()
         _request(ledger, "s_1")
-        ledger.record_collection("s_1", completed=True, spent=ModelUsage())
+        ledger.record_collection("s_1", completed=True, spent=ModelUsage(), switch_reason="cache_cold")
         _request(ledger, "s_1")
-        assert ledger.collections_waiting("s_1") == 0, "the request carrying it is on its way"
+        assert ledger.collections_waiting("s_1") == (), "the request carrying it is on its way"
 
-        ledger.restore_waiting("s_1", 1)
+        ledger.restore_waiting("s_1", ("cache_cold",))
 
-        assert ledger.collections_waiting("s_1") == 1
+        assert ledger.collections_waiting("s_1") == ("cache_cold",)
+
+    def test_what_a_refused_request_gives_back_stays_ahead_of_a_collection_made_meanwhile(self):
+        ledger = _ledger()
+        _request(ledger, "s_1")
+        ledger.record_collection("s_1", completed=True, spent=ModelUsage(), switch_reason="cache_cold")
+        carried = ledger.collections_waiting("s_1")
+        _request(ledger, "s_1")
+        ledger.record_collection("s_1", completed=True, spent=ModelUsage(), switch_reason="requested")
+
+        ledger.restore_waiting("s_1", carried)
+
+        assert ledger.collections_waiting("s_1") == ("cache_cold", "requested"), "oldest first"
+        assert _conversation(ledger, "s_1")["collections_not_yet_sent"] == 2
+
+    def test_what_is_waiting_is_a_copy_the_next_request_cannot_empty(self):
+        """The proxy reads what a request carries before the ledger counts it, which clears the waiting list."""
+        ledger = _ledger()
+        _request(ledger, "s_1")
+        ledger.record_collection("s_1", completed=True, spent=ModelUsage(), switch_reason="repays_rewrite")
+
+        carried = ledger.collections_waiting("s_1")
+        _request(ledger, "s_1")
+
+        assert carried == ("repays_rewrite",)

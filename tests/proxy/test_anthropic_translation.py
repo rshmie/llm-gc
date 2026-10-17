@@ -169,6 +169,22 @@ class TestInstructionsInsideATurn:
 
         assert turn.content == "[tool result] line one" and turn.instructions == (REMINDER,)
 
+    @pytest.mark.parametrize("said", [
+        "Check how `<system-reminder>` blocks are lifted.",
+        "Wrap it in <system-reminder>x</system-reminder> tags, like Claude Code does.",
+        "Is the tag\n<system-reminder> on its own line\nread as the start of one?",
+    ])
+    def test_a_person_naming_the_element_in_their_words_keeps_every_word(self, said):
+        """Live run, 2026-10-17: a mention read as an element ran on to the end of the real one after it,
+        filing the rest of the person's words as the client's instructions."""
+        payload = {"messages": [{"role": "user", "content": [
+            {"type": "text", "text": said}, {"type": "text", "text": REMINDER}]}]}
+
+        turn = extract_messages(payload)[0]
+
+        assert turn.content == said, "every word is conversation"
+        assert turn.instructions == (REMINDER,), "the client's own element is still lifted"
+
     def test_an_assistant_reply_quoting_one_is_conversation(self):
         payload = {"messages": [{"role": "user", "content": "what does it say?"},
                                 {"role": "assistant", "content": f"It says: {REMINDER}"}]}

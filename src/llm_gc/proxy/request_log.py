@@ -67,7 +67,9 @@ class RequestRecord:
     tokens_from_client: int
     tokens_forwarded: int
     collected: bool
-    carries_collections: int       # collections made since its conversation's previous request: this one carries them
+    # Why each collection made since its conversation's previous request was switched in: this one
+    # carries them. As the engine's `SwitchReason` names it.
+    switch_reasons: tuple[str | None, ...] = ()
     # True once a later request of its conversation carries its newest message, False once one
     # replaces it; None until then.
     kept: bool | None = None
@@ -77,6 +79,10 @@ class RequestRecord:
     spawned_by: SpawnRef | None = None
     # Refused as LLM-GC rewrote it, so the client's own request was sent in its place.
     resent_as_written: bool = False
+
+    @property
+    def carries_collections(self) -> int:
+        return len(self.switch_reasons)
 
 
 class RequestLog:
@@ -94,7 +100,7 @@ class RequestLog:
 
     def begin(self, *, conversation_id: str | None, origin: ClientOrigin | None, hashes: Sequence[str],
               newest: NewestKind, model: str | None, tokens_from_client: int, tokens_forwarded: int,
-              collected: bool, carries_collections: int = 0) -> RequestRecord:
+              collected: bool, switch_reasons: Sequence[str | None] = ()) -> RequestRecord:
         """Open a record for a request about to be forwarded, and settle the earlier records it answers.
 
         `hashes` are the chain hashes of every message the request carries, in order.
@@ -105,7 +111,7 @@ class RequestLog:
                                position=len(hashes), newest=newest, newest_hash=hashes[-1], model=model,
                                forwarded_at=self._clock(), tokens_from_client=tokens_from_client,
                                tokens_forwarded=tokens_forwarded, collected=collected,
-                               carries_collections=carries_collections)
+                               switch_reasons=tuple(switch_reasons))
         self._records.append(record)
         self._watch(origin, record)
         return record

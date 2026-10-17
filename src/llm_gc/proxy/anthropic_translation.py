@@ -35,7 +35,11 @@ _ATTACHMENTS = {"image": "[image]", "document": "[document]"}
 # A client can also place instructions inside a turn's text, in this element: Claude
 # Code wraps CLAUDE.md, memory, the date and notes about files in it, in the user's
 # messages and in tool results. Lifted out of the turn, so it is never condensed.
-_REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
+# Only as the client writes it, a block that opens at the start of a line and closes at the end of
+# one: a person who names the element in a sentence is talking about it. Never across a second
+# opening tag, so a stray one cannot carry the words before a real element into it.
+_REMINDER = re.compile(r"^<system-reminder>(?:(?!<system-reminder>).)*?</system-reminder>[ \t]*$",
+                       re.DOTALL | re.MULTILINE)
 _BLANK_RUN = re.compile(r"\n{3,}")
 
 # A client can place instructions inside its conversation, as messages of this role:

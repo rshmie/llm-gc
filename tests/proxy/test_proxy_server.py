@@ -1541,6 +1541,30 @@ class TestEachSubagentIsLinkedToItsCall:
 
         assert all(record.spawned_by is None for record in records)
 
+    def test_a_prompt_that_mentions_the_reminder_tag_is_still_linked(self):
+        """Live run, 2026-10-17: a prompt naming `<system-reminder>` inline, then the client's own reminder
+        after it. The mention was read as an element that ran to the real one's end, so the opening lost
+        the rest of the prompt and no call matched."""
+        prompt = "Check how `<system-reminder>` blocks are lifted from turns, and report what you find."
+        ask = "Use a subagent to check the lifter."
+
+        def upstream(request: httpx2.Request) -> httpx2.Response:
+            if json.loads(request.content)["messages"][-1]["content"] != ask:
+                return httpx2.Response(200, json=UPSTREAM_OK)
+            return httpx2.Response(200, json={**UPSTREAM_OK, "stop_reason": "tool_use", "content": [
+                {"type": "tool_use", "id": "toolu_a", "name": "Agent", "input": {"prompt": prompt}}]})
+
+        client, _, _, _ = _proxy(upstream, link_subagents=True)
+        main = {CLIENT_SESSION_HEADER: "cc-1"}
+        _post(client, _body(("user", ask)), headers=main)
+        opening = [{"type": "text", "text": prompt},
+                   {"type": "text", "text": "<system-reminder>\nRepository context.\n</system-reminder>"}]
+        _post(client, {"model": "claude-sonnet-5", "max_tokens": 64, "messages": [{"role": "user", "content": opening}]},
+              headers={**main, CLIENT_AGENT_HEADER: "agent-a"})
+
+        spawner, task = client.app.state.metrics.request_log.records()
+        assert task.spawned_by is not None and task.spawned_by.request_id == spawner.request_id
+
 
 class TestLlmGcYieldsWhenTheUpstreamPushesBack:
     """A 429 or 529 on a client's request pauses LLM-GC's own model calls; the client's requests go through."""
@@ -1688,6 +1712,8 @@ class TestAPreparedCutWaitsForTheRightRequest:
         assert _is_front(forwarded[0]), "the cold request carries the collection"
         snapshot = service.session_manager.store.get("s").snapshot
         assert snapshot.staged is None and snapshot.cut_count == 1
+        carrying = client.app.state.metrics.request_log.records()[-1]
+        assert carrying.switch_reasons == ("cache_cold",), "its record says why it carries one"
 
     def test_a_request_answering_tool_calls_never_carries_a_new_front(self):
         """Live run, 2026-10-17: the first request to carry a recap answered a Write call, and the provider
@@ -1721,6 +1747,8 @@ class TestAPreparedCutWaitsForTheRightRequest:
 
         assert any(_is_front(message) for message in forwarded[-1])
         assert SwitchReason.STALE_WEIGHT_AT_BOUND in reasons and SwitchReason.CACHE_COLD not in reasons
+        carried = [r.switch_reasons for r in client.app.state.metrics.request_log.records() if r.switch_reasons]
+        assert carried == [("stale_weight_at_bound",)], "the one request that carried it says why"
 
 
 class TestARefusedRewriteIsSentAsWritten:
@@ -1767,6 +1795,8 @@ class TestARefusedRewriteIsSentAsWritten:
         assert first_refused.carries_collections == 0, "it reached no model"
         assert first_refused.outline.error_type == "invalid_request_error"
         assert records[records.index(first_refused) + 1].resent_as_written is True
+        waiting = client.app.state.metrics.traffic.collections_waiting(first_refused.conversation_id)
+        assert waiting and all(reason is not None for reason in waiting), "they wait with their reasons"
 
 
 class TestTheNewestRequestIsCountedBothWays:

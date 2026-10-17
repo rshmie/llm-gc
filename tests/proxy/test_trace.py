@@ -32,12 +32,12 @@ class _Session:
     def __init__(self) -> None:
         self.log = RequestLog(clock=_Clock())
 
-    def send(self, conversation, turns, newest="typed", origin=MAIN, calls=(), status=200, carries=0, sent=100,
+    def send(self, conversation, turns, newest="typed", origin=MAIN, calls=(), status=200, reasons=(), sent=100,
              forwarded=100):
         record = self.log.begin(conversation_id=conversation, origin=origin,
                                 hashes=[turns[:end] for end in range(1, len(turns) + 1)], newest=newest, model="m",
                                 tokens_from_client=sent, tokens_forwarded=forwarded, collected=origin.agent_id is None,
-                                carries_collections=carries)
+                                switch_reasons=reasons)
         self.log.finish(record, ReplyOutline(
             status=status, finished=status == 200, stop_reason="tool_use" if calls else "end_turn",
             usage=ProviderUsage(replies=1, cache_read_input_tokens=sent, cache_creation_input_tokens=sent, output_tokens=10),
@@ -165,10 +165,11 @@ def test_a_tools_own_model_call_inside_a_subagent_is_not_taken_for_its_task():
 def test_a_request_that_carried_a_collection_says_so_and_totals_add_the_providers_count():
     s = _Session()
     s.send("s_1", "abc", sent=1000, forwarded=1000)
-    s.send("s_1", "abcde", newest="tool_results", carries=1, sent=1200, forwarded=400)
+    s.send("s_1", "abcde", newest="tool_results", reasons=("repays_rewrite",), sent=1200, forwarded=400)
 
     [turn] = s.trace()["turns"]
     assert [row["carries_collections"] for row in turn["requests"]] == [0, 1]
+    assert [row["switch_reasons"] for row in turn["requests"]] == [[], ["repays_rewrite"]], "and why it was switched in"
     assert (turn["totals"]["tokens_saved"], turn["totals"]["cache_read_input_tokens"]) == (800, 2200)
 
 
@@ -185,7 +186,7 @@ def test_the_cache_writes_of_requests_that_carried_a_collection_are_totalled_as_
     """A collection changes the recap, so the prompt after it is cached again: the cost a token count hides."""
     s = _Session()
     s.send("s_1", "abc", sent=1000)
-    s.send("s_1", "abcde", newest="tool_results", carries=1, sent=1200, forwarded=400)
+    s.send("s_1", "abcde", newest="tool_results", reasons=("repays_rewrite",), sent=1200, forwarded=400)
     s.send("s_1", "abcdefg", newest="tool_results", sent=1300, forwarded=500)
 
     [turn] = s.trace()["turns"]

@@ -6,7 +6,7 @@ model calls. What the next request would carry is the engine's forecast, not thi
 """
 
 from collections import OrderedDict
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from typing import Any, TypeVar
@@ -142,8 +142,13 @@ class ConversationTraffic:
     last_request_at: datetime
     traffic: Traffic = field(default_factory=Traffic)
     collections: int = 0
-    # Collections made since its newest request. Their saving reaches the model only with the next one.
-    collections_not_yet_sent: int = 0
+    # Why each collection made since its newest request was switched in, oldest first, as the
+    # engine's `SwitchReason` names it. Their saving reaches the model only with the next request.
+    waiting: list[str | None] = field(default_factory=list)
+
+    @property
+    def collections_not_yet_sent(self) -> int:
+        return len(self.waiting)
 
     def as_dict(self) -> dict[str, Any]:
         return {"conversation_id": self.conversation_id,
@@ -209,7 +214,7 @@ class TrafficLedger:
             conversation.collected = collected
             if carries_front:
                 # This request carries every collection made so far.
-                conversation.collections_not_yet_sent = 0
+                conversation.waiting.clear()
             targets.append(conversation.traffic)
         else:
             unclaimed = self._unclaimed.get((opening, origin))
@@ -244,19 +249,21 @@ class TrafficLedger:
         client = self._client_sessions.get(client_session)
         return client.traffic.summaries if client is not None else None
 
-    def collections_waiting(self, conversation_id: str) -> int:
-        """Collections made since the conversation's newest request: the next request carries them."""
+    def collections_waiting(self, conversation_id: str) -> tuple[str | None, ...]:
+        """Why each collection made since the conversation's newest request was switched in: the next request carries them."""
         conversation = self._conversations.get(conversation_id)
-        return conversation.collections_not_yet_sent if conversation is not None else 0
+        return tuple(conversation.waiting) if conversation is not None else ()
 
-    def restore_waiting(self, conversation_id: str, collections: int) -> None:
+    def restore_waiting(self, conversation_id: str, reasons: Sequence[str | None]) -> None:
         """Collections a refused request was to carry: they still wait for a request that reaches the model."""
         conversation = self._conversations.get(conversation_id)
         if conversation is not None:
-            conversation.collections_not_yet_sent += collections
+            # Made before any collection that arrived meanwhile, so they stay first.
+            conversation.waiting[:0] = reasons
 
-    def record_collection(self, conversation_id: str, *, completed: bool, spent: ModelUsage) -> None:
-        """Count a collection's own model calls, and the collection itself when one was made."""
+    def record_collection(self, conversation_id: str, *, completed: bool, spent: ModelUsage,
+                          switch_reason: str | None = None) -> None:
+        """Count a collection's own model calls, and the collection itself, with why it was switched in, when one was made."""
         self.total.summaries.add(spent)
         conversation = self._conversations.get(conversation_id)
         if conversation is None:
@@ -266,7 +273,7 @@ class TrafficLedger:
             client.traffic.summaries.add(spent)
         if completed:
             conversation.collections += 1
-            conversation.collections_not_yet_sent += 1
+            conversation.waiting.append(switch_reason)
 
     def as_dict(self) -> dict[str, Any]:
         """Every count, grouped by client session, the most recently active first."""

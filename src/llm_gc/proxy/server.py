@@ -425,7 +425,7 @@ def _measure_request(app: FastAPI, session_id: str | None, origin: ClientOrigin 
         hashes = hashes if hashes is not None else chain_hashes(client_messages)
         model = _model_name(payload)
         # Read before the ledger counts this request, which marks them sent.
-        carried = metrics.traffic.collections_waiting(session_id) if session_id is not None and carries_front else 0
+        carried = metrics.traffic.collections_waiting(session_id) if session_id is not None and carries_front else ()
         counted = metrics.traffic.record_request(conversation_id=session_id, origin=origin, model=model,
                                                  opening=hashes[0], tokens_from_client=from_client,
                                                  tokens_forwarded=forwarded, context_window=window,
@@ -433,7 +433,7 @@ def _measure_request(app: FastAPI, session_id: str | None, origin: ClientOrigin 
         record = metrics.request_log.begin(conversation_id=session_id, origin=origin, hashes=hashes,
                                            newest=newest_kind(client_messages[-1]), model=model,
                                            tokens_from_client=from_client, tokens_forwarded=forwarded,
-                                           collected=collected, carries_collections=carried)
+                                           collected=collected, switch_reasons=carried)
         linker: SpawnLinker | None = app.state.spawn_linker
         if linker is not None and origin is not None and origin.agent_id is not None and record.position == 1:
             first = client_messages[0]
@@ -450,10 +450,10 @@ def _measure_request(app: FastAPI, session_id: str | None, origin: ClientOrigin 
                                                    f"the upstream {pressure} a request from the client")
         if carried and outline.status != 200 and session_id is not None:
             # A refused request reached no model, so the collections it carried still wait for one that does.
-            record.carries_collections = 0
+            record.switch_reasons = ()
             metrics.traffic.restore_waiting(session_id, carried)
         if outline.usage is not None:
-            TrafficLedger.record_usage(counted, outline.usage, forwarded, carried_collection=carried > 0)
+            TrafficLedger.record_usage(counted, outline.usage, forwarded, carried_collection=bool(carried))
             if session_id is not None:
                 metrics.cache_watch.observe(session_id, started_at=started_at, lifetime_s=lifetime_s,
                                             usage=outline.usage)
@@ -468,12 +468,13 @@ def _measure_request(app: FastAPI, session_id: str | None, origin: ClientOrigin 
 
 
 def _count_collection(app: FastAPI, event: Event) -> None:
-    """Count a collection, and what its own model calls spent, against its conversation."""
+    """Count a collection, why it was switched in, and what its own model calls spent, against its conversation."""
     result: GCResult = event.data["gc_result"]
     traffic: TrafficLedger = app.state.metrics.traffic
     traffic.record_collection(event.data["session_id"], completed=result.status is GCStatus.COMPLETED,
                               spent=ModelUsage(calls=result.summary_calls, input_tokens=result.summary_input_tokens,
-                                               output_tokens=result.summary_output_tokens))
+                                               output_tokens=result.summary_output_tokens),
+                              switch_reason=result.switch_reason.value if result.switch_reason is not None else None)
 
 
 def _record_client_history(app: FastAPI, history: list[Message], hashes: Sequence[str], header_value: str | None,
