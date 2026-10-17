@@ -2,40 +2,18 @@
 
 **See what your model remembers, what it has forgotten, and when to worry.**
 
-If you've spent 50+ turns in a Claude Code session, you've probably watched the model
-start forgetting things: the database you agreed on, the approach you picked, the thing
-you said *not* to do. It's all still in the conversation, buried under 130K tokens of old
-file reads, stale command output and settled debates. Every request re-sends all of it,
-so you pay for the noise on every call, and the model answers in the same confident tone
-whether the decision is still in view or not.
+If you've spent 50+ turns in a Claude Code session, you've probably watched the model start forgetting things: the database you agreed on, the approach you picked, the thing you said *not* to do. It's all still in the conversation, buried under 130K tokens of old file reads, stale command output and settled debates. Every request re-sends all of it, so you pay for the noise on every call, and the model answers in the same confident tone whether the decision is still in view or not.
 
-LLM-GC sits between your app and the provider and manages the conversation the way a
-generational garbage collector manages memory. Recent turns stay word for word. Older
-exchanges are shown at a level of detail — quoted whole, summarised, or archived to their
-opening line and the facts they established — chosen by how much each matters now, chosen
-again at every collection, and raised back when the conversation returns to them. The
-next request carries one compact recap instead of the whole history. **And it never does this
-silently:** a live dashboard shows, for every turn, exactly what the model still
-receives, so you can see when its grounding has gone.
+LLM-GC sits between your app and the provider and manages the conversation the way a generational garbage collector manages memory. Recent turns stay word for word. Older exchanges are shown at a level of detail — quoted whole, summarised, or archived to their opening line and the facts they established — chosen by how much each matters now, chosen again at every collection, and raised back when the conversation returns to them. The next request carries one compact recap instead of the whole history.
+**And it never does this silently:** a live dashboard shows, for every turn, exactly what the model still receives, so you can see when its grounding has gone.
 
-To run it with Claude Code, follow [Get started](#get-started): five steps, about ten
-minutes.
+To run it with Claude Code, follow [Get started](#get-started): five steps, about ten minutes.
 
-> **Status: work in progress, not yet pip-installable.** The engine, an
-> Anthropic-compatible proxy (streaming included), the `llm-gc` command and the dashboard
-> are built and tested, and Claude Code runs through the proxy. A
-> [decision-survival check](evals/decision_survival/README.md) measures what the model can
-> still answer once LLM-GC has condensed a conversation: on its latest run all 37 answers
-> survived, with prompts 12–17% smaller on the short conversations and 42–43% smaller on
-> the long ones — one run, on scripted conversations. Not done yet: benchmarks on real
-> sessions with a post-session report, recall (restoring a condensed exchange on the
-> request that asks about it), and the OpenAI-compatible endpoint.
+> **Status: work in progress, not yet pip-installable.** The engine, an Anthropic-compatible proxy (streaming included), the `llm-gc` command and the dashboard are built and tested, and Claude Code runs through the proxy. A [decision-survival check](evals/decision_survival/README.md) measures what the model can still answer once LLM-GC has condensed a conversation: on its latest run all 37 answers survived, with prompts 12–17% smaller on the short conversations and 42–43% smaller on the long ones — one run, on scripted conversations. Not done yet: benchmarks on real sessions with a post-session report, recall (restoring a condensed exchange on the request that asks about it), and the OpenAI-compatible endpoint.
 
 ## Get started
 
-LLM-GC is a small server that runs on your machine. You point Claude Code at it, and it
-passes each request on to Anthropic, or to your company's gateway, with the conversation
-condensed:
+LLM-GC is a small server that runs on your machine. You point Claude Code at it, and it passes each request on to Anthropic, or to your company's gateway, with the conversation condensed:
 
 ```
  Claude Code ─────────────────►  LLM-GC  ─────────────────►  Anthropic, or your
@@ -45,10 +23,8 @@ condensed:
                                     └──►  dashboard :9901, in your browser
 ```
 
-Each arrow is set in its own place. `upstream` is where LLM-GC sends requests on:
-Anthropic by default, or your gateway, set in step 2. `ANTHROPIC_BASE_URL` is where Claude
-Code sends them, and step 4 sets it to LLM-GC. Until then, in either setup, Claude Code
-doesn't know LLM-GC exists.
+Each arrow is set in its own place. `upstream` is where LLM-GC sends requests on: Anthropic by default, or your gateway, set in step 2. `ANTHROPIC_BASE_URL` is where Claude Code sends them, and step 4 sets it to LLM-GC. 
+Until then, in either setup, Claude Code doesn't know LLM-GC exists.
 
 **Two credentials, two jobs:**
 
@@ -57,13 +33,10 @@ doesn't know LLM-GC exists.
 | **Claude Code's login** | Your conversation. Passed on untouched, never stored | In Claude Code, as now. You change nothing |
 | **LLM-GC's own key** | Only LLM-GC's own short calls: summarising old exchanges and reading their facts. Never your conversation. Billed to that key | LLM-GC's `.env` file, set up in step 2 |
 
-LLM-GC can't borrow Claude Code's login, so you give it a key of its own. Behind a company
-gateway, it can be the same token Claude Code uses. The model LLM-GC calls is its own
-choice too, separate from the one you talk to: `model` under `[summary]` in `llm-gc.toml`
-(see [Configuration](#configuration)).
+LLM-GC can't borrow Claude Code's login, so you give it a key of its own. Behind a company gateway, it can be the same token Claude Code uses. The model LLM-GC calls is its own choice too, separate 
+from the one you talk to: `model` under `[summary]` in `llm-gc.toml` (see [Configuration](#configuration)).
 
-> **Just want to look first?** [Without a key](#without-a-key) runs the dashboard on
-> scripted conversations, with no key and no Claude Code.
+> **Just want to look first?** [Without a key](#without-a-key) runs the dashboard on scripted conversations, with no key and no Claude Code.
 
 ### Which setup are you?
 
@@ -75,17 +48,15 @@ grep ANTHROPIC_BASE_URL ~/.claude/settings.json
 
 | It prints | Your setup | What LLM-GC needs |
 |---|---|---|
-| Nothing, or *No such file* | **Direct.** Claude Code talks to Anthropic, with a Claude Pro or Max login or with an API key | An Anthropic API key from [console.anthropic.com](https://console.anthropic.com). A Pro or Max subscription doesn't include one: the Console bills it separately |
+| Nothing, or *No such file* | **Direct.** Claude Code talks to Anthropic, with a Claude Pro or Max login or with an API key | An Anthropic API key from [console.anthropic.com](https://console.anthropic.com). 
+A Pro or Max subscription doesn't include one: the Console bills it separately |
 | A line with a URL | **Gateway.** Your company routes Claude through its own address | That address, a model name and a token, all copied from `~/.claude/settings.json` in step 2 |
 
-If Claude Code runs on Amazon Bedrock or Google Vertex AI, LLM-GC can't sit in front of it
-yet.
+If Claude Code runs on Amazon Bedrock or Google Vertex AI, LLM-GC can't sit in front of it yet.
 
 ### 1. Install
 
-You need [uv](https://docs.astral.sh/uv/getting-started/installation/) (`brew install uv`,
-or `curl -LsSf https://astral.sh/uv/install.sh | sh`). It installs Python 3.13 for you if
-you don't have it.
+You need [uv](https://docs.astral.sh/uv/getting-started/installation/) (`brew install uv`, or `curl -LsSf https://astral.sh/uv/install.sh | sh`). It installs Python 3.13 for you if you don't have it.
 
 ```bash
 git clone https://github.com/rshmie/llm-gc.git
@@ -95,8 +66,7 @@ source .venv/bin/activate    # puts the llm-gc command on this terminal's PATH
 llm-gc --version             # prints its version: the install worked
 ```
 
-Every new terminal needs `source .venv/bin/activate`, run in the LLM-GC folder, before
-`llm-gc` works.
+Every new terminal needs `source .venv/bin/activate`, run in the LLM-GC folder, before `llm-gc` works.
 
 ### 2. Configure LLM-GC
 
@@ -107,13 +77,11 @@ llm-gc config init       # writes llm-gc.toml: LLM-GC's settings, each one comme
 cp .env.example .env     # .env holds LLM-GC's key
 ```
 
-Both files stay in this folder, and git ignores both. `llm-gc` reads them from the folder
-you start it in, so always start it from here.
+Both files stay in this folder, and git ignores both. `llm-gc` reads them from the folder you start it in, so always start it from here.
 
 #### Direct
 
-Claude Code calls Anthropic's API itself, with your Pro or Max login or an API key.
-LLM-GC forwards to Anthropic by default, so all it needs is its own key.
+Claude Code calls Anthropic's API itself, with your Pro or Max login or an API key. LLM-GC forwards to Anthropic by default, so all it needs is its own key.
 
 Open `.env` and put your API key on the `ANTHROPIC_API_KEY` line:
 
@@ -125,8 +93,7 @@ Leave `llm-gc.toml` as it is, and go on to [check the setup](#check-the-setup).
 
 #### Gateway
 
-Claude Code calls your company's own address, which passes requests on to Anthropic.
-LLM-GC goes between Claude Code and that gateway, and sends its own calls there too:
+Claude Code calls your company's own address, which passes requests on to Anthropic. LLM-GC goes between Claude Code and that gateway, and sends its own calls there too:
 
 ```
 Claude Code ──►  LLM-GC  ──►  your company's gateway  ──►  Anthropic
@@ -140,10 +107,7 @@ Open `~/.claude/settings.json` and copy three values from its `env` block:
 | A model name, from an entry ending in `_MODEL` such as `ANTHROPIC_DEFAULT_SONNET_MODEL` | `llm-gc.toml`: the `model` line under `[summary]`. Delete the `#` in front of it | `model = "…"` |
 | `ANTHROPIC_AUTH_TOKEN` (or `ANTHROPIC_API_KEY`) | `.env`: the line with the same name | `ANTHROPIC_AUTH_TOKEN=…` |
 
-Gateways sometimes name models their own way and refuse LLM-GC's default, so set the model name accordingly.
-Every setting in `llm-gc.toml` starts commented out at its default, so the file changes
-nothing until you edit it. Once edited, the two lines you set look like this, each in its
-own place in the file:
+Gateways sometimes name models their own way and refuse LLM-GC's default, so set the model name accordingly. Every setting in `llm-gc.toml` starts commented out at its default, so the file changes nothing until you edit it. Once edited, the two lines you set look like this, each in its own place in the file:
 
 ```toml
 upstream = "https://your-gateway.example.com"
@@ -152,15 +116,11 @@ upstream = "https://your-gateway.example.com"
 model = "your-gateway-sonnet-name"
 ```
 
-Edit the lines that are already there rather than adding new ones at the end of the file:
-a line added there lands in the last section, `[engine]`, and `llm-gc start` refuses it.
+Edit the lines that are already there rather than adding new ones at the end of the file: a line added there lands in the last section, `[engine]`, and `llm-gc start` refuses it.
 
-No `_MODEL` entry, or no token in the `env` block (some gateways hand tokens out through a
-helper script, `apiKeyHelper`)? Ask your gateway team for a model name and a token that
-LLM-GC can use.
+No `_MODEL` entry, or no token in the `env` block (some gateways hand tokens out through a helper script, `apiKeyHelper`)? Ask your gateway team for a model name and a token that LLM-GC can use.
 
-Leave `~/.claude/settings.json` as it is. Step 4 sets LLM-GC's address in your project
-instead.
+Leave `~/.claude/settings.json` as it is. Step 4 sets LLM-GC's address in your project instead.
 
 #### Check the setup
 
@@ -168,10 +128,7 @@ instead.
 llm-gc config show
 ```
 
-It prints every setting LLM-GC will use and where each came from. A value you changed
-stands out; one that only repeats its default is dimmed. It ends with LLM-GC's key, never
-its value. The last line should read `✓ LLM-GC has its own key for anthropic.` Behind a
-gateway, also check `upstream` and `model`. Step 3 then tests the key for real.
+It prints every setting LLM-GC will use and where each came from. A value you changed stands out; one that only repeats its default is dimmed. It ends with LLM-GC's key, never its value. The last line should read `✓ LLM-GC has its own key for anthropic.` Behind a gateway, also check `upstream` and `model`. Step 3 then tests the key for real.
 
 ### 3. Start LLM-GC
 
@@ -179,9 +136,7 @@ gateway, also check `upstream` and `model`. Step 3 then tests the key for real.
 llm-gc start --dashboard
 ```
 
-Before it serves anything, LLM-GC sends one tiny request to the upstream (Anthropic, or
-your gateway) with its own key and model. A wrong key or model stops it here, with the
-upstream's own reason, instead of failing quietly later. When all is well, it prints something like:
+Before it serves anything, LLM-GC sends one tiny request to the upstream (Anthropic, or your gateway) with its own key and model. A wrong key or model stops it here, with the upstream's own reason, instead of failing quietly later. When all is well, it prints something like:
 
 ```
   LLM-GC 0.1.0
@@ -198,18 +153,13 @@ upstream's own reason, instead of failing quietly later. When all is well, it pr
   Leave this terminal open while you work. Ctrl-C stops LLM-GC.
 ```
 
-Behind a gateway, `Upstream` and `Summaries` show the gateway's address and your model.
-The dashboard runs only with `--dashboard`, because it shows your conversations. Without
-the flag its row says *off*. To have it every time, set `dashboard = true` in
-`llm-gc.toml`.
+Behind a gateway, `Upstream` and `Summaries` show the gateway's address and your model. The dashboard runs only with `--dashboard`, because it shows your conversations. Without the flag its row says *off*. To have it every time, set `dashboard = true` in `llm-gc.toml`.
 
 Leave LLM-GC running, and open a **second terminal** for the next steps.
 
 ### 4. Point Claude Code at LLM-GC
 
-**Both setups need this step.** Claude Code sends each request to the address in its
-`ANTHROPIC_BASE_URL` setting, or straight to Anthropic when that isn't set. Until it names
-LLM-GC's address, LLM-GC receives nothing, whatever `llm-gc.toml` says.
+**Both setups need this step.** Claude Code sends each request to the address in its `ANTHROPIC_BASE_URL` setting, or straight to Anthropic when that isn't set. Until it names LLM-GC's address, LLM-GC receives nothing, whatever `llm-gc.toml` says.
 
 Start with one project: a folder you work in with Claude Code, not the LLM-GC folder.
 
@@ -228,9 +178,7 @@ If `.claude/settings.local.json` doesn't exist yet, create it with this:
 }
 ```
 
-If it does exist (Claude Code keeps your permission choices there), add the `env` entry
-beside what is there, with a comma between the two. If it already has an `env` block, add
-the `ANTHROPIC_BASE_URL` line inside it instead.
+If it does exist (Claude Code keeps your permission choices there), add the `env` entry beside what is there, with a comma between the two. If it already has an `env` block, add the `ANTHROPIC_BASE_URL` line inside it instead.
 
 ```json
 {
@@ -239,29 +187,17 @@ the `ANTHROPIC_BASE_URL` line inside it instead.
 }
 ```
 
-Then start `claude` in that project. A session that was already running keeps its old
-address, so restart it.
+Then start `claude` in that project. A session that was already running keeps its old address, so restart it.
 
 What this changes, and what it doesn't:
 
-- **Only this project goes through LLM-GC.** Its setting overrides `~/.claude/settings.json`,
-  so your other projects don't change. To stop, delete the `env` entry.
+- **Only this project goes through LLM-GC.** Its setting overrides `~/.claude/settings.json`, so your other projects don't change. To stop, delete the `env` entry.
 - **Your login stays where it is.** Claude Code still sends it, and LLM-GC passes it on.
-- **The file is yours alone, so keep it out of git.** `git check-ignore .claude/settings.local.json`
-  prints the path if git already ignores it. If it prints nothing, add that path to the
-  project's `.gitignore`. Committed, it would point your teammates' Claude Code at an
-  address where nothing answers.
+- **The file is yours alone, so keep it out of git.** `git check-ignore .claude/settings.local.json` prints the path if git already ignores it. If it prints nothing, add that path to the project's `.gitignore`. Committed, it would point your teammates' Claude Code at an address where nothing answers.
 
-> **Just one session?** In the direct setup, `ANTHROPIC_BASE_URL=http://127.0.0.1:9900 claude`
-> points that one session at LLM-GC, with no file to edit. Behind a gateway it has no
-> effect: the address in `~/.claude/settings.json` wins over the command line.
+> **Just one session?** In the direct setup, `ANTHROPIC_BASE_URL=http://127.0.0.1:9900 claude` points that one session at LLM-GC, with no file to edit. Behind a gateway it has no effect: the address in `~/.claude/settings.json` wins over the command line.
 >
-> **Want LLM-GC in all your projects?** Put the same `env` entry in
-> `~/.claude/settings.json` instead of in each project. The catch: every Claude Code
-> session then depends on LLM-GC, so none can connect while it is stopped. Behind a
-> gateway, that file already sets `ANTHROPIC_BASE_URL` to the gateway's address. Change
-> that value to LLM-GC's address, after copying the gateway's address into `upstream` in
-> step 2.
+> **Want LLM-GC in all your projects?** Put the same `env` entry in `~/.claude/settings.json` instead of in each project. The catch: every Claude Code session then depends on LLM-GC, so none can connect while it is stopped. Behind a gateway, that file already sets `ANTHROPIC_BASE_URL` to the gateway's address. Change that value to LLM-GC's address, after copying the gateway's address into `upstream` in step 2.
 
 ### 5. Check that it works
 
@@ -271,21 +207,11 @@ Send Claude a message. LLM-GC's terminal prints a line for each request it passe
 14:02:11 INFO llm_gc.proxy.server: claude-sonnet-5 -> 200: client sent 18,240 tokens, LLM-GC forwarded 18,240 (100%)
 ```
 
-`200` means the upstream answered. Claude Code makes small requests of its own too, so one
-message can print several lines. A refused request prints a `WARNING` line with its status
-(such as `401`) and the likely cause.
+`200` means the upstream answered. Claude Code makes small requests of its own too, so one message can print several lines. A refused request prints a `WARNING` line with its status (such as `401`) and the likely cause.
 
-Open the dashboard at http://127.0.0.1:9901. A conversation appears there from its second
-message: the first has no history yet for LLM-GC to recognise it by.
+Open the dashboard at http://127.0.0.1:9901. A conversation appears there from its second message: the first has no history yet for LLM-GC to recognise it by.
 
-At first every message is sent whole, so the line says `(100%)`. Once older turns that LLM-GC
-could condense add up (1,000 tokens' worth, by default), it prepares a *collection* in the
-background. The collection takes effect at the request where it costs least: at once when the
-provider's prompt cache has expired (after five idle minutes, by default) or is not used; while
-the cache is warm, only once it saves at least as much as it makes the provider cache again, or
-once the model carries too much that has gone quiet. Then the dashboard says *Last collection …*
-and the percentage drops. The Engine tab's *Next collection* card says which of these it is
-waiting for. To see one now, press **Run GC now** on the dashboard.
+At first every message is sent whole, so the line says `(100%)`. Once older turns that LLM-GC could condense add up (1,000 tokens' worth, by default), it prepares a *collection* in the background. The collection takes effect at the request where it costs least: at once when the provider's prompt cache has expired (after five idle minutes, by default) or is not used; while the cache is warm, only once it saves at least as much as it makes the provider cache again, or once the model carries too much that has gone quiet. Then the dashboard says *Last collection …* and the percentage drops. The Engine tab's *Next collection* card says which of these it is waiting for. To see one now, press **Run GC now** on the dashboard.
 
 `llm-gc stats`, in a terminal with the environment activated, prints the totals so far, what the provider reported, and each Claude Code session's conversations with what each sent and saved.
 
@@ -319,8 +245,7 @@ waiting for. To see one now, press **Run GC now** on the dashboard.
 | *The upstream is refusing LLM-GC's credential* | The upstream accepted LLM-GC's key at startup and refuses it now, for example because it was revoked or expired. Collections are skipped, and what was already condensed stays in use. Fix the key in `.env`, then restart LLM-GC |
 | *Summary request failed*, on the Engine tab, without that message | The upstream refused a summary for another reason, shown on the Engine tab. A gateway may need headers LLM-GC doesn't send yet |
 
-**To stop using LLM-GC**, press Ctrl-C in its terminal and delete the `env` entry you added
-in step 4. Otherwise Claude Code keeps sending requests to an address where nothing answers.
+**To stop using LLM-GC**, press Ctrl-C in its terminal and delete the `env` entry you added in step 4. Otherwise Claude Code keeps sending requests to an address where nothing answers.
 
 ## The problem
 
@@ -351,11 +276,7 @@ LLM-GC sits between your app and the provider as a proxy. Every request is forwa
                              └ t0–t39 as spans, each at its level, in one message
 ```
 
-An agent's tool calls and their results are part of the conversation: they are sized,
-scored, summarised and quoted like words, so old file reads and command output are
-condensed too. The client's own instructions are not: its system prompt, its tools, and
-the instructions it writes into messages (Claude Code's CLAUDE.md, memory and notes) reach
-the model word for word with every request.
+An agent's tool calls and their results are part of the conversation: they are sized, scored, summarised and quoted like words, so old file reads and command output are condensed too. The client's own instructions are not: its system prompt, its tools, and the instructions it writes into messages (Claude Code's CLAUDE.md, memory and notes) reach the model word for word with every request.
 
 A collection is prepared in the background, and decides whether it is worth making before it pays for a single summary. It changes the prompt only when that is cheap or needed: when the provider's cache has expired anyway, when the saving repays caching the prompt again, or when the model carries too much that has gone quiet. None of it runs while a request waits.
 
@@ -458,38 +379,19 @@ Three things follow, and they shape the whole design:
 With an agent's conversation, LLM-GC:
 
 - reads tool calls and results as text, so they are summarised and quoted like words;
-- sends Claude Code's instructions (its system prompt, its tools, and the
-  `<system-reminder>` blocks that carry CLAUDE.md and memory) word for word with every
-  request, never condensed;
+- sends Claude Code's instructions (its system prompt, its tools, and the `<system-reminder>` blocks that carry CLAUDE.md and memory) word for word with every request, never condensed;
 - passes its other calls, such as token counting, through untouched;
-- shows its side requests (after each reply it asks the model to suggest your next
-  prompt) as the *newest request*, never as something you said.
+- shows its side requests (after each reply it asks the model to suggest your next prompt) as the *newest request*, never as something you said.
 
-Sessions live in memory: restarting LLM-GC starts each conversation again from what
-Claude Code sends, at the cost of one request sent whole and one collection. The first
-collection of a long conversation can take a couple of minutes, and requests meanwhile
-go whole — never worse than without LLM-GC.
+Sessions live in memory: restarting LLM-GC starts each conversation again from what Claude Code sends, at the cost of one request sent whole and one collection. The first collection of a long conversation can take a couple of minutes, and requests meanwhile go whole — never worse than without LLM-GC.
 
 ### The dashboard
 
-The **Conversation** tab opens with three answers: what the model remembers, what it has
-forgotten, and whether to worry. Below them come each fact as the model is sent it, a map
-of the conversation, and every exchange, newest first unless you switch it, with what the model reads for it —
-recent, quoted, summarised, archived or out of view — beside what was said. The
-**Requests** tab traces a Claude Code session turn by turn, with what it cost by the
-provider's own count, and the **Engine** tab shows the three generations, how each
-exchange is scored, every check and collection, and the proxy's counters. Hover any ⓘ for
-a short meaning; click it, or **?**, for the full explanation. **Run GC now** prepares a cut for the selected
-conversation without waiting for the minimum and switches it in at once. With `min_saving_share`
-set to 0, every prepared cut is switched in as soon as it saves something; together with
-`llm-gc start --dashboard --min-cut-tokens 300`, collections happen within a short conversation.
+The **Conversation** tab opens with three answers: what the model remembers, what it has forgotten, and whether to worry. Below them come each fact as the model is sent it, a map of the conversation, and every exchange, newest first unless you switch it, with what the model reads for it — recent, quoted, summarised, archived or out of view — beside what was said. The **Requests** tab traces a Claude Code session turn by turn, with what it cost by the provider's own count, and the **Engine** tab shows the three generations, how each exchange is scored, every check and collection, and the proxy's counters. Hover any ⓘ for a short meaning; click it, or **?**, for the full explanation. **Run GC now** prepares a cut for the selected conversation without waiting for the minimum and switches it in at once. With `min_saving_share` set to 0, every prepared cut is switched in as soon as it saves something; together with `llm-gc start --dashboard --min-cut-tokens 300`, collections happen within a short conversation.
 
 ### Without a key
 
-To look around without an API key or a conversation of your own, rehearse the
-decision-survival check with its dashboard. It plays five scripted conversations
-through the same engine, offline, each as its own session. After step 1 of
-[Get started](#get-started), in the LLM-GC folder with the environment activated:
+To look around without an API key or a conversation of your own, rehearse the decision-survival check with its dashboard. It plays five scripted conversations through the same engine, offline, each as its own session. After step 1 of [Get started](#get-started), in the LLM-GC folder with the environment activated:
 
 ```bash
 python -m evals.decision_survival.run --rehearse --dashboard
@@ -498,26 +400,20 @@ python -m evals.decision_survival.run --rehearse --dashboard
 
 Its dashboard has a port of its own, 9911, so it can run beside a real LLM-GC.
 
-Rehearsal shows the page's shape, not a real model's work: its stand-in summaries
-state nothing, and its facts are read by simple patterns from your messages only, so
-the assistant's column stays empty. `python scripts/run_proxy.py --serve --dashboard`
-does the same for a conversation of your own, with pre-written responses.
+Rehearsal shows the page's shape, not a real model's work: its stand-in summaries state nothing, and its facts are read by simple patterns from your messages only, so the assistant's column stays empty. `python scripts/run_proxy.py --serve --dashboard` does the same for a conversation of your own, with pre-written responses.
 
-`llm-gc start --compactor noop` runs with real replies but no credential of LLM-GC's
-own: it makes no model calls, so exchanges are kept or archived but never summarised.
+`llm-gc start --compactor noop` runs with real replies but no credential of LLM-GC's own: it makes no model calls, so exchanges are kept or archived but never summarised.
 
 ### With another Anthropic client
 
-Point the client at LLM-GC and change nothing else. The client's own credential is
-passed through, never stored:
+Point the client at LLM-GC and change nothing else. The client's own credential is passed through, never stored:
 
 ```python
 import anthropic
 client = anthropic.Anthropic(base_url="http://127.0.0.1:9900")
 ```
 
-`python scripts/chat.py` is exactly that, as a terminal chat: export the client's key
-(`ANTHROPIC_API_KEY`) in its terminal first.
+`python scripts/chat.py` is exactly that, as a terminal chat: export the client's key (`ANTHROPIC_API_KEY`) in its terminal first.
 
 ### As a library
 
@@ -575,15 +471,9 @@ LLM-GC does one thing: keep the context window clean so the model remembers what
 
 Context management is not a new idea, and the honest framing is worth stating plainly.
 
-**[MemGPT / Letta](https://arxiv.org/abs/2310.08560)** paged LLM context against an
-operating-system memory hierarchy in 2023 — the closest relative to this project's
-framing. **[Mem0](https://github.com/mem0ai/mem0)** and **[Zep](https://www.getzep.com/)**
-extract facts and resolve contradictions; Zep's temporal edge invalidation is the same
-idea as supersession here. **LangChain** has summary-buffer memory. **Providers ship
-their own compaction**, summarising with a frontier model, as LLM-GC's compactor does.
+**[MemGPT / Letta](https://arxiv.org/abs/2310.08560)** paged LLM context against an operating-system memory hierarchy in 2023 — the closest relative to this project's framing. **[Mem0](https://github.com/mem0ai/mem0)** and **[Zep](https://www.getzep.com/)** extract facts and resolve contradictions; Zep's temporal edge invalidation is the same idea as supersession here. **LangChain** has summary-buffer memory. **Providers ship their own compaction**, summarising with a frontier model, as LLM-GC's compactor does.
 
-So LLM-GC doesn't claim a better summarizer. What it does differently is **govern and
-report** the operation rather than perform it silently:
+So LLM-GC doesn't claim a better summarizer. What it does differently is **govern and report** the operation rather than perform it silently:
 
 - **Per exchange and selective**, not summarize-everything-at-a-threshold
 - **Recoverable** — every exchange keeps its original, so a condensed one can be shown whole again; provider compaction is one-way
@@ -591,39 +481,24 @@ report** the operation rather than perform it silently:
 - **Under your policy** — level lines, recap budget and batch size are yours, not the provider's
 - **Cross-client** — a proxy works for anything speaking the provider's API
 
-LLM-GC's compactor uses the *same mechanism* provider compaction uses: a model
-summarises. It is not an alternative to compaction; it is a governance and transparency
-layer around it.
+LLM-GC's compactor uses the *same mechanism* provider compaction uses: a model summarises. It is not an alternative to compaction; it is a governance and transparency layer around it.
 
 ## Measured results
 
-Benchmarks on real sessions are not published yet; results from them will come with their
-dataset and method. What exists is the
-[decision-survival check](evals/decision_survival/README.md): five scripted conversations,
-37 questions about facts they established, asked once through LLM-GC and once with the
-whole conversation sent, and graded. Its latest committed run:
+Benchmarks on real sessions are not published yet; results from them will come with their dataset and method. What exists is the [decision-survival check](evals/decision_survival/README.md): five scripted conversations, 37 questions about facts they established, asked once through LLM-GC and once with the whole conversation sent, and graded. Its latest committed run:
 
 | | Short conversations (18 questions) | Long conversations (19 questions) |
 |---|---|---|
 | Through LLM-GC | 18/18, prompts 12–17% smaller | 19/19, prompts 42–43% smaller |
 | Whole conversation | 18/18 | 19/19 |
 
-One run, on scripted conversations, with `claude-sonnet-5-5` answering; the
-[evidence file](evals/decision_survival/evidence/facts-room-2026-10-06.json) holds every
-answer. It grades one of them wrong: asked for the shard count, the model answered
-"9 primaries", the user's value in words the grader did not accept until then. The
-stored answers regrade to 37/37. The check's README lists the earlier runs and what each
-change won back.
+One run, on scripted conversations, with `claude-sonnet-5-5` answering; the [evidence file](evals/decision_survival/evidence/facts-room-2026-10-06.json) holds every answer. It grades one of them wrong: asked for the shard count, the model answered "9 primaries", the user's value in words the grader did not accept until then. The stored answers regrade to 37/37. The check's README lists the earlier runs and what each change won back.
 
-Savings will also be judged against **cached-token pricing**, not raw token counts:
-rewriting the start of the prompt invalidates the provider's prompt cache, so a real
-reduction in tokens can still be an increase in cost. A savings number that ignores that
-isn't an honest number.
+Savings will also be judged against **cached-token pricing**, not raw token counts: rewriting the start of the prompt invalidates the provider's prompt cache, so a real reduction in tokens can still be an increase in cost. A savings number that ignores that isn't an honest number.
 
 ## Configuration
 
-`llm-gc start` needs nothing but a credential. To change anything else, say so in whichever
-of these suits you. When a setting appears in more than one, the later one wins:
+`llm-gc start` needs nothing but a credential. To change anything else, say so in whichever of these suits you. When a setting appears in more than one, the later one wins:
 
 ```
 built-in defaults  <  config file  <  .env  <  LLM_GC_* environment variables  <  flags
@@ -631,30 +506,16 @@ built-in defaults  <  config file  <  .env  <  LLM_GC_* environment variables  <
  out of the box     keep and share  secrets      one-off overrides             experiment
 ```
 
-A flag you leave out changes nothing: the setting comes from the layer below, so a flag's
-own default never overrides your file.
+A flag you leave out changes nothing: the setting comes from the layer below, so a flag's own default never overrides your file.
 
-**The config file** is TOML, because it allows comments and has no surprises
-(`no` stays a string, `3.10` isn't turned into `3.1`). `llm-gc start` uses the first one
-it finds, and its banner says which; files are never merged:
+**The config file** is TOML, because it allows comments and has no surprises (`no` stays a string, `3.10` isn't turned into `3.1`). `llm-gc start` uses the first one it finds, and its banner says which; files are never merged:
 
 1. `--config PATH`
 2. the file named by the `LLM_GC_CONFIG` environment variable
 3. `llm-gc.toml` in the directory you run it from
 4. `llm-gc/config.toml` under `~/.config` (or `$XDG_CONFIG_HOME`)
 
-A file you asked for in 1 or 2 that doesn't exist is an error, not a silent fallback.
-`llm-gc config init` writes a commented starter file,
-[`llm-gc.toml`](src/llm_gc/cli/config_template.toml), into the current directory (`--user`
-writes the per-user one instead, and it will not replace a file you already have without
-`--force`). It lists every setting with its default and what it decides, each one
-commented out: remove the `#` in front of a setting to change it. The file changes nothing
-until you do, and the settings you leave commented follow LLM-GC's defaults, including
-improved ones in later versions. `llm-gc config path` says which file `start` would use, and `llm-gc config show` prints every
-effective setting with the layer it came from (file, `.env`, environment or default), which
-is the quickest way to find out why a value isn't what you expected; credentials are only
-reported as set or not, never shown. An unknown or misspelt
-setting is an error that names it, so it never looks configured when it isn't.
+A file you asked for in 1 or 2 that doesn't exist is an error, not a silent fallback. `llm-gc config init` writes a commented starter file, [`llm-gc.toml`](src/llm_gc/cli/config_template.toml), into the current directory (`--user` writes the per-user one instead, and it will not replace a file you already have without `--force`). It lists every setting with its default and what it decides, each one commented out: remove the `#` in front of a setting to change it. The file changes nothing until you do, and the settings you leave commented follow LLM-GC's defaults, including improved ones in later versions. `llm-gc config path` says which file `start` would use, and `llm-gc config show` prints every effective setting with the layer it came from (file, `.env`, environment or default), which is the quickest way to find out why a value isn't what you expected; credentials are only reported as set or not, never shown. An unknown or misspelt setting is an error that names it, so it never looks configured when it isn't.
 
 **The proxy:**
 
@@ -670,17 +531,9 @@ setting is an error that names it, so it never looks configured when it isn't.
 | Where summary calls go, if not the upstream | `[summary] base_url` | | `LLM_GC_SUMMARY__BASE_URL` | the upstream for `anthropic`; the vendor's address otherwise |
 | Log level | `log_level` | `--log-level` | `LLM_GC_LOG_LEVEL` | `INFO` |
 
-**The summary model is LLM-GC's own,** separate from the model your client talks to:
-For instance, Claude Code can converse with Opus while LLM-GC summarises with Sonnet. A cheaper model
-lowers LLM-GC's own bill, but its summaries and facts are what the conversation model reads
-in place of the old turns, so a weaker one can leave the model remembering less well. The
-saving is also smaller than it looks, because LLM-GC calls its model only when it runs a
-collection, not on every request. Currently, [decision-survival check](evals/decision_survival/README.md) is measured
-with the default model that is configured.
+**The summary model is LLM-GC's own,** separate from the model your client talks to: For instance, Claude Code can converse with Opus while LLM-GC summarises with Sonnet. A cheaper model lowers LLM-GC's own bill, but its summaries and facts are what the conversation model reads in place of the old turns, so a weaker one can leave the model remembering less well. The saving is also smaller than it looks, because LLM-GC calls its model only when it runs a collection, not on every request. Currently, [decision-survival check](evals/decision_survival/README.md) is measured with the default model that is configured.
 
-**The engine** is what the library takes as a `GCConfig`. These are the settings worth
-turning while you watch the dashboard; in the file they go under `[engine]`, and in the
-environment they take `LLM_GC_ENGINE__`:
+**The engine** is what the library takes as a `GCConfig`. These are the settings worth turning while you watch the dashboard; in the file they go under `[engine]`, and in the environment they take `LLM_GC_ENGINE__`:
 
 | `GCConfig` | Flag | Default | What it decides |
 |---|---|---|---|
@@ -694,16 +547,9 @@ environment they take `LLM_GC_ENGINE__`:
 | `level_margin` | | 0.05 | how far past a line a score must move before a span changes level, so a score near a line does not flip it back and forth |
 | `max_recap_ratio` | | 0.3 | share of the window the recap may spend, the window converted to LLM-GC's count at the rate the conversation's replies measure; over it, the coldest spans lose detail, then the oldest fold out of view |
 
-The proxy's default window is 200,000, the smallest of the current models'. Raise it only
-if every model you proxy has a larger one: a window set too large lets a recap outgrow the
-model's, and requests fail.
+The proxy's default window is 200,000, the smallest of the current models'. Raise it only if every model you proxy has a larger one: a window set too large lets a recap outgrow the model's, and requests fail.
 
-**Credentials** are LLM-GC's own, for its summary and fact calls, never taken from a
-client's request. They come only from the environment or `.env` (copy
-[`.env.example`](.env.example)), never from flags, so they never land in shell history,
-and never from the config file, which is meant to be shared: a credential there is
-refused. `.env` is read from the directory you run `llm-gc` in, and an empty value in it,
-or in the environment, counts as not set.
+**Credentials** are LLM-GC's own, for its summary and fact calls, never taken from a client's request. They come only from the environment or `.env` (copy [`.env.example`](.env.example)), never from flags, so they never land in shell history, and never from the config file, which is meant to be shared: a credential there is refused. `.env` is read from the directory you run `llm-gc` in, and an empty value in it, or in the environment, counts as not set.
 
 | Variable | What it is |
 |---|---|
@@ -711,29 +557,18 @@ or in the environment, counts as not set.
 | `ANTHROPIC_AUTH_TOKEN` | a bearer token, sent as `Authorization`, as a gateway often takes; either or both |
 | `OPENAI_API_KEY` | only when `provider` is `openai` |
 
-Each vendor receives only its own credentials. Without one for the chosen vendor,
-`llm-gc start` stops and says so, rather than running on summaries that only look like
-compaction. `--compactor noop` runs with no credential and no model calls: exchanges are
-kept or archived and never condensed, which is also the baseline to measure against. To
-look around with no key at all, use `python scripts/run_proxy.py --serve --dashboard`.
+Each vendor receives only its own credentials. Without one for the chosen vendor, `llm-gc start` stops and says so, rather than running on summaries that only look like compaction. `--compactor noop` runs with no credential and no model calls: exchanges are kept or archived and never condensed, which is also the baseline to measure against. To look around with no key at all, use `python scripts/run_proxy.py --serve --dashboard`.
 
 The library never reads files or the environment: it takes a `GCConfig` in code.
 
 ## GC strategies
 
-LLM-GC has **one** strategy, generational: exchanges scored by how much they matter now,
-shown at detail levels re-planned at every collection, with facts and their replacements
-carried in the prompt. One well-specified strategy beats three half-specified ones.
+LLM-GC has **one** strategy, generational: exchanges scored by how much they matter now, shown at detail levels re-planned at every collection, with facts and their replacements carried in the prompt. One well-specified strategy beats three half-specified ones.
 
 Two others were considered and rejected, for different reasons:
 
-- **`sliding_window`** (drop everything older than N turns) — rejected outright. It
-  ignores content entirely, which is what lost 7.6 of 8 decisions in the early profiling
-  described under [The problem](#the-problem). It remains useful as the baseline to beat, not as an option to offer.
-- **`summary`** (keep recent turns, roll everything older into one summary) — rejected
-  on different grounds: it condenses what matters now as hard as what does not, cannot
-  restore anything, and loses the per-exchange record that makes the transparency
-  possible.
+- **`sliding_window`** (drop everything older than N turns) — rejected outright. It ignores content entirely, which is what lost 7.6 of 8 decisions in the early profiling described under [The problem](#the-problem). It remains useful as the baseline to beat, not as an option to offer.
+- **`summary`** (keep recent turns, roll everything older into one summary) — rejected on different grounds: it condenses what matters now as hard as what does not, cannot restore anything, and loses the per-exchange record that makes the transparency possible.
 
 ## Developing LLM-GC
 
@@ -747,9 +582,7 @@ python -m evals.decision_survival.run --rehearse   # the decision-survival check
 
 ## Documentation
 
-The design docs are the substantive part of this repository. Each one covers how a
-subsystem works, why it exists, and **why it has that shape — including the credible
-alternatives that were rejected and the reason.**
+The design docs are the substantive part of this repository. Each one covers how a subsystem works, why it exists, and **why it has that shape — including the credible alternatives that were rejected and the reason.**
 
 - [Overview](doc/overview.md) — why this project exists, the core principles, how the pieces fit
 - [Scoring](doc/design/scoring/overview.md) — how much each span matters now: liveness, and the decisions and specifics it states
