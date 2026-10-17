@@ -132,14 +132,14 @@ export function renderEngineStatus() {
   const failed = !!last && last.gc_status === "bypassed_on_error";
   const refusal = credentialRefusal();
   const tone = failed || refusal ? "critical" : problems || state.pause ? "warn" : "good";
-  const lastText = state.pause ? `Its own model calls are paused until ${new Date(state.pause.until).toLocaleTimeString()}: ${state.pause.reason}. Your requests go through as normal.`
-    : state.knowledge && !state.knowledge.collected ? "This conversation is a subagent's: recorded and sent as written, never checked for a collection."
+  const lastText = state.pause ? `LLM-GC's own model calls are paused until ${new Date(state.pause.until).toLocaleTimeString()}. Reason: ${state.pause.reason}. Your requests go through as normal.`
+    : state.knowledge && !state.knowledge.collected ? "This is a subagent's conversation. LLM-GC records it and sends it as written, and never collects it."
     : last ? `Last check ${agoTs(last.gc_completed_at)}: ${STATUS[last.gc_status]?.text || last.gc_status}, ${last.duration_ms.toFixed(0)} ms.`
     : "No checks yet. LLM-GC checks after every reply.";
   fill("eng-status", h("div", { class: `status-line tone-${tone}` },
     h("span", { class: "badge", "aria-hidden": "true" }, failed || refusal ? "✕" : problems ? "!" : state.pause ? "⏸" : "✓"),
-    h("span", { class: "msg-text", ...(state.pause ? hoverTip("Paused", PAUSED_TEXT) : {}) }, h("b", {}, refusal ? CREDENTIAL_REFUSED_TITLE : failed ? "The last check failed, and nothing changed." : problems ? `${plural(problems, "part")} of a collection fell short.` : state.pause ? "LLM-GC is yielding to a rate limit." : "LLM-GC is working normally."),
-      refusal ? ` ${CREDENTIAL_REFUSED_TEXT} The upstream said: ${refusal.degradation.detail}` : ` ${lastText}`,
+    h("span", { class: "msg-text", ...(state.pause ? hoverTip("Paused", PAUSED_TEXT) : {}) }, h("b", {}, refusal ? CREDENTIAL_REFUSED_TITLE : failed ? "The last check failed, and nothing changed." : problems ? `${plural(problems, "part")} of a collection fell short.` : state.pause ? "LLM-GC is paused by a rate limit." : "LLM-GC is working normally."),
+      refusal ? ` ${CREDENTIAL_REFUSED_TEXT} The provider said: ${refusal.degradation.detail}` : ` ${lastText}`,
       !refusal && failed && last.failure_reason ? ` ${last.failure_stage}: ${last.failure_reason}` : null),
     problems ? h("button", { class: "link-btn", type: "button", onclick: () => openCard("notmoved", true) }, "See why →")
       : h("span", { class: "then" }, "Every collection did all it planned.")));
@@ -159,7 +159,7 @@ function lastAttempt() {
 export function renderNext(k) {
   // A conversation that is never collected has no next collection to show the conditions of.
   if (!k.collected) {
-    fill("panel-next", h("p", { class: "next-lede" }, "Not collected: a subagent's conversation is recorded and sent as written."),
+    fill("panel-next", h("p", { class: "next-lede" }, "Not collected."),
       h("p", { class: "secondary" }, NOT_COLLECTED_TEXT));
     return;
   }
@@ -183,31 +183,31 @@ function renderPreparing(k) {
   const taking = k.turns.filter((t) => t.fidelity === "verbatim" && t.becomes);
   const refused = lastAttempt()?.abandoned_cut ? lastAttempt() : null;
   const saving = cut.estimated_saving;
-  const lede = state.pause ? `Paused until ${new Date(state.pause.until).toLocaleTimeString()}: LLM-GC is yielding to the upstream's rate limit, so no cut is prepared.`
+  const lede = state.pause ? `Paused until ${new Date(state.pause.until).toLocaleTimeString()}. The provider is rate-limiting requests, so LLM-GC prepares no collection.`
     : !taking.length ? "Nothing to collect yet."
     : !cut.batch_ready ? `Waiting for ${fmt(cut.min_cut_tokens - cut.compactable_tokens)} more tokens of messages to summarise or archive.`
-    : saving > 0 ? "Ready: a cut is prepared after the next reply."
-    : "Enough to collect, but collecting now would make the prompt bigger, so it waits.";
+    : saving > 0 ? "Ready. LLM-GC prepares a collection after the next reply."
+    : "Enough to collect, but collecting now would make the prompt bigger. LLM-GC waits for more messages.";
 
   fill("panel-next",
     h("p", { class: "next-lede" }, lede),
     h("div", { class: "next-grid" },
       h("div", {},
-        h("div", { class: "label" }, "A cut is prepared when both hold"),
+        h("div", { class: "label" }, "Step 1 · Prepare, when both are true"),
         h("ul", { class: "ck-list" },
           checkItem(cut.batch_ready ? "good" : "wait", cut.batch_ready ? "✓" : "…", "Enough to collect",
             h("span", { class: "num" }, countEl("next-ready", cut.compactable_tokens), ` tokens · ${fmt(cut.min_cut_tokens)} needed`),
             meterOf("next-ready", cut.compactable_tokens, cut.min_cut_tokens, "Tokens of messages to summarise or archive"),
             h("p", {}, "Only messages to be summarised or archived count. Quoting a message word for word saves nothing.")),
           !taking.length
-            ? checkItem("wait", "…", "Makes the prompt smaller", null, h("p", {}, "Nothing to estimate: no older messages are waiting."))
+            ? checkItem("wait", "…", "Makes the prompt smaller", null, h("p", {}, "Nothing to estimate. No older messages are waiting."))
             : saving > 0
               ? checkItem("good", "✓", "Makes the prompt smaller", h("span", { class: "num" }, `about ${fmt(saving)} tokens smaller`),
-                h("p", {}, "Estimated before any summary is paid for, and checked again on the real ones."),
-                refused ? h("p", {}, `The last try, ${agoTs(refused.gc_completed_at)}, was skipped on its real summaries: ${fmt(refused.tokens_before)} → ${fmt(refused.abandoned_cut.context_tokens_after)} tokens.`) : null)
+                h("p", {}, "LLM-GC estimates this before it pays for any summary, and checks again with the real summaries."),
+                refused ? h("p", {}, `The last try, ${agoTs(refused.gc_completed_at)}, was skipped. With the real summaries, the prompt would have gone from ${fmt(refused.tokens_before)} to ${fmt(refused.abandoned_cut.context_tokens_after)} tokens.`) : null)
               : checkItem("warn", "!", "Makes the prompt smaller", h("span", { class: "num" }, `about ${fmt(-saving)} tokens bigger`),
-                h("p", {}, "The recap's markers and opening lines would cost more than these short messages save, so it waits for more.")))),
-      wouldDo(k, taking, "What it would do now", [`Counts toward the ${fmt(k.next_cut.min_cut_tokens)}`, "Doesn't count"])));
+                h("p", {}, "These messages are short. The recap's markers and opening lines would add more tokens than condensing them saves, so LLM-GC waits for more.")))),
+      wouldDo(k, taking, "What it would do now", [`Counts toward the ${fmt(k.next_cut.min_cut_tokens)}-token minimum`, "Does not count"])));
 }
 
 function renderStaged(k) {
@@ -219,15 +219,15 @@ function renderStaged(k) {
   // With no proxy reading the cache beside this dashboard, the verdict was made for a cold one.
   const cold = cache ? cache.state === "cold" : true;
   const lede = s.switches
-    ? `Prepared: switched in with the next request, because ${SWITCH_REASON[s.reason] || s.reason}.`
+    ? `Ready. LLM-GC applies it to the next request, because ${SWITCH_REASON[s.reason] || s.reason}.`
     : s.reason === "tool_round_open"
-    ? `Prepared, waiting for the tool round to end. ${TOOL_ROUND_TEXT}`
-    : `Prepared, waiting for the right request: switching now would make the provider cache ${fmt(s.rewritten_tokens)} tokens again to save ${fmt(s.saving_tokens)}. Meanwhile the model gets these messages word for word.`;
-  const cacheSays = !cache ? "No proxy reads the cache beside this dashboard, so it counts as cold."
-    : cache.uses_cache === false ? "This conversation's replies use no prompt cache: every request is read in full, so a smaller prompt is always cheaper."
-    : cache.uses_cache === null ? "No request has been answered yet, so nothing says the cache is cold. Until something does, it counts as warm."
-    : cold ? `Idle ${duration(cache.idle_s)}, longer than the ${duration(cache.lifetime_s)} the provider keeps this conversation cached.`
-    : `${duration(cache.idle_s)} since the last request; the provider keeps this conversation cached for ${duration(cache.lifetime_s)} after each one.`;
+    ? `Prepared, and waiting for the model to finish using tools. ${TOOL_ROUND_TEXT}`
+    : `Prepared, and waiting for a cheaper moment. Applying it now would make the provider cache ${fmt(s.rewritten_tokens)} tokens again, to save ${fmt(s.saving_tokens)} tokens on each later request. Until then, the model gets these messages word for word.`;
+  const cacheSays = !cache ? "This dashboard runs without the proxy, so it cannot see the cache. It treats the cache as cold."
+    : cache.uses_cache === false ? "This conversation does not use the prompt cache. The provider reads every request in full, so a smaller prompt is always cheaper."
+    : cache.uses_cache === null ? "No request has been answered yet, so LLM-GC cannot tell whether the cache is cold. Until it can, it treats the cache as warm."
+    : cold ? `No request for ${duration(cache.idle_s)}. The provider keeps this conversation cached for ${duration(cache.lifetime_s)}, so the cache has expired.`
+    : `${duration(cache.idle_s)} since the last request. The provider keeps this conversation cached for ${duration(cache.lifetime_s)} after each request.`;
   const taking = k.turns.filter((t) => t.fidelity === "verbatim" && t.becomes);
   const prepared = new Set(s.turns);
   const unprepared = taking.filter((t) => !prepared.has(t.turn_index)).length;
@@ -236,20 +236,20 @@ function renderStaged(k) {
     h("p", { class: "next-lede" }, lede),
     h("div", { class: "next-grid" },
       h("div", {},
-        h("div", { class: "label" }, "Switched in when any one holds"),
+        h("div", { class: "label" }, "Step 2 · Apply, when any one is true"),
         h("ul", { class: "ck-list" },
           checkItem(cold ? "good" : "wait", cold ? "✓" : "…", "The cache is cold", null, h("p", {}, cacheSays)),
-          checkItem(repays ? "good" : "wait", repays ? "✓" : "…", "It repays its rewrite",
+          checkItem(repays ? "good" : "wait", repays ? "✓" : "…", "The saving covers the cost",
             h("span", { class: "num" }, countEl("next-repays", s.saving_tokens), ` tokens saved · ${fmt(needed)} needed`),
-            meterOf("next-repays", s.saving_tokens, needed, "Tokens the switch saves, against the tokens it must save"),
-            h("p", {}, `On a warm cache it must save ${fmt(s.min_saving_share)}× the ${fmt(s.rewritten_tokens)} tokens the provider would cache again.`)),
-          checkItem(overdue ? "good" : "wait", overdue ? "✓" : "…", "Stale weight at its bound",
+            meterOf("next-repays", s.saving_tokens, needed, "Tokens applying it saves, against the tokens it must save"),
+            h("p", {}, `Applying it makes the provider cache ${fmt(s.rewritten_tokens)} tokens again. On a warm cache, it must save at least ${fmt(s.min_saving_share)}× that.`)),
+          checkItem(overdue ? "good" : "wait", overdue ? "✓" : "…", "Stale tokens at their limit",
             h("span", { class: "num" }, countEl("next-stale", s.stale_tokens), ` of ${fmt(s.stale_bound_tokens)} tokens, by LLM-GC's count`),
-            meterOf("next-stale", s.stale_tokens, s.stale_bound_tokens, "Stale weight, against its bound"),
-            h("p", {}, "Gone-quiet material the model still gets word for word. At the ",
-              boundFrom(k) ? hint("bound", "Where the bound comes from", boundFrom(k)) : "bound", ", it is switched in whatever the cache costs.")))),
-      wouldDo(k, taking, "What switching it in would do", ["Condensed", "Sent as they are"],
-        unprepared ? h("p", { class: "note" }, `${plural(unprepared, "message")} below ${unprepared === 1 ? "is" : "are"} not prepared yet: the next pass condenses ${unprepared === 1 ? "it" : "them"} first.`) : null)));
+            meterOf("next-stale", s.stale_tokens, s.stale_bound_tokens, "Stale tokens, against their limit"),
+            h("p", {}, "Older messages the model still gets word for word, which this collection would condense. At the ",
+              boundFrom(k) ? hint("limit", "Where the limit comes from", boundFrom(k)) : "limit", ", LLM-GC applies it, even if the provider must cache the prompt again.")))),
+      wouldDo(k, taking, "What applying it would do", ["Condensed", "Sent as they are"],
+        unprepared ? h("p", { class: "note" }, `${plural(unprepared, "message")} below ${unprepared === 1 ? "is" : "are"} not prepared yet. The next check condenses ${unprepared === 1 ? "it" : "them"} first.`) : null)));
 }
 
 // Where the stale bound comes from: a share of the model's window, which is in the model's tokens, converted by the
@@ -258,10 +258,11 @@ function renderStaged(k) {
 function boundFrom(k) {
   const c = state.config;
   if (!c) return null;
-  const share = `${Math.round(c.max_stale_ratio * 100)}% of the model's ${fmt(k.context_window)}-token window`;
+  const percent = `${Math.round(c.max_stale_ratio * 100)}%`;
+  const limit = fmt(k.staged.stale_bound_tokens);
   return k.token_rate
-    ? `The bound is ${share}: ${fmt(k.window_in_own_count)} in LLM-GC's count, since the model counts ${k.token_rate.toFixed(2)} tokens for each of LLM-GC's.`
-    : `The bound is ${share}, taken as LLM-GC's count until a reply measures how the model's count runs against it.`;
+    ? `The limit is ${percent} of the model's window. The window is ${fmt(k.context_window)} tokens by the model's count. The model counts ${k.token_rate.toFixed(2)} tokens for each of LLM-GC's, so the window is ${fmt(k.window_in_own_count)} in LLM-GC's count, and the limit is ${limit}.`
+    : `The limit is ${percent} of the model's ${fmt(k.context_window)}-token window: ${limit} tokens. No reply has yet shown how the model's count compares with LLM-GC's, so LLM-GC uses the window's number as it is.`;
 }
 
 // What the collection would do: the messages it would condense, by what each becomes, then the rest.
@@ -601,9 +602,9 @@ export function renderSettings() {
   if (!c) return;
   // The flag is how to change a setting while watching here; the rest are GCConfig fields.
   const rows = [
-    ["Collection size", "min_cut_tokens", c.min_cut_tokens, "tokens of messages to summarise or archive before a cut is prepared", "--min-cut-tokens"],
-    ["Saving share", "min_saving_share", c.min_saving_share, "with the provider's cache warm, how many times what a switch makes it cache again the cut must save before it is switched in"],
-    ["Stale bound", "max_stale_ratio", c.max_stale_ratio, "share of the window the model may carry that a prepared cut would condense; at it, the cut is switched in whatever the cache costs. The window is in the model's tokens, so it is converted to LLM-GC's count first, at the rate the conversation's replies measure"],
+    ["Collection size", "min_cut_tokens", c.min_cut_tokens, "tokens of older messages to summarise or archive before LLM-GC prepares a collection", "--min-cut-tokens"],
+    ["Saving share", "min_saving_share", c.min_saving_share, "on a warm cache, the saving a collection needs before LLM-GC applies it, as a multiple of the tokens the provider must cache again"],
+    ["Stale limit", "max_stale_ratio", c.max_stale_ratio, "share of the model's window that stale tokens may fill. At this limit, LLM-GC applies the prepared collection, even on a warm cache. The window is in the model's tokens, so LLM-GC first converts it to its own count, at the rate it measures from the replies"],
     ["Always recent", "last_n_turns_to_keep", c.last_n_turns_to_keep, "newest messages never collected: each sent as its own message, as written", "--keep-last"],
     ["Keep from", "keep_threshold", c.keep_threshold, "an exchange scoring at or above this is kept, quoted word for word"],
     ["Archive below", "archive_threshold", c.archive_threshold, "an exchange scoring below this is archived, to its opening line and facts"],

@@ -5,7 +5,7 @@ import { $, clearMotionCaches, fill, h, plural, setChildren, storeGet, storeSet 
 import { OTHER, collecting, getJSON, sessionPath, state, ui } from "./state.js";
 import { hideTooltip } from "./tooltip.js";
 import { THEMES, applyTheme, fillConfigValues, offerReturn, setLive, showCleanupNotice, showTab } from "./shell.js";
-import { setGuide } from "./guide.js";
+import { openReference, setGuide } from "./guide.js";
 import { celebrateCleanup, clearMapCache, jumpTo, renderBar, renderChips, renderFacts, renderFactsGuide, renderHero, renderMap, renderMessages, renderOrderControl, renderPrompt, renderSummary, renderTimeline, setOrder, setPromptView } from "./conversation.js";
 import { initCards, openCard, renderChart, renderChecks, renderEngineStatus, renderGenerations, renderHistory, renderNext, renderProblems, renderProxy, renderRelevance, renderSettings } from "./engine.js";
 import { renderRunGcButton, runGcNow } from "./run-gc.js";
@@ -101,18 +101,29 @@ function resetConversation(sessionId) {
   clearMotionCaches();
 }
 
+// The browser rebuilds its open menu, scrolled back to the top, whenever the options change. So an option names
+// its conversation and nothing that grows while it runs - the page shows the live counts - and the options are
+// replaced only when a name does change.
+let shownPicker = null;
+
 function renderPicker(groups) {
   const select = $("session-select");
-  const conversation = ({ s, part }) => h("option", { value: s.session_id, title: s.session_id },
-    `${part ? `${part.label} · ` : ""}${s.title ? s.title : s.session_id} · ${plural(s.recorded_turns, "message")} · ${plural(s.cuts, "collection")}${s.aging_in_flight ? " · collecting…" : ""}`);
-  const group = (g) => !g.clientSession
-    ? h("optgroup", { label: "No Claude Code session named" }, g.entries.map(conversation))
-    : h("optgroup", { label: `Claude Code session ${shortId(g.clientSession)} · since ${clock(g.since)}` },
-      g.entries.length ? g.entries.map(conversation)
-        : h("option", { value: `${REQUESTS_ONLY}${g.clientSession}` }, "Its conversations have closed: requests only"));
-  setChildren(select, groups.length ? groups.map(group) : h("option", {}, "none yet"));
+  const conversation = ({ s, part }) => ({ value: s.session_id, title: s.session_id, text: `${part ? `${part.label} · ` : ""}${s.title || s.session_id}` });
+  const listed = groups.map((g) => !g.clientSession
+    ? { label: "No Claude Code session named", options: g.entries.map(conversation) }
+    : { label: `Claude Code session ${shortId(g.clientSession)} · since ${clock(g.since)}`,
+      options: g.entries.length ? g.entries.map(conversation)
+        : [{ value: `${REQUESTS_ONLY}${g.clientSession}`, text: "Its conversations have closed: requests only" }] });
+  const key = JSON.stringify(listed);
+  if (key !== shownPicker) {
+    shownPicker = key;
+    setChildren(select, listed.length
+      ? listed.map((g) => h("optgroup", { label: g.label }, g.options.map((o) => h("option", { value: o.value, title: o.title }, o.text))))
+      : h("option", {}, "none yet"));
+  }
   select.disabled = !groups.length;
-  select.value = state.selected || (state.clientSession ? `${REQUESTS_ONLY}${state.clientSession}` : "");
+  const value = state.selected || (state.clientSession ? `${REQUESTS_ONLY}${state.clientSession}` : "");
+  if (select.value !== value) select.value = value;
   $("conv-bar").hidden = !groups.length;
   const button = $("run-gc");
   button.disabled = !state.selected || button.dataset.running === "1";
@@ -223,8 +234,8 @@ async function refresh() {
           }
           if (previousCuts !== null && k.cuts > previousCuts) {
             showCleanupNotice(k.cuts - previousCuts > 1
-              ? `${plural(k.cuts - previousCuts, "collection")} just switched in: older messages moved into the recap.`
-              : "A collection was just switched in: older messages moved into the recap.");
+              ? `${plural(k.cuts - previousCuts, "collection")} just applied: older messages moved into the recap.`
+              : "A collection was just applied: older messages moved into the recap.");
             celebrateCleanup();
           }
         }
@@ -317,6 +328,8 @@ $("intro").hidden = storeGet("llmgc.intro") === "dismissed";
 const reference = (kind) => ([key, [title, short, more]]) => [h("dt", { id: `ref-${kind}-${key}` }, title), h("dd", {}, more || short)];
 fill("glossary", Object.entries(GLOSSARY).map(reference("term")));
 fill("card-glossary", Object.entries(CARD_INFO).map(reference("card")));
+// Each part of the request diagram opens its own entry, as an ⓘ does.
+for (const part of document.querySelectorAll(".anatomy [data-ref]")) part.addEventListener("click", () => openReference(part.dataset.ref));
 fill("guide-colours", ORDER.map((key) => h("div", {}, swatch(key), h("div", {}, h("b", {}, CATS[key].label), h("span", {}, ` — ${GLOSSARY[key][1]}`)))),
   h("div", {}, h("span", { class: "qdot", style: "margin:3px 2px 0" }), h("div", {}, h("b", {}, "Changes at the next collection"), h("span", {}, " — a dot on the message's bar, in the colour it will become. On the map, a bar's height shows how much of the message the model still has, and its width how long the message is."))));
 

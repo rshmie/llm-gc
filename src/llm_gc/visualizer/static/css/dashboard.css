@@ -580,15 +580,33 @@ tr.cut td { font-weight: 600; }
 .drawer .guide-sub { list-style: disc; padding-left: 18px; margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
 .drawer .guide-analogy { margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: var(--sunken); color: var(--ink-2); font-size: 13px; line-height: 1.5; }
 .drawer .guide-analogy b { color: var(--ink); }
-.anatomy { display: flex; gap: 3px; margin: 16px 0 6px; font-size: 12px; font-weight: 600; }
-.anatomy > div { border-radius: 6px; padding: 9px 8px; text-align: center; color: #fff; }
-.anatomy .blk { background: var(--fid-compacted); flex: 1.5; }
-.anatomy .msgx { background: var(--fid-verbatim); flex: 1; }
-.anatomy .sysx { background: var(--sunken); color: var(--ink-3); flex: 1; border: 1px solid var(--hairline); }
+/* The request diagram. Each part's block and caption share a column through the subgrid, so blocks stay
+   one height and captions one baseline, and a part rises as one on hover. */
+.drawer .anatomy { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 6px 3px; margin: 16px 0 6px; padding: 0; list-style: none; }
+.anatomy > li { display: grid; grid-row: span 2; grid-template-rows: subgrid; min-width: 0; }
+.anatomy button { font: inherit; font-size: 12px; font-weight: 600; border: 0; border-radius: 6px; padding: 9px 8px; color: #fff;
+  cursor: pointer; transition: transform .15s, box-shadow .15s; }
+.anatomy .blk { background: var(--fid-compacted); }
+.anatomy .msgx { background: var(--fid-verbatim); }
+.anatomy .sysx { background: var(--sunken); color: var(--ink-3); border: 1px solid var(--hairline); }
 :root[data-theme="dark"] .anatomy .msgx { color: #0b0b0b; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .anatomy .msgx { color: #0b0b0b; } }
-.anatomy-caption { display: flex; gap: 3px; font-size: 11.5px; color: var(--ink-3); }
-.anatomy-caption > div { text-align: center; }
+.anatomy li > span { font-size: 11.5px; color: var(--ink-3); text-align: center; transition: color .15s; }
+/* The same 3px lift as the map's bars. Hover only where a pointer can hover, so a tap does not leave a part raised. */
+@media (hover: hover) {
+  .anatomy li:hover button { transform: translateY(-3px); box-shadow: 0 4px 10px rgba(0, 0, 0, 0.18); }
+  .anatomy li:hover > span { color: var(--ink); }
+}
+.anatomy button:focus-visible { transform: translateY(-3px); }
+.anatomy li:focus-within > span { color: var(--ink); }
+@media (prefers-reduced-motion: reduce) { .anatomy button, .anatomy li:hover button { transform: none; transition: none; } }
+@media (max-width: 560px) {
+  .drawer .anatomy { grid-template-columns: minmax(0, 1fr); }
+  .anatomy > li { display: flex; align-items: center; gap: 10px; grid-row: auto; }
+  .anatomy button { flex: 0 0 42%; }
+  .anatomy li > span { text-align: left; }
+}
 .colours { display: flex; flex-direction: column; gap: 9px; }
 .colours > div { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 10px; align-items: baseline; font-size: 13px; }
 .colours .swatch { transform: translateY(1px); }
@@ -672,7 +690,7 @@ body { background: radial-gradient(1100px 520px at 12% -8%, color-mix(in srgb, v
 }
 
 .cfg { color: var(--accent); font-weight: 650; }
-.anatomy .newx { flex: 1; background: var(--raised); color: var(--ink-2); border: 1px dashed var(--baseline); }
+.anatomy .newx { background: var(--raised); color: var(--ink-2); border: 1px dashed var(--baseline); }
 .gflow { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; font-size: 13px; }
 .gnode { border: 1px solid var(--hairline); border-left: 4px solid var(--fid-verbatim); border-radius: 9px; padding: 9px 12px; background: var(--sunken); display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .gnode span { color: var(--ink-3); font-size: 12.5px; }

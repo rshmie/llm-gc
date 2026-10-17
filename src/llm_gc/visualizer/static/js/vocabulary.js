@@ -1,5 +1,9 @@
 // The words the dashboard uses, and what each status and category means. The categories are the
 // engine's own detail levels, so the screen, the code and the recap's markers say the same thing.
+//
+// Every text on the page follows the same rules: one idea per sentence, about 20 words at most; say
+// who acts (LLM-GC, the provider, the model); one screen word per concept, as the guide's table lists
+// them, never the code word; no idioms; every number has a unit, and says whose count it is.
 
 import { h } from "./dom.js";
 
@@ -25,6 +29,9 @@ export const GLOSSARY = {
   size: ["The next request",
     "What LLM-GC will send of this conversation with your next message: the recap, then the recent messages. An estimate, by LLM-GC's own tokenizer.",
     "A forecast, not a running total: what LLM-GC will send of this conversation with your next message - the recap, then the recent messages as written - compared with the whole conversation as written, which it would carry without LLM-GC. Both are counted with LLM-GC's own tokenizer, an estimate: the provider counts its own way, usually higher, and its count of the last request is shown beside. The system prompt, tools and your client's own instructions are not in either figure: they go with every request, word for word, either way. \"So far\" is measured: every request this conversation sent, counted whole."],
+  system: ["System prompt and tools",
+    "Your client's own setup for the model, at the top of every request. LLM-GC never changes it.",
+    "The system prompt and tool list your client sends at the top of every request. LLM-GC passes them through untouched, so the provider keeps them cached across collections. If your client changes them, for example by adding a tool, the provider caches the whole request again."],
   tools: ["Tool calls and results",
     "Claude Code asks its client to run a tool, and the client sends back the output under your role. Both are condensed with their exchange, never apart.",
     "An agent such as Claude Code asks its client to run a tool – write a file, run a command – and the client sends back what came out, under the user's role. LLM-GC reads both as text and collects them with their exchange like any other message, never separating a call from its result."],
@@ -41,11 +48,11 @@ export const GLOSSARY = {
     "The answer to the newest request. It joins the conversation once your next request carries it.",
     "The answer to the newest request, as it reached your client. It joins the conversation, and is counted, when your next request carries it; until then nothing is sent with it. A reply that is regenerated or never finishes does not join, so it is shown here but never recorded from here."],
   window: ["The model's window",
-    "The most the model can read in one request, as the provider reports it for this model. The recap's budget and the stale bound are shares of it.",
-    "The most the model can read in one request, for the model this conversation's requests name, as the provider reports it; until it does, or if it cannot, the configured window. Filling it is what forces old context out; LLM-GC decides what goes, instead of the provider truncating. The recap's budget and the stale bound are shares of it. It is counted in the model's tokens and they in LLM-GC's, so LLM-GC first converts it at the rate the conversation's replies measure: how many tokens the model counts for each of its own."],
+    "The most tokens the model can read in one request, as the provider reports it. The recap's budget and the stale limit are shares of it.",
+    "The most tokens the model can read in one request. LLM-GC reads it from the provider, for the model this conversation's requests name. Until the provider reports it, or if it cannot, LLM-GC uses the configured window. When the window fills, old context must go: LLM-GC decides what goes, instead of the provider truncating. The recap's budget and the stale limit are shares of the window. The provider counts the window in its own tokens, so LLM-GC converts it to its own count, at the rate it measures from the conversation's replies."],
   block: ["Recap (the “front” in the code)",
     "One message at the start of every request standing in for every older exchange, each at its level. It stays the same until the next collection, so the provider can cache it.",
-    "One message at the start of every request standing in for every older exchange: quoted ones word for word, summarised ones as their opening line, facts and summary, archived ones as their opening line and facts. It stays exactly the same until the next collection is switched in, so the provider can keep it cached."],
+    "One message at the start of every request standing in for every older exchange: quoted ones word for word, summarised ones as their opening line, facts and summary, archived ones as their opening line and facts. It stays exactly the same until LLM-GC applies the next collection, so the provider can keep it cached."],
   exchange: ["Exchange (a “span” in the code)",
     "A message of yours and everything up to your next one. Exchanges are condensed whole, so a question never loses its answer.",
     "A message of yours and everything up to your next one: the reply, and any tool calls in between. A collection condenses whole exchanges, so a question is never shown apart from its answer."],
@@ -65,23 +72,23 @@ export const GLOSSARY = {
     "Folded behind one line: the model knows the exchange exists, not what was said. Only happens when the recap is over its budget.",
     "The recap reached its budget with every exchange already at its least detail, so the oldest were folded behind one line. The model is told they exist, not what was said in them. Their words are still stored, and a later collection shows them again if there is room."],
   next: ["Changes at the next collection",
-    "A forecast: the level it moves to when the next collection is switched in, drawn in that level's colour.",
-    "Recent messages the next collection would take, and earlier exchanges it would show at another level, each with a dot in the colour it will become. A forecast: nothing changes until the collection is switched in, and the conversation can change it before then."],
+    "A forecast: the level it moves to when LLM-GC applies the next collection, drawn in that level's colour.",
+    "Recent messages the next collection would take, and earlier exchanges it would show at another level, each with a dot in the colour it will become. A forecast: nothing changes until LLM-GC applies the collection, and the conversation can change it before then."],
   relevance: ["Score",
     "From 0 to 1: how recent an exchange is, or how much what you're discussing now is about it. It decides the exchange's level.",
     "From 0 to 1, for each exchange: how recent it is or how much what you are discussing now is about it, whichever is larger, plus whether it states a decision and how much specific detail it holds. Scored again at every collection."],
   check: ["Checks (GC passes)",
-    "After every reply LLM-GC checks whether there is enough to prepare a collection. Most checks find nothing to do.",
-    "After every reply LLM-GC checks whether there is enough to prepare a collection. Most checks find nothing to do; that is normal, and takes a few milliseconds. A prepared collection changes nothing the model is sent until a later request switches it in."],
+    "After every reply, LLM-GC checks whether to prepare a collection. Most checks find nothing to do.",
+    "After every reply, LLM-GC checks whether enough older messages are waiting to prepare a collection. Most checks find nothing to do. This is normal, and takes a few milliseconds. A prepared collection does not change what the model is sent. The change starts when LLM-GC applies it to a later request."],
   cache: ["The provider's prompt cache",
-    "The provider remembers the prompt it just read for a few minutes. While warm, the next request is cheap; once cold, it is read in full anyway.",
-    "Every request sends the whole conversation again, so the provider remembers the prompt it has just read, for a few minutes (5 by default). While it remembers - the cache is warm - the next request is cheap, as long as its start is unchanged. Once it has forgotten - the cache is cold - the next request is read in full whatever LLM-GC does. A collection changes the start of the prompt, so on a warm cache it makes the provider read everything again; on a cold one it costs nothing extra and makes that full read smaller. That is why LLM-GC waits for the right request."],
+    "The provider keeps the prompt it just read for a few minutes. While the cache is warm, the next request costs less. Once it is cold, the provider reads the whole prompt again.",
+    "Every request sends the whole conversation again, so the provider keeps the prompt it has just read for a few minutes (5 by default). While it keeps it, the cache is warm: the next request costs less, if its start is unchanged. After that time, the cache is cold: the provider reads the whole next request at full price, whatever LLM-GC does. A collection changes the start of the prompt. On a warm cache, the provider must then cache everything after the change again. On a cold cache, this costs nothing extra, and the full read is smaller. That is why LLM-GC chooses which request applies a collection."],
   prepared: ["Prepared collection (a staged cut)",
-    "Summaries and facts are ready, but the model isn't sent them yet. It is switched in at the request where that costs least.",
-    "A collection whose summaries and facts are ready but which the model is not sent yet. It is switched in as a later request is built: at once if the cache is cold, on a warm cache once its saving repays what the provider must cache again, or once stale weight reaches its bound."],
-  stale: ["Stale weight",
-    "What the model still gets word for word that a prepared collection would condense. At its bound, the collection is switched in.",
-    "What the model is still sent word for word that a prepared collection would condense: material that has gone quiet. It has a bound, a share of the window; reaching it switches the collection in for the model's sake, whatever the cache costs."],
+    "Its summaries and facts are ready, but the model does not get them yet. LLM-GC applies it to the request where that costs least.",
+    "A collection whose summaries and facts are ready, but which the model does not get yet. LLM-GC applies it to a later request when one of these is true: the cache is cold; on a warm cache, it saves at least what the provider must cache again; or the stale tokens reach their limit. While the model is using tools, LLM-GC waits until it finishes."],
+  stale: ["Stale tokens (“stale weight” in the code)",
+    "Older messages the model still gets word for word, which the prepared collection would condense. At their limit, LLM-GC applies the collection.",
+    "Older messages the model still gets word for word, which the prepared collection would condense. The model must read past them to reach what is discussed now. Their limit is a share of the model's window. When they reach it, LLM-GC applies the collection for the model's sake, even if the provider must cache the prompt again."],
   tracking: ["Conversation tracking",
     "LLM-GC recognises a conversation by its content: a history that continues none in progress starts a new one.",
     "LLM-GC recognises a conversation by its content, so a history that continues none in progress starts fresh: a new conversation, a subagent's, one after /compact or an edited message, and any after a proxy restart. A client that names its conversation with the x-llm-gc-session header has an edited message rewound instead, or restarted when it cannot be. A restart or a fresh start costs one request that is not condensed."],
@@ -117,36 +124,36 @@ export const TRACE_KINDS = {
   unclaimed: ["Not part of a conversation", "A request no conversation has continued: a title, a quota check, or a conversation's first message that nothing has followed yet."],
   closing: ["Last request of a replaced conversation", "The last request before Claude Code began a new main conversation, after /compact or an edited message. It begins no turn."],
   subagent: ["A subagent", "A conversation of its own, started by a tool call. Only its report reaches the main conversation; LLM-GC records it and sends it as written."],
-  collection: ["Carried a collection", "A prepared collection was switched in as this request was built: from here on, the conversation is sent condensed."],
+  collection: ["Carried a collection", "LLM-GC applied a prepared collection to this request. From here on, the conversation is sent condensed."],
   boundary: ["A new main conversation", "Claude Code began a new main conversation here, after /compact or an edited message. The one before it closes once idle."],
 };
 
 export const STATUS = {
-  completed:                { tone: "good", icon: "✓", text: "collection made" },
-  staged:                   { tone: "", icon: "◷", text: "prepared: a cut waits to be switched in" },
+  completed:                { tone: "good", icon: "✓", text: "collection applied" },
+  staged:                   { tone: "", icon: "◷", text: "prepared: waits to be applied" },
   discarded_history_changed: { tone: "", icon: "–", text: "discarded: the conversation was rewound while it ran" },
   bypassed_batch_too_small: { tone: "", icon: "–", text: "nothing to collect yet" },
   bypassed_no_saving:       { tone: "", icon: "–", text: "skipped: it would have made the prompt bigger" },
-  bypassed_aging_in_flight: { tone: "", icon: "–", text: "skipped: a collection was already running" },
+  bypassed_aging_in_flight: { tone: "", icon: "–", text: "skipped: a collection was already being prepared" },
   bypassed_on_error:        { tone: "critical", icon: "✕", text: "failed: nothing changed" },
   discarded_session_closed: { tone: "", icon: "–", text: "discarded: the conversation had closed" },
   bypassed_not_collected:   { tone: "", icon: "–", text: "not collected: recorded and sent as written" },
-  bypassed_paused:          { tone: "", icon: "⏸", text: "paused: yielding to the upstream's rate limit" },
+  bypassed_paused:          { tone: "", icon: "⏸", text: "paused: the provider is rate-limiting requests" },
 };
-// Why a prepared cut is switched in with the next request, in the switch policy's order.
+// Why a prepared collection is applied to the next request, in the switch policy's order.
 export const SWITCH_REASON = {
   requested: "Run GC now was pressed",
-  cache_cold: "the cache is cold, so the request is read in full anyway and switching costs nothing extra",
-  repays_rewrite: "it removes at least what it makes the provider cache again",
-  stale_weight_at_bound: "the model carries as much gone-quiet material as it may, so it is switched in whatever the cache costs",
+  cache_cold: "the cache is cold, so the provider reads the whole request anyway, and applying it costs nothing extra",
+  repays_rewrite: "it saves at least as many tokens as the provider must cache again",
+  stale_weight_at_bound: "the stale tokens reached their limit, so it is applied even though the provider must cache the prompt again",
 };
 // Why a prepared collection waits while a tool round is open, whatever else holds.
-export const TOOL_ROUND_TEXT = "A tool round is open: the next request answers the tool calls in the model's last reply. That reply must go back with its thinking, and the provider refuses thinking once the history before it has changed, so no collection is switched in until the round ends. Run GC now waits for it too.";
+export const TOOL_ROUND_TEXT = "While the model uses tools, each request sends the model's last reply back, with its thinking. The provider rejects that thinking if any earlier message has changed. A collection changes earlier messages, so LLM-GC waits until the model replies without calling a tool. It applies the collection with the request after that, usually your next message. Run GC now waits too.";
 // While the upstream is rate-limiting or overloaded, LLM-GC makes no model calls of its own.
-export const PAUSED_TEXT = "The upstream refused a request as rate-limited or overloaded. LLM-GC makes no model calls of its own until the pause ends, so it doesn't compete with you; your requests go through as normal.";
+export const PAUSED_TEXT = "The provider refused a request because of a rate limit or overload. Until the pause ends, LLM-GC makes no model calls of its own, so it does not compete with you. Your requests go through as normal.";
 
 // Why a conversation is recorded but never collected: today, only a subagent's.
-export const NOT_COLLECTED_TEXT = "A subagent's conversation: recorded and shown, sent as written. It usually ends before a collection would pay off. The collect_subagents setting turns collection on.";
+export const NOT_COLLECTED_TEXT = "This is a subagent's conversation. LLM-GC records and shows it, and sends it as written. A subagent usually finishes before a collection would save more than it costs. The collect_subagents setting turns collection on.";
 // What a collection did. Always from the engine's outcome, which names every message it moved: a
 // collection re-plans every exchange, so it can move earlier ones too, in either direction.
 export const OUTCOME_LINES = [
@@ -175,8 +182,8 @@ export const NOT_MOVED = {
   recap_over_budget: ["Recap over its budget", "Every exchange is folded out of view and the recap still doesn't fit: the budget is too small for this conversation."],
 };
 // Said where a refused credential shows: on both tabs, so it is not found only by opening a card.
-export const CREDENTIAL_REFUSED_TITLE = "The upstream is refusing LLM-GC's credential.";
-export const CREDENTIAL_REFUSED_TEXT = "LLM-GC can't make summaries, so the prompt has stopped shrinking; what was condensed stays. Check the credential LLM-GC was started with, then restart it.";
+export const CREDENTIAL_REFUSED_TITLE = "The provider refuses LLM-GC's credential.";
+export const CREDENTIAL_REFUSED_TEXT = "LLM-GC cannot write summaries, so the prompt no longer shrinks. What is already condensed stays condensed. Check the credential LLM-GC was started with, then restart LLM-GC.";
 // How much of a message the model still has, drawn as the height of its bar (percent of full).
 export const HEIGHT = { verbatim: 100, kept: 100, compacted: 52, archived: 24, out_of_view: 10 };
 // The ⓘ beside each card, shaped as the glossary is: [title, short, more].
@@ -188,8 +195,8 @@ export const CARD_INFO = {
     "Where each message lives: recent and sent as written (young), in the recap at its level (old), or filed as a fact (permanent).",
     "Where each message lives, as in a generational garbage collector. New messages enter the young generation and are sent word for word. A collection moves older ones into the old generation as exchanges, each shown quoted, summarised or archived by how much it matters now, and decided again at every collection. The facts read from every exchange are filed in the permanent generation, which also records what replaced what. The old generation is sent as the recap, at the start of the prompt, within its budget."],
   next: ["Next collection",
-    "Prepared after a reply once enough has gone quiet, then switched in at the request where it costs least, or when stale weight reaches its bound.",
-    "A collection has two halves. After every reply, a pass prepares a cut when two things hold: enough older messages to condense (only those to be summarised or archived count, since quoting a message word for word saves nothing), and a result smaller than the prompt is now, estimated from each summary's target size before any summary is paid for and checked again on the real ones. Preparing changes nothing the model is sent. The prepared cut is switched in as a later request is built: at once if the provider's cache is cold, since that request is read in full anyway; on a warm cache only once the saving repays what the provider must cache again, or once what the model carries that has gone quiet reaches its bound. Run GC now prepares a cut and switches it in at once, but never one that would make the prompt bigger."],
+    "LLM-GC prepares a collection once enough older messages are waiting. It applies it at the request where that costs least, or when the stale tokens reach their limit.",
+    "A collection has two steps. Step 1, prepare: after every reply, LLM-GC checks two things. Are enough older messages waiting to summarise or archive? Quoted messages do not count, because quoting a message word for word saves nothing. And would the result be smaller than the prompt is now? LLM-GC estimates this before it pays for any summary, and checks again with the real summaries. Preparing does not change what the model is sent. Step 2, apply: LLM-GC applies the collection to a later request when one of these is true. The cache is cold, so the provider reads the whole request anyway. Or, on a warm cache, the saving is at least what the provider must cache again. Or the stale tokens reach their limit. While the model is using tools, LLM-GC applies nothing until it finishes. Run GC now prepares a collection and applies it at once, but never one that would make the prompt bigger."],
   rate: ["How each exchange is scored",
     "Each dot is an exchange's score: quoted above the upper line, archived below the lower one, summarised between.",
     "Each dot is an exchange's score, from 0 to 1, against your two lines: quoted from the upper one, archived below the lower one, summarised in between. Every exchange is scored again at every collection, so one the conversation returns to can rise. A score must clear a line by the margin to move, so an exchange near a line doesn't flip back and forth. When the recap is over its budget, the coldest exchanges lose detail first."],

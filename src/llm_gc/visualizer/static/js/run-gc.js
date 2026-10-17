@@ -1,6 +1,6 @@
 // Run GC now: the dashboard's one action, and the explanation of its outcome.
 
-import { ACTION_HEADER, NOT_COLLECTED_TEXT, PAUSED_TEXT, STATUS, describeOutcome } from "./vocabulary.js";
+import { ACTION_HEADER, NOT_COLLECTED_TEXT, PAUSED_TEXT, STATUS, TOOL_ROUND_TEXT, describeOutcome } from "./vocabulary.js";
 import { $, fmt, h, plural, setChildren } from "./dom.js";
 import { keepLast, sessionPath, state } from "./state.js";
 import { showTab } from "./shell.js";
@@ -10,7 +10,7 @@ const pauseEnds = () => state.pause ? `It ends at ${new Date(state.pause.until).
 export function explainResult(r, before) {
   const figures = (after) => [["before", `${fmt(r.tokens_before)} tokens`], ["after", `${fmt(after)} tokens`]];
   const problems = r.degradations.length
-    ? `⚠ ${plural(r.degradations.length, "part")} of the collection fell short; each says what the model gets instead: see What fell short, on the Engine tab.` : null;
+    ? `⚠ ${plural(r.degradations.length, "part")} of the collection could not be done. “What fell short”, on the Engine tab, says what the model gets instead.` : null;
   if (r.status === "completed") {
     const o = r.outcome;
     const moved = o.kept.length + o.compacted.length + o.archived.length + o.folded.length;
@@ -41,8 +41,10 @@ export function explainResult(r, before) {
     return { tone: "muted", title: "– Nothing to collect yet",
       body: [`The ${plural(cut.turns.length, "older message")} would all be quoted word for word (they are short, or matter now), so collecting them would save nothing.`] };
   }
+  // Mid tool round the collection is prepared but held, so the button reports the preparation.
+  if (r.status === "staged") return { tone: "muted", title: "◷ Prepared. LLM-GC applies it once the model finishes using tools", body: [TOOL_ROUND_TEXT] };
   if (r.status === "bypassed_aging_in_flight") return { tone: "muted", title: "– A collection is already running", body: ["LLM-GC is already collecting this conversation. Try again in a moment."] };
-  if (r.status === "bypassed_paused") return { tone: "muted", title: "⏸ Paused: LLM-GC is yielding to a rate limit", body: [PAUSED_TEXT, pauseEnds()] };
+  if (r.status === "bypassed_paused") return { tone: "muted", title: "⏸ Paused by a rate limit", body: [PAUSED_TEXT, pauseEnds()] };
   if (r.status === "bypassed_not_collected") return { tone: "muted", title: "– Not collected", body: [NOT_COLLECTED_TEXT] };
   if (r.status === "bypassed_on_error") return { tone: "critical", title: "✕ The collection failed, and nothing changed", body: ["The conversation is exactly as it was. The error is in the proxy's log."] };
   return { tone: "muted", title: STATUS[r.status]?.text || r.status, body: [] };
@@ -69,11 +71,13 @@ export function renderRunGcButton() {
   const cut = k ? k.next_cut : null;
   const idle = !!cut && cut.turns.length === 0;
   button.setAttribute("aria-disabled", String(idle));
-  button.title = k && !k.collected ? "Not collected: a subagent's conversation is recorded and sent as written."
-    : !cut ? "Collect this conversation now, without waiting for the minimum."
-    : idle ? (k.cuts ? `Nothing to collect: everything older than the newest ${keepLast()} messages is already collected. Click to see why.`
-      : `Nothing to collect yet: the conversation is within its newest ${keepLast()} messages.`)
-    : `Collect the ${plural(cut.turns.length, "waiting message")} now: ${fmt(cut.compactable_tokens)} of ${fmt(cut.min_cut_tokens)} tokens ready, without waiting for the minimum.`;
+  button.title = k && !k.collected ? "Not collected. This is a subagent's conversation, which LLM-GC sends as written."
+    : !cut ? "Collect this conversation now, without waiting for the token minimum."
+    : idle ? (k.cuts ? `Nothing to collect. Everything older than the newest ${keepLast()} messages is already collected. Click to see why.`
+      : `Nothing to collect yet. The conversation is still within its newest ${keepLast()} messages.`)
+    : k.staged ? "A collection is prepared. Click to apply it now, without waiting for the cache. While the model is using tools, it waits until they finish."
+    : cut.batch_ready ? `Collect the ${plural(cut.turns.length, "waiting message")} now, without waiting for the next reply or the cache.`
+    : `Collect the ${plural(cut.turns.length, "waiting message")} now. ${fmt(cut.compactable_tokens)} of the ${fmt(cut.min_cut_tokens)} tokens needed are waiting, and Run GC now does not wait for the rest.`;
 }
 
 export function showResult(explained) {

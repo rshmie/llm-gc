@@ -5,7 +5,7 @@
 
 import { BECOMES, CATS, CLAMP_CHARS, CREDENTIAL_REFUSED_TEXT, CREDENTIAL_REFUSED_TITLE, FAR_JUMP_SCREENS, MAP_PX_PER_MESSAGE, EARLIER_SHOWN, GLOSSARY, HEIGHT, MIN_BAR_PX, NOT_COLLECTED_TEXT, ORDER, RUN_MIN, FACT_STATUS, SWITCH_REASON, TOOL_ROUND_TEXT, categoryOf, describeOutcome, swatch } from "./vocabulary.js";
 import { $, agoTs, compact, countEl, fill, fmt, h, meterBar, plural, ranges, reducedMotion, setChildren, share, storeGet, storeSet } from "./dom.js";
-import { LIST_ORDER_KEY, collecting, countCats, credentialRefusal, factsByTurn, has, instructionTokens, marked, newestReply, pendingTurns, preview, query, recapLimit, state, trafficOf, turnMatches, ui, writtenTokens } from "./state.js";
+import { LIST_ORDER_KEY, collecting, countCats, credentialRefusal, factsByTurn, has, instructionTokens, keepLast, marked, newestReply, pendingTurns, preview, query, recapLimit, state, trafficOf, turnMatches, ui, writtenTokens } from "./state.js";
 import { hideTooltip, hint, info, showTooltip, tipAction, tipQuote, hoverTip } from "./tooltip.js";
 import { offerReturn, showTab } from "./shell.js";
 import { openCard, showWhy, whyText } from "./engine.js";
@@ -128,9 +128,9 @@ function worries(k, counts, facts) {
     ["See why", toEngine("notmoved")], ["shortfalls", latestShortfall]));
   if (fill_ && fill_.share >= WINDOW_WARN) items.push(sumLine("warn", [h("b", {}, `The prompt fills ${Math.round(fill_.share * 100)}% of the model's window.`), ` ${fill_.how}`]));
   if (staged && staged.stale_tokens >= STALE_NOTE * staged.stale_bound_tokens && !staged.switches) items.push(sumLine("",
-    [`The model carries ${plural(staged.stale_tokens, "token")} that have gone quiet, ${Math.round((100 * staged.stale_tokens) / staged.stale_bound_tokens)}% of its bound. At the bound, the prepared collection is switched in.`],
+    [`The model still gets ${plural(staged.stale_tokens, "stale token")}, ${Math.round((100 * staged.stale_tokens) / staged.stale_bound_tokens)}% of their limit. At the limit, LLM-GC applies the prepared collection.`],
     ["Why", toEngine("next")]));
-  if (state.pause) items.push(sumLine("warn", [h("b", {}, `LLM-GC is yielding to a rate limit until ${new Date(state.pause.until).toLocaleTimeString()}.`), " It prepares no collection meanwhile; your requests go through as normal."], ["Why", toEngine("next")]));
+  if (state.pause) items.push(sumLine("warn", [h("b", {}, `LLM-GC is paused by a rate limit until ${new Date(state.pause.until).toLocaleTimeString()}.`), " It prepares no collection until then. Your requests go through as normal."], ["Why", toEngine("next")]));
   if (collecting()) items.push(sumLine("", "Preparing a collection now: this updates when it finishes."));
   const clear = !counts.out_of_view && !unseenFacts && !shortfalls.length && !credentialRefusal() && !(fill_ && fill_.share >= WINDOW_WARN);
   if (clear) items.unshift(sumLine("good", [h("b", {}, "No."), facts.length ? " Every fact reaches the model," : "", " nothing is out of view, and no collection fell short."]));
@@ -187,7 +187,7 @@ function tokenLines(k) {
         `${compact(last.usage.cache_read_input_tokens)} read from its cache, ${compact(last.usage.cache_creation_input_tokens)} written to it and ${compact(last.usage.input_tokens)} sent plainly, the system prompt and tools included.`),
       " tokens by the provider's count", windowMeter,
       ratio ? [" · ", hint(`${ratio.toFixed(2)}× LLM-GC's count`, "Two counts of one request",
-        `LLM-GC counted it at ${fmt(last.tokens_forwarded)} with its own tokenizer, an estimate.${k.token_rate ? " The recap's budget and the stale bound are sized at this rate." : ""}`)] : null) : null,
+        `LLM-GC counted it at ${fmt(last.tokens_forwarded)} with its own tokenizer, an estimate.${k.token_rate ? " LLM-GC sizes the recap's budget and the stale limit at this rate." : ""}`)] : null) : null,
     h("p", { class: "sum-tokens secondary" },
       lastCollection ? [`Last collection ${agoTs(lastCollection.gc_completed_at)}${lastCollection.outcome ? `: ${describeOutcome(lastCollection.outcome)}` : ""} · `,
         h("button", { class: "link-btn", type: "button", onclick: toEngine("moves") }, "What moved →")] : "No collection yet",
@@ -211,24 +211,24 @@ export function renderBar(k) {
     : cache.uses_cache === null ? chip("", "Cache: no reply yet", "The provider's prompt cache",
       "No request has been answered yet, so nothing says whether the provider caches this conversation.")
     : cache.uses_cache === false ? chip("", "Cache: not used", "No prompt cache",
-      "This conversation's replies use no prompt cache: every request is read in full, so a smaller prompt is always cheaper.")
+      "This conversation does not use the prompt cache. The provider reads every request in full, so a smaller prompt is always cheaper.")
     : cache.state === "warm" ? chip("good", `Cache warm · ${duration(Math.max(0, cache.lifetime_s - cache.idle_s))} left`, "Cache warm",
-      `The provider still remembers this prompt, so the next request is cheap if its start is unchanged. It forgets ${keeps} after the last request.`)
+      `The provider still has this prompt cached, so the next request costs less if its start is unchanged. The cache expires ${keeps} after the last request.`)
     : chip("cold", `Cache cold · idle ${duration(cache.idle_s)}`, "Cache cold",
-      `Idle past the ${keeps} the provider remembers a prompt, so the next request is read in full anyway: a free moment to switch a collection in.`);
+      `No request for longer than the ${keeps} the provider keeps a prompt cached. The provider reads the next request in full anyway, so applying a collection now costs nothing extra.`);
   const s = k && k.staged;
   const cut = k && k.next_cut;
   const next = !k ? null
     : !k.collected ? chip("", "Not collected", "Not collected", NOT_COLLECTED_TEXT)
-    : collecting() ? chip("", "Preparing a collection…", "Preparing a collection", "Summaries and facts are being written; nothing the model is sent changes yet.", toEngine("next"))
-    : s && s.switches ? chip("good", "Collection: switches in next request", "Switched in with your next request", `${capitalised(SWITCH_REASON[s.reason] || s.reason)}.`, toEngine("next"))
-    : s && s.reason === "tool_round_open" ? chip("", "Collection: prepared, waiting for the tool round", "Waiting for the tool round", TOOL_ROUND_TEXT, toEngine("next"))
-    : s ? chip("", "Collection: prepared, waiting", "Prepared, waiting",
-      `The cache is warm: switching now would make the provider cache ${fmt(s.rewritten_tokens)} tokens again to save ${fmt(s.saving_tokens)}.`, toEngine("next"))
-    : cut.batch_ready ? chip("", "Collection: prepared after the next reply", "Ready to prepare", "Enough has gone quiet: a collection is prepared after your next reply.", toEngine("next"))
+    : collecting() ? chip("", "Preparing a collection…", "Preparing a collection", "LLM-GC is writing summaries and reading facts. What the model is sent does not change yet.", toEngine("next"))
+    : s && s.switches ? chip("good", "Collection: applied with next request", "Applied with the next request", `${capitalised(SWITCH_REASON[s.reason] || s.reason)}.`, toEngine("next"))
+    : s && s.reason === "tool_round_open" ? chip("", "Collection: prepared, waiting for tool calls", "Waiting for the model to finish using tools", TOOL_ROUND_TEXT, toEngine("next"))
+    : s ? chip("", "Collection: prepared, waiting", "Prepared, waiting for a cheaper moment",
+      `The cache is warm. Applying it now would make the provider cache ${fmt(s.rewritten_tokens)} tokens again, to save ${fmt(s.saving_tokens)} tokens on each later request.`, toEngine("next"))
+    : cut.batch_ready ? chip("", "Collection: prepared after the next reply", "Ready to prepare", "Enough older messages are waiting. LLM-GC prepares a collection after the next reply.", toEngine("next"))
     : cut.compactable_tokens ? chip("", `Collection: not enough yet · ${fmt(cut.compactable_tokens)} of ${fmt(cut.min_cut_tokens)} tokens`, "Not enough yet",
-      `Prepared once the older messages to condense reach ${fmt(cut.min_cut_tokens)} tokens.`, toEngine("next"))
-    : chip("", "Collection: nothing to collect yet", "Nothing to collect yet", "Nothing older than the newest messages has gone quiet yet.", toEngine("next"));
+      `LLM-GC prepares a collection once the older messages to condense reach ${fmt(cut.min_cut_tokens)} tokens.`, toEngine("next"))
+    : chip("", "Collection: nothing to collect yet", "Nothing to collect yet", `No message is older than the newest ${keepLast()} yet. The newest messages always stay as written.`, toEngine("next"));
   fill("bar-chips", cacheChip, next);
 }
 

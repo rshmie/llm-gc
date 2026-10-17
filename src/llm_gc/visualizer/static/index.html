@@ -46,7 +46,7 @@
       <select id="session-select"><option>none yet</option></select>
     </div>
     <div class="bar-chips" id="bar-chips" aria-live="polite"></div>
-    <button class="run-gc" id="run-gc" disabled title="Prepare a collection of this conversation now and switch it in at once, without waiting for enough messages to summarise or archive, or for the cache.">Run GC now</button>
+    <button class="run-gc" id="run-gc" disabled title="Collect this conversation now. LLM-GC prepares a collection and applies it at once, without waiting for the token minimum or the cache.">Run GC now</button>
     <p class="origin-line secondary" id="origin-line" hidden></p>
   </section>
 
@@ -150,7 +150,7 @@
   <div id="view-engine" class="view" role="tabpanel" aria-labelledby="tab-engine" hidden>
     <div class="eng-intro">
       <h1>LLM-GC at work</h1>
-      <p>When the next collection is prepared and switched in, and why; what collections have done to this conversation; and a record of every check.</p>
+      <p>When LLM-GC prepares and applies the next collection, and why. What collections have done to this conversation. A record of every check.</p>
     </div>
     <div class="proxy-line" id="proxy-line"></div>
     <div class="status-stack" id="eng-status" role="status"></div>
@@ -259,10 +259,16 @@
   <p class="guide-note">Hover any <b>ⓘ</b> or dotted phrase for a short meaning; click an ⓘ for the full one, at the foot of this guide.</p>
 
   <h3>What one request carries</h3>
-  <div class="anatomy" aria-hidden="true"><div class="sysx">system prompt · tools</div><div class="blk">recap</div><div class="msgx">recent</div><div class="newx">your new message</div></div>
-  <div class="anatomy-caption" aria-hidden="true"><div style="flex:1">your client's own, sent unchanged every time</div><div style="flex:1.5">the old generation: every exchange at its level (the front)</div><div style="flex:1">the young generation: at least the newest <b class="cfg" data-config="last_n_turns_to_keep">…</b>, as written</div><div style="flex:1">&nbsp;</div></div>
-  <p class="guide-note">The provider caches a request from its first byte. The system prompt and tools never change, so they stay
-    cached; a collection changes the recap, so everything after it is cached again.</p>
+  <ol class="anatomy" aria-label="What one request carries, in order. Click a part for its full meaning.">
+    <li><button type="button" class="sysx" data-ref="term-system">system prompt · tools</button><span>your client's own; LLM-GC never changes them</span></li>
+    <li><button type="button" class="blk" data-ref="term-block">recap</button><span>the old generation: every older exchange at its level, once LLM-GC applies a collection</span></li>
+    <li><button type="button" class="msgx" data-ref="term-verbatim">recent</button><span>the young generation: at least the newest <b class="cfg" data-config="last_n_turns_to_keep">…</b>, as written</span></li>
+    <li><button type="button" class="newx" data-ref="term-newest">your new message</button><span>as your client sent it</span></li>
+  </ol>
+  <p class="guide-note">Click a part for its full meaning. Until LLM-GC applies its first collection, it sends each request exactly as
+    your client wrote it. After that, your client's instructions from older messages open the recap, word for word.</p>
+  <p class="guide-note">The provider caches a request from its first byte. LLM-GC never changes the system prompt or tools, so they stay
+    cached. A collection changes the recap, so the provider caches everything from the recap onwards again.</p>
 
   <h3>How a message moves through the generations</h3>
   <div class="gflow" role="img" aria-label="Every message starts in the young generation. A collection moves older messages into the old generation as exchanges, each shown quoted, summarised or archived by its score and decided again at every collection. The facts read from each exchange are filed in the permanent generation, and shown on its line.">
@@ -281,27 +287,28 @@
   </div>
 
   <h3>When a collection happens</h3>
-  <p>A collection (a <i>cut</i> in the code) has two halves, because they cost different things.</p>
+  <p>A collection (a <i>cut</i> in the code) has two steps, because each step costs something different.</p>
   <ol>
-    <li><b>It is prepared.</b> After every reply LLM-GC runs a <b>check</b> (a <i>pass</i>). Once the older messages to be
-      summarised or archived reach <b class="cfg" data-config="min_cut_tokens">…</b> tokens, and the result would be smaller,
-      it writes their summaries and reads their facts. That costs LLM-GC's own model calls, and changes nothing the model is
-      sent. The newest <b class="cfg" data-config="last_n_turns_to_keep">…</b> messages always stay recent.</li>
-    <li><b>It is switched in</b> as a later request is built, which is the first to carry it:
+    <li><b>Prepare.</b> After every reply, LLM-GC runs a <b>check</b> (a <i>pass</i> in the code). It prepares a collection
+      when the older messages to summarise or archive reach <b class="cfg" data-config="min_cut_tokens">…</b> tokens, and the
+      result would be smaller. Preparing costs LLM-GC's own model calls, to write summaries and read facts. It does not change
+      what the model is sent. The newest <b class="cfg" data-config="last_n_turns_to_keep">…</b> messages always stay recent.</li>
+    <li><b>Apply.</b> LLM-GC applies the prepared collection to a later request, when one of these is true:
       <ul class="guide-sub">
-        <li>at once if the provider's <b>cache is cold</b>: that request is read in full anyway, so the change costs nothing extra;</li>
-        <li>on a <b>warm</b> cache, once it saves at least <b class="cfg" data-config="min_saving_share" data-format="times">…</b> what it
-          makes the provider cache again;</li>
-        <li>or once the model carries too much that has gone quiet: its <b>stale weight</b> reaches
-          <b class="cfg" data-config="max_stale_ratio" data-format="percent">…</b> of the window, whatever the cache costs.</li>
+        <li>The provider's <b>cache is cold</b>. The provider reads the whole request anyway, so the change costs nothing extra.</li>
+        <li>The cache is <b>warm</b>, and the collection saves at least <b class="cfg" data-config="min_saving_share" data-format="times">…</b>
+          the tokens the provider must cache again.</li>
+        <li>The <b>stale tokens</b> reach <b class="cfg" data-config="max_stale_ratio" data-format="percent">…</b> of the window.
+          These are older messages the model still gets word for word. LLM-GC then applies the collection, even on a warm cache.</li>
       </ul></li>
-    <li>A collection that would make the prompt bigger is never switched in. <b>Run GC now</b> prepares one and switches it in at
-      once, ignoring the token minimum and the cache, but never that rule.</li>
+    <li>LLM-GC never applies a collection that makes the prompt bigger. While the model is using tools, it applies none until the
+      model finishes. <b>Run GC now</b> prepares a collection and applies it at once. It skips the token minimum and the cache,
+      but not these two rules.</li>
   </ol>
   <div class="guide-analogy"><b>Warm and cold, in plain words.</b> The provider is like a reviewer who has just read the first
     50 pages of your document. Send it back soon with one new page and they read only the new page: the cache is <b>warm</b>.
     Send it after they have forgotten and they read all 51: it is <b>cold</b>. Change page 1 and they must reread everything,
-    remembered or not. A collection changes page 1, so LLM-GC switches one in when the reviewer has forgotten anyway, or
+    remembered or not. A collection changes page 1, so LLM-GC applies one when the reviewer has forgotten anyway, or
     when the saving is worth the reread.</div>
 
   <h3>What to watch</h3>
@@ -315,7 +322,7 @@
       facts the model can't see, or part of a collection that fell short. Each links to its evidence; nothing is lost.
       Dismiss one with × and it stays hidden until there is more of it.</li>
     <li><b>The two chips beside the picker</b>: the provider's cache, warm with the time left or cold, and the next collection,
-      from "not enough yet" to "switches in next request". Click the second for the Next collection card.</li>
+      from "not enough yet" to "applied with next request". Click the second for the Next collection card.</li>
     <li><b>Two counts of tokens</b>: LLM-GC's own counts are estimates by its own tokenizer; the provider's count of the last
       request is what it bills. The page names whose count each figure is.</li>
   </ol>
@@ -327,9 +334,10 @@
       <tr><td>pass</td><td>check</td><td>runs after every reply</td></tr>
       <tr><td>cut</td><td>collection</td><td>older messages moved out of the young generation into the recap</td></tr>
       <tr><td>staged cut</td><td>prepared collection</td><td>summaries and facts ready, not yet sent to the model</td></tr>
-      <tr><td>switch</td><td>switched in</td><td>the request a prepared collection first reaches the model with</td></tr>
-      <tr><td>CacheState</td><td>cache warm / cold</td><td>whether the provider still remembers the prompt</td></tr>
-      <tr><td>stale weight</td><td>stale weight</td><td>what is still sent word for word that a prepared collection would condense</td></tr>
+      <tr><td>switch</td><td>apply</td><td>a prepared collection reaches the model, from the next request on</td></tr>
+      <tr><td>tool round open</td><td>waiting for tool calls</td><td>the model is using tools; no collection is applied until it finishes</td></tr>
+      <tr><td>CacheState</td><td>cache warm / cold</td><td>whether the provider still has the prompt cached</td></tr>
+      <tr><td>stale weight, stale bound</td><td>stale tokens, stale limit</td><td>older messages still sent word for word that a prepared collection would condense, and the most allowed</td></tr>
       <tr><td>front</td><td>recap</td><td>the first message of every request: every exchange at its level</td></tr>
       <tr><td>session</td><td>conversation</td><td>one conversation LLM-GC tracks and collects: a main conversation or a subagent's</td></tr>
       <tr><td>client session</td><td>Claude Code session</td><td>the piece of work a Claude Code window runs, holding several conversations</td></tr>

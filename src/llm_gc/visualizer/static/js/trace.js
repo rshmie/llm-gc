@@ -75,7 +75,7 @@ function traceHead(trace) {
 function paused() {
   if (!state.pause) return null;
   return h("div", { class: "status-line tone-warn trace-paused" }, h("span", { class: "badge", "aria-hidden": "true" }, "⏸"),
-    h("span", { class: "msg-text", ...hoverTip("Paused", PAUSED_TEXT) }, h("b", {}, `LLM-GC is yielding to a rate limit until ${new Date(state.pause.until).toLocaleTimeString()}.`),
+    h("span", { class: "msg-text", ...hoverTip("Paused", PAUSED_TEXT) }, h("b", {}, `LLM-GC is paused by a rate limit until ${new Date(state.pause.until).toLocaleTimeString()}.`),
       ` ${state.pause.reason[0].toUpperCase()}${state.pause.reason.slice(1)}, so LLM-GC makes no model calls of its own and starts no collection meanwhile. Your requests go through as normal.`));
 }
 
