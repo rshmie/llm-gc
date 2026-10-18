@@ -1,4 +1,6 @@
 import time
+from typing import Any
+
 from pydantic import BaseModel, Field
 from llm_gc.events.event_type import EventType
 
@@ -9,5 +11,5 @@ class Event(BaseModel):
     Consumed by the EventBus subscribers (visualizer, logger, benchmarks etc.)
     """
     event_type: EventType
-    data: dict
+    data: dict[str, Any]
     timestamp: float = Field(default_factory=time.time)

@@ -2,7 +2,7 @@
 
 import { CARD_INFO, CATS, GLOSSARY, ORDER, swatch } from "./vocabulary.js";
 import { $, clearMotionCaches, fill, h, plural, setChildren, storeGet, storeSet } from "./dom.js";
-import { OTHER, collecting, getJSON, sessionPath, state, ui } from "./state.js";
+import { OTHER, RequestFailed, collecting, getJSON, sessionPath, state, ui } from "./state.js";
 import { hideTooltip } from "./tooltip.js";
 import { THEMES, applyTheme, fillConfigValues, offerReturn, setLive, showCleanupNotice, showTab } from "./shell.js";
 import { openReference, setGuide } from "./guide.js";
@@ -256,9 +256,27 @@ async function refresh() {
     if (!state.knowledge) renderBar(null);
     renderRunGcButton();
     setLive("live", `live · ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`);
-  } catch {
-    setLive("down", "proxy unreachable");
+    loggedFault = null;
+  } catch (err) {
+    reportRefreshFailure(err);
   }
+}
+
+// The fault last written to the console: refresh runs every second, and a fault that recurs is logged once.
+let loggedFault = null;
+
+// Only a request that got no answer means the proxy is down. A server error, or a fault in the dashboard's
+// own code, is named as one and written to the console, so it is not mistaken for a proxy that stopped.
+function reportRefreshFailure(err) {
+  if (err instanceof RequestFailed && err.status === null) {
+    setLive("down", "proxy unreachable");
+    return;
+  }
+  if (String(err) !== loggedFault) {
+    console.error("dashboard refresh failed:", err);
+    loggedFault = String(err);
+  }
+  setLive("down", err instanceof RequestFailed ? `dashboard server error · ${err.status}` : "dashboard error · see console");
 }
 
 // ----------------------------------------------------------------- wiring

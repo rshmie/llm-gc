@@ -418,11 +418,7 @@ client = anthropic.Anthropic(base_url="http://127.0.0.1:9900")
 ### As a library
 
 ```python
-from llm_gc.config import GCConfig
-from llm_gc.engine import build_gc_service
-from llm_gc.llm import AnthropicClient
-from llm_gc.models import Message
-from llm_gc.utils import count_tokens
+from llm_gc import AnthropicClient, GCConfig, Message, build_gc_service, count_tokens
 
 service = build_gc_service(GCConfig(context_window=200_000),
                            summary_provider=AnthropicClient(api_key="sk-ant-..."))
@@ -432,6 +428,8 @@ async def on_turn(session_id: str, text: str, role: str, index: int) -> list[Mes
     await service.gc_update(session_id, turn)     # record the turn, then run a pass
     return await service.gc_collect(session_id)   # what to send: the recap, then recent turns
 ```
+
+The names `llm_gc` exports are its public API. Anything imported from a subpackage, such as `llm_gc.engine`, is internal and may change in any release.
 
 ## What LLM-GC does and doesn't do
 

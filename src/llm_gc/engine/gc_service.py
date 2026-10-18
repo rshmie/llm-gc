@@ -529,8 +529,11 @@ class GcService:
         except Exception as err:
             logger.exception("gc_age failed",
                              extra={"session_id": session_id, "gc_run_id": gc_run_id, "stage": current_stage})
+            # The result reaches the bus and the dashboard, so as in `_record_degradation` only our own
+            # errors' messages, which carry no content, are shown; the log above keeps the rest.
+            reason = str(err) if isinstance(err, LLMGCError) else type(err).__name__
             return self._unchanged_result(base, gc_run_id, GCStatus.BYPASSED_ON_ERROR, start,
-                                          failure_reason=str(err), failure_stage=current_stage)
+                                          failure_reason=reason, failure_stage=current_stage)
 
         if not self.session_manager.is_live(state):
             logger.info("session closed during aging; result discarded",
