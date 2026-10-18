@@ -166,13 +166,18 @@ function lastAttempt() {
 export function renderNext(k) {
   // A conversation that is never collected has no next collection to show the conditions of.
   if (!k.collected) {
-    fill("panel-next", h("p", { class: "next-lede" }, "Not collected."),
-      h("p", { class: "secondary" }, NOT_COLLECTED_TEXT));
+    fill("panel-next", nextHead("Not collected.", NOT_COLLECTED_TEXT));
     return;
   }
   if (k.staged) renderStaged(k);
   else renderPreparing(k);
 }
+
+// The card opens with its answer in one sentence. Whatever explains that answer follows in a quieter line, so the
+// answer stays readable at a glance and the figures stay with the checks below that prove them.
+const nextHead = (answer, detail = null) => h("div", { class: "next-head" },
+  h("p", { class: "next-lede" }, answer),
+  detail ? h("p", { class: "next-detail" }, detail) : null);
 
 const checkItem = (tone, icon, title, figure, ...body) => h("li", { class: `ck tone-${tone}` },
   h("span", { class: "ck-badge", "aria-hidden": "true" }, icon),
@@ -190,14 +195,17 @@ function renderPreparing(k) {
   const taking = k.turns.filter((t) => t.fidelity === "verbatim" && t.becomes);
   const refused = lastAttempt()?.abandoned_cut ? lastAttempt() : null;
   const saving = cut.estimated_saving;
-  const lede = state.pause ? `Paused until ${new Date(state.pause.until).toLocaleTimeString()}. ${state.pause.lasting ? "LLM-GC's own model calls are failing" : "The provider is rate-limiting requests"}, so LLM-GC prepares no collection.`
+  const answer = state.pause ? `Paused until ${new Date(state.pause.until).toLocaleTimeString()}.`
     : !taking.length ? "Nothing to collect yet."
     : !cut.batch_ready ? `Waiting for ${fmt(cut.min_cut_tokens - cut.compactable_tokens)} more tokens of messages to summarise or archive.`
     : saving > 0 ? "Ready. LLM-GC prepares a collection after the next reply."
     : "Enough to collect, but collecting now would make the prompt bigger. LLM-GC waits for more messages.";
+  const detail = state.pause
+    ? `${state.pause.lasting ? "LLM-GC's own model calls are failing" : "The provider is rate-limiting requests"}, so LLM-GC prepares no collection.`
+    : null;
 
   fill("panel-next",
-    h("p", { class: "next-lede" }, lede),
+    nextHead(answer, detail),
     h("div", { class: "next-grid" },
       h("div", {},
         h("div", { class: "label" }, "Step 1 · Prepare, when both are true"),
@@ -228,11 +236,12 @@ function renderStaged(k) {
   const overdue = s.stale_tokens >= s.stale_bound_tokens;
   // With no proxy reading the cache beside this dashboard, the verdict was made for a cold one.
   const cold = cache ? cache.state === "cold" : true;
-  const lede = s.switches
-    ? `Ready. LLM-GC applies it to the next request, because ${SWITCH_REASON[s.reason] || s.reason}.`
+  const [answer, detail] = s.switches
+    ? [`Ready. LLM-GC applies it to the next request, because ${SWITCH_REASON[s.reason] || s.reason}.`, null]
     : s.reason === "tool_round_open"
-    ? `Prepared, and waiting for the model to finish using tools. ${TOOL_ROUND_TEXT}`
-    : `Prepared, and waiting for a cheaper moment. Applying it now would make the provider cache ${fmt(s.rewritten_tokens)} tokens again, to save ${fmt(s.saving_tokens)} tokens on each later request. Until then, the model gets these messages word for word.`;
+    ? ["Prepared, and waiting for the model to finish using tools.", TOOL_ROUND_TEXT]
+    : ["Prepared, and waiting for a cheaper moment.",
+      `Applying it now would make the provider cache ${fmt(s.rewritten_tokens)} tokens again, to save ${fmt(s.saving_tokens)} tokens on each later request. Until then, the model gets these messages word for word.`];
   const cacheSays = !cache ? "This dashboard runs without the proxy, so it cannot see the cache. It treats the cache as cold."
     : cache.uses_cache === false ? "This conversation does not use the prompt cache. The provider reads every request in full, so a smaller prompt is always cheaper."
     : cache.uses_cache === null ? "No request has been answered yet, so LLM-GC cannot tell whether the cache is cold. Until it can, it treats the cache as warm."
@@ -243,7 +252,7 @@ function renderStaged(k) {
   const unprepared = taking.filter((t) => !prepared.has(t.turn_index)).length;
 
   fill("panel-next",
-    h("p", { class: "next-lede" }, lede),
+    nextHead(answer, detail),
     h("div", { class: "next-grid" },
       h("div", {},
         h("div", { class: "label" }, "Step 2 · Apply, when any one is true"),

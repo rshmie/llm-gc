@@ -440,7 +440,9 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.6 ui-monosp
 .collapse svg { transition: transform .2s; }
 .collapse[aria-expanded="false"] svg { transform: rotate(-90deg); }
 @media (prefers-reduced-motion: reduce) { .collapse svg { transition: none; } }
-.next-lede { margin: 0 0 14px; font-size: 15px; font-weight: 650; color: var(--ink); }
+.next-head { margin-bottom: 14px; }
+.next-lede { font-size: 15px; font-weight: 650; color: var(--ink); }
+.next-detail { margin-top: 4px; color: var(--ink-2); max-width: 80ch; }
 .next-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 16px 40px; }
 @media (max-width: 860px) { .next-grid { grid-template-columns: minmax(0, 1fr); } }
 .next-grid .label { margin-bottom: 10px; }
