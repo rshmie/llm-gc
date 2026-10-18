@@ -61,7 +61,7 @@ Today's evidence is a 37-question check on scripted conversations and a few live
 
 - [ ] **Choose a license**: Apache-2.0 includes an explicit patent grant; MIT is the simplest. Then set the `license` field in `pyproject.toml`.
 - [ ] **Add the benchmark's regression check to CI**, once the benchmark exists, so a change that loses quality or savings fails a pull request.
-- [ ] **Repository settings:** require the CI checks before a merge (Lint, Type-check, Test (3.13), Test (3.14) and Library-only install), and turn on private vulnerability reporting, which `SECURITY.md` and `CODE_OF_CONDUCT.md` send people to.
+- [ ] **Repository settings:** require the CI checks to pass before a merge, and turn on private vulnerability reporting, which `SECURITY.md` points people to.
 - [ ] **Integration tests:** the proxy tested end to end over HTTP against a stand-in upstream, async tests on `pytest-asyncio`, and coverage reported.
 - [ ] **A Docker image** that starts a working proxy, with its port published to localhost only by default.
 - [ ] **PyPI publishing through trusted publishing**, with no long-lived token.
