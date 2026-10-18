@@ -30,8 +30,12 @@ const relayedTip = () => hoverTip(GLOSSARY.relayed[0], GLOSSARY.relayed[1]);
 const clientTip = () => hoverTip(GLOSSARY.client[0], GLOSSARY.client[1]);
 const sharedTip = () => hoverTip(GLOSSARY.shared[0], GLOSSARY.shared[1]);
 // The speaker, explained whenever it is not simply you or the assistant.
-const who = (turn) => h("span", { class: "who", ...(turn.relayed ? relayedTip() : turn.tool_results ? toolTip()
-  : byClient(turn) ? clientTip() : shared(turn) ? sharedTip() : {}) }, speakerOf(turn));
+const speakerTip = (turn) => turn.relayed ? relayedTip() : turn.tool_results ? toolTip()
+  : byClient(turn) ? clientTip() : shared(turn) ? sharedTip() : {};
+const who = (turn) => h("span", { class: "who", ...speakerTip(turn) }, speakerOf(turn));
+// Beside the role the provider receives: who wrote a turn, when the role alone would credit it to the wrong side.
+const writerTag = (turn) => speakerOf(turn) === speakerName(turn.role) ? null
+  : h("span", { class: "tag", ...speakerTip(turn) }, speakerOf(turn));
 const toolTag = (label) => h("span", { class: "tag", ...toolTip() }, label);
 const callsTag = (turn) => turn.tool_calls ? toolTag("calls a tool") : null;
 // Instructions the client puts inside the message: never condensed, so their size stands apart.
@@ -882,7 +886,7 @@ export function renderPrompt(k) {
     k.front_text ? h("div", { class: "prompt-msg front", id: "prompt-recap" }, h("div", { class: "msg-head" }, h("span", { class: "who" }, "user"),
       h("span", { class: "tag" }, h("span", { class: "key block" }), `the recap · ${plural(k.front_tokens, "token")}`), info("block")), promptText(k.front_text, "prompt-front")) : null,
     ...tail.map((t) => h("div", { class: "prompt-msg", id: `prompt-turn-${t.turn_index}` }, h("div", { class: "msg-head" }, h("span", { class: "who" }, t.role),
-      t.tool_results ? toolTag("tool results") : t.tool_calls ? toolTag("tool calls") : null, instructionsTag(t),
+      writerTag(t) ?? (t.tool_calls ? toolTag("tool calls") : null), instructionsTag(t),
       h("span", { class: "num" }, `message ${t.turn_index} · ${plural(t.tokens, "token")}`)), promptText(t.text || "(no text)", `prompt-${t.turn_index}`))),
   ];
   keepPlace($("prompt"), ".prompt-msg[id]", () => setChildren($("prompt"), head, ui.newestFirst ? messages.toReversed() : messages));

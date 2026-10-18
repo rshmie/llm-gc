@@ -56,6 +56,13 @@ class TestLevelsAreNested:
         assert kept.startswith(f"{QUOTE_PREFIX} (turn 0, user) ")
         assert all(turn.content in kept for turn in span.turns)
 
+    def test_a_quoted_tool_result_is_named_as_the_tools(self):
+        result = Message(role="user", content="[tool result] 42 passed", token_count=6, turn_index=4,
+                         raw_content=[{"type": "tool_result", "tool_use_id": "t1", "content": "42 passed"}])
+        kept = span_text(Span(turns=(result,), level=KEPT), Annotations())
+
+        assert kept == f"{QUOTE_PREFIX} (turn 4, tool results) [tool result] 42 passed"
+
     def test_each_richer_level_costs_more_so_the_planner_sees_what_it_buys(self):
         kept, compacted, archived = level_costs(_span(0, ARCHIVED), self.annotations)
         assert compacted is not None and archived < compacted

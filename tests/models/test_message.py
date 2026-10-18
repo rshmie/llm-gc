@@ -1,6 +1,6 @@
 import pytest
-from llm_gc.models.message import (CLIENT_SPEAKER, Message, TextPart, parts_by_writer, person_text, said_by_user,
-                                   speaker_label)
+from llm_gc.models.message import (CLIENT_SPEAKER, TOOL_SPEAKER, Message, TextPart, parts_by_writer, person_text,
+                                   said_by_user, speaker_label)
 from tests.models.support import COMMAND, NOTICE, SKILL_RULES, turn_with_client_text
 from pydantic import ValidationError
 
@@ -69,3 +69,18 @@ class TestWhoATurnWithClientTextBelongsTo:
     def test_a_turn_the_client_wrote_all_of_is_the_clients(self):
         turn = turn_with_client_text(0, (True, NOTICE))
         assert not said_by_user(turn) and speaker_label(turn) == CLIENT_SPEAKER
+
+
+class TestATurnOfToolResultsIsNamedAsOne:
+    RESULT = {"type": "tool_result", "tool_use_id": "t1", "content": "42 passed"}
+
+    def test_a_turn_holding_only_tool_results_is_the_tools(self):
+        turn = Message(role="user", content="[tool result] 42 passed", raw_content=[self.RESULT])
+        assert speaker_label(turn) == TOOL_SPEAKER
+
+    def test_a_turn_that_also_holds_text_keeps_the_users_label(self):
+        """What a person types after interrupting a tool round arrives beside the round's results."""
+        typed = {"type": "text", "text": "Why do we keep the mypy override?"}
+        turn = Message(role="user", content="[tool result] 42 passed\nWhy do we keep the mypy override?",
+                       raw_content=[self.RESULT, typed])
+        assert speaker_label(turn) == "user"

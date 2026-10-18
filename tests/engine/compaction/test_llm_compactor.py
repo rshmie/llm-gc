@@ -195,6 +195,15 @@ class TestWhatItSendsToTheModel:
                          "[turn 4] client: Base directory for this skill: /skills/audit",
                          "[turn 5] subagent report: <agent-message>Found MySQL.</agent-message>"]
 
+    def test_tool_output_is_labelled_as_the_tools(self):
+        """Under the user label, a file's contents could be summarised as something the user said."""
+        result = Message(role="user", content="[tool result] DATABASE_URL=mysql://db", token_count=20, turn_index=7,
+                         raw_content=[{"type": "tool_result", "tool_use_id": "t1", "content": "DATABASE_URL=mysql://db"}])
+        compactor, _, provider = _compactor([_response("The assistant read the config.")])
+        _compact(compactor, [*RUN, result])
+
+        assert "\n[turn 7] tool results: [tool result] DATABASE_URL=mysql://db" in provider.calls[0].messages[0].content
+
     def test_the_timeout_is_passed_through(self):
         compactor, _, provider = _compactor([_response("A short summary.")], timeout_s=7.5)
         _compact(compactor)

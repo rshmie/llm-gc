@@ -28,7 +28,7 @@ LLM-GC is built for that missing part: a layer of context management between the
 
 The motivation is **epistemic transparency**. A model has no reliable sense of what it does and does not know, so it cannot be relied on to say when its grounding has gone weak. A person can make that judgement — whether to trust an answer, restate a decision, or start afresh — but only with the data to make it from.
 
-So visibility is not a feature added to a context manager; it is the reason the project exists. The condensing serves it as much as it saves tokens: a context that is managed deliberately is one that can be described honestly. The savings come for free.
+So visibility is not a feature added to a context manager. The condensing serves it as much as it saves tokens: a context that is managed deliberately is one that can be described honestly. The savings come for free.
 
 That gives the developer three commitments:
 
@@ -74,7 +74,7 @@ Relevance is not decidable. The root set for a conversation is the *next questio
 
 Three consequences follow, and they run through the whole design:
 
-**Cleanup cannot be silent.** A system that makes unsound, unverifiable decisions about what the model is allowed to see — and hides those decisions from the person who will be handed the resulting answer — has replaced one opaque actor with two. Transparency here is not a feature chosen for its appeal. It is the only honest way to ship an operation that cannot be proven correct.
+**Cleanup cannot be silent.** A system that makes unsound, unverifiable decisions about what the model is allowed to see — and hides those decisions from the person who will be handed the resulting answer — has replaced one opaque actor with two. Transparency here is a feature chosen as one of the honest way to ship an operation that cannot be proven correct.
 
 **Condensing has to be recoverable, not final.** Because a bet can be wrong, nothing is deleted. A turn leaving the young generation lands in a span that keeps it whole, shown with less detail while the conversation is elsewhere and with more when it returns, and the decisions inside it survive as extracted facts. A wrong bet then costs fidelity for a while rather than knowledge.
 

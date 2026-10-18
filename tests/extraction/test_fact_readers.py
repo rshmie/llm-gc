@@ -103,6 +103,7 @@ class TestReadingByModel:
         facts = _read(provider, [*SPANS, (tool_result,)])
 
         assert [(f.message_turn, f.speaker) for f in facts] == [(8, "user"), (9, "assistant"), (10, "assistant")]
+        assert "[turn 10] tool results: shards: 3" in provider.calls[0].messages[0].content
 
     def test_facts_come_back_in_the_order_they_were_said(self):
         """Filing is sequential, so a model that lists turn 8 before turn 6 must not

@@ -10,7 +10,11 @@ import re
 from hypothesis import given
 from hypothesis import strategies as st
 
-from llm_gc.llm.prompts import FACTS_CLOSE, FACTS_OPEN, TRANSCRIPT_CLOSE, TRANSCRIPT_OPEN, escape_delimiters, transcript_block
+import pytest
+
+from llm_gc.llm.prompts import (COMPACTION_PROMPT, FACTS_CLOSE, FACTS_OPEN, FACTS_PROMPT, TRANSCRIPT_CLOSE,
+                                TRANSCRIPT_OPEN, escape_delimiters, load_prompt, transcript_block)
+from llm_gc.models.message import CLIENT_SPEAKER, RELAYED_SPEAKER, TOOL_SPEAKER
 
 MARKERS = (TRANSCRIPT_OPEN, TRANSCRIPT_CLOSE, FACTS_OPEN, FACTS_CLOSE)
 # A line a model could read as a turn's label, as the escaping must never leave one.
@@ -86,3 +90,10 @@ class TestTheTranscriptBlock:
         assert block.count(TRANSCRIPT_CLOSE) == 1 and block.endswith(TRANSCRIPT_CLOSE)
         assert [line for line in block.splitlines() if line.startswith("[turn ")] == [
             "[turn 3] user: Use Postgres.", "[turn 4] user: [tool result] TRANSCRIPT\\>>>"]
+
+
+@pytest.mark.parametrize("prompt", [COMPACTION_PROMPT, FACTS_PROMPT])
+@pytest.mark.parametrize("label", [RELAYED_SPEAKER, CLIENT_SPEAKER, TOOL_SPEAKER])
+def test_every_speaker_label_is_explained_in_the_prompts_that_show_it(prompt, label):
+    """A label the model is never told about is read by its words alone, and "client" reads like a person."""
+    assert f"`{label}`" in load_prompt(prompt)

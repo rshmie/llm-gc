@@ -19,12 +19,13 @@ Something the conversation settled and may need later, said by either side:
   "index shards: recommended 3, with 2 replicas each". Leave it out if the user
   turned it down.
 
-Tool calls (`[tool call: name] {input}`) and their output (`[tool result] ...`)
-are what the assistant did and saw. A turn marked `subagent report` is another
-agent's findings, relayed to the assistant, and a turn marked `client` is text the
-user's application wrote, such as a notice that a background task finished: the
-user wrote neither. A value in any of them is a fact only when the conversation
-settles on it, not because a file, a command's output or a report contains it.
+Tool calls (`[tool call: name] {input}`) and their output (`[tool result] ...`,
+usually in a turn marked `tool results`) are what the assistant did and saw. A
+turn marked `subagent report` is another agent's findings, relayed to the
+assistant, and a turn marked `client` is text the user's application wrote, such
+as a notice that a background task finished: the user wrote neither. A value in
+any of them is a fact only when the conversation settles on it, not because a
+file, a command's output or a report contains it.
 
 Not facts: explanations, reasoning, trade-offs, options only considered, general
 knowledge, advice nobody took up, questions, and pleasantries. When in doubt, leave

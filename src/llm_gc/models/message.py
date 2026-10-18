@@ -76,9 +76,10 @@ def tool_result_ids(message: Message) -> list[str]:
             if block.get("type") == "tool_result" and "tool_use_id" in block]
 
 
-# How a quote or a transcript names a relayed report's speaker, and text the client wrote.
+# How a quote or a transcript names a relayed report's speaker, text the client wrote, and tool output.
 RELAYED_SPEAKER = "subagent report"
 CLIENT_SPEAKER = "client"
+TOOL_SPEAKER = "tool results"
 
 
 class TextPart(NamedTuple):
@@ -129,12 +130,23 @@ def speaker_label(message: Message) -> str:
 
     A turn the client wrote all of is the client's. A turn it wrote part of is still the
     user's: `parts_by_writer` tells the parts apart.
+
+    A turn of tool results is named as one only when it carries no text of its own.
+    When a person interrupts a tool round, Claude Code sends what they type in the same
+    turn as the round's results, and their words must not be read as a tool's. Such a
+    turn keeps the user role, and its tool output still opens `[tool result]`.
     """
     if message.relayed:
         return RELAYED_SPEAKER
+    if tool_result_ids(message) and not _carries_text(message):
+        return TOOL_SPEAKER
     if message.client_written and not person_text(message):
         return CLIENT_SPEAKER
     return message.role
+
+
+def _carries_text(message: Message) -> bool:
+    return any(block.get("type") == "text" for block in _blocks(message))
 
 
 def _blocks(message: Message) -> Iterable[dict[str, Any]]:
