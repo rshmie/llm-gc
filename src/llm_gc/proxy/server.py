@@ -59,7 +59,7 @@ from llm_gc.proxy.anthropic_translation import (
 )
 from llm_gc.proxy.cache_watch import CacheWatch
 from llm_gc.proxy.model_windows import ModelWindow, ModelWindows, WindowLookup
-from llm_gc.proxy.session_identity import SESSION_HEADER, chain_hashes, client_origin
+from llm_gc.proxy.session_identity import chain_hashes, client_origin, named_session
 from llm_gc.proxy.reply_thinking import ReplyThinking
 from llm_gc.web.request_id import RequestIdMiddleware, current_request_id
 from llm_gc.proxy.request_log import RequestLog, RequestRecord, newest_kind
@@ -331,8 +331,7 @@ async def _handle(app: FastAPI, request: Request) -> Response:
         origin = client_origin(request.headers)
         # One pass serves the session lookup, the claim of a first request and the request log.
         hashes = chain_hashes(client_messages)
-        session_id = _record_client_history(app, history, hashes[:-1], request.headers.get(SESSION_HEADER),
-                                            origin)
+        session_id = _record_client_history(app, history, hashes[:-1], named_session(request.headers), origin)
         window = app.state.model_windows.window_for(_model_name(payload))
         collected = _collected(app, origin)
         if session_id is not None:
@@ -556,15 +555,15 @@ def _count_collection(app: FastAPI, event: Event) -> None:
                               switch_reason=result.switch_reason.value if result.switch_reason is not None else None)
 
 
-def _record_client_history(app: FastAPI, history: list[Message], hashes: Sequence[str], header_value: str | None,
+def _record_client_history(app: FastAPI, history: list[Message], hashes: Sequence[str], named: str | None,
                            origin: ClientOrigin | None) -> str | None:
     """Find the session this history belongs to and record what it has not seen.
 
     The client's history is the truth: it holds every earlier reply exactly as the
     user saw it, and nothing the user never saw. So the session is reconciled to
     it on every request - continued, rewound, or started over - rather than built
-    from responses. `hashes` are the history's chain hashes. Returns None for a first
-    turn, which has no history to keep.
+    from responses. `hashes` are the history's chain hashes, and `named` is the session
+    the client named, if any. Returns None for a first turn, which has no history to keep.
     """
     if not history:
         return None
@@ -573,8 +572,8 @@ def _record_client_history(app: FastAPI, history: list[Message], hashes: Sequenc
     manager = gc_service.session_manager
     metrics: ProxyMetrics = app.state.metrics
 
-    if header_value and header_value.strip():
-        state = manager.get_or_create(header_value.strip())
+    if named is not None:
+        state = manager.get_or_create(named)
         recorded = state.snapshot.lineage
         agreed = _agreed_length(recorded, hashes)
         if agreed < len(recorded):

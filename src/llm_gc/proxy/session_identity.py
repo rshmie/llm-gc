@@ -9,14 +9,17 @@ doc/design/proxy/overview.md.
 
 import hashlib
 import json
+import logging
 import re
 from collections.abc import Mapping, Sequence
 
 from llm_gc.models import ClientOrigin, Message
 from llm_gc.proxy.anthropic_translation import is_thinking_block, lift_instructions
 
+logger = logging.getLogger(__name__)
+
 SESSION_HEADER = "x-llm-gc-session"
-"""Client-supplied session id. Preferred over matching by content."""
+"""Client-supplied session id, a short plain id. Preferred over matching by content."""
 
 # Claude Code names its own session, and each sub-agent, on every request. They label a
 # conversation; they never identify one, since one Claude Code session holds several.
@@ -25,6 +28,22 @@ CLIENT_AGENT_HEADER = "x-claude-code-agent-id"
 
 # A client's ids reach the log and the dashboard, so only a short plain id is taken.
 _CLIENT_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def named_session(headers: Mapping[str, str]) -> str | None:
+    """The session a request names with `SESSION_HEADER`, or None when it names none.
+
+    The name follows the same rule as the client's own ids, since it becomes a log field,
+    a dashboard label and part of the dashboard's addresses. Any other value is ignored
+    with a warning, and the conversation is found by its content instead.
+    """
+    value = headers.get(SESSION_HEADER)
+    session_id = _client_id(value)
+    if value is not None and session_id is None:
+        # Only its length is logged: the value is what failed the check.
+        logger.warning("%s ignored: not 1-64 letters, digits, '_' or '-'; the conversation is matched by its content",
+                       SESSION_HEADER, extra={"header_length": len(value)})
+    return session_id
 
 
 def client_origin(headers: Mapping[str, str]) -> ClientOrigin | None:

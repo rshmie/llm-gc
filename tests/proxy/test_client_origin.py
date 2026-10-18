@@ -1,9 +1,12 @@
 """The client's own session and agent: a label on a conversation, never its identity."""
 
+import logging
+
 import pytest
 
 from llm_gc.models import ClientOrigin
-from llm_gc.proxy.session_identity import CLIENT_AGENT_HEADER, CLIENT_SESSION_HEADER, client_origin
+from llm_gc.proxy.session_identity import (CLIENT_AGENT_HEADER, CLIENT_SESSION_HEADER, SESSION_HEADER, client_origin,
+                                           named_session)
 
 SESSION = "c7a78c2f-d25c-44e4-af6f-dba30717fb9b"
 AGENT = "a1c50dab6bf4df2c1"
@@ -32,3 +35,23 @@ class TestReadingTheClientsSession:
     def test_a_malformed_agent_still_keeps_the_session(self):
         origin = client_origin({CLIENT_SESSION_HEADER: SESSION, CLIENT_AGENT_HEADER: "not an id"})
         assert origin == ClientOrigin(session_id=SESSION)
+
+
+class TestReadingTheSessionAClientNames:
+    """LLM-GC's own header names the session, under the same rule as the client's ids."""
+
+    def test_a_plain_id_names_the_session(self):
+        assert named_session({SESSION_HEADER: " chat-42 "}) == "chat-42"
+
+    def test_no_header_names_none_and_says_nothing(self, caplog):
+        caplog.set_level(logging.WARNING, logger="llm_gc.proxy.session_identity")
+        assert named_session({}) is None
+        assert caplog.records == []
+
+    @pytest.mark.parametrize("value", ["", "x" * 65, "chats/42", "two words", "abc\nINFO forged line"])
+    def test_any_other_value_is_ignored_with_a_warning_that_does_not_repeat_it(self, value, caplog):
+        caplog.set_level(logging.WARNING, logger="llm_gc.proxy.session_identity")
+        assert named_session({SESSION_HEADER: value}) is None
+        [record] = caplog.records
+        assert record.levelno == logging.WARNING
+        assert record.args == (SESSION_HEADER,) and record.header_length == len(value)  # type: ignore[attr-defined]

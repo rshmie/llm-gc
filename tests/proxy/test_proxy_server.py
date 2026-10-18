@@ -424,6 +424,19 @@ class TestFindingTheConversation:
         _post(client, _body(("user", "a"), ("assistant", "b"), ("user", "c")), headers={SESSION_HEADER: "chat-42"})
         assert service.session_manager.store.get("chat-42") is not None
 
+    @pytest.mark.parametrize("name", ["chats/42", "x" * 65])
+    def test_a_name_that_is_not_a_plain_id_is_ignored_and_the_conversation_found_by_content(self, name):
+        """A `/` in a session's name made every dashboard address for it a 404."""
+        client, service, _, _ = _proxy()
+        headers = {SESSION_HEADER: name}
+        _post(client, _body(("user", "a"), ("assistant", "b"), ("user", "c")), headers=headers)
+        _post(client, _body(("user", "a"), ("assistant", "b"), ("user", "c"), ("assistant", "d"), ("user", "e")),
+              headers=headers)
+
+        assert service.session_manager.store.get(name) is None
+        # Seeded by the first request and continued by the second, as if no name was sent.
+        assert client.get("/stats").json()["sessions_seeded"] == 1
+
     def test_different_conversations_get_different_sessions(self):
         client, service, _, _ = _proxy()
         _post(client, _body(("user", "about databases"), ("assistant", "ok"), ("user", "go on")))

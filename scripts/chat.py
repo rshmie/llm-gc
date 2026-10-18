@@ -146,7 +146,7 @@ def main() -> None:
                         help="the model's effort level; its own default when omitted")
     parser.add_argument("--system", help="a system prompt for the conversation")
     parser.add_argument("--show-thinking", action="store_true", help="ask for and print a summary of the reasoning")
-    parser.add_argument("--session", help=f"send {SESSION_HEADER} instead of letting the proxy match by content")
+    parser.add_argument("--session", help=f"send {SESSION_HEADER} instead of letting the proxy match by content: 1-64 letters, digits, _ or -")
     parser.add_argument("--no-fallback", action="store_true", help="do not re-run declined requests on another model")
     try:
         chat(parser.parse_args())
