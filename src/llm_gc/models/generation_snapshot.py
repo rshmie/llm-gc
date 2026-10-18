@@ -227,12 +227,20 @@ class Supersession:
 
 @dataclass(frozen=True)
 class AppliedAging:
+    """The snapshot with a delta applied, and what filing its facts changed.
+
+    `filed` is the delta's new entries that were filed, each as it was filed: a
+    restatement is left out, and a value read after a newer one is on record arrives
+    already replaced. Only these are changes to the conversation's memory.
+    """
+
     snapshot: GenerationSnapshot
     supersessions: tuple[Supersession, ...] = field(default=())
+    filed: tuple[KnowledgeEntry, ...] = field(default=())
 
 
 def apply_aging(snapshot: GenerationSnapshot, delta: AgingDelta) -> AppliedAging:
-    """Return the snapshot with `delta` applied, and the supersessions it caused.
+    """Return the snapshot with `delta` applied, and the facts it filed and retired.
 
     Raises:
         ValueError: The delta names a turn or span the snapshot does not hold, or
@@ -259,7 +267,7 @@ def apply_aging(snapshot: GenerationSnapshot, delta: AgingDelta) -> AppliedAging
             raise ValueError(f"aging delta changes a span not in the old generation: turn {span.first_turn}")
         old[old.index(span)] = replace(span, level=level)
 
-    knowledge, supersessions = file_knowledge(snapshot.knowledge, delta.new_knowledge)
+    knowledge, supersessions, filed = _file_entries(snapshot.knowledge, delta.new_knowledge)
     aged = replace(
         snapshot,
         young=tuple(m for m in snapshot.young if m.turn_index not in delta.departed_turns),
@@ -267,7 +275,7 @@ def apply_aging(snapshot: GenerationSnapshot, delta: AgingDelta) -> AppliedAging
         knowledge=knowledge,
         version=snapshot.version + 1,
     )
-    return AppliedAging(snapshot=aged, supersessions=supersessions)
+    return AppliedAging(snapshot=aged, supersessions=supersessions, filed=filed)
 
 
 def file_knowledge(
@@ -288,8 +296,17 @@ def file_knowledge(
     user changes their own decision, and a labelled recommendation beside an unlabelled
     decision reads as the answer. The recommendation stays in its exchange's words and summary.
     """
+    filed, supersessions, _ = _file_entries(knowledge, new_entries)
+    return filed, supersessions
+
+
+def _file_entries(
+    knowledge: tuple[KnowledgeEntry, ...], new_entries: tuple[KnowledgeEntry, ...]
+) -> tuple[tuple[KnowledgeEntry, ...], tuple[Supersession, ...], tuple[KnowledgeEntry, ...]]:
+    """`file_knowledge`, also returning the new entries that were filed, as filed."""
     filed = list(knowledge)
     supersessions: list[Supersession] = []
+    added: list[KnowledgeEntry] = []
     for new_entry in new_entries:
         at = next((index for index, entry in enumerate(filed) if entry.message_turn > new_entry.message_turn),
                   len(filed))
@@ -306,8 +323,10 @@ def file_knowledge(
                     superseded.append(existing)
             if superseded:
                 supersessions.append(Supersession(new_entry=new_entry, superseded=tuple(superseded)))
-        filed.insert(at, replace(new_entry, knowledge_status=KnowledgeStatus.SUPERSEDED) if replaced_later else new_entry)
-    return tuple(filed), tuple(supersessions)
+        entry = replace(new_entry, knowledge_status=KnowledgeStatus.SUPERSEDED) if replaced_later else new_entry
+        filed.insert(at, entry)
+        added.append(entry)
+    return tuple(filed), tuple(supersessions), tuple(added)
 
 
 def _in_force(entries: Sequence[KnowledgeEntry]) -> list[KnowledgeEntry]:

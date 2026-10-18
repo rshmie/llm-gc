@@ -6,10 +6,9 @@ from dataclasses import dataclass, field
 from llm_gc.config import GCConfig
 from llm_gc.config.constants import DEFAULT_MAX_RECENT_DEGRADATIONS, DEFAULT_MAX_RECENT_PASSES, \
     DEFAULT_MAX_RECENT_TRANSITIONS, DEFAULT_MONITOR_MAX_SESSIONS
-from llm_gc.engine import AgingDegradation, GCResult, GCStatus
+from llm_gc.engine import AgingDegradation, GCStatus, PassReport
 from llm_gc.engine.generations.front import FRONT_OVERHEAD_TOKENS, render_front
 from llm_gc.events import Event, EventBus, EventType
-from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.generation_snapshot import GenerationSnapshot
 from llm_gc.monitoring.context_health import (
     GenerationTransition,
@@ -24,12 +23,7 @@ from llm_gc.monitoring.context_health import (
 
 @dataclass(frozen=True)
 class _PassSignals:
-    """What the monitor keeps of one finished pass: its signals, built on arrival.
-
-    Built when GC_FINISHED arrives rather than when a snapshot is read, so the
-    monitor never holds the result itself - which carries the conversation - only
-    counts, tokens and turn indices.
-    """
+    """What the monitor keeps of one finished pass: its signals, built from its report on arrival."""
 
     token_budget: TokenBudgetSignal | None
     gc_breakdown: GCBreakdownSignal
@@ -97,15 +91,15 @@ class ContextHealthMonitor:
         return record
 
     def _on_gc_finished(self, event: Event) -> None:
-        gc_result: GCResult = event.data["gc_result"]
-        young_turn_indices, young_tokens = self._young_generation(gc_result)
-        breakdown = self._build_gc_breakdown(gc_result, event.timestamp)
+        report: PassReport = event.data["report"]
+        breakdown = self._build_gc_breakdown(report, event.timestamp)
         record = self._record_for(event)
         record.passes.append(breakdown)
+        # The young generation as it stands: the turns forwarded word for word after the pass.
         record.last_pass = _PassSignals(
-            token_budget=self._build_token_budget(gc_result), gc_breakdown=breakdown,
-            transformation_ratio=self._compute_transformation_ratio(gc_result),
-            young_turn_indices=young_turn_indices, young_tokens=young_tokens)
+            token_budget=self._build_token_budget(report), gc_breakdown=breakdown,
+            transformation_ratio=self._compute_transformation_ratio(report),
+            young_turn_indices=report.tail_turns, young_tokens=report.tail_tokens)
 
     def _on_message_promoted_to_old_gen(self, event: Event) -> None:
         """Record a young -> old promotion, one transition per turn that moved.
@@ -121,26 +115,22 @@ class ContextHealthMonitor:
         """
         transitions = self._record_for(event).transitions
         for turn_index in event.data["source_turn_indices"]:
-            transitions.append(
-                GenerationTransition(transition_type=TransitionType.PROMOTED, turn_index=turn_index,
-                                     topic_label=None, occurred_at=event.timestamp))
+            transitions.append(GenerationTransition(transition_type=TransitionType.PROMOTED, turn_index=turn_index,
+                                                    occurred_at=event.timestamp))
 
     def _on_message_archived(self, event: Event) -> None:
         """Record a span shown archived or out of view, one transition per turn in it."""
         transitions = self._record_for(event).transitions
         for turn_index in event.data["source_turn_indices"]:
-            transitions.append(
-                GenerationTransition(transition_type=TransitionType.ARCHIVED, turn_index=turn_index,
-                                     topic_label=None, occurred_at=event.timestamp))
+            transitions.append(GenerationTransition(transition_type=TransitionType.ARCHIVED, turn_index=turn_index,
+                                                    occurred_at=event.timestamp))
 
     def _on_knowledge_entry_superseded(self, event: Event) -> None:
-        superseded_entries: list[KnowledgeEntry] = event.data["superseded_knowledge_entries"]
+        """Record each retired fact by the turn that stated it, one transition per fact."""
         transitions = self._record_for(event).transitions
-        for superseded_entry in superseded_entries:
-            transitions.append(GenerationTransition(transition_type=TransitionType.SUPERSEDED,
-                                                                 turn_index=superseded_entry.message_turn,
-                                                                 topic_label=superseded_entry.topic_label,
-                                                                 occurred_at=event.timestamp))
+        for turn_index in event.data["superseded_turns"]:
+            transitions.append(GenerationTransition(transition_type=TransitionType.SUPERSEDED, turn_index=turn_index,
+                                                    occurred_at=event.timestamp))
 
     def _on_aging_degraded(self, event: Event) -> None:
         """Keep degradations across passes: one quiet pass must not hide a refusal before it."""
@@ -172,61 +162,55 @@ class ContextHealthMonitor:
             snapshot_taken_at=time.time())
 
     @staticmethod
-    def _newest_turn_index(gc_result: GCResult) -> int | None:
+    def _newest_turn_index(report: PassReport) -> int | None:
         """How far into the conversation the pass ran, or None when no turn is forwarded word for word."""
-        return max((message.turn_index for message in _tail(gc_result)), default=None)
+        return max(report.tail_turns, default=None)
 
-    def _build_token_budget(self, gc_result: GCResult) -> TokenBudgetSignal | None:
-        current_msg_turn_index = self._newest_turn_index(gc_result)
+    def _build_token_budget(self, report: PassReport) -> TokenBudgetSignal | None:
+        current_msg_turn_index = self._newest_turn_index(report)
         if current_msg_turn_index is None:
             return None   # an empty conversation has no turn to point at
-        return TokenBudgetSignal(current_tokens=gc_result.tokens_in_final,
+        return TokenBudgetSignal(current_tokens=report.tokens_in_final,
                                  context_window=self.gc_config.context_window,
-                                 pressure_ratio=gc_result.tokens_in_final / self.gc_config.context_window,
+                                 pressure_ratio=report.tokens_in_final / self.gc_config.context_window,
                                  current_msg_turn_index=current_msg_turn_index)
 
-    def _build_gc_breakdown(self, gc_result: GCResult, gc_completed_at: float) -> GCBreakdownSignal:
-        if gc_result.status is GCStatus.COMPLETED:
+    def _build_gc_breakdown(self, report: PassReport, gc_completed_at: float) -> GCBreakdownSignal:
+        if report.status is GCStatus.COMPLETED:
             # The cut's turns by planned level; the tail stayed word for word.
-            keep_tokens = gc_result.kept_tokens + sum(message.token_count for message in _tail(gc_result))
-            compact_tokens = gc_result.compacted_tokens
-            archive_tokens = gc_result.archived_tokens
+            keep_tokens = report.kept_tokens + report.tail_tokens
+            compact_tokens = report.compacted_tokens
+            archive_tokens = report.archived_tokens
         else:
             # Nothing was condensed: the producer's own claim (kept_count ==
             # len(messages)) is that everything stayed untouched.
-            keep_tokens = gc_result.tokens_in_final
+            keep_tokens = report.tokens_in_final
             compact_tokens = 0
             archive_tokens = 0
-        return GCBreakdownSignal(keep_count=gc_result.kept_count, compact_count=gc_result.compacted_count,
-                                 archive_count=gc_result.archived_count, keep_tokens=keep_tokens,
+        return GCBreakdownSignal(keep_count=report.kept_count, compact_count=report.compacted_count,
+                                 archive_count=report.archived_count, keep_tokens=keep_tokens,
                                  compact_tokens=compact_tokens, archive_tokens=archive_tokens,
-                                 tokens_before=gc_result.tokens_before, tokens_saved=gc_result.tokens_saved,
-                                 thinking_dropped_tokens=gc_result.thinking_dropped_tokens,
-                                 gc_run_id=gc_result.gc_run_id, gc_status=gc_result.status,
-                                 gc_completed_at=gc_completed_at, duration_ms=gc_result.duration_ms,
-                                 failure_reason=gc_result.failure_reason, failure_stage=gc_result.failure_stage,
-                                 newest_turn_index=self._newest_turn_index(gc_result),
-                                 degradations=gc_result.degradations, outcome=gc_result.outcome,
-                                 abandoned_cut=gc_result.abandoned_cut)
+                                 tokens_before=report.tokens_before, tokens_saved=report.tokens_saved,
+                                 thinking_dropped_tokens=report.thinking_dropped_tokens,
+                                 gc_run_id=report.gc_run_id, gc_status=report.status,
+                                 gc_completed_at=gc_completed_at, duration_ms=report.duration_ms,
+                                 failure_reason=report.failure_reason, failure_stage=report.failure_stage,
+                                 newest_turn_index=self._newest_turn_index(report),
+                                 degradations=report.degradations, outcome=report.outcome,
+                                 abandoned_cut=report.abandoned_cut)
 
     @staticmethod
-    def _compute_transformation_ratio(gc_result: GCResult) -> float | None:
+    def _compute_transformation_ratio(report: PassReport) -> float | None:
         """Of the young turns a completed pass looked at, the share of their tokens it condensed.
 
         None for any other pass: nothing was condensed, so there is no profile to
         report - not a fabricated 0.0.
         """
-        if gc_result.status is not GCStatus.COMPLETED:
+        if report.status is not GCStatus.COMPLETED:
             return None
-        transformed_tokens = gc_result.compacted_tokens + gc_result.archived_tokens
-        looked_at = transformed_tokens + gc_result.kept_tokens + sum(m.token_count for m in _tail(gc_result))
+        transformed_tokens = report.compacted_tokens + report.archived_tokens
+        looked_at = transformed_tokens + report.kept_tokens + report.tail_tokens
         return transformed_tokens / looked_at if looked_at else None
-
-    @staticmethod
-    def _young_generation(gc_result: GCResult) -> tuple[list[int], int]:
-        """The turns forwarded word for word after the pass: the young generation as it stands."""
-        tail = _tail(gc_result)
-        return [message.turn_index for message in tail], sum(message.token_count for message in tail)
 
     def _build_generation_lifecycle(self, last_pass: _PassSignals | None, session_id: str | None,
                                     transitions: list[GenerationTransition]) -> GenerationLifeCycleSignal:
@@ -253,8 +237,3 @@ class ContextHealthMonitor:
                                          old_gen_turn_indices=old_gen_turn_indices,
                                          permanent_gen_entries=permanent_gen_entries,
                                          recent_transitions=transitions)
-
-
-def _tail(gc_result: GCResult) -> list[Message]:
-    """The turns a pass forwards word for word: everything but the front, which sits before turn 0."""
-    return [message for message in gc_result.final_messages if message.turn_index >= 0]

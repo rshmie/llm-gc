@@ -126,7 +126,7 @@ class TestOnePassAtATime:
             await task
 
         _run(scenario())
-        statuses = [event.data["gc_result"].status for event in finished]
+        statuses = [event.data["report"].status for event in finished]
         # The running pass stages its cut, and switching it in is a collection of its own.
         assert statuses == [GCStatus.BYPASSED_AGING_IN_FLIGHT, GCStatus.STAGED, GCStatus.COMPLETED]
 
@@ -156,7 +156,7 @@ class TestAClosedSessionStaysClosed:
 
         _run(scenario())
         assert service.session_manager.store.get(SESSION) is None
-        assert finished[-1].data["gc_result"].status == GCStatus.DISCARDED_SESSION_CLOSED
+        assert finished[-1].data["report"].status == GCStatus.DISCARDED_SESSION_CLOSED
 
     def test_a_reopened_id_does_not_inherit_the_old_conversations_pass(self):
         service, compactor = _service()

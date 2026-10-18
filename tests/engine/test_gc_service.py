@@ -10,7 +10,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from llm_gc.config import GCConfig
-from llm_gc.engine import DegradationReason
+from llm_gc.engine import DegradationReason, PassReport
 from llm_gc.engine.compaction import BaseCompactor, LLMCompactor
 from llm_gc.engine.compaction.compaction_strategy import CompactionStrategy
 from llm_gc.engine.gc_result import CutOutcome
@@ -22,7 +22,8 @@ from llm_gc.llm import FakeProvider
 from llm_gc.engine.switch_policy import CacheState
 from llm_gc.extraction import PatternFactReader
 from llm_gc.models.generation_snapshot import DetailLevel
-from llm_gc.models.knowledge_entry import KnowledgeStatus
+from llm_gc.models import KnowledgeEntry
+from llm_gc.models.knowledge_entry import KnowledgeStatus, KnowledgeType
 from llm_gc.utils import count_tokens
 from tests.engine.support import ARCHIVED_SCORE, COMPACTED_SCORE, KEPT_SCORE, SUMMARY, collect, make_service, turn
 
@@ -44,6 +45,20 @@ class _RaisingScorer:
 
     def score(self, spans, now, newest_turn):
         raise self.error
+
+
+class _ScriptedReader:
+    """Reads one user decision on the database from every turn: `values[turn_index]`."""
+
+    speakers = frozenset({"user"})
+
+    def __init__(self, *values: str):
+        self.values = values
+
+    async def read(self, spans, on_record):
+        return [KnowledgeEntry(message_turn=message.turn_index, content=self.values[message.turn_index],
+                               topic_label="primary database", knowledge_type=KnowledgeType.DECISION, speaker="user")
+                for span in spans for message in span]
 
 
 def _record(service, message) -> None:
@@ -359,11 +374,59 @@ class TestTheBusSeesWhatTheCollectionDid:
         emitted = len(finished)
         asyncio.run(service.gc_collect("s"))
 
-        switches = [e for e in finished if e.data["gc_result"].status is GCStatus.COMPLETED]
+        switches = [e for e in finished if e.data["report"].status is GCStatus.COMPLETED]
         assert len(finished) == emitted, "rendering the prompt changes nothing and announces nothing"
         assert len(finished) - len(switches) == 3, "one per pass"
         assert len(switches) == service.session_manager.store.get("s").snapshot.cut_count > 0, "one per switch"
         assert all(event.data["session_id"] == "s" for event in finished)
+
+    def test_no_event_carries_the_conversations_words(self):
+        """A subscriber may log or export whatever it hears, so the conversation stays in the
+        session: events name turns and counts. Every turn and summary here is about storage,
+        and every fact names a database."""
+        service, _, _ = make_service(scores={0: COMPACTED_SCORE}, default_score=ARCHIVED_SCORE,
+                                     fact_reader=_ScriptedReader("SQLite", "Postgres", "MySQL", "MariaDB"))
+        heard = []
+        for event_type in EventType:
+            service.event_bus.subscribe(event_type, heard.append)
+
+        _converse(service, 4)
+
+        assert {EventType.GC_FINISHED, EventType.MESSAGE_COMPACTED, EventType.MESSAGE_PROMOTED_TO_OLD_GEN,
+                EventType.MESSAGE_ARCHIVED, EventType.KNOWLEDGE_ENTRY_ADDED,
+                EventType.KNOWLEDGE_ENTRY_SUPERSEDED} <= {event.event_type for event in heard}, "every kind was heard"
+        assert all(isinstance(event.data["report"], PassReport)
+                   for event in heard if event.event_type is EventType.GC_FINISHED)
+        for event in heard:
+            payload = event.model_dump_json()
+            for words in ("storage", "SQLite", "Postgres", "MySQL", "primary database"):
+                assert words not in payload, f"{event.event_type.value} carries {words!r}"
+
+    def test_only_a_fact_that_was_filed_is_announced(self):
+        """A value that only restates the one in force is not filed: announcing it would
+        report a change to the conversation's memory that never happened."""
+        service, _, _ = make_service(default_score=ARCHIVED_SCORE, fact_reader=_ScriptedReader(*["Postgres"] * 6))
+        added, archived = [], []
+        service.event_bus.subscribe(EventType.KNOWLEDGE_ENTRY_ADDED, added.append)
+        service.event_bus.subscribe(EventType.MESSAGE_ARCHIVED, archived.append)
+
+        _converse(service, 6)
+
+        filed = service.session_manager.store.get("s").snapshot.knowledge
+        assert [entry.message_turn for entry in filed] == [0], "later turns only restate turn 0's value"
+        assert [event.data for event in added] == [{"session_id": "s", "message_turn": 0, "knowledge_type": "decision",
+                                                    "knowledge_status": "active", "speaker": "user"}]
+        assert sum(event.data["knowledge_entries_filed"] for event in archived) == 1
+
+    def test_a_replaced_value_is_announced_by_its_turns(self):
+        service, _, _ = make_service(default_score=ARCHIVED_SCORE,
+                                     fact_reader=_ScriptedReader("SQLite", "Postgres", "MySQL"))
+        superseded = []
+        service.event_bus.subscribe(EventType.KNOWLEDGE_ENTRY_SUPERSEDED, superseded.append)
+
+        _converse(service, 3)
+
+        assert [(event.data["message_turn"], event.data["superseded_turns"]) for event in superseded] == [(1, [0])]
 
     def test_what_a_pass_reports_is_exactly_what_collect_sends(self):
         service, _, _ = make_service(scores={0: COMPACTED_SCORE, 1: ARCHIVED_SCORE})
@@ -406,7 +469,7 @@ class TestNothingRecordedIsDestroyed:
         held = list(snapshot.young) + [message for span in snapshot.old for message in span.turns]
         assert sorted(message.turn_index for message in held) == list(range(len(scores)))
         assert all(message == turn(message.turn_index) for message in held)
-        assert not [e for e in finished if e.data["gc_result"].status is GCStatus.BYPASSED_ON_ERROR]
+        assert not [e for e in finished if e.data["report"].status is GCStatus.BYPASSED_ON_ERROR]
 
 
 class TestTheRecapIsSizedForTheModelsWindow:

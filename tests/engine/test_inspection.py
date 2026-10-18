@@ -99,8 +99,8 @@ class TestCoverage:
         service = _build()
         finished = _converse(service, 30)
 
-        committed = sum(1 for event in finished if event.data["gc_result"].status is GCStatus.COMPLETED
-                        and event.data["gc_result"].tokens_saved > 0)
+        committed = sum(1 for event in finished if event.data["report"].status is GCStatus.COMPLETED
+                        and event.data["report"].tokens_saved > 0)
         assert _snapshot(service).cut_count == committed > 0
         assert len(finished) > committed, "most passes find no batch worth a cut"
 
@@ -175,7 +175,7 @@ class TestTheViewIsTheEngine:
                 preview = service.inspect(SESSION).next_cut
                 young_before = {m.turn_index for m in _snapshot(service).young}
                 await collect(service, SESSION)
-                result = finished[-1].data["gc_result"]
+                result = finished[-1].data["report"]
                 if not preview.batch_ready:
                     assert result.status is GCStatus.BYPASSED_BATCH_TOO_SMALL, index
                 elif not result.degradations and result.tokens_saved > 0:
@@ -202,7 +202,7 @@ class TestTheViewIsTheEngine:
                 preview = service.inspect(SESSION).next_cut
                 await collect(service, SESSION)
                 if preview.batch_ready:
-                    checked.append((preview.estimated_saving, finished[-1].data["gc_result"]))
+                    checked.append((preview.estimated_saving, finished[-1].data["report"]))
 
         asyncio.run(scenario())
         assert any(saving <= 0 for saving, _ in checked), "a cut that does not pay was previewed"

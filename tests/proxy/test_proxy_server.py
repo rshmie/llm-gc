@@ -1887,7 +1887,7 @@ class TestAPreparedCutWaitsForTheRightRequest:
     def test_on_a_warm_cache_the_stale_bound_switches_it_in_for_the_models_sake(self):
         client, service, seen, _ = self._client(max_stale_ratio=0.5, **self.PATIENT)
         reasons = []
-        service.event_bus.subscribe(EventType.GC_FINISHED, lambda event: reasons.append(event.data["gc_result"].switch_reason))
+        service.event_bus.subscribe(EventType.GC_FINISHED, lambda event: reasons.append(event.data["report"].switch_reason))
         history: list[dict] = []
         forwarded = [self._ask(client, seen, history) for _ in range(8)]
 

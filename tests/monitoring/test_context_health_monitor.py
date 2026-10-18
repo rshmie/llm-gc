@@ -85,7 +85,7 @@ def _make_monitor(max_recent_transitions: int | None = None,
 def _emit_gc_finished(bus: EventBus, gc_result: GCResult, timestamp: float | None = None) -> None:
     kwargs = {} if timestamp is None else {"timestamp": timestamp}
     bus.emit(Event(event_type=EventType.GC_FINISHED,
-                   data={"gc_run_id": gc_result.gc_run_id, "gc_result": gc_result}, **kwargs))
+                   data={"gc_run_id": gc_result.gc_run_id, "report": gc_result.report()}, **kwargs))
 
 
 def _transitions_of(monitor: ContextHealthMonitor, transition_type: TransitionType) -> list:
@@ -122,7 +122,6 @@ class TestPromotionRecording:
         promoted = _transitions_of(monitor, TransitionType.PROMOTED)
         assert len(promoted) == 1
         assert promoted[0].turn_index == 2
-        assert promoted[0].topic_label is None
 
     def test_a_promoted_run_fires_one_transition_per_turn(self):
         monitor, bus, _ = _make_monitor()
@@ -172,30 +171,27 @@ class TestArchiveAndSupersedeHandlers:
         """A reply is archived with the question it answered: both move, so both are listed."""
         monitor, bus, _ = _make_monitor()
         bus.emit(Event(event_type=EventType.MESSAGE_ARCHIVED,
-                       data={"source_turn_indices": [7, 8], "extracted_knowledge_entries": []},
+                       data={"source_turn_indices": [7, 8], "knowledge_entries_filed": 0},
                        timestamp=111.0))
 
         archived = _transitions_of(monitor, TransitionType.ARCHIVED)
         assert [t.turn_index for t in archived] == [7, 8]
-        assert all(t.topic_label is None and t.occurred_at == 111.0 for t in archived)
+        assert all(t.occurred_at == 111.0 for t in archived)
 
     def test_superseded_appends_one_transition_per_entry(self):
         monitor, bus, _ = _make_monitor()
-        old_entries = [_make_knowledge_entry(message_turn=1, topic_label="database"),
-                       _make_knowledge_entry(message_turn=3, topic_label="database")]
         bus.emit(Event(event_type=EventType.KNOWLEDGE_ENTRY_SUPERSEDED,
-                       data={"new_knowledge_entry": _make_knowledge_entry(message_turn=9, content="mysql"),
-                             "superseded_knowledge_entries": old_entries}))
+                       data={"message_turn": 9, "superseded_turns": [1, 3]}))
 
         superseded = _transitions_of(monitor, TransitionType.SUPERSEDED)
         # turn_index points at the *origin turn of the superseded fact*, not the new one.
-        assert [(t.turn_index, t.topic_label) for t in superseded] == [(1, "database"), (3, "database")]
+        assert [t.turn_index for t in superseded] == [1, 3]
 
     def test_transitions_bounded_to_max_oldest_evicted(self):
         monitor, bus, _ = _make_monitor(max_recent_transitions=3)
         for turn in range(5):
             bus.emit(Event(event_type=EventType.MESSAGE_ARCHIVED,
-                           data={"source_turn_indices": [turn], "extracted_knowledge_entries": []}))
+                           data={"source_turn_indices": [turn], "knowledge_entries_filed": 0}))
 
         transitions = monitor.get_snapshot().generation_lifecycle.recent_transitions
         assert [t.turn_index for t in transitions] == [2, 3, 4]
@@ -384,8 +380,8 @@ class TestSessionsAreKeptApart:
 
     def test_each_session_sees_only_its_own_pass_and_transitions(self):
         monitor, bus, _ = _make_monitor()
-        _emit_for(bus, "alice", EventType.GC_FINISHED, gc_result=_make_completed_result(
-            {0: TurnFidelity.VERBATIM}, gc_run_id="alice-run"))
+        _emit_for(bus, "alice", EventType.GC_FINISHED, report=_make_completed_result(
+            {0: TurnFidelity.VERBATIM}, gc_run_id="alice-run").report())
         _emit_for(bus, "bob", EventType.MESSAGE_PROMOTED_TO_OLD_GEN, source_turn_indices=[4])
 
         alice, bob = monitor.get_snapshot("alice"), monitor.get_snapshot("bob")
@@ -424,16 +420,6 @@ class TestSessionsAreKeptApart:
         assert monitor.get_snapshot("b").generation_lifecycle.recent_transitions == []
         assert len(monitor.get_snapshot("a").generation_lifecycle.recent_transitions) == 2
 
-    def test_the_monitor_keeps_no_conversation_content_from_a_pass(self):
-        """A GCResult carries the whole context. Holding it per session would keep
-        every conversation's text alive in the monitor long after its session closed."""
-        monitor, bus, _ = _make_monitor()
-        _emit_for(bus, "alice", EventType.GC_FINISHED, gc_result=_make_completed_result(
-            {0: TurnFidelity.VERBATIM, 1: TurnFidelity.COMPACTED}))
-
-        record = monitor._records["alice"]
-        assert not any(isinstance(value, GCResult) for value in vars(record.last_pass).values())
-
 
 class TestDegradationsOutliveTheirPass:
     def test_a_refusal_stays_visible_after_a_quiet_pass(self):
@@ -441,8 +427,8 @@ class TestDegradationsOutliveTheirPass:
         refused = AgingDegradation(reason=DegradationReason.COMPACTION_REFUSED, turn_indices=[3, 4],
                                    detail="summary was not shorter than the run")
         _emit_for(bus, "alice", EventType.AGING_DEGRADED, degradation=refused)
-        _emit_for(bus, "alice", EventType.GC_FINISHED, gc_result=_make_bypassed_result(
-            [_make_message(turn_index=5)], status=GCStatus.BYPASSED_BATCH_TOO_SMALL))
+        _emit_for(bus, "alice", EventType.GC_FINISHED, report=_make_bypassed_result(
+            [_make_message(turn_index=5)], status=GCStatus.BYPASSED_BATCH_TOO_SMALL).report())
 
         snapshot = monitor.get_snapshot("alice")
 
@@ -455,10 +441,10 @@ class TestPassHistory:
         """The dashboard's activity timeline: what each pass did, not only the last."""
         monitor, bus, _ = _make_monitor()
         for run in ("one", "two"):
-            _emit_for(bus, "alice", EventType.GC_FINISHED, gc_result=_make_completed_result(
-                {0: TurnFidelity.VERBATIM}, gc_run_id=run))
-        _emit_for(bus, "bob", EventType.GC_FINISHED, gc_result=_make_completed_result(
-            {0: TurnFidelity.VERBATIM}, gc_run_id="bob-run"))
+            _emit_for(bus, "alice", EventType.GC_FINISHED, report=_make_completed_result(
+                {0: TurnFidelity.VERBATIM}, gc_run_id=run).report())
+        _emit_for(bus, "bob", EventType.GC_FINISHED, report=_make_completed_result(
+            {0: TurnFidelity.VERBATIM}, gc_run_id="bob-run").report())
 
         assert [p.gc_run_id for p in monitor.get_snapshot("alice").recent_passes] == ["one", "two"]
         assert [p.gc_run_id for p in monitor.get_snapshot("bob").recent_passes] == ["bob-run"]

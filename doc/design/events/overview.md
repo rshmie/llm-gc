@@ -41,7 +41,22 @@ The defining discipline: a component's **event surface is decided at design time
 | `aging_degraded` | GcService | part of a collection fell short: a summary refused or failed, facts not read, a recap over its budget | yes |
 | `message_compacted` | each compactor | every summary call, whether or not its summary was used | no |
 
-The GcService emits only **after a collection commits**, and every event names its session, so an event always describes a change that happened, to one conversation. A pass discarded because its session closed announces nothing but its `gc_finished`. `gc_finished` carries the pass's result, which includes the calls and tokens its own model calls spent; the proxy subscribes to it to count them, and each collection, against the conversation.
+The GcService emits only **after a collection commits**, and every event names its session, so an event always describes a change that happened, to one conversation. A pass discarded because its session closed announces nothing but its `gc_finished`, and a fact that was not filed, such as one that only restates the value in force, is not announced. `gc_finished` carries the pass's report: every measure of its result, including the calls and tokens its own model calls spent, with the recent turns it kept given as turn numbers and a token count. The proxy subscribes to it to count those calls, and each collection, against the conversation.
+
+### What a payload carries
+
+**Turn numbers, counts, ids and named values, never words.** A payload may say which turns moved, how many tokens a summary saved, what kind of fact was filed and who stated it. It never carries a string the user, the assistant, or a model reading them wrote: no turn text, no summary, and no fact's value or topic. A topic is a few words taken from the conversation ("the wedding venue"), so it is the conversation too.
+
+A consumer that needs the words reads them from the session, which owns them. The event tells it which turns changed; the dashboard, for one, shows turns and facts from the session's state, not from events. This is the claim-check pattern: the message carries a reference, and the content stays with its owner.
+
+```
+ GcService ── emit ──► "turns 4-5 archived, 2 facts filed" ──► subscriber (monitor, log, export)
+     │                                                              │
+     │ commits                                                      │ needs the words?
+     ▼                                                              ▼
+ session state  ◄─────────────── read by turn number ───────────────┘
+ (the turns, their summaries, the facts)
+```
 
 ## Why This Shape — Design Rationale
 
@@ -54,6 +69,13 @@ The transport choice was equally deliberate:
 
 - **In-process bus (chosen).** The events are in-process and synchronous-friendly; an in-process bus has zero operational footprint and is trivially testable.
 - **External message broker — Redis, NATS, etc. (rejected).** Adds operational complexity the project does not need at its current scope. If a genuine distributed need ever emerges, an external broker can replace the in-process bus behind the same publish/subscribe shape.
+
+What a payload carries was the third choice:
+
+- **References and measures (chosen).** Every subscriber can log, export or keep whatever it hears without holding a conversation. The cost is a second shape for a pass, the report beside the result, which share their measures so they cannot drift apart.
+- **The engine's own objects — the result, the fact entries (rejected).** Simplest to emit, but every subscriber then holds the conversation, and the first one that serialises what it hears ships every conversation into a log store, usually with wider access and a longer life than the session. Once an outside tool reads a field, taking it out breaks that tool.
+- **The same objects with their text left out of serialisation (rejected).** That keeps words out of a log line, but every in-process subscriber still holds them, and a caller who serialises their own result loses the messages they asked for.
+- **Words behind an opt-in setting (not built).** No consumer needs words from an event, because the session already serves them. An opt-in is cheap to add when one does; a field outside tools depend on is expensive to remove.
 
 ## Consequences
 

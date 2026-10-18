@@ -236,7 +236,8 @@ class GcService:
                            "thinking_dropped_tokens": preview.thinking_dropped_tokens,
                            "young_remaining": len(state.snapshot.young)})
         self.event_bus.emit(Event(event_type=EventType.GC_FINISHED,
-                                  data={"gc_run_id": result.gc_run_id, "session_id": session_id, "gc_result": result}))
+                                  data={"gc_run_id": result.gc_run_id, "session_id": session_id,
+                                        "report": result.report()}))
         return result
 
     def inspect(self, session_id: str, cache: CacheState = CacheState.COLD, *,
@@ -427,7 +428,7 @@ class GcService:
 
         self.event_bus.emit(Event(event_type=EventType.GC_FINISHED,
                                   data={"gc_run_id": gc_run_id, "session_id": session_id,
-                                        "gc_result": gc_result}))
+                                        "report": gc_result.report()}))
         return gc_result
 
     async def _age(self, state: SessionState, base: GenerationSnapshot, gc_run_id: str, start: float,
@@ -726,7 +727,9 @@ class GcService:
         """Emit the events for a collection switched in, after the commit.
 
         Emitted only now so an event always describes a change that happened: a cut
-        that is staged and never switched in announces nothing.
+        that is staged and never switched in announces nothing, and a fact that was not
+        filed is not announced. Payloads name turns and counts, never what was said: a
+        subscriber may log or export what it hears, and the words stay in the session.
         """
         for span in delta.new_spans:
             turns = [turn.turn_index for turn in span.turns]
@@ -739,28 +742,32 @@ class GcService:
                     "tokens_after": span.summary.token_count,
                 }))
             elif span.level in _CONDENSED:
-                self._announce_archived(session_id, span, [f for f in delta.new_knowledge if f.message_turn in turns],
-                                        "young")
+                filed = sum(1 for entry in applied.filed if entry.message_turn in turns)
+                self._announce_archived(session_id, span, filed, "young")
         for span, level in delta.level_changes:
             if level in _CONDENSED and _RANK[level] < _RANK[span.level]:
-                self._announce_archived(session_id, span, [], "old")
+                self._announce_archived(session_id, span, 0, "old")
 
-        superseded_by = {id(s.new_entry): s.superseded for s in applied.supersessions}
-        for entry in delta.new_knowledge:
-            self.event_bus.emit(Event(event_type=EventType.KNOWLEDGE_ENTRY_ADDED,
-                                      data={"session_id": session_id, "knowledge_entry": entry}))
-            if id(entry) in superseded_by:
-                self.event_bus.emit(Event(event_type=EventType.KNOWLEDGE_ENTRY_SUPERSEDED, data={
-                    "session_id": session_id,
-                    "new_knowledge_entry": entry,
-                    "superseded_knowledge_entries": list(superseded_by[id(entry)]),
-                }))
+        for entry in applied.filed:
+            self.event_bus.emit(Event(event_type=EventType.KNOWLEDGE_ENTRY_ADDED, data={
+                "session_id": session_id,
+                "message_turn": entry.message_turn,
+                "knowledge_type": entry.knowledge_type.value,
+                "knowledge_status": entry.knowledge_status.value,
+                "speaker": entry.speaker,
+            }))
+        for supersession in applied.supersessions:
+            self.event_bus.emit(Event(event_type=EventType.KNOWLEDGE_ENTRY_SUPERSEDED, data={
+                "session_id": session_id,
+                "message_turn": supersession.new_entry.message_turn,
+                "superseded_turns": [entry.message_turn for entry in supersession.superseded],
+            }))
 
-    def _announce_archived(self, session_id: str, span: Span, facts: list[KnowledgeEntry], source: str) -> None:
+    def _announce_archived(self, session_id: str, span: Span, facts_filed: int, source: str) -> None:
         self.event_bus.emit(Event(event_type=EventType.MESSAGE_ARCHIVED, data={
             "session_id": session_id,
             "source_turn_indices": [turn.turn_index for turn in span.turns],
-            "extracted_knowledge_entries": facts,
+            "knowledge_entries_filed": facts_filed,
             "source_generation": source,
         }))
 

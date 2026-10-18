@@ -445,16 +445,18 @@ that held what it produced would hand one user's facts to the next.
 | Event | When | Data |
 |-------|------|------|
 | `MESSAGE_PROMOTED_TO_OLD_GEN` | A new span was made at the summarised level | session id, the span's turns, tokens before / after |
-| `MESSAGE_ARCHIVED` | A new span was made archived, or an older span was lowered to archived or out of view | session id, the span's turns, its new facts, `young` or `old` |
-| `KNOWLEDGE_ENTRY_ADDED` | A fact was filed | session id, the entry |
-| `KNOWLEDGE_ENTRY_SUPERSEDED` | A new fact retired active ones on its topic | session id, new entry, retired entries |
+| `MESSAGE_ARCHIVED` | A new span was made archived, or an older span was lowered to archived or out of view | session id, the span's turns, how many facts were filed from them, `young` or `old` |
+| `KNOWLEDGE_ENTRY_ADDED` | A fact was filed | session id, its turn, its kind, its status, who stated it |
+| `KNOWLEDGE_ENTRY_SUPERSEDED` | A new fact retired active ones on its topic | session id, the new fact's turn, the turns of the facts it retired |
 | `AGING_DEGRADED` | Part of a collection fell short | session id, the degradation |
-| `GC_FINISHED` | Every pass, whatever it did | session id, the result |
+| `GC_FINISHED` | Every pass, whatever it did | session id, the pass's report |
 
 All but `AGING_DEGRADED` and `GC_FINISHED` are emitted **after** the commit, so
 each describes a change now in the session's state. Where each turn and fact
 stands *now* is read from the session's state, not from events — see
 [visibility/overview.md](../visibility/overview.md).
+
+No payload carries what was said, only turns, counts and named values; why is in [events/overview.md](../events/overview.md#what-a-payload-carries).
 
 ---
 

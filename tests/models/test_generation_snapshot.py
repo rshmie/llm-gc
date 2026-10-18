@@ -321,6 +321,16 @@ class TestAFactReadLateTakesItsPlaceInTheConversation:
 
         assert [content for _, content, _ in self._filed(record, _said(12, "postgres."))] == ["Postgres", "MySQL"]
 
+    def test_the_aging_reports_its_new_entries_as_they_were_filed(self):
+        """What the bus announces: a restatement is left out, and a value read late keeps the status it was filed with."""
+        record, _ = file_knowledge((), (_said(5, "Postgres"), _said(40, "MySQL")))
+
+        applied = apply_aging(GenerationSnapshot(knowledge=record),
+                              AgingDelta(new_knowledge=(_said(12, "postgres."), _said(20, "SQLite"))))
+
+        assert [(entry.message_turn, entry.knowledge_status) for entry in applied.filed] == [
+            (20, KnowledgeStatus.SUPERSEDED)]
+
     def test_an_assistant_value_stated_before_the_users_decision_is_kept_as_replaced(self):
         record, _ = file_knowledge((), (_said(20, "MySQL"),))
 

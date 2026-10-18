@@ -103,11 +103,11 @@ class GenerationTransition(BaseModel):
     all - superseded entries are excluded from the active view by design, so
     this log is the only place that moment is ever visible. One instance is
     one event: five promotions are five separate GenerationTransition
-    objects, never one object with a count.
+    objects, never one object with a count. It names the turn, never what was
+    said in it: what a retired fact said is read from the session's knowledge.
     """
     transition_type: TransitionType
-    turn_index: int    # set for PROMOTED / ARCHIVED / SUPERSEDED
-    topic_label: str | None   # set for SUPERSEDED, None for PROMOTED / ARCHIVED
+    turn_index: int    # the turn moved; for SUPERSEDED, the turn that stated the retired fact
     occurred_at: float
 
 

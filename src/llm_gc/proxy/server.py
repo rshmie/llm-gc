@@ -28,7 +28,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import StreamingResponse
 
 from llm_gc.config.constants import APP_VERSION
-from llm_gc.engine.gc_result import GCResult
+from llm_gc.engine.gc_result import PassReport
 from llm_gc.engine.gc_service import GcService
 from llm_gc.engine.gc_status import GCStatus
 from llm_gc.events import Event, EventType
@@ -548,7 +548,7 @@ def _thinking_sizer(app: FastAPI, payload: dict[str, Any]) -> ThinkingSizer:
 
 def _count_collection(app: FastAPI, event: Event) -> None:
     """Count a collection, why it was switched in, and what its own model calls spent, against its conversation."""
-    result: GCResult = event.data["gc_result"]
+    result: PassReport = event.data["report"]
     traffic: TrafficLedger = app.state.metrics.traffic
     traffic.record_collection(event.data["session_id"], completed=result.status is GCStatus.COMPLETED,
                               spent=ModelUsage(calls=result.summary_calls, input_tokens=result.summary_input_tokens,

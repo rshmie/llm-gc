@@ -45,12 +45,13 @@ class AbandonedCut(BaseModel):
     context_tokens_after: int   # what the whole context would have been
 
 
-class GCResult(BaseModel):
-    """Output of a garbage collection run.
+class _PassMeasures(BaseModel):
+    """What one GC pass did, in counts, tokens and turn indices.
 
-    Contains the optimized message list and metrics showing token savings and processing cost.
+    Shared by `GCResult`, which adds the context the pass produced, and
+    `PassReport`, which is what the event bus carries, so a measure is declared
+    once and the two cannot drift apart.
     """
-    final_messages: list[Message]
     gc_run_id: str
     status: GCStatus
     failure_reason: Optional[str] = None  # human-readable; None if not bypassed
@@ -101,3 +102,34 @@ class GCResult(BaseModel):
     @property
     def tokens_saved(self) -> int:
         return self.tokens_before - self.tokens_in_final
+
+
+class PassReport(_PassMeasures):
+    """What one GC pass did, with no conversation text: the payload of GC_FINISHED.
+
+    Event subscribers can log, export or keep it without holding anyone's words.
+    The tail - the turns the pass forwards word for word - is described by its
+    turn indices and tokens; the text stays with the session that owns it.
+    """
+
+    model_config = {"frozen": True}   # one object is handed to every subscriber in turn
+
+    tail_turns: list[int]   # in conversation order
+    tail_tokens: int = Field(ge=0)
+
+
+class GCResult(_PassMeasures):
+    """Output of a garbage collection run: the context to send, and what the pass did to make it.
+
+    `final_messages` is the conversation itself, so a result never goes on the
+    event bus; `report()` does.
+    """
+    final_messages: list[Message]
+
+    def report(self) -> PassReport:
+        """This result without its messages: every measure, and the shape of the tail."""
+        # The front sits before turn 0; everything from turn 0 on is the tail.
+        tail = [message for message in self.final_messages if message.turn_index >= 0]
+        return PassReport(**self.model_dump(exclude={"final_messages"}),
+                          tail_turns=[message.turn_index for message in tail],
+                          tail_tokens=sum(message.token_count for message in tail))

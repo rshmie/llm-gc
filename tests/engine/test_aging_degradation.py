@@ -49,7 +49,7 @@ def _summariser(response: LLMResponse | Exception) -> LLMCompactor:
 def _run(service, turns: int = 3) -> list:
     """Record turns one by one, a pass after each; every GCResult, in order."""
     results = []
-    service.event_bus.subscribe(EventType.GC_FINISHED, lambda event: results.append(event.data["gc_result"]))
+    service.event_bus.subscribe(EventType.GC_FINISHED, lambda event: results.append(event.data["report"]))
 
     async def scenario():
         for index in range(turns):
