@@ -418,13 +418,13 @@ client = anthropic.Anthropic(base_url="http://127.0.0.1:9900")
 ### As a library
 
 ```python
-from llm_gc import AnthropicClient, GCConfig, Message, build_gc_service, count_tokens
+from llm_gc import AnthropicClient, GCConfig, Message, build_gc_service
 
 service = build_gc_service(GCConfig(context_window=200_000),
                            summary_provider=AnthropicClient(api_key="sk-ant-..."))
 
 async def on_turn(session_id: str, text: str, role: str, index: int) -> list[Message]:
-    turn = Message(role=role, content=text, token_count=count_tokens(text), turn_index=index)
+    turn = Message(role=role, content=text, turn_index=index)   # index: 0, 1, 2, ... in order
     await service.gc_update(session_id, turn)     # record the turn, then run a pass
     return await service.gc_collect(session_id)   # what to send: the recap, then recent turns
 ```

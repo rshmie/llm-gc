@@ -376,7 +376,18 @@ class GcService:
         `cache` is the provider cache the caller's next request would meet. Cold by default:
         a caller that says nothing of one has none to protect, so a cut takes effect as soon
         as it saves something.
+
+        `new_turn.turn_index` must be the session's next turn: 0 in a new session, then one
+        more each call. Cuts and facts are filed by turn, so any other index is refused with
+        a ValueError, and nothing is recorded. A turn whose `token_count` is 0 is counted
+        here, the way the proxy counts its turns; a count the caller gives is kept.
         """
+        state = self.session_manager.store.get(session_id)
+        expected = state.snapshot.recorded_turn_count if state is not None else 0
+        if new_turn.turn_index != expected:
+            raise ValueError(f"turn {expected} is next in this session, got turn_index {new_turn.turn_index}")
+        if new_turn.token_count == 0 and new_turn.content:
+            new_turn = new_turn.model_copy(update={"token_count": count_tokens(new_turn.content)})
         state = self.session_manager.get_or_create(session_id)
         state.snapshot = state.snapshot.with_turn(new_turn)
         await self.gc_age(session_id)

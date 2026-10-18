@@ -16,7 +16,7 @@ from llm_gc.events import Event, EventBus, EventType
 from llm_gc.extraction import PatternFactReader
 from llm_gc.models import Message
 from llm_gc.session import SessionManager
-from tests.engine.support import COMPACTED_SCORE, ScriptedSpanScorer, turn
+from tests.engine.support import COMPACTED_SCORE, KEPT_SCORE, ScriptedSpanScorer, turn
 
 SESSION = "s"
 
@@ -164,16 +164,17 @@ class TestAClosedSessionStaysClosed:
         async def scenario():
             task = await _start_aging(service, compactor)
             service.session_manager.close_session(SESSION)
-            # A new conversation, same id. Its one turn is not collected, so any
-            # summary that appears can only have come from the old pass.
-            reopened = asyncio.create_task(service.gc_update(SESSION, _turn(5)))
+            # A new conversation, same id. The old pass has scored already, so its turn 0
+            # is kept from here on: any summary that appears came from the old pass.
+            service.span_scorer.scores[0] = KEPT_SCORE  # type: ignore[attr-defined]
+            reopened = asyncio.create_task(service.gc_update(SESSION, _turn(0)))
             compactor.gate.set()
             await asyncio.gather(task, reopened)
             return service.session_manager.store.get(SESSION).snapshot
 
         snapshot = _run(scenario())
         assert snapshot.old == (), "the old conversation's summary must not land in the new one"
-        assert _indices(list(snapshot.young)) == [5]
+        assert _indices(list(snapshot.young)) == [0]
 
 
 class TestEventsDescribeCommittedChanges:

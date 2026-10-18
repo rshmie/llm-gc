@@ -19,6 +19,11 @@ def test_default_token_count():
     msg = Message(role="assistant", content="Hi")
     assert msg.token_count == 0
 
+def test_a_negative_token_count_is_refused():
+    """Every budget sums these counts; a negative one would make a turn look like it frees room."""
+    with pytest.raises(ValidationError):
+        Message(role="user", content="Hi", token_count=-1)
+
 def test_preview_content():
     msg = Message(role="user", content="Hello, how are you?")
     assert msg.preview() == "Hello, how are you?"

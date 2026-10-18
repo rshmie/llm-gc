@@ -22,7 +22,7 @@ from llm_gc.llm import FakeProvider
 from llm_gc.engine.switch_policy import CacheState
 from llm_gc.extraction import PatternFactReader
 from llm_gc.models.generation_snapshot import DetailLevel
-from llm_gc.models import KnowledgeEntry
+from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.knowledge_entry import KnowledgeStatus, KnowledgeType
 from llm_gc.utils import count_tokens
 from tests.engine.support import ARCHIVED_SCORE, COMPACTED_SCORE, KEPT_SCORE, SUMMARY, collect, make_service, turn
@@ -470,6 +470,68 @@ class TestNothingRecordedIsDestroyed:
         assert sorted(message.turn_index for message in held) == list(range(len(scores)))
         assert all(message == turn(message.turn_index) for message in held)
         assert not [e for e in finished if e.data["report"].status is GCStatus.BYPASSED_ON_ERROR]
+
+
+def _update(service, *turns: Message, session_id: str = "s") -> None:
+    async def scenario():
+        for message in turns:
+            await service.gc_update(session_id, message)
+
+    asyncio.run(scenario())
+
+
+class TestTheLibrarysLoopChecksEachTurn:
+    """`gc_update` is where a library caller's turns come in, numbered and counted by the caller's code."""
+
+    def test_the_next_turn_counts_the_turns_already_condensed(self):
+        """The tail alone would put the next turn at 1 here, refusing every correct turn after a collection."""
+        service, _, _ = make_service(default_score=COMPACTED_SCORE)
+        _update(service, turn(0), turn(1), turn(2))
+        assert _snapshot(service).old, "precondition: a collection moved turns out of the tail"
+
+        _update(service, turn(3))
+
+        assert _young(service)[-1] == 3
+
+    @pytest.mark.parametrize("index", [1, 3, 0], ids=["repeated", "skipped", "left-at-default"])
+    def test_a_turn_out_of_sequence_is_refused_and_records_nothing(self, index):
+        service, _, _ = make_service()
+        _update(service, turn(0), turn(1))
+        before = _snapshot(service)
+
+        with pytest.raises(ValueError, match=f"turn 2 is next in this session, got turn_index {index}"):
+            _update(service, turn(index))
+
+        assert _snapshot(service) is before
+
+    def test_a_refused_first_turn_opens_no_session(self):
+        service, _, _ = make_service()
+
+        with pytest.raises(ValueError):
+            _update(service, turn(1), session_id="new")
+
+        assert service.session_manager.store.get("new") is None
+
+    @pytest.mark.parametrize(("content", "given", "recorded"),
+                             [("Postgres it is.", 0, count_tokens("Postgres it is.")), ("Postgres it is.", 7, 7),
+                              ("", 0, 0)],
+                             ids=["uncounted", "counted-by-the-caller", "empty"])
+    def test_a_turn_without_a_count_is_counted_and_a_given_count_is_kept(self, content, given, recorded):
+        service, _, _ = make_service()
+
+        _update(service, Message(role="user", content=content, token_count=given, turn_index=0))
+
+        assert _snapshot(service).young[0].token_count == recorded
+
+    def test_turns_the_caller_did_not_count_are_still_collected(self):
+        """Uncounted, every batch weighed nothing, so no pass ever reached the minimum."""
+        tokens = turn(0).token_count
+        service, _, _ = make_service(GCConfig(min_cut_tokens=2 * tokens, last_n_turns_to_keep=1),
+                                     default_score=COMPACTED_SCORE)
+
+        _update(service, *(Message(role="user", content=turn(index).content, turn_index=index) for index in range(3)))
+
+        assert _levels(service) == {0: COMPACTED, 1: COMPACTED}
 
 
 class TestTheRecapIsSizedForTheModelsWindow:

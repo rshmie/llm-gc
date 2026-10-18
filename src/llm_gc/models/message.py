@@ -46,7 +46,7 @@ class Message(BaseModel):
     """
     role: Literal["user", "assistant", "system"]
     content: str
-    token_count: int = 0
+    token_count: int = Field(default=0, ge=0)
     turn_index: int = 0
     raw_content: Any = Field(default=None, exclude=True, repr=False)
     instructions: tuple[str, ...] = Field(default=(), exclude=True, repr=False)
