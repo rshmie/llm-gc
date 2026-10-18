@@ -10,8 +10,8 @@ class EventBus:
 
     Components emit events without knowing who listens. Subscribers can register callbacks for specific event types.
     """
-    def __init__(self):
-        self.subscribers = {}
+    def __init__(self) -> None:
+        self.subscribers: dict[EventType, list[Callable[[Event], None]]] = {}
 
     def subscribe(self, event_type: EventType, callback: Callable[[Event], None]) -> None:
         self.subscribers.setdefault(event_type, []).append(callback)

@@ -56,10 +56,25 @@ export function credentialRefusal() {
 }
 export const preview = (text, n = 150) => !text ? null : text.length > n ? `“${text.slice(0, n).trim()}…”` : `“${text}”`;
 
+// A request the dashboard's server did not answer with data: `status` is the HTTP status, or null when
+// nothing answered at all. Its own class, so a caller can tell it from a fault in the dashboard's code.
+export class RequestFailed extends Error {
+  constructor(path, status, options) {
+    super(status === null ? `${path}: no answer` : `${path}: ${status}`, options);
+    this.name = "RequestFailed";
+    this.status = status;
+  }
+}
+
 export async function getJSON(path) {
-  const response = await fetch(path, { cache: "no-store" });
+  let response;
+  try {
+    response = await fetch(path, { cache: "no-store" });
+  } catch (err) {
+    throw new RequestFailed(path, null, { cause: err });
+  }
   if (response.status === 404) return null;
-  if (!response.ok) throw new Error(`${path}: ${response.status}`);
+  if (!response.ok) throw new RequestFailed(path, response.status);
   return response.json();
 }
 export const sessionPath = (suffix = "") => `/api/sessions/${encodeURIComponent(state.selected)}${suffix}`;

@@ -17,7 +17,7 @@ from llm_gc.engine.gc_result import CutOutcome
 from llm_gc.engine.gc_status import GCStatus
 from llm_gc.engine.pause import ModelCallPause
 from llm_gc.events import EventBus, EventType
-from llm_gc.exceptions import LLMAuthError, LLMRateLimitError, LLMResponseError
+from llm_gc.exceptions import ConfigError, LLMAuthError, LLMRateLimitError, LLMResponseError
 from llm_gc.llm import FakeProvider
 from llm_gc.engine.switch_policy import CacheState
 from llm_gc.extraction import PatternFactReader
@@ -39,8 +39,11 @@ class _FailingCompactor(BaseCompactor):
 
 
 class _RaisingScorer:
+    def __init__(self, error: Exception | None = None):
+        self.error = error if error is not None else RuntimeError("scoring failed")
+
     def score(self, spans, now, newest_turn):
-        raise RuntimeError("scoring failed")
+        raise self.error
 
 
 def _record(service, message) -> None:
@@ -329,8 +332,21 @@ class TestFailuresAreReportedAndLoseNothing:
         result = _converse(service, 2)[-1]
 
         assert result.status is GCStatus.BYPASSED_ON_ERROR
-        assert result.failure_stage == "plan" and "scoring failed" in result.failure_reason
+        assert result.failure_stage == "plan" and result.failure_reason == "RuntimeError"
         assert _young(service) == [0, 1] and _snapshot(service).old == ()
+
+    @pytest.mark.parametrize("error, shown", [
+        (RuntimeError("could not score: the user wrote 'my card is 4242'"), "RuntimeError"),
+        (ConfigError("span weights must be positive"), "span weights must be positive"),
+    ])
+    def test_a_failure_shows_a_message_only_when_the_error_is_llm_gcs_own(self, error, shown):
+        """The result reaches the bus and the dashboard, and another library's message may quote the conversation."""
+        service, _, _ = make_service()
+        service.span_scorer = _RaisingScorer(error)  # type: ignore[assignment]
+
+        result = _converse(service, 2)[-1]
+
+        assert result.status is GCStatus.BYPASSED_ON_ERROR and result.failure_reason == shown
 
 
 class TestTheBusSeesWhatTheCollectionDid:

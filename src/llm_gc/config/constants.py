@@ -1,8 +1,9 @@
 """ Application's default configuration values as constants """
 
-from llm_gc import __version__
+from importlib.metadata import version
 
-APP_VERSION = __version__
+# Read from the installed package, so pyproject.toml is the one place the version is written.
+APP_VERSION = version("llm-gc")
 
 DEFAULT_CONTEXT_WINDOW = 128_000
 # The proxy's window when none is configured: the smallest of the current models'. Too

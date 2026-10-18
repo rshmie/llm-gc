@@ -75,7 +75,7 @@ def speaker_label(message: Message) -> str:
     return RELAYED_SPEAKER if message.relayed else message.role
 
 
-def _blocks(message: Message) -> Iterable[dict]:
+def _blocks(message: Message) -> Iterable[dict[str, Any]]:
     if isinstance(message.raw_content, list):
         return (block for block in message.raw_content if isinstance(block, dict))
     return ()

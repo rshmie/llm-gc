@@ -236,7 +236,8 @@ def create_app(
 
     @app.get("/stats")
     def stats() -> dict[str, Any]:
-        return app.state.metrics.as_dict()
+        metrics: ProxyMetrics = app.state.metrics
+        return metrics.as_dict()
 
     @app.post(MESSAGES_PATH)
     async def messages(request: Request) -> Response:

@@ -304,8 +304,14 @@ def load_settings(config_path: Path | None = None, **flags: Any) -> ProxySetting
         """
 
         @classmethod
-        def settings_customise_sources(cls, settings_cls, init_settings, env_settings, dotenv_settings,
-                                       file_secret_settings):  # type: ignore[no-untyped-def]
+        def settings_customise_sources(
+            cls,
+            settings_cls: type[BaseSettings],
+            init_settings: PydanticBaseSettingsSource,
+            env_settings: PydanticBaseSettingsSource,
+            dotenv_settings: PydanticBaseSettingsSource,
+            file_secret_settings: PydanticBaseSettingsSource,
+        ) -> tuple[PydanticBaseSettingsSource, ...]:
             file_source = _ConfigFileSource(settings_cls, config_path)
             return (init_settings, env_settings, _KnownSettingsDotEnvSource(settings_cls), file_source)
 

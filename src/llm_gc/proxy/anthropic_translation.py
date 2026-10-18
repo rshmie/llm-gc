@@ -341,9 +341,9 @@ def _block_as_text(block: object) -> str | None:
     """One block's text form, or None for a block nothing reads, such as thinking."""
     if not isinstance(block, dict):
         return None
-    kind = block.get("type")
-    if kind == "text" and isinstance(block.get("text"), str):
-        return block["text"]
+    kind, text = block.get("type"), block.get("text")
+    if kind == "text" and isinstance(text, str):
+        return text
     if kind in _TOOL_CALLS:
         return _TOOL_CALL.format(name=block.get("name", "?"), input=json.dumps(block.get("input"), ensure_ascii=False))
     if kind == "tool_result":
