@@ -55,7 +55,7 @@ def _service():
         generational_memory=GenerationalMemory(fact_reader=PatternFactReader(), compactor=compactor),
         span_scorer=ScriptedSpanScorer({0: COMPACTED_SCORE, 1: COMPACTED_SCORE, 2: COMPACTED_SCORE}),  # type: ignore[arg-type]
         event_bus=bus,
-        gc_config=GCConfig(context_window=1000, min_cut_tokens=0, last_n_turns_to_keep=0, archive_threshold=0.0),
+        gc_config=GCConfig(context_window=1000, min_cut_tokens=0, last_n_messages_to_keep=0, archive_threshold=0.0),
     )
     return service, compactor
 

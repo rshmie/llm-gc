@@ -352,7 +352,7 @@ LLM-GC borrows principles from garbage collection — a concept pioneered in Lis
 | Permanent generation | Facts, and what replaced them (never discarded) |
 | GC pause | None on the request: a cut is prepared after each reply, summaries included, and switching it in makes no model call |
 | Concurrent GC | Cuts are prepared between turns, while the user reads the reply |
-| GC tuning flags | Level lines, recap budget, batch size, newest turns kept, saving share and stale bound |
+| GC tuning flags | Level lines, recap budget, batch size, newest messages kept, saving share and stale bound |
 
 ### Where the analogy breaks — and why that matters more than where it holds
 
@@ -543,7 +543,7 @@ A file you asked for in 1 or 2 that doesn't exist is an error, not a silent fall
 | `min_cut_tokens` | `--min-cut-tokens` | 1000 | tokens of older turns to summarise or archive before a cut is prepared |
 | `min_saving_share` | | 1.0 | with the provider's cache warm, how many times what switching a cut in makes it cache again the cut must save; 0 switches it in as soon as it saves anything |
 | `max_stale_ratio` | | 0.1 | share of the window the model may carry that a prepared cut would condense; at it, the cut is switched in whatever the cache costs. The window is converted to LLM-GC's count first, at the rate the conversation's replies measure |
-| `last_n_turns_to_keep` | `--keep-last` | 5 | newest messages always sent word for word |
+| `last_n_messages_to_keep` | `--keep-last` | 5 | newest messages always sent word for word |
 | `context_window` | `--context-window` | 128,000 (proxy: 200,000) | the model's window; the recap budget is a share of it |
 | `keep_threshold` | | 0.7 | score at or above which a span is quoted whole |
 | `archive_threshold` | | 0.3 | score below which a span is archived; between the two, summarised |

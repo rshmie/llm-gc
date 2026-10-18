@@ -278,7 +278,7 @@ class GcService:
             return None
         snapshot = state.snapshot
         young = _in_order(snapshot.young)
-        cut = find_cut_point(young, self.gc_config.last_n_turns_to_keep)
+        cut = find_cut_point(young, self.gc_config.last_n_messages_to_keep)
         own_window = self._window_in_own_count(state)
         recap_budget = self.gc_config.recap_budget(own_window)
         planned, _ = self._estimate(snapshot, young, cut, recap_budget)
@@ -506,7 +506,7 @@ class GcService:
         from replacing it. A failure therefore leaves the session exactly as it was.
         """
         session_id = state.session_id
-        keep_last = self.gc_config.last_n_turns_to_keep
+        keep_last = self.gc_config.last_n_messages_to_keep
         current_stage = "plan"
         degradations: list[AgingDegradation] = []
         try:
@@ -814,7 +814,7 @@ class GcService:
             return None
         snapshot = state.snapshot
         tail = [turn for turn in snapshot.young if turn.turn_index not in staged.delta.departed_turns]
-        if len(tail) < self.gc_config.last_n_turns_to_keep:
+        if len(tail) < self.gc_config.last_n_messages_to_keep:
             return None
         # After a switch no turn sends its thinking, so only text is cached again, with whatever the
         # caller sends after the prompt's last cached point and never condenses.

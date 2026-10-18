@@ -26,7 +26,7 @@ from llm_gc.engine.generations.front import FRONT_HEADER
 from llm_gc.llm import FakeProvider, LLMResponse, StopReason
 
 CONVERSATION = load_conversations()[0]
-CONFIG = GCConfig(context_window=200_000, min_cut_tokens=300, last_n_turns_to_keep=5)
+CONFIG = GCConfig(context_window=200_000, min_cut_tokens=300, last_n_messages_to_keep=5)
 
 
 def _run(summary_provider=None, model_transport=None) -> Run:

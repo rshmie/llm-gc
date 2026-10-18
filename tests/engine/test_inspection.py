@@ -42,7 +42,7 @@ def _build(**overrides) -> GcService:
             "context_window": 700,
             "keep_threshold": 0.55,
             "archive_threshold": 0.25,
-            "last_n_turns_to_keep": 3,
+            "last_n_messages_to_keep": 3,
             "min_cut_tokens": 60,
             **overrides,
         }

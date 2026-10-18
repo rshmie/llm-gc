@@ -61,7 +61,7 @@ def _engine(**config_overrides):
         "context_window": 200,
         "keep_threshold": 0.55,
         "archive_threshold": 0.25,
-        "last_n_turns_to_keep": 2,
+        "last_n_messages_to_keep": 2,
         # Scaled to the 200-token window: a few turns' worth is worth a cut.
         "min_cut_tokens": 30,
     }

@@ -69,8 +69,9 @@
 # a larger one: a window set too large lets the recap outgrow the model's.
 # context_window = 200000
 
-# The newest turns, always sent word for word.
-# last_n_turns_to_keep = 5
+# How many of the newest messages are always sent word for word. A message is one user
+# message, one reply or one tool result, so one prompt in Claude Code is many messages.
+# last_n_messages_to_keep = 5
 
 # A cut is prepared once the new turns it would condense add up to this many tokens. Preparing
 # changes nothing the model is sent; switching the cut in does.

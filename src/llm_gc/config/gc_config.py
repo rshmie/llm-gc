@@ -5,7 +5,7 @@ from llm_gc.config.constants import (
     DEFAULT_ARCHIVE_THRESHOLD,
     DEFAULT_CONTEXT_WINDOW,
     DEFAULT_KEEP_THRESHOLD,
-    DEFAULT_LAST_N_TURNS_TO_KEEP,
+    DEFAULT_LAST_N_MESSAGES_TO_KEEP,
     DEFAULT_LEVEL_MARGIN,
     DEFAULT_MAX_RECAP_RATIO,
     DEFAULT_MAX_STALE_RATIO,
@@ -33,7 +33,9 @@ class GCConfig(BaseModel):
     archive_threshold: float = Field(default=DEFAULT_ARCHIVE_THRESHOLD, ge=0.0, le=1.0)
     # How far past a line a score must be to move a span across it, either way.
     level_margin: float = Field(default=DEFAULT_LEVEL_MARGIN, ge=0.0)
-    last_n_turns_to_keep: int = Field(default=DEFAULT_LAST_N_TURNS_TO_KEEP, ge=0)
+    # How many of the newest messages always stay as written: each user message, reply and
+    # tool result counts as one, so one prompt with tool calls is several.
+    last_n_messages_to_keep: int = Field(default=DEFAULT_LAST_N_MESSAGES_TO_KEEP, ge=0)
     # A cut is prepared only once the new turns it would condense add up to this many tokens.
     min_cut_tokens: int = Field(default=DEFAULT_MIN_CUT_TOKENS, ge=0)
     # Everything the front shows for condensed turns, as a share of the window.

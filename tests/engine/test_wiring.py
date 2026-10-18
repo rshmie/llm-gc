@@ -73,7 +73,7 @@ def test_a_change_of_plan_in_a_later_collection_replaces_the_value_under_its_top
     model the old value was replaced - once, and only by a real change."""
     model = _Model()
     service = build_gc_service(
-        GCConfig(min_cut_tokens=0, last_n_turns_to_keep=2, context_window=100_000), summary_provider=model
+        GCConfig(min_cut_tokens=0, last_n_messages_to_keep=2, context_window=100_000), summary_provider=model
     )
     said = [
         "We'll host on Google Cloud. What should the architecture be?",
@@ -114,7 +114,7 @@ def test_a_recommendation_never_marks_the_users_decision_replaced():
 
     model = _Recommending()
     service = build_gc_service(
-        GCConfig(min_cut_tokens=0, last_n_turns_to_keep=2, context_window=100_000), summary_provider=model
+        GCConfig(min_cut_tokens=0, last_n_messages_to_keep=2, context_window=100_000), summary_provider=model
     )
     said = [
         "Let's use 9 shards with 2 replicas each for the index.",
@@ -174,7 +174,7 @@ def test_a_recommendation_in_the_same_exchange_never_outranks_the_users_decision
 
     model = _OutOfOrder()
     service = build_gc_service(
-        GCConfig(min_cut_tokens=0, last_n_turns_to_keep=2, context_window=100_000), summary_provider=model
+        GCConfig(min_cut_tokens=0, last_n_messages_to_keep=2, context_window=100_000), summary_provider=model
     )
     said = [
         "Let's use 9 shards. Is that reasonable?",

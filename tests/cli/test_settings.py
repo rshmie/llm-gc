@@ -65,9 +65,9 @@ def test_a_flag_that_was_not_passed_does_not_mask_the_file(isolated):
 
 def test_nested_sections_merge_across_layers_instead_of_replacing(isolated):
     path = _write(isolated, "c.toml", "[engine]\nmin_cut_tokens = 2000\n")
-    settings = load_settings(path, engine={"last_n_turns_to_keep": 2})
+    settings = load_settings(path, engine={"last_n_messages_to_keep": 2})
     assert settings.engine.min_cut_tokens == 2000
-    assert settings.engine.last_n_turns_to_keep == 2
+    assert settings.engine.last_n_messages_to_keep == 2
 
 
 def test_an_explicit_missing_file_is_an_error(isolated):

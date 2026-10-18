@@ -24,7 +24,7 @@ PATIENT = {"min_saving_share": 1000.0, "max_stale_ratio": 1.0}
 
 def _service(**config):
     service, _, provider = make_service(
-        GCConfig(**{"min_cut_tokens": 0, "last_n_turns_to_keep": 1, **config}), default_score=COMPACTED_SCORE
+        GCConfig(**{"min_cut_tokens": 0, "last_n_messages_to_keep": 1, **config}), default_score=COMPACTED_SCORE
     )
     return service, provider
 
@@ -192,7 +192,7 @@ class TestASwitchWhileAPassIsRunning:
             span_scorer=ScriptedSpanScorer(default=COMPACTED_SCORE),  # type: ignore[arg-type]
             event_bus=bus,
             gc_config=GCConfig(
-                context_window=1000, min_cut_tokens=0, last_n_turns_to_keep=0, archive_threshold=0.0, **PATIENT
+                context_window=1000, min_cut_tokens=0, last_n_messages_to_keep=0, archive_threshold=0.0, **PATIENT
             ),
         )
 

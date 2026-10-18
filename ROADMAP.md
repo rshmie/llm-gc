@@ -43,7 +43,7 @@ Today's evidence is a 37-question check on scripted conversations and a few live
 - [ ] **Grounding failures, read from live replies:** the model asking for something the session already established, or calling it unknown. It is the one live signal that can show quality was lost.
 - [ ] **Classification correctness** against a small labelled set: did LLM-GC keep, compact and archive what a person would have?
 - [ ] **Latency added on the request path** (p50 and p95), and how long a collection takes cold and warm. Time how long a pass holds the event loop too, with one and four conversations at once: planning runs on the loop, so every other request and stream waits while it plans (about 115 ms at 3,200 turns on a synthetic conversation). If that is the cost, move planning to a worker thread, as [scoring](doc/design/scoring/overview.md) describes. The request path counts each text once and remembers the count, and a pass reads each span's text once, so what is measured is the design's overhead, not the same conversation being tokenised again on every request. Measure with the dashboard open and closed: it records the history on each request too.
-- [ ] **Tune the draft defaults** against the benchmark, rerunning the decision-survival check after each change: `min_cut_tokens`, `last_n_turns_to_keep`, `keep_threshold`, `archive_threshold`, `max_recap_ratio`, `min_saving_share` and `max_stale_ratio`.
+- [ ] **Tune the draft defaults** against the benchmark, rerunning the decision-survival check after each change: `min_cut_tokens`, `last_n_messages_to_keep`, `keep_threshold`, `archive_threshold`, `max_recap_ratio`, `min_saving_share` and `max_stale_ratio`.
 - [ ] **A post-session report** on the dashboard: what was kept, compacted and archived, which decisions survived, the grounding failures seen, and what the session cost against no LLM-GC. It is the page people share, so it must make sense to someone who did not build LLM-GC.
 
 ## 3. Fix that are planned
@@ -72,7 +72,7 @@ Today's evidence is a 37-question check on scripted conversations and a few live
 Each is accepted for the first release, stated in the docs, and fixed after it.
 
 - **Sessions live in memory.** A restart costs each conversation one whole request and one collection's model calls.
-- **A very large tool result is sent whole** while it is among the newest turns kept, and is compacted only once it is older.
+- **A very large tool result is sent whole** while it is among the newest messages kept, and is compacted only once it is older.
 - **The proxy speaks only Anthropic's wire format.** Clients that speak OpenAI's cannot use it yet.
 - **Without a model, facts are read by patterns** that catch few phrasings. This affects offline runs only.
 - **A relayed subagent report is not tied to the subagent that wrote it.**

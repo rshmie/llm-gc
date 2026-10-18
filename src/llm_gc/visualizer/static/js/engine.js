@@ -641,7 +641,7 @@ export function renderSettings() {
     ["Collection size", "min_cut_tokens", c.min_cut_tokens, "tokens of older messages to summarise or archive before LLM-GC prepares a collection", "--min-cut-tokens"],
     ["Saving share", "min_saving_share", c.min_saving_share, "on a warm cache, the saving a collection needs before LLM-GC applies it, as a multiple of the tokens the provider must cache again"],
     ["Stale limit", "max_stale_ratio", c.max_stale_ratio, "share of the model's window that stale tokens may fill. At this limit, LLM-GC applies the prepared collection, even on a warm cache. The window is in the model's tokens, so LLM-GC first converts it to its own count, at the rate it measures from the replies"],
-    ["Always recent", "last_n_turns_to_keep", c.last_n_turns_to_keep, "newest messages never collected: each sent as its own message, as written", "--keep-last"],
+    ["Always recent", "last_n_messages_to_keep", c.last_n_messages_to_keep, "newest messages never collected: each sent as its own message, as written", "--keep-last"],
     ["Keep from", "keep_threshold", c.keep_threshold, "an exchange scoring at or above this is kept, quoted word for word"],
     ["Archive below", "archive_threshold", c.archive_threshold, "an exchange scoring below this is archived, to its opening line and facts"],
     ["Level margin", "level_margin", c.level_margin, "how far past a line a score must move before a span changes level"],
@@ -674,7 +674,7 @@ export function renderGenerations(k) {
   const levels = ["kept", "compacted", "archived", "out_of_view"].filter((level) => at(level).length);
   fill("generations", h("div", { class: "gen-flow" },
     box("young", "Young generation", "recent: each sent as written", plural(young.length, "message"),
-      `${plural(young.reduce((n, t) => n + t.tokens, 0), "token")} · the newest ${keepLast()} always stay`,
+      `${plural(young.reduce((n, t) => n + t.tokens, 0), "token")} · the newest ${keepLast()} messages always stay`,
       links("messages", young.map((t) => t.turn_index))),
     arrow(`collection${k.cuts ? ` ×${fmt(k.cuts)}` : ""}`, "in exchanges, each by its score"),
     box("old", "Old generation", "the recap: every exchange at its level", plural(k.spans.length, "exchange"),

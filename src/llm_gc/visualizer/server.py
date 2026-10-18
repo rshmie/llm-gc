@@ -164,7 +164,7 @@ def create_dashboard_app(
             config={
                 "context_window": config.context_window,
                 "min_cut_tokens": config.min_cut_tokens,
-                "last_n_turns_to_keep": config.last_n_turns_to_keep,
+                "last_n_messages_to_keep": config.last_n_messages_to_keep,
                 "keep_threshold": config.keep_threshold,
                 "archive_threshold": config.archive_threshold,
                 "level_margin": config.level_margin,

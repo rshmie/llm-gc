@@ -24,7 +24,7 @@ the next collection:     [FRONT′] t52 … t60       ← new spans added, every
 ```
  after a response, in the background, one pass per session at a time
 
- 1  CUT POINT   the latest position that keeps at least `last_n_turns_to_keep` turns
+ 1  CUT POINT   the latest position that keeps at least `last_n_messages_to_keep` messages
                 verbatim, where a span may begin, and splits no tool round;
                 everything before it is the batch
                       │
@@ -75,7 +75,7 @@ The assembler that renders the prompt still changes nothing; the switch is a ste
 1. **Enough has gone quiet to prepare one.** The new turns the plan would not keep word for word add up to at least `min_cut_tokens`. A batch the plan would keep entirely is never prepared: moving kept turns into the front saves nothing.
 2. **It would save something, at the estimated costs.** A session's first collection also pays for the front's header, so a short batch can be worth condensing and still not worth a collection.
 3. **No tool round is split.** No tool result kept after the cut may answer a tool call before it. The provider's rule is stricter than "no orphans": a tool result must immediately follow the message holding its call. The front is always the first message, so it can never land between the two.
-4. **The most recent turns stay verbatim** — at least `last_n_turns_to_keep`.
+4. **The most recent turns stay verbatim** — at least `last_n_messages_to_keep` messages.
 5. **The cut pays for itself.** Its new spans, rendered, must cost less than the turns they replace. Re-planned older spans are not part of this measure: restoring a span the conversation returned to costs tokens on purpose, and is bounded by the recap budget instead.
 
 Whether a prepared cut becomes the prompt now is the switch policy's question, and not one of these.
@@ -152,7 +152,7 @@ A prompt rewritten anywhere but its start breaks two things the user depends on.
    AI   "Done."                ┘
   ```
 
-  Measured before it: with `last_n_turns_to_keep` at 5 and replies far larger than `min_cut_tokens`, nearly every cut fell between a question and its answer. Each question became a span of its own that the summariser could not shorten — one refused, paid call each — and each answer a span whose opening line was its first heading rather than what was asked. *Accepted cost:* the tail can be one turn longer than `last_n_turns_to_keep`. *Rejected: cutting only before a user message.* One long agentic exchange has no such point, so it would never be collected and its prompt would grow without bound.
+  Measured before it: with `last_n_messages_to_keep` at 5 and replies far larger than `min_cut_tokens`, nearly every cut fell between a question and its answer. Each question became a span of its own that the summariser could not shorten — one refused, paid call each — and each answer a span whose opening line was its first heading rather than what was asked. *Accepted cost:* the tail can be one message longer than `last_n_messages_to_keep`. *Rejected: cutting only before a user message.* One long agentic exchange has no such point, so it would never be collected and its prompt would grow without bound.
 - **Prepare on what has gone quiet; switch on the cache and on health.** Preparing costs LLM-GC's tokens and changes nothing the client sees, so a flat floor is the right gate for it. Switching costs the provider's cache, so it waits for a cold cache, for a saving that repays the rewrite, or for the model's stale weight to reach its bound. See [when-to-collect.md](when-to-collect.md).
 - **Hold a prepared cut rather than commit it.** Committing as soon as a pass finishes fixes the cache rewrite at an arbitrary moment. A staged cut can be switched in at the request that would miss the cache anyway.
 - **Plan before paying.** Drafting and planning cost no model call, so a pass that will not collect, or whose cut cannot pay for itself, stops before buying summaries it would throw away.
@@ -180,5 +180,5 @@ A prompt rewritten anywhere but its start breaks two things the user depends on.
 ## Known gaps
 
 - **A span that lost its summary is never summarised later.** Only a provider *failure* is worth retrying; a refusal would be refused again. LLM-GC's own model calls are not retried yet either ([LLM provider](../llm-provider.md)), so a single timeout is enough to lose one. This is accepted because the span is then kept whole: the loss is tokens, never detail.
-- **Defaults are drafts.** `min_cut_tokens`, `last_n_turns_to_keep`, the level lines, the margin and the recap budget are to be tuned on the decision-survival check and on real conversations.
+- **Defaults are drafts.** `min_cut_tokens`, `last_n_messages_to_keep`, the level lines, the margin and the recap budget are to be tuned on the decision-survival check and on real conversations.
 - **Non-text content inside the front.** A condensed turn's images and tool calls survive only as the text that described them.

@@ -128,7 +128,7 @@ class TestASpanMadeWithoutItsFactsIsRecorded:
 
 class TestAFrontThatCannotFitIsRecorded:
     def test_folding_everything_and_still_not_fitting_is_reported(self):
-        tiny = GCConfig(context_window=200, max_recap_ratio=0.3, min_cut_tokens=0, last_n_turns_to_keep=1)
+        tiny = GCConfig(context_window=200, max_recap_ratio=0.3, min_cut_tokens=0, last_n_messages_to_keep=1)
         service, _, _ = make_service(tiny, scores=SCORES)
 
         results = _run(service)

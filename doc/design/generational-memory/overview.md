@@ -46,9 +46,11 @@ LLM-GC's answer is to **never destroy anything**, and instead decide, again and 
 
 ## The three generations
 
+A **turn** in these docs is one message of the conversation: a user message, a reply, or a tool result. One prompt to a coding agent is many turns, since each tool call and its result is a turn of its own; the dashboard's Session tab, which follows the person, counts prompts instead. The settings say "messages" for the same thing.
+
 | Generation | Holds | Sent to the model as |
 |---|---|---|
-| **Young** (the tail) | The newest turns — at least `last_n_turns_to_keep` | Exactly as the client sent them |
+| **Young** (the tail) | The newest turns — at least `last_n_messages_to_keep` of them | Exactly as the client sent them |
 | **Old** | Every older turn, grouped into spans, each with its original words | The front: each span at its detail level |
 | **Permanent** | The facts, decisions and preferences read from every turn, active or replaced | On their span's line, and as "replaced later" notes |
 

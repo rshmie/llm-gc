@@ -22,7 +22,7 @@ export const ui = { tab: "conversation", filter: "all", query: "", promptView: f
   // Whether the shown conversation follows the session's main one: true until the person picks another.
   followMain: true };
 
-export const keepLast = () => (state.config ? state.config.last_n_turns_to_keep : 5);
+export const keepLast = () => (state.config ? state.config.last_n_messages_to_keep : 5);
 // What the recap may spend on older exchanges: its token budget, a share of the window of the model being called.
 export const recapLimit = () => state.knowledge ? `${Number(state.knowledge.recap_budget).toLocaleString()} tokens`
   : !state.config ? "a share of the model's window" : `${Number(state.config.max_recap_tokens).toLocaleString()} tokens`;

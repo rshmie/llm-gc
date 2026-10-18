@@ -80,7 +80,7 @@ def make_service(
         ),
         span_scorer=scorer,  # type: ignore[arg-type]  # duck-typed: only `score` is called
         event_bus=bus,
-        gc_config=config if config is not None else GCConfig(min_cut_tokens=0, last_n_turns_to_keep=1),
+        gc_config=config if config is not None else GCConfig(min_cut_tokens=0, last_n_messages_to_keep=1),
     )
     return service, scorer, provider
 

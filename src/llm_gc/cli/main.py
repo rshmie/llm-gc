@@ -66,7 +66,7 @@ def build_cli(
     @click.option("--summary-provider", help="The vendor LLM-GC summarises with: anthropic or openai.")
     @click.option("--summary-model", help="The model LLM-GC summarises with, as the upstream names it.")
     @click.option("--min-cut-tokens", type=int, help="Tokens a collection must condense.")
-    @click.option("--keep-last", type=int, help="Newest turns always sent word for word.")
+    @click.option("--keep-last", type=int, help="Newest messages always sent word for word.")
     @click.option("--context-window", type=int, help="The proxied model's window; sets the recap budget.")
     @click.option(
         "--log-level",
@@ -112,7 +112,7 @@ def build_cli(
                 summary={"provider": summary_provider, "model": summary_model},
                 engine={
                     "min_cut_tokens": min_cut_tokens,
-                    "last_n_turns_to_keep": keep_last,
+                    "last_n_messages_to_keep": keep_last,
                     "context_window": context_window,
                 },
             )

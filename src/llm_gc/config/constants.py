@@ -12,7 +12,7 @@ DEFAULT_CONTEXT_WINDOW = 128_000
 DEFAULT_PROXY_CONTEXT_WINDOW = 200_000
 DEFAULT_KEEP_THRESHOLD = 0.7
 DEFAULT_ARCHIVE_THRESHOLD = 0.3
-DEFAULT_LAST_N_TURNS_TO_KEEP = 5
+DEFAULT_LAST_N_MESSAGES_TO_KEEP = 5
 # Smallest batch of compactable turns worth a cut. Every cut resets the provider's
 # prompt cache once and strips thinking blocks from the turns it keeps, so cutting
 # for a few tokens costs more than it saves. A draft value, to be tuned by watching

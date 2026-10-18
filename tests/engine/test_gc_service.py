@@ -157,7 +157,7 @@ class TestNowIsWhatTheUserIsDiscussing:
         """Not the assistant's replies, which restate and expand and would make every
         span look relevant; not tool results, which are output rather than a subject."""
         service, scorer, _ = make_service(
-            GCConfig(min_cut_tokens=0, last_n_turns_to_keep=3), default_score=COMPACTED_SCORE
+            GCConfig(min_cut_tokens=0, last_n_messages_to_keep=3), default_score=COMPACTED_SCORE
         )
         heard: list[list[int]] = []
         score = scorer.score
@@ -190,7 +190,7 @@ class TestTheBatchDecidesWhen:
     def test_below_the_minimum_nothing_is_collected_or_paid_for(self):
         """The plan runs on estimated summaries first: no model call until the batch is worth one."""
         service, _, provider = make_service(
-            GCConfig(min_cut_tokens=10_000, last_n_turns_to_keep=1), default_score=COMPACTED_SCORE
+            GCConfig(min_cut_tokens=10_000, last_n_messages_to_keep=1), default_score=COMPACTED_SCORE
         )
 
         results = _converse(service, 3)
@@ -212,7 +212,7 @@ class TestTheBatchDecidesWhen:
     def test_reaching_the_minimum_collects_the_whole_batch(self):
         tokens = turn(0).token_count
         service, _, _ = make_service(
-            GCConfig(min_cut_tokens=2 * tokens, last_n_turns_to_keep=1), default_score=COMPACTED_SCORE
+            GCConfig(min_cut_tokens=2 * tokens, last_n_messages_to_keep=1), default_score=COMPACTED_SCORE
         )
 
         results = _converse(service, 3)
@@ -222,7 +222,7 @@ class TestTheBatchDecidesWhen:
 
     def test_the_manual_lever_waives_only_the_minimum(self):
         service, _, _ = make_service(
-            GCConfig(min_cut_tokens=10_000, last_n_turns_to_keep=1), default_score=COMPACTED_SCORE
+            GCConfig(min_cut_tokens=10_000, last_n_messages_to_keep=1), default_score=COMPACTED_SCORE
         )
         _converse(service, 3)
 
@@ -295,7 +295,7 @@ class TestLevelsAreReplannedAtEveryCollection:
 
     def test_over_the_budget_the_coldest_span_loses_detail_first(self):
         """Room for two quotes, a summary and an archived line - not three quotes."""
-        config = GCConfig(context_window=1000, max_recap_ratio=0.378, min_cut_tokens=0, last_n_turns_to_keep=1)
+        config = GCConfig(context_window=1000, max_recap_ratio=0.378, min_cut_tokens=0, last_n_messages_to_keep=1)
         service, _, _ = make_service(config, scores={0: 0.8, 1: 0.95, 2: 0.95, 3: ARCHIVED_SCORE})
 
         _converse(service, 5)
@@ -501,7 +501,7 @@ class TestNothingRecordedIsDestroyed:
         ratio=st.sampled_from([0.02, 0.1, 0.3]),
     )
     def test_every_turn_is_held_exactly_once(self, scores, ratio):
-        config = GCConfig(context_window=2000, max_recap_ratio=ratio, min_cut_tokens=0, last_n_turns_to_keep=1)
+        config = GCConfig(context_window=2000, max_recap_ratio=ratio, min_cut_tokens=0, last_n_messages_to_keep=1)
         service, _, _ = make_service(config, scores=dict(enumerate(scores)))
         finished = []
         service.event_bus.subscribe(EventType.GC_FINISHED, finished.append)
@@ -571,7 +571,7 @@ class TestTheLibrarysLoopChecksEachTurn:
         """Uncounted, every batch weighed nothing, so no pass ever reached the minimum."""
         tokens = turn(0).token_count
         service, _, _ = make_service(
-            GCConfig(min_cut_tokens=2 * tokens, last_n_turns_to_keep=1), default_score=COMPACTED_SCORE
+            GCConfig(min_cut_tokens=2 * tokens, last_n_messages_to_keep=1), default_score=COMPACTED_SCORE
         )
 
         _update(service, *(Message(role="user", content=turn(index).content, turn_index=index) for index in range(3)))
@@ -592,7 +592,7 @@ class TestTheRecapIsSizedForTheModelsWindow:
     def test_the_window_moves_only_the_budget(self):
         """The same conversation as the budget test above: on its small window the coldest quote is
         summarised to fit; on a model with a larger window it stays quoted. Savings still come from scores."""
-        config = GCConfig(context_window=1000, max_recap_ratio=0.378, min_cut_tokens=0, last_n_turns_to_keep=1)
+        config = GCConfig(context_window=1000, max_recap_ratio=0.378, min_cut_tokens=0, last_n_messages_to_keep=1)
         scores = {0: 0.8, 1: 0.95, 2: 0.95, 3: ARCHIVED_SCORE}
         small, _, _ = make_service(config, scores=scores)
         large, _, _ = make_service(config, scores=scores)
@@ -700,7 +700,9 @@ class TestASessionCanBeRecordedWithoutBeingCollected:
 
 def test_a_relayed_report_in_the_tail_is_not_what_the_user_is_discussing_now():
     """Scored against it, every exchange near a subagent's findings would look like the subject."""
-    service, scorer, _ = make_service(GCConfig(min_cut_tokens=0, last_n_turns_to_keep=3), default_score=COMPACTED_SCORE)
+    service, scorer, _ = make_service(
+        GCConfig(min_cut_tokens=0, last_n_messages_to_keep=3), default_score=COMPACTED_SCORE
+    )
     heard: list[list[int]] = []
     score = scorer.score
 
@@ -860,7 +862,7 @@ class TestFactsThatFailedAreReadAgain:
     def _after_the_outage(self, **config):
         reader = _RecoveringReader(failing={0})
         service, _, _ = make_service(
-            GCConfig(**{"min_cut_tokens": 0, "last_n_turns_to_keep": 1, **config}),
+            GCConfig(**{"min_cut_tokens": 0, "last_n_messages_to_keep": 1, **config}),
             fact_reader=reader,
             default_score=ARCHIVED_SCORE,
         )  # type: ignore[arg-type]

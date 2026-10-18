@@ -262,7 +262,7 @@
   <ol class="anatomy" aria-label="What one request carries, in order. Click a part for its full meaning.">
     <li><button type="button" class="sysx" data-ref="term-system">system prompt · tools</button><span>your client's own; LLM-GC never changes them</span></li>
     <li><button type="button" class="blk" data-ref="term-block">recap</button><span>the old generation: every older exchange at its level, once LLM-GC applies a collection</span></li>
-    <li><button type="button" class="msgx" data-ref="term-verbatim">recent</button><span>the young generation: at least the newest <b class="cfg" data-config="last_n_turns_to_keep">…</b>, as written</span></li>
+    <li><button type="button" class="msgx" data-ref="term-verbatim">recent</button><span>the young generation: at least the newest <b class="cfg" data-config="last_n_messages_to_keep">…</b> messages, as written</span></li>
     <li><button type="button" class="newx" data-ref="term-newest">your new message</button><span>as your client sent it</span></li>
   </ol>
   <p class="guide-note">Click a part for its full meaning. Until LLM-GC applies its first collection, it sends each request exactly as
@@ -292,7 +292,7 @@
     <li><b>Prepare.</b> After every reply, LLM-GC runs a <b>check</b> (a <i>pass</i> in the code). It prepares a collection
       when the older messages to summarise or archive reach <b class="cfg" data-config="min_cut_tokens">…</b> tokens, and the
       result would be smaller. Preparing costs LLM-GC's own model calls, to write summaries and read facts. It does not change
-      what the model is sent. The newest <b class="cfg" data-config="last_n_turns_to_keep">…</b> messages always stay recent.</li>
+      what the model is sent. The newest <b class="cfg" data-config="last_n_messages_to_keep">…</b> messages always stay recent.</li>
     <li><b>Apply.</b> LLM-GC applies the prepared collection to a later request, when one of these is true:
       <ul class="guide-sub">
         <li>The provider's <b>cache is cold</b>. The provider reads the whole request anyway, so the change costs nothing extra.</li>

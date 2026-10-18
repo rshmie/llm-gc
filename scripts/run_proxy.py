@@ -43,7 +43,7 @@ from llm_gc.cli.settings import load_settings  # noqa: E402
 from llm_gc.config import GCConfig  # noqa: E402
 from llm_gc.config.constants import (  # noqa: E402
     DEFAULT_DASHBOARD_PORT,
-    DEFAULT_LAST_N_TURNS_TO_KEEP,
+    DEFAULT_LAST_N_MESSAGES_TO_KEEP,
     DEFAULT_MIN_CUT_TOKENS,
     DEFAULT_PROXY_CONTEXT_WINDOW,
 )
@@ -108,7 +108,7 @@ def demo_config() -> GCConfig:
         context_window=900,
         keep_threshold=0.55,
         archive_threshold=0.25,
-        last_n_turns_to_keep=3,
+        last_n_messages_to_keep=3,
         # Scaled to this demo's small window; real conversations use far larger batches.
         min_cut_tokens=60,
     )
@@ -117,7 +117,7 @@ def demo_config() -> GCConfig:
 def serve_config(args: argparse.Namespace) -> GCConfig:
     """The library defaults, with the two knobs worth turning while watching."""
     return GCConfig(
-        context_window=args.context_window, min_cut_tokens=args.min_cut_tokens, last_n_turns_to_keep=args.keep_last
+        context_window=args.context_window, min_cut_tokens=args.min_cut_tokens, last_n_messages_to_keep=args.keep_last
     )
 
 
@@ -271,7 +271,7 @@ def serve(args: argparse.Namespace) -> None:
     print(f"\ncompactor: {label}")
     print("upstream:  stub (canned replies, no network)")
     print(
-        f"settings:  min_cut_tokens={config.min_cut_tokens}  last_n_turns_to_keep={config.last_n_turns_to_keep}  "
+        f"settings:  min_cut_tokens={config.min_cut_tokens}  last_n_messages_to_keep={config.last_n_messages_to_keep}  "
         f"context_window={config.context_window}"
     )
     print(f"\nproxy      http://127.0.0.1:{args.port}   (stats: /stats)")
@@ -362,7 +362,7 @@ def main() -> None:
         help="tokens a collection must condense (lower it to see collections sooner)",
     )
     serving.add_argument(
-        "--keep-last", type=int, default=DEFAULT_LAST_N_TURNS_TO_KEEP, help="newest turns always kept verbatim"
+        "--keep-last", type=int, default=DEFAULT_LAST_N_MESSAGES_TO_KEEP, help="newest messages always kept verbatim"
     )
     serving.add_argument(
         "--context-window",

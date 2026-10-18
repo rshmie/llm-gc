@@ -73,7 +73,7 @@ def test_a_collection_reports_what_its_own_model_calls_spent():
     summary = turn(0).token_count
     provider = FakeProvider(responses=[RESPONSE] * 20)
     service, _, _ = make_service(
-        GCConfig(min_cut_tokens=summary, last_n_turns_to_keep=1),
+        GCConfig(min_cut_tokens=summary, last_n_messages_to_keep=1),
         compactor=LLMCompactor(event_bus=EventBus(), provider=MeteredProvider(provider)),
         default_score=COMPACTED_SCORE,
     )

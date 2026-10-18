@@ -34,7 +34,7 @@ SUMMARY = LLMResponse(
 
 def _engine(*, model: bool = True) -> tuple[GcService, ContextHealthMonitor]:
     config = GCConfig(
-        context_window=700, keep_threshold=0.55, archive_threshold=0.25, last_n_turns_to_keep=3, min_cut_tokens=60
+        context_window=700, keep_threshold=0.55, archive_threshold=0.25, last_n_messages_to_keep=3, min_cut_tokens=60
     )
     service = build_gc_service(config, summary_provider=FakeProvider(responses=[SUMMARY] * 400) if model else None)
     bus = service.event_bus
@@ -200,7 +200,7 @@ class TestOverview:
     def test_reports_the_tunable_settings(self):
         config = _client(*_engine()).get("/api/overview").json()["config"]
         assert config["min_cut_tokens"] == 60
-        assert config["last_n_turns_to_keep"] == 3
+        assert config["last_n_messages_to_keep"] == 3
 
     def test_says_whose_turns_facts_are_read_from(self):
         # A model reads facts from both sides; the patterns used without one read only the user's,

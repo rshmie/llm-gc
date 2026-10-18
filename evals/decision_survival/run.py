@@ -89,7 +89,7 @@ def totals(results: Sequence[ProbeResult]) -> dict[str, int]:
 
 async def check(args: argparse.Namespace, api_key: str | None, publish: Callable[[dict[str, Any]], None]) -> None:
     config = GCConfig(
-        context_window=CONTEXT_WINDOW, min_cut_tokens=args.min_cut_tokens, last_n_turns_to_keep=args.keep_last
+        context_window=CONTEXT_WINDOW, min_cut_tokens=args.min_cut_tokens, last_n_messages_to_keep=args.keep_last
     )
     conversations = [c for c in load_conversations() if not args.conversation or c.id in args.conversation]
     report: dict[str, Any] = {"settings": _settings(args), "conversations": []}
