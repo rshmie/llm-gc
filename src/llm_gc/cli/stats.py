@@ -23,12 +23,16 @@ _NOTE_WIDTH = 96
 # reader who takes one for the other misreads every number.
 _OWN_COUNT = ("LLM-GC's own count", "an estimate, made the same way on both sides, so the share holds")
 _PROVIDER_COUNT = ("The provider's own count", "what it bills")
-_NOT_NETTED = ("Not taken from the saving: the two are not worth the same. With a warm cache a saved token "
-               "would have been a cache read, the cheapest kind; these are the summary model's input and output.")
+_NOT_NETTED = (
+    "Not taken from the saving: the two are not worth the same. With a warm cache a saved token "
+    "would have been a cache read, the cheapest kind; these are the summary model's input and output."
+)
 _WEIGHED_AGAINST = "To weigh the saving, set it against the cache written on requests that carried a collection."
-_RATE_NOTE = ("Model count: how many tokens the model counted for each of LLM-GC's, on the conversation's newest "
-              "request. LLM-GC sizes the recap and the stale bound at this rate, so each is the share of the "
-              "model's window its setting names.")
+_RATE_NOTE = (
+    "Model count: how many tokens the model counted for each of LLM-GC's, on the conversation's newest "
+    "request. LLM-GC sizes the recap and the stale bound at this rate, so each is the share of the "
+    "model's window its setting names."
+)
 
 Section = tuple[str, list[tuple[int, str]]]
 
@@ -91,7 +95,7 @@ class ConversationStats(_Counters):
     collections: int
     collections_not_yet_sent: int
     traffic: TrafficStats
-    part: str | None = None      # main, subagent or earlier_main, within a client session
+    part: str | None = None  # main, subagent or earlier_main, within a client session
 
 
 class ClientSessionStats(_Counters):
@@ -160,48 +164,86 @@ def render_stats(stats: ProxyStats, base_url: str) -> str:
     if any(c.traffic.last_reply is not None and c.traffic.last_reply.token_rate for c in _all_conversations(stats)):
         notes.append(_RATE_NOTE)
     if any(c.collections_not_yet_sent for c in _all_conversations(stats)):
-        notes.append("A collection not yet sent has saved nothing yet: its saving reaches the model with the "
-                     "conversation's next request.")
+        notes.append(
+            "A collection not yet sent has saved nothing yet: its saving reaches the model with the "
+            "conversation's next request."
+        )
     if any(not c.collected for c in _all_conversations(stats)):
-        notes.append("Not collected: a subagent's conversation is recorded and sent as written "
-                     "(collect_subagents turns collection on).")
+        notes.append(
+            "Not collected: a subagent's conversation is recorded and sent as written "
+            "(collect_subagents turns collection on)."
+        )
     wrapped = [line for note in notes for line in _dim_lines(note, INDENT)]
     return "\n".join([*lines, *([""] + wrapped if wrapped else []), ""])
 
 
 def _totals(stats: ProxyStats) -> list[str]:
     """LLM-GC's own count, then the provider's, each under its name; then what the proxy handled."""
-    tokens: Section = ("Tokens", [
-        (stats.tokens_from_client, "your clients sent " + _note("each request whole, added up: system prompt, "
-                                                                "tools and messages")),
-        (stats.tokens_forwarded, "LLM-GC forwarded"),
-        (stats.tokens_saved, _describe_saving(stats)),
-    ])
+    tokens: Section = (
+        "Tokens",
+        [
+            (
+                stats.tokens_from_client,
+                "your clients sent " + _note("each request whole, added up: system prompt, tools and messages"),
+            ),
+            (stats.tokens_forwarded, "LLM-GC forwarded"),
+            (stats.tokens_saved, _describe_saving(stats)),
+        ],
+    )
     handled: list[Section] = [
-        ("Requests", [
-            (stats.requests, "received"),
-            (stats.gc_applied, "through LLM-GC"),
-            (stats.gc_bypassed, "passed on as sent " + _note("unreadable, or an error in LLM-GC")),
-            # LLM-GC's own fault, shown only once it has happened; the log has the provider's reason.
-            *([(stats.rewrites_refused, "refused as LLM-GC rewrote them " + _note("each sent again as written; "
-                                                                               "the log says why"))]
-              if stats.rewrites_refused else []),
-        ]),
-        ("Conversations", [
-            (stats.sessions_seeded, "tracked " + _note("new, or picked up again after a restart or an edit")),
-            # Only a client sending LLM-GC's session header can rewind; Claude Code never does,
-            # so these show only once they have happened.
-            *([(stats.history_rewinds, "rewound " + _note("an edit or a retry went back to an earlier point"))]
-              if stats.history_rewinds else []),
-            *([(stats.history_restarts, "started over " + _note("an edit reached a condensed part: one request "
-                                                                 "went whole"))]
-              if stats.history_restarts else []),
-        ]),
+        (
+            "Requests",
+            [
+                (stats.requests, "received"),
+                (stats.gc_applied, "through LLM-GC"),
+                (stats.gc_bypassed, "passed on as sent " + _note("unreadable, or an error in LLM-GC")),
+                # LLM-GC's own fault, shown only once it has happened; the log has the provider's reason.
+                *(
+                    [
+                        (
+                            stats.rewrites_refused,
+                            "refused as LLM-GC rewrote them " + _note("each sent again as written; the log says why"),
+                        )
+                    ]
+                    if stats.rewrites_refused
+                    else []
+                ),
+            ],
+        ),
+        (
+            "Conversations",
+            [
+                (stats.sessions_seeded, "tracked " + _note("new, or picked up again after a restart or an edit")),
+                # Only a client sending LLM-GC's session header can rewind; Claude Code never does,
+                # so these show only once they have happened.
+                *(
+                    [(stats.history_rewinds, "rewound " + _note("an edit or a retry went back to an earlier point"))]
+                    if stats.history_rewinds
+                    else []
+                ),
+                *(
+                    [
+                        (
+                            stats.history_restarts,
+                            "started over " + _note("an edit reached a condensed part: one request went whole"),
+                        )
+                    ]
+                    if stats.history_restarts
+                    else []
+                ),
+            ],
+        ),
     ]
     # One width for every count, so magnitudes compare at a glance across sections.
     width = max(len(f"{count:,}") for _, rows in (tokens, *handled) for count, _ in rows)
-    lines = [_heading(*_OWN_COUNT), *_section(tokens, width), "",
-             _heading(*_PROVIDER_COUNT), *_provider_counts(stats), ""]
+    lines = [
+        _heading(*_OWN_COUNT),
+        *_section(tokens, width),
+        "",
+        _heading(*_PROVIDER_COUNT),
+        *_provider_counts(stats),
+        "",
+    ]
     for section in handled:
         lines += [*_section(section, width), ""]
     return lines[:-1]
@@ -214,23 +256,35 @@ def _heading(name: str, meaning: str) -> str:
 def _section(section: Section, width: int) -> list[str]:
     title, rows = section
     # Padded before styling: escape codes would count towards the width.
-    return [f"{INDENT}{style((title if index == 0 else '').ljust(_SECTION_WIDTH), bold=True)}{count:>{width},}  {text}"
-            for index, (count, text) in enumerate(rows)]
+    return [
+        f"{INDENT}{style((title if index == 0 else '').ljust(_SECTION_WIDTH), bold=True)}{count:>{width},}  {text}"
+        for index, (count, text) in enumerate(rows)
+    ]
 
 
 def _provider_counts(stats: ProxyStats) -> list[str]:
     """What the provider reported on the client's replies and on LLM-GC's own calls: set beside the saving, never netted."""
     usage, spent, carried = stats.provider_usage, stats.summaries, stats.collection_cache_write_tokens
     on_collections = f" ({carried:,} on requests that carried a collection)" if carried else ""
-    provider = (f"Reported on {usage.replies:,} replies: {usage.input_tokens:,} input, "
-                f"{usage.cache_read_input_tokens:,} cache read, {usage.cache_creation_input_tokens:,} cache write"
-                f"{on_collections}, {usage.output_tokens:,} output." if usage.replies
-                else "No reply has reported its usage yet.")
-    own = (f"{spent.calls:,} calls to summarise and read facts: {spent.input_tokens:,} tokens in, "
-           f"{spent.output_tokens:,} out." if spent.calls else "None yet: nothing has been summarised.")
+    provider = (
+        f"Reported on {usage.replies:,} replies: {usage.input_tokens:,} input, "
+        f"{usage.cache_read_input_tokens:,} cache read, {usage.cache_creation_input_tokens:,} cache write"
+        f"{on_collections}, {usage.output_tokens:,} output."
+        if usage.replies
+        else "No reply has reported its usage yet."
+    )
+    own = (
+        f"{spent.calls:,} calls to summarise and read facts: {spent.input_tokens:,} tokens in, "
+        f"{spent.output_tokens:,} out."
+        if spent.calls
+        else "None yet: nothing has been summarised."
+    )
     note = " ".join([_NOT_NETTED, *([_WEIGHED_AGAINST] if carried else [])])
-    return [*_labelled("Provider", provider), *_labelled("LLM-GC's calls", own),
-            *(_dim_lines(note, INDENT + " " * _SECTION_WIDTH) if spent.calls else [])]
+    return [
+        *_labelled("Provider", provider),
+        *_labelled("LLM-GC's calls", own),
+        *(_dim_lines(note, INDENT + " " * _SECTION_WIDTH) if spent.calls else []),
+    ]
 
 
 def _labelled(label: str, text: str) -> list[str]:
@@ -242,11 +296,18 @@ def _labelled(label: str, text: str) -> list[str]:
 
 def _client_session(session: ClientSessionStats) -> list[str]:
     traffic = session.traffic
-    saved = (f"by LLM-GC's count, saved {traffic.tokens_saved:,} of {traffic.tokens_from_client:,} "
-             f"({_share(traffic.tokens_saved, traffic.tokens_from_client)})" if traffic.tokens_from_client else "")
+    saved = (
+        f"by LLM-GC's count, saved {traffic.tokens_saved:,} of {traffic.tokens_from_client:,} "
+        f"({_share(traffic.tokens_saved, traffic.tokens_from_client)})"
+        if traffic.tokens_from_client
+        else ""
+    )
     span = f"{_clock(session.first_request_at)} to {_clock(session.last_request_at)}"
     header = f"Claude Code session {session.client_session[:_SHORT_ID_CHARS]}"
-    lines = ["", INDENT + style(header, bold=True) + style(f"  {span} · {traffic.requests:,} requests · {saved}", dim=True)]
+    lines = [
+        "",
+        INDENT + style(header, bold=True) + style(f"  {span} · {traffic.requests:,} requests · {saved}", dim=True),
+    ]
     subagents = 0
     rows: list[tuple[str, ConversationStats | TrafficStats]] = []
     for conversation in session.conversations:
@@ -254,8 +315,9 @@ def _client_session(session: ClientSessionStats) -> list[str]:
             subagents += 1
             rows.append((f"Subagent {subagents} ({(conversation.agent or '')[:_SHORT_ID_CHARS]})", conversation))
         else:
-            rows.append(({"main": "Main", "earlier_main": "Earlier main"}.get(conversation.part or "", "Main"),
-                         conversation))
+            rows.append(
+                ({"main": "Main", "earlier_main": "Earlier main"}.get(conversation.part or "", "Main"), conversation)
+            )
     if session.outside_conversations.requests:
         rows.append(("Other requests", session.outside_conversations))
     return lines + _table(rows)
@@ -266,8 +328,12 @@ def _table(rows: list[tuple[str, ConversationStats | TrafficStats]]) -> list[str
     for label, row in rows:
         collections = window = rate = ""
         if isinstance(row, ConversationStats):
-            collections = "not collected" if not row.collected else f"{row.collections}" + (
-                f" ({row.collections_not_yet_sent} not yet sent)" if row.collections_not_yet_sent else "")
+            collections = (
+                "not collected"
+                if not row.collected
+                else f"{row.collections}"
+                + (f" ({row.collections_not_yet_sent} not yet sent)" if row.collections_not_yet_sent else "")
+            )
             window = _window(row.context_window)
             last = row.traffic.last_reply
             rate = f"{last.token_rate:.2f}×" if last is not None and last.token_rate else ""
@@ -276,12 +342,16 @@ def _table(rows: list[tuple[str, ConversationStats | TrafficStats]]) -> list[str
     window_width = max(len("Window"), *(len(cell[3]) for cell in cells)) + 2
     # Only once a reply has measured a rate: a column of blanks would say nothing.
     rate_head = "Model count" if any(cell[4] for cell in cells) else ""
-    head = (f"{'Conversation':<{_LABEL_WIDTH}}{'Requests':>9}{'Sent':>12}{'Saved':>11}  {'Collections':<{width}}"
-            f"{'Window':<{window_width}}{rate_head}")
+    head = (
+        f"{'Conversation':<{_LABEL_WIDTH}}{'Requests':>9}{'Sent':>12}{'Saved':>11}  {'Collections':<{width}}"
+        f"{'Window':<{window_width}}{rate_head}"
+    )
     lines = [INDENT * 2 + style(head.rstrip(), dim=True)]
     for label, traffic, collections, window, rate in cells:
-        lines.append(f"{INDENT * 2}{label:<{_LABEL_WIDTH}}{traffic.requests:>9,}{traffic.tokens_from_client:>12,}"
-                     f"{traffic.tokens_saved:>11,}  {collections:<{width}}{window:<{window_width}}{rate}".rstrip())
+        lines.append(
+            f"{INDENT * 2}{label:<{_LABEL_WIDTH}}{traffic.requests:>9,}{traffic.tokens_from_client:>12,}"
+            f"{traffic.tokens_saved:>11,}  {collections:<{width}}{window:<{window_width}}{rate}".rstrip()
+        )
     return lines
 
 
@@ -289,8 +359,13 @@ def _window(window: WindowStats | None) -> str:
     if window is None:
         return ""
     tokens = window.tokens
-    size = (f"{tokens // 1_000_000}M" if tokens % 1_000_000 == 0 else
-            f"{tokens // 1000}k" if tokens % 1000 == 0 else f"{tokens:,}")
+    size = (
+        f"{tokens // 1_000_000}M"
+        if tokens % 1_000_000 == 0
+        else f"{tokens // 1000}k"
+        if tokens % 1000 == 0
+        else f"{tokens:,}"
+    )
     return size if window.reported else f"{size} (assumed)"
 
 
@@ -324,5 +399,7 @@ def _note(text: str) -> str:
 
 
 def _dim_lines(text: str, indent: str) -> list[str]:
-    return [style(line, dim=True)
-            for line in textwrap.wrap(text, _NOTE_WIDTH, initial_indent=indent, subsequent_indent=indent)]
+    return [
+        style(line, dim=True)
+        for line in textwrap.wrap(text, _NOTE_WIDTH, initial_indent=indent, subsequent_indent=indent)
+    ]

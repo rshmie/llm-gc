@@ -51,7 +51,7 @@ def _value(output: str, label: str) -> str:
     """The text of the banner row with this label, after the label."""
     for line in output.splitlines():
         if line.strip().startswith(f"{label} "):
-            return line.strip()[len(label):].strip()
+            return line.strip()[len(label) :].strip()
     raise AssertionError(f"no {label} row in:\n{output}")
 
 

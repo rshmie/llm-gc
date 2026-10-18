@@ -10,14 +10,27 @@ from llm_gc.models import Message
 def _result(tail: list[Message] | None = None) -> GCResult:
     front = Message(role="user", content="Earlier: the vault code is 4417.", token_count=9, turn_index=-1)
     if tail is None:
-        tail = [Message(role="user", content="Ship it on Friday.", token_count=6, turn_index=4),
-                Message(role="assistant", content="Friday it is.", token_count=4, turn_index=5)]
-    return GCResult(final_messages=[front, *tail], gc_run_id="run-1", status=GCStatus.COMPLETED,
-                    tokens_before=40, tokens_in_final=19, kept_count=0, compacted_count=2, archived_count=2,
-                    compacted_tokens=12, archived_tokens=9, duration_ms=3.0,
-                    degradations=[AgingDegradation(reason=DegradationReason.ARCHIVE_FAILED, turn_indices=[2],
-                                                   detail="LLMResponseError")],
-                    outcome=CutOutcome(compacted=[0, 1], archived=[2, 3]))
+        tail = [
+            Message(role="user", content="Ship it on Friday.", token_count=6, turn_index=4),
+            Message(role="assistant", content="Friday it is.", token_count=4, turn_index=5),
+        ]
+    return GCResult(
+        final_messages=[front, *tail],
+        gc_run_id="run-1",
+        status=GCStatus.COMPLETED,
+        tokens_before=40,
+        tokens_in_final=19,
+        kept_count=0,
+        compacted_count=2,
+        archived_count=2,
+        compacted_tokens=12,
+        archived_tokens=9,
+        duration_ms=3.0,
+        degradations=[
+            AgingDegradation(reason=DegradationReason.ARCHIVE_FAILED, turn_indices=[2], detail="LLMResponseError")
+        ],
+        outcome=CutOutcome(compacted=[0, 1], archived=[2, 3]),
+    )
 
 
 class TestTheReport:

@@ -15,9 +15,14 @@ from tests.engine.support import ARCHIVED_SCORE, COMPACTED_SCORE, make_service, 
 
 ALICE_SECRET = "The patient records database lives in frankfurt."
 
-_SUMMARY_WITH_THE_SECRET = LLMResponse(text="The records database lives in frankfurt; retention was discussed.",
-                                       stop_reason=StopReason.COMPLETE, input_tokens=0, output_tokens=12,
-                                       model="scripted", provider="offline")
+_SUMMARY_WITH_THE_SECRET = LLMResponse(
+    text="The records database lives in frankfurt; retention was discussed.",
+    stop_reason=StopReason.COMPLETE,
+    input_tokens=0,
+    output_tokens=12,
+    model="scripted",
+    provider="offline",
+)
 
 
 def _service(score: float) -> GcService:

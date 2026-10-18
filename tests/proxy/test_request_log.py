@@ -29,8 +29,16 @@ def _chain(turns: str) -> list[str]:
 
 
 def _begin(log: RequestLog, conversation: str | None, turns: str, origin: ClientOrigin | None = MAIN):
-    return log.begin(conversation_id=conversation, origin=origin, hashes=_chain(turns), newest="typed", model="m",
-                     tokens_from_client=10, tokens_forwarded=10, collected=True)
+    return log.begin(
+        conversation_id=conversation,
+        origin=origin,
+        hashes=_chain(turns),
+        newest="typed",
+        model="m",
+        tokens_from_client=10,
+        tokens_forwarded=10,
+        collected=True,
+    )
 
 
 class TestALaterRequestSettlesAnEarlierOne:
@@ -91,8 +99,9 @@ class TestARecordCloses:
     def test_with_its_replys_outline_after_it_was_forwarded(self):
         log = RequestLog(clock=_Clock())
         record = _begin(log, None, "a")
-        outline = ReplyOutline(status=200, finished=True, stop_reason="tool_use",
-                               tool_calls=(ToolCall(name="Agent", call_id="toolu_1"),))
+        outline = ReplyOutline(
+            status=200, finished=True, stop_reason="tool_use", tool_calls=(ToolCall(name="Agent", call_id="toolu_1"),)
+        )
 
         log.finish(record, outline)
 
@@ -117,13 +126,21 @@ class TestBounds:
 
 def test_a_requests_newest_message_is_named_by_who_wrote_it():
     typed = Message(role="user", content="which runner?", turn_index=0)
-    results = Message(role="user", content="ok", turn_index=2,
-                      raw_content=[{"type": "tool_result", "tool_use_id": "t", "content": "ok"}])
+    results = Message(
+        role="user",
+        content="ok",
+        turn_index=2,
+        raw_content=[{"type": "tool_result", "tool_use_id": "t", "content": "ok"}],
+    )
     report = Message(role="user", content="<agent-message>done</agent-message>", turn_index=4, relayed=True)
     reply = Message(role="assistant", content="Here", turn_index=5)
 
-    assert [newest_kind(m) for m in (typed, results, report, reply)] == ["typed", "tool_results", "relayed",
-                                                                         "assistant"]
+    assert [newest_kind(m) for m in (typed, results, report, reply)] == [
+        "typed",
+        "tool_results",
+        "relayed",
+        "assistant",
+    ]
 
 
 def test_words_typed_after_interrupting_a_tool_round_are_typed():
@@ -133,8 +150,9 @@ def test_words_typed_after_interrupting_a_tool_round_are_typed():
 
 def test_a_newest_message_the_client_wrote_all_of_is_not_typed():
     """A background task finishing sends a request the person did not type."""
-    notice = Message(role="user", content="<task-notification>done</task-notification>", turn_index=6,
-                     client_written=((0, 43),))
+    notice = Message(
+        role="user", content="<task-notification>done</task-notification>", turn_index=6, client_written=((0, 43),)
+    )
     assert newest_kind(notice) == "client"
 
 
@@ -165,9 +183,17 @@ class TestAnOpenToolRound:
 
 class TestARecordNamesItsRequest:
     def test_a_record_takes_the_client_requests_id(self):
-        record = RequestLog(clock=_Clock()).begin(conversation_id=None, origin=MAIN, hashes=_chain("a"),
-                                                  newest="typed", model="m", tokens_from_client=10,
-                                                  tokens_forwarded=10, collected=True, request_id="3f2a9c01b7de")
+        record = RequestLog(clock=_Clock()).begin(
+            conversation_id=None,
+            origin=MAIN,
+            hashes=_chain("a"),
+            newest="typed",
+            model="m",
+            tokens_from_client=10,
+            tokens_forwarded=10,
+            collected=True,
+            request_id="3f2a9c01b7de",
+        )
 
         assert record.request_id == "3f2a9c01b7de"
 
@@ -179,9 +205,27 @@ class TestARecordNamesItsRequest:
     def test_two_records_that_agree_in_every_field_are_still_two(self):
         """A record is one forward, settled as later requests arrive: who it is never depends on its fields."""
         log = RequestLog(clock=lambda: datetime(2026, 10, 13, 12, 0, tzinfo=timezone.utc))
-        first = log.begin(conversation_id="s_1", origin=MAIN, hashes=_chain("ab"), newest="typed", model="m",
-                          tokens_from_client=10, tokens_forwarded=10, collected=True, request_id="3f2a9c01b7de")
-        second = log.begin(conversation_id="s_1", origin=MAIN, hashes=_chain("ab"), newest="typed", model="m",
-                           tokens_from_client=10, tokens_forwarded=10, collected=True, request_id="3f2a9c01b7de")
+        first = log.begin(
+            conversation_id="s_1",
+            origin=MAIN,
+            hashes=_chain("ab"),
+            newest="typed",
+            model="m",
+            tokens_from_client=10,
+            tokens_forwarded=10,
+            collected=True,
+            request_id="3f2a9c01b7de",
+        )
+        second = log.begin(
+            conversation_id="s_1",
+            origin=MAIN,
+            hashes=_chain("ab"),
+            newest="typed",
+            model="m",
+            tokens_from_client=10,
+            tokens_forwarded=10,
+            collected=True,
+            request_id="3f2a9c01b7de",
+        )
 
         assert first != second and len({first, second}) == 2

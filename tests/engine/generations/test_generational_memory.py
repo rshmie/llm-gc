@@ -13,8 +13,7 @@ def _make_message(content: str, turn_index: int = 1) -> Message:
 
 def _make_generational_memory() -> GenerationalMemory:
     bus = EventBus()
-    return GenerationalMemory(fact_reader=PatternFactReader(),
-                              compactor=NoOpCompactor(event_bus=bus))
+    return GenerationalMemory(fact_reader=PatternFactReader(), compactor=NoOpCompactor(event_bus=bus))
 
 
 class TestItStoresNothing:

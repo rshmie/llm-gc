@@ -106,16 +106,24 @@ OutlineHandler = Callable[[ReplyOutline, Mapping[str, str]], None]
 # Response headers that describe the upstream connection, not its content.
 # Returning them would have us promise an encoding or a length that no longer
 # applies to the body we hand back.
-_RESPONSE_HOP_BY_HOP = frozenset({
-    "content-length", "content-encoding", "transfer-encoding", "connection",
-    "keep-alive", "upgrade", "trailer",
-})
+_RESPONSE_HOP_BY_HOP = frozenset(
+    {
+        "content-length",
+        "content-encoding",
+        "transfer-encoding",
+        "connection",
+        "keep-alive",
+        "upgrade",
+        "trailer",
+    }
+)
 
 # What the log says about a failed answer. The client sees the upstream's own error; these
 # point whoever runs LLM-GC at the usual cause on its side.
 _ERROR_STATUS_HINT = "the client gets the upstream's error unchanged"
-_CREDENTIAL_REFUSED_HINT = ("the upstream refused the client's credential. Behind a gateway, check that "
-                            "`upstream` is the gateway's address")
+_CREDENTIAL_REFUSED_HINT = (
+    "the upstream refused the client's credential. Behind a gateway, check that `upstream` is the gateway's address"
+)
 _ERROR_STATUS_HINTS = {
     401: _CREDENTIAL_REFUSED_HINT,
     403: _CREDENTIAL_REFUSED_HINT,
@@ -204,6 +212,7 @@ def create_app(
             started it. Holds each spawned prompt in memory until matched, so it is on
             only when something will show the link.
     """
+
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         # Sessions hold conversation content; without the sweeper an idle one would
@@ -263,8 +272,9 @@ def create_app(
         body = await _read_body(request)
         if body is None:
             return _too_large()
-        return await _forward(app, body, forwardable_headers(dict(request.headers)), _target(request),
-                              method=request.method)
+        return await _forward(
+            app, body, forwardable_headers(dict(request.headers)), _target(request), method=request.method
+        )
 
     return app
 
@@ -314,10 +324,13 @@ async def _handle(app: FastAPI, request: Request) -> Response:
     # The system prompt, the tools and the instructions count on both sides of the ratio:
     # they are sent, whole, either way. Thinking counts too, because the provider bills it as input.
     fixed_tokens = fixed_prompt_tokens(payload)
-    client_tokens = (sum(message.token_count for message in client_messages)
-                     + sent_thinking_tokens(client_messages)
-                     + instruction_tokens(client_messages)
-                     + sum(instruction.token_count for instruction in instructions) + fixed_tokens)
+    client_tokens = (
+        sum(message.token_count for message in client_messages)
+        + sent_thinking_tokens(client_messages)
+        + instruction_tokens(client_messages)
+        + sum(instruction.token_count for instruction in instructions)
+        + fixed_tokens
+    )
     client_sends_thinking = sends_thinking(client_messages)
 
     # Everything LLM-GC does before forwarding sits inside this one guard, so no
@@ -339,47 +352,113 @@ async def _handle(app: FastAPI, request: Request) -> Response:
             app.state.gc_service.use_context_window(session_id, window.tokens)
             app.state.gc_service.set_collection_enabled(session_id, collected)
             # Read before the switch is decided: a switch makes the provider cache these again too.
-            app.state.gc_service.use_rewrite_overhead(session_id,
-                                                      rewrite_overhead_tokens(payload, client_messages, instructions))
+            app.state.gc_service.use_rewrite_overhead(
+                session_id, rewrite_overhead_tokens(payload, client_messages, instructions)
+            )
         forwarded = await _apply_gc(app, session_id, history, new_turn, payload, body, instructions)
     except Exception as err:
-        logger.exception("GC failed on the request path; forwarding the original",
-                         extra={"session_id": session_id, "error_type": type(err).__name__})
+        logger.exception(
+            "GC failed on the request path; forwarding the original",
+            extra={"session_id": session_id, "error_type": type(err).__name__},
+        )
         metrics.gc_bypassed += 1
         # Counted as forwarded whole, so a bypass does not look free in /stats.
-        on_outline, _ = _measure_request(app, session_id, origin, payload, client_messages, hashes, client_tokens,
-                                         client_tokens, window, collected, sends_thinking=client_sends_thinking,
-                                         carries_front=False)
+        on_outline, _ = _measure_request(
+            app,
+            session_id,
+            origin,
+            payload,
+            client_messages,
+            hashes,
+            client_tokens,
+            client_tokens,
+            window,
+            collected,
+            sends_thinking=client_sends_thinking,
+            carries_front=False,
+        )
         sent = time.perf_counter()
         response = await _send(app, body, headers, streaming, target, on_outline=on_outline)
-        _log_answer(response, payload, client_tokens, client_tokens, session_id,
-                    prepared_s=sent - received, upstream_s=time.perf_counter() - sent, streamed=streaming)
+        _log_answer(
+            response,
+            payload,
+            client_tokens,
+            client_tokens,
+            session_id,
+            prepared_s=sent - received,
+            upstream_s=time.perf_counter() - sent,
+            streamed=streaming,
+        )
         return response
 
     metrics.gc_applied += 1
     forward_body = forwarded.body
     forwarded_tokens = forwarded.tokens + fixed_tokens
-    on_outline, _ = _measure_request(app, session_id, origin, payload, client_messages, hashes, client_tokens,
-                                     forwarded_tokens, window, collected, sends_thinking=forwarded.sends_thinking)
+    on_outline, _ = _measure_request(
+        app,
+        session_id,
+        origin,
+        payload,
+        client_messages,
+        hashes,
+        client_tokens,
+        forwarded_tokens,
+        window,
+        collected,
+        sends_thinking=forwarded.sends_thinking,
+    )
     sent = time.perf_counter()
-    response = await _send(app, forward_body, headers, streaming, target,
-                           on_complete=_reply_observer(app, session_id, new_turn, streaming), on_outline=on_outline)
+    response = await _send(
+        app,
+        forward_body,
+        headers,
+        streaming,
+        target,
+        on_complete=_reply_observer(app, session_id, new_turn, streaming),
+        on_outline=on_outline,
+    )
     if response.status_code == _REFUSED_AS_INVALID and forward_body is not body:
         # The provider refused the request as LLM-GC rewrote it. The client's own request is what it
         # would have sent without LLM-GC, so that goes in its place: never worse than no GC.
         _log_refused_rewrite(response, payload, session_id)
         metrics.rewrites_refused += 1
         forwarded_tokens = client_tokens
-        on_outline, record = _measure_request(app, session_id, origin, payload, client_messages, hashes, client_tokens,
-                                              client_tokens, window, collected, sends_thinking=client_sends_thinking,
-                                              carries_front=False)
+        on_outline, record = _measure_request(
+            app,
+            session_id,
+            origin,
+            payload,
+            client_messages,
+            hashes,
+            client_tokens,
+            client_tokens,
+            window,
+            collected,
+            sends_thinking=client_sends_thinking,
+            carries_front=False,
+        )
         if record is not None:
             record.resent_as_written = True
-        response = await _send(app, body, headers, streaming, target,
-                               on_complete=_reply_observer(app, session_id, new_turn, streaming), on_outline=on_outline)
+        response = await _send(
+            app,
+            body,
+            headers,
+            streaming,
+            target,
+            on_complete=_reply_observer(app, session_id, new_turn, streaming),
+            on_outline=on_outline,
+        )
     # A refused rewrite's round trip counts as the upstream's time: LLM-GC's is how long it took to forward at first.
-    _log_answer(response, payload, client_tokens, forwarded_tokens, session_id,
-                prepared_s=sent - received, upstream_s=time.perf_counter() - sent, streamed=streaming)
+    _log_answer(
+        response,
+        payload,
+        client_tokens,
+        forwarded_tokens,
+        session_id,
+        prepared_s=sent - received,
+        upstream_s=time.perf_counter() - sent,
+        streamed=streaming,
+    )
 
     # Aging prepares the next request from the conversation recorded so far; it
     # never depends on this reply, which the next request will show us exactly.
@@ -395,13 +474,26 @@ def _log_refused_rewrite(response: Response, payload: dict[str, Any], session_id
     """
     reason = refusal_reason(bytes(response.body))
     where = f" in {session_id}" if session_id is not None else ""
-    logger.warning("%s refused the request%s as LLM-GC rewrote it (%s); sent again as the client wrote it",
-                   _model_name(payload) or "?", where, reason,
-                   extra={"session_id": session_id, "status": response.status_code, "reason": reason})
+    logger.warning(
+        "%s refused the request%s as LLM-GC rewrote it (%s); sent again as the client wrote it",
+        _model_name(payload) or "?",
+        where,
+        reason,
+        extra={"session_id": session_id, "status": response.status_code, "reason": reason},
+    )
 
 
-def _log_answer(response: Response, payload: dict[str, Any], from_client: int, forwarded: int,
-                session_id: str | None, *, prepared_s: float, upstream_s: float, streamed: bool) -> None:
+def _log_answer(
+    response: Response,
+    payload: dict[str, Any],
+    from_client: int,
+    forwarded: int,
+    session_id: str | None,
+    *,
+    prepared_s: float,
+    upstream_s: float,
+    streamed: bool,
+) -> None:
     """One line per conversation request, logged once the upstream has answered.
 
     After forwarding rather than before, so the line says whether the request worked: one
@@ -416,22 +508,47 @@ def _log_answer(response: Response, payload: dict[str, Any], from_client: int, f
     status = response.status_code
     name = _model_name(payload) or "?"
     upstream_id = _short_printable(response.headers.get(_UPSTREAM_REQUEST_ID_HEADER))
-    extra = {"session_id": session_id, "status": status, "model": name,
-             "tokens_from_client": from_client, "tokens_forwarded": forwarded,
-             "prepared_ms": round(prepared_s * 1000), "upstream_ms": round(upstream_s * 1000),
-             "streamed": streamed, "upstream_request_id": upstream_id}
+    extra = {
+        "session_id": session_id,
+        "status": status,
+        "model": name,
+        "tokens_from_client": from_client,
+        "tokens_forwarded": forwarded,
+        "prepared_ms": round(prepared_s * 1000),
+        "upstream_ms": round(upstream_s * 1000),
+        "streamed": streamed,
+        "upstream_request_id": upstream_id,
+    }
     # Names the conversation, as the dashboard's picker does; a first turn belongs to none yet.
     where = f" in {session_id}" if session_id is not None else ""
     if status < 400:
         share = f"{forwarded / from_client:.0%}" if from_client else "-"
-        logger.info("%s -> %d%s: client sent %s tokens, LLM-GC forwarded %s (%s) in %s; the upstream %s in %s",
-                    name, status, where, f"{from_client:,}", f"{forwarded:,}", share, _format_duration(prepared_s),
-                    "began answering" if streamed else "answered", _format_duration(upstream_s), extra=extra)
+        logger.info(
+            "%s -> %d%s: client sent %s tokens, LLM-GC forwarded %s (%s) in %s; the upstream %s in %s",
+            name,
+            status,
+            where,
+            f"{from_client:,}",
+            f"{forwarded:,}",
+            share,
+            _format_duration(prepared_s),
+            "began answering" if streamed else "answered",
+            _format_duration(upstream_s),
+            extra=extra,
+        )
     else:
         # The client shows the upstream's own ID with its error; naming it here leads from that error to this line.
         cited = f" (upstream request {upstream_id})" if upstream_id is not None else ""
-        logger.warning("%s -> %d%s after %s: %s%s", name, status, where, _format_duration(upstream_s),
-                       _ERROR_STATUS_HINTS.get(status, _ERROR_STATUS_HINT), cited, extra=extra)
+        logger.warning(
+            "%s -> %d%s after %s: %s%s",
+            name,
+            status,
+            where,
+            _format_duration(upstream_s),
+            _ERROR_STATUS_HINTS.get(status, _ERROR_STATUS_HINT),
+            cited,
+            extra=extra,
+        )
 
 
 def _format_duration(seconds: float) -> str:
@@ -461,10 +578,21 @@ def _collected(app: FastAPI, origin: ClientOrigin | None) -> bool:
     return origin is None or origin.agent_id is None or app.state.collect_subagents
 
 
-def _measure_request(app: FastAPI, session_id: str | None, origin: ClientOrigin | None, payload: dict[str, Any],
-                     client_messages: Sequence[Message], hashes: Sequence[str] | None, from_client: int,
-                     forwarded: int, window: ModelWindow | None, collected: bool, *, sends_thinking: bool,
-                     carries_front: bool = True) -> tuple[OutlineHandler | None, RequestRecord | None]:
+def _measure_request(
+    app: FastAPI,
+    session_id: str | None,
+    origin: ClientOrigin | None,
+    payload: dict[str, Any],
+    client_messages: Sequence[Message],
+    hashes: Sequence[str] | None,
+    from_client: int,
+    forwarded: int,
+    window: ModelWindow | None,
+    collected: bool,
+    *,
+    sends_thinking: bool,
+    carries_front: bool = True,
+) -> tuple[OutlineHandler | None, RequestRecord | None]:
     """Count a request in the ledger and open its record; return what to do with its reply's outline, and the record.
 
     `sends_thinking`: the forwarded request still contains thinking blocks.
@@ -477,15 +605,29 @@ def _measure_request(app: FastAPI, session_id: str | None, origin: ClientOrigin 
         model = _model_name(payload)
         # Read before the ledger counts this request, which marks them sent.
         carried = metrics.traffic.collections_waiting(session_id) if session_id is not None and carries_front else ()
-        counted = metrics.traffic.record_request(conversation_id=session_id, origin=origin, model=model,
-                                                 opening=hashes[0], tokens_from_client=from_client,
-                                                 tokens_forwarded=forwarded, context_window=window,
-                                                 collected=collected, carries_front=carries_front)
-        record = metrics.request_log.begin(conversation_id=session_id, origin=origin, hashes=hashes,
-                                           newest=newest_kind(client_messages[-1]), model=model,
-                                           tokens_from_client=from_client, tokens_forwarded=forwarded,
-                                           collected=collected, switch_reasons=carried,
-                                           request_id=current_request_id())
+        counted = metrics.traffic.record_request(
+            conversation_id=session_id,
+            origin=origin,
+            model=model,
+            opening=hashes[0],
+            tokens_from_client=from_client,
+            tokens_forwarded=forwarded,
+            context_window=window,
+            collected=collected,
+            carries_front=carries_front,
+        )
+        record = metrics.request_log.begin(
+            conversation_id=session_id,
+            origin=origin,
+            hashes=hashes,
+            newest=newest_kind(client_messages[-1]),
+            model=model,
+            tokens_from_client=from_client,
+            tokens_forwarded=forwarded,
+            collected=collected,
+            switch_reasons=carried,
+            request_id=current_request_id(),
+        )
         linker: SpawnLinker | None = app.state.spawn_linker
         if linker is not None and origin is not None and origin.agent_id is not None and record.position == 1:
             first = client_messages[0]
@@ -498,8 +640,9 @@ def _measure_request(app: FastAPI, session_id: str | None, origin: ClientOrigin 
 
     def close(outline: ReplyOutline, prompts: Mapping[str, str]) -> None:
         if (pressure := _PRESSURE_STATUSES.get(outline.status)) is not None:
-            app.state.gc_service.pause_model_calls(outline.retry_after_s,
-                                                   f"the upstream {pressure} a request from the client")
+            app.state.gc_service.pause_model_calls(
+                outline.retry_after_s, f"the upstream {pressure} a request from the client"
+            )
         if carried and outline.status != 200 and session_id is not None:
             # A refused request reached no model, so the collections it carried still wait for one that does.
             record.switch_reasons = ()
@@ -511,16 +654,18 @@ def _measure_request(app: FastAPI, session_id: str | None, origin: ClientOrigin 
             if rate is not None:
                 app.state.reply_thinking.observe_rate(model, rate)
             if session_id is not None:
-                metrics.cache_watch.observe(session_id, started_at=started_at, lifetime_s=lifetime_s,
-                                            usage=outline.usage)
+                metrics.cache_watch.observe(
+                    session_id, started_at=started_at, lifetime_s=lifetime_s, usage=outline.usage
+                )
                 # The window is in the model's tokens; this is how LLM-GC sets its own counts against it.
                 session_rate = rate if rate is not None else _rate_until_measured(app, session_id, model)
                 if session_rate is not None:
                     app.state.gc_service.use_token_rate(session_id, session_rate)
             if outline.finished and outline.thinking_key is not None:
                 # The thinking's size is worked out when the client sends this reply back.
-                app.state.reply_thinking.remember(outline.thinking_key, output_tokens=outline.usage.output_tokens,
-                                                  model=model)
+                app.state.reply_thinking.remember(
+                    outline.thinking_key, output_tokens=outline.usage.output_tokens, model=model
+                )
         metrics.request_log.finish(record, outline)
         if linker is not None and origin is not None and prompts:
             linker.offer_calls(origin.session_id, record, prompts)
@@ -549,14 +694,21 @@ def _count_collection(app: FastAPI, event: Event) -> None:
     """Count a collection, why it was switched in, and what its own model calls spent, against its conversation."""
     result: PassReport = event.data["report"]
     traffic: TrafficLedger = app.state.metrics.traffic
-    traffic.record_collection(event.data["session_id"], completed=result.status is GCStatus.COMPLETED,
-                              spent=ModelUsage(calls=result.summary_calls, input_tokens=result.summary_input_tokens,
-                                               output_tokens=result.summary_output_tokens),
-                              switch_reason=result.switch_reason.value if result.switch_reason is not None else None)
+    traffic.record_collection(
+        event.data["session_id"],
+        completed=result.status is GCStatus.COMPLETED,
+        spent=ModelUsage(
+            calls=result.summary_calls,
+            input_tokens=result.summary_input_tokens,
+            output_tokens=result.summary_output_tokens,
+        ),
+        switch_reason=result.switch_reason.value if result.switch_reason is not None else None,
+    )
 
 
-def _record_client_history(app: FastAPI, history: list[Message], hashes: Sequence[str], named: str | None,
-                           origin: ClientOrigin | None) -> str | None:
+def _record_client_history(
+    app: FastAPI, history: list[Message], hashes: Sequence[str], named: str | None, origin: ClientOrigin | None
+) -> str | None:
     """Find the session this history belongs to and record what it has not seen.
 
     The client's history is the truth: it holds every earlier reply exactly as the
@@ -591,8 +743,10 @@ def _record_client_history(app: FastAPI, history: list[Message], hashes: Sequenc
                 metrics.history_restarts += 1
                 state = manager.replace(state, GenerationSnapshot())
                 agreed = 0
-            logger.info("client history diverged from the session; reconciled",
-                        extra={"session_id": state.session_id, "at_turn": agreed})
+            logger.info(
+                "client history diverged from the session; reconciled",
+                extra={"session_id": state.session_id, "at_turn": agreed},
+            )
     else:
         found = manager.find_by_lineage(hashes)
         if found is not None:
@@ -620,16 +774,25 @@ def _log_conversation_started(session_id: str, turns: int, origin: ClientOrigin 
         source = "no client session named"
     else:
         source = f"client session {origin.session_id}, " + (
-            f"sub-agent {origin.agent_id}" if origin.agent_id is not None else "main conversation")
-    logger.info("conversation %s started: no conversation in progress continues its %d-turn history (%s)",
-                session_id, turns, source,
-                extra={"session_id": session_id, "history_turns": turns,
-                       "client_session": origin.session_id if origin is not None else None,
-                       "client_agent": origin.agent_id if origin is not None else None})
+            f"sub-agent {origin.agent_id}" if origin.agent_id is not None else "main conversation"
+        )
+    logger.info(
+        "conversation %s started: no conversation in progress continues its %d-turn history (%s)",
+        session_id,
+        turns,
+        source,
+        extra={
+            "session_id": session_id,
+            "history_turns": turns,
+            "client_session": origin.session_id if origin is not None else None,
+            "client_agent": origin.agent_id if origin is not None else None,
+        },
+    )
 
 
-def _observe_history(app: FastAPI, session_id: str, client_messages: list[Message],
-                     origin: ClientOrigin | None) -> None:
+def _observe_history(
+    app: FastAPI, session_id: str, client_messages: list[Message], origin: ClientOrigin | None
+) -> None:
     """Hand the conversation to an observer, if one is attached. Never fails the request."""
     observer = app.state.on_client_history
     if observer is None:
@@ -667,9 +830,13 @@ async def _apply_gc(
     client's instructions are never condensed: each goes back in place.
     """
     sent_whole = sum(instruction.token_count for instruction in instructions)
-    client_tokens = (sum(message.token_count for message in history) + new_turn.token_count
-                     + sent_thinking_tokens([*history, new_turn])
-                     + instruction_tokens([*history, new_turn]) + sent_whole)
+    client_tokens = (
+        sum(message.token_count for message in history)
+        + new_turn.token_count
+        + sent_thinking_tokens([*history, new_turn])
+        + instruction_tokens([*history, new_turn])
+        + sent_whole
+    )
     whole = _Forwarded(original_body, client_tokens, sends_thinking([*history, new_turn]))
     if session_id is None:
         return whole
@@ -679,8 +846,9 @@ async def _apply_gc(
     # A staged cut is switched in, or not, as this request is built: then it is the first to carry it.
     # Whether its cache would serve this request decides whether switching costs a rewrite, and
     # a request answering tool calls never carries a new front.
-    gc_service.gc_switch(session_id, metrics.cache_watch.state(session_id),
-                         tool_round_open=bool(tool_result_ids(new_turn)))
+    gc_service.gc_switch(
+        session_id, metrics.cache_watch.state(session_id), tool_round_open=bool(tool_result_ids(new_turn))
+    )
     collected = await gc_service.gc_collect(session_id)
     if [message.turn_index for message in collected] == list(range(len(history))):
         return whole
@@ -695,12 +863,17 @@ async def _apply_gc(
     # instructions in those turns open it, word for word, as this request has them.
     first_sent = next((message.turn_index for message in collected if message.turn_index >= 0), len(history))
     stood_in = [message for message in history if message.turn_index < first_sent]
-    forwarded = [carry_instructions(message, stood_in) if message.turn_index < 0
-                 else sent_now.get(message.turn_index, message) for message in collected] + [new_turn]
+    forwarded = [
+        carry_instructions(message, stood_in) if message.turn_index < 0 else sent_now.get(message.turn_index, message)
+        for message in collected
+    ] + [new_turn]
     body = rewrite_messages(payload, forwarded, strip_thinking_before=valid_from, instructions=instructions)
-    forwarded_tokens = (sum(message.token_count for message in forwarded)
-                        + sent_thinking_tokens(forwarded, strip_thinking_before=valid_from)
-                        + instruction_tokens(forwarded) + sent_whole)
+    forwarded_tokens = (
+        sum(message.token_count for message in forwarded)
+        + sent_thinking_tokens(forwarded, strip_thinking_before=valid_from)
+        + instruction_tokens(forwarded)
+        + sent_whole
+    )
     return _Forwarded(_dump_json(body), forwarded_tokens, sends_thinking(forwarded, strip_thinking_before=valid_from))
 
 
@@ -709,8 +882,8 @@ class _Forwarded:
     """The request body LLM-GC forwards, as `_apply_gc` built it."""
 
     body: bytes
-    tokens: int              # its conversation's tokens, thinking included
-    sends_thinking: bool     # whether any thinking block is left in it
+    tokens: int  # its conversation's tokens, thinking included
+    sends_thinking: bool  # whether any thinking block is left in it
 
 
 async def _age(app: FastAPI, session_id: str) -> None:
@@ -739,16 +912,23 @@ def _target(request: Request) -> str:
     return f"{request.url.path}?{request.url.query}" if request.url.query else request.url.path
 
 
-async def _send(app: FastAPI, body: bytes, headers: dict[str, str], streaming: bool, target: str,
-                on_complete: Callable[[bytes], None] | None = None,
-                on_outline: OutlineHandler | None = None) -> Response:
+async def _send(
+    app: FastAPI,
+    body: bytes,
+    headers: dict[str, str],
+    streaming: bool,
+    target: str,
+    on_complete: Callable[[bytes], None] | None = None,
+    on_outline: OutlineHandler | None = None,
+) -> Response:
     if streaming:
         return await _forward_stream(app, body, headers, target, on_complete, on_outline)
     return await _forward(app, body, headers, target, on_complete=on_complete, on_outline=on_outline)
 
 
-def _reply_observer(app: FastAPI, session_id: str | None, answering: Message,
-                    streaming: bool) -> Callable[[bytes], None] | None:
+def _reply_observer(
+    app: FastAPI, session_id: str | None, answering: Message, streaming: bool
+) -> Callable[[bytes], None] | None:
     """What to do with a finished reply's bytes: show its text, when an observer is attached.
 
     Read only for showing: the record still learns the reply from the next request,
@@ -769,9 +949,16 @@ def _reply_observer(app: FastAPI, session_id: str | None, answering: Message,
     return observe
 
 
-async def _forward(app: FastAPI, body: bytes, headers: dict[str, str], target: str, *,
-                   method: str = "POST", on_complete: Callable[[bytes], None] | None = None,
-                   on_outline: OutlineHandler | None = None) -> Response:
+async def _forward(
+    app: FastAPI,
+    body: bytes,
+    headers: dict[str, str],
+    target: str,
+    *,
+    method: str = "POST",
+    on_complete: Callable[[bytes], None] | None = None,
+    on_outline: OutlineHandler | None = None,
+) -> Response:
     """Send the request upstream and hand the answer back verbatim.
 
     Status codes and error bodies pass through unchanged: the client's error
@@ -790,9 +977,14 @@ async def _forward(app: FastAPI, body: bytes, headers: dict[str, str], target: s
     return _verbatim(upstream, upstream.content)
 
 
-async def _forward_stream(app: FastAPI, body: bytes, headers: dict[str, str], target: str,
-                          on_complete: Callable[[bytes], None] | None = None,
-                          on_outline: OutlineHandler | None = None) -> Response:
+async def _forward_stream(
+    app: FastAPI,
+    body: bytes,
+    headers: dict[str, str],
+    target: str,
+    on_complete: Callable[[bytes], None] | None = None,
+    on_outline: OutlineHandler | None = None,
+) -> Response:
     """Relay a streamed reply chunk by chunk, as it arrives.
 
     With `on_complete`, each chunk is also kept, and the whole stream is handed
@@ -868,8 +1060,7 @@ def _reads_prompts(app: FastAPI) -> bool:
     return app.state.spawn_linker is not None
 
 
-def _upstream_request(app: FastAPI, body: bytes, headers: dict[str, str], target: str,
-                      method: str) -> httpx2.Request:
+def _upstream_request(app: FastAPI, body: bytes, headers: dict[str, str], target: str, method: str) -> httpx2.Request:
     client: httpx2.AsyncClient = app.state.http_client
     return client.build_request(
         method,
@@ -917,10 +1108,14 @@ async def _read_body(request: Request) -> bytes | None:
 
 def _too_large() -> Response:
     # Logged so the request ID in the client's error leads somewhere: no other line is written for it.
-    logger.warning("refused a request body over %s bytes, the provider's own limit; it was not forwarded",
-                   f"{MAX_REQUEST_BYTES:,}", extra={"status": 413})
-    return _error_response(413, "request_too_large",
-                           f"request body exceeds {MAX_REQUEST_BYTES} bytes, the provider's own limit")
+    logger.warning(
+        "refused a request body over %s bytes, the provider's own limit; it was not forwarded",
+        f"{MAX_REQUEST_BYTES:,}",
+        extra={"status": 413},
+    )
+    return _error_response(
+        413, "request_too_large", f"request body exceeds {MAX_REQUEST_BYTES} bytes, the provider's own limit"
+    )
 
 
 def _error_response(status: int, error_type: str, message: str) -> Response:

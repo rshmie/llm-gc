@@ -23,9 +23,9 @@ from llm_gc.models.knowledge_entry import KnowledgeStatus
 class DetailLevel(Enum):
     """How much of a span the front carries, from most to least."""
 
-    KEPT = "kept"                # the turns, word for word
-    COMPACTED = "compacted"      # the span's summary
-    ARCHIVED = "archived"        # its opening line and the facts read from it
+    KEPT = "kept"  # the turns, word for word
+    COMPACTED = "compacted"  # the span's summary
+    ARCHIVED = "archived"  # its opening line and the facts read from it
     OUT_OF_VIEW = "out_of_view"  # folded with its neighbours into one line naming the turns
 
 
@@ -125,7 +125,9 @@ class GenerationSnapshot:
     def sent_thinking_tokens(self, turns: Iterable[Message] | None = None) -> int:
         """Estimated thinking tokens still sent with the young turns, or with the given turns."""
         start = self.thinking_sent_from
-        return sum(turn.thinking_tokens for turn in (self.young if turns is None else turns) if turn.turn_index >= start)
+        return sum(
+            turn.thinking_tokens for turn in (self.young if turns is None else turns) if turn.turn_index >= start
+        )
 
     @property
     def tip(self) -> str | None:
@@ -139,8 +141,9 @@ class GenerationSnapshot:
         """Append turns together with their chain hashes, one for one."""
         if len(turns) != len(hashes):
             raise ValueError(f"{len(turns)} turns but {len(hashes)} lineage hashes")
-        return replace(self, young=self.young + tuple(turns), lineage=self.lineage + tuple(hashes),
-                       version=self.version + 1)
+        return replace(
+            self, young=self.young + tuple(turns), lineage=self.lineage + tuple(hashes), version=self.version + 1
+        )
 
     def rewound_to(self, turn_count: int) -> "GenerationSnapshot | None":
         """The snapshot as it was with only the first `turn_count` turns recorded.
@@ -189,8 +192,9 @@ class AgingDelta:
 
     @property
     def is_empty(self) -> bool:
-        return not (self.departed_turns or self.new_spans or self.level_changes or self.new_knowledge
-                    or self.facts_read)
+        return not (
+            self.departed_turns or self.new_spans or self.level_changes or self.new_knowledge or self.facts_read
+        )
 
 
 @dataclass(frozen=True)
@@ -254,8 +258,10 @@ def apply_aging(snapshot: GenerationSnapshot, delta: AgingDelta) -> AppliedAging
         raise ValueError(f"aging delta removes turns not in the young generation: {sorted(missing)}")
     landed = [turn for span in delta.new_spans for turn in span.turn_indices]
     if sorted(landed) != sorted(delta.departed_turns):
-        raise ValueError(f"turns {sorted(delta.departed_turns)} depart but new spans hold {sorted(landed)}: "
-                         "every departing turn must land in exactly one span")
+        raise ValueError(
+            f"turns {sorted(delta.departed_turns)} depart but new spans hold {sorted(landed)}: "
+            "every departing turn must land in exactly one span"
+        )
     old = list(snapshot.old)
     # Before the level changes, which name these spans as they are once read.
     for span in delta.facts_read:
@@ -308,17 +314,24 @@ def _file_entries(
     supersessions: list[Supersession] = []
     added: list[KnowledgeEntry] = []
     for new_entry in new_entries:
-        at = next((index for index, entry in enumerate(filed) if entry.message_turn > new_entry.message_turn),
-                  len(filed))
-        if any(_restates(new_entry, existing) or _contradicts_users_decision(new_entry, existing)
-               for existing in _in_force(filed[:at])):
+        at = next(
+            (index for index, entry in enumerate(filed) if entry.message_turn > new_entry.message_turn), len(filed)
+        )
+        if any(
+            _restates(new_entry, existing) or _contradicts_users_decision(new_entry, existing)
+            for existing in _in_force(filed[:at])
+        ):
             continue
         replaced_later = new_entry.can_supersede and any(
-            later.topic_label == new_entry.topic_label and later.can_supersede for later in filed[at:])
+            later.topic_label == new_entry.topic_label and later.can_supersede for later in filed[at:]
+        )
         if new_entry.can_supersede:
             superseded = []
             for index, existing in enumerate(filed[:at]):
-                if existing.topic_label == new_entry.topic_label and existing.knowledge_status is KnowledgeStatus.ACTIVE:
+                if (
+                    existing.topic_label == new_entry.topic_label
+                    and existing.knowledge_status is KnowledgeStatus.ACTIVE
+                ):
                     filed[index] = replace(existing, knowledge_status=KnowledgeStatus.SUPERSEDED)
                     superseded.append(existing)
             if superseded:
@@ -347,12 +360,18 @@ def _restates(new: KnowledgeEntry, existing: KnowledgeEntry) -> bool:
 
 
 def _contradicts_users_decision(new: KnowledgeEntry, existing: KnowledgeEntry) -> bool:
-    return (new.speaker == "assistant" and existing.speaker == "user" and new.can_supersede
-            and existing.topic_label == new.topic_label)
+    return (
+        new.speaker == "assistant"
+        and existing.speaker == "user"
+        and new.can_supersede
+        and existing.topic_label == new.topic_label
+    )
 
 
 def _same_value(a: str, b: str) -> bool:
     """Equal once case, spacing and closing punctuation are set aside: "MySQL 8." restates "mysql 8"."""
+
     def plain(value: str) -> str:
         return " ".join(value.split()).rstrip(".!;,").casefold()
+
     return plain(a) == plain(b)

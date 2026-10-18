@@ -3,19 +3,25 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal
 
+
 class KnowledgeType(Enum):
     """Semantic classification of extracted knowledge."""
+
     FACT = "fact"
     DECISION = "decision"
     PREFERENCE = "preference"
 
+
 # The label of an entry whose statement names no topic: "we decided to ship on Friday".
 GENERAL_TOPIC = "general"
 
+
 class KnowledgeStatus(Enum):
     """Lifecycle status of a knowledge entry in permanent generation."""
+
     ACTIVE = "active"
     SUPERSEDED = "superseded"
+
 
 @dataclass(frozen=True)
 class KnowledgeEntry:
@@ -27,6 +33,7 @@ class KnowledgeEntry:
     `speaker` who stated it: a value the assistant states never replaces one the
     user stated (see `file_knowledge`). None when the reader did not say.
     """
+
     message_turn: int
     content: str
     topic_label: str
@@ -44,4 +51,3 @@ class KnowledgeEntry:
         however unrelated.
         """
         return self.topic_label != GENERAL_TOPIC
-

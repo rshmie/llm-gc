@@ -131,17 +131,24 @@ class TestTheReadingSaysWhatItWasReadFrom:
         reading = watch.reading("c")
 
         assert (reading.state, reading.uses_cache, reading.idle_s, reading.lifetime_s) == (
-            CacheState.WARM, True, 60.0, FIVE_MINUTES)
+            CacheState.WARM,
+            True,
+            60.0,
+            FIVE_MINUTES,
+        )
 
     def test_an_unknown_conversation_reads_warm_with_nothing_behind_it(self):
         watch, _ = _watch()
         reading = watch.reading("never-seen")
         assert (reading.state, reading.uses_cache, reading.idle_s, reading.lifetime_s) == (
-            CacheState.WARM, None, None, None)
+            CacheState.WARM,
+            None,
+            None,
+            None,
+        )
 
     def test_a_conversation_that_never_caches_reads_cold_and_says_so(self):
         watch, clock = _watch()
         _answered(watch, clock, usage=UNCACHED)
         reading = watch.reading("c")
         assert (reading.state, reading.uses_cache) == (CacheState.COLD, False)
-

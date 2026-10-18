@@ -18,8 +18,9 @@ class TransitionType(Enum):
     a turn's classification across two collect() passes - nothing before this
     monitor has ever needed to look at more than one pass at a time.
     """
-    PROMOTED = "promoted"      # a turn's classification moved KEEP -> COMPACT
-    ARCHIVED = "archived"      # a turn was removed from the live context after extraction
+
+    PROMOTED = "promoted"  # a turn's classification moved KEEP -> COMPACT
+    ARCHIVED = "archived"  # a turn was removed from the live context after extraction
     SUPERSEDED = "superseded"  # a knowledge entry was contradicted by a newer one
 
 
@@ -29,9 +30,10 @@ class TokenBudgetSignal(BaseModel):
     Every field is read from the most recent GCResult and GCConfig - this
     signal never computes anything a component upstream hasn't already computed.
     """
-    current_tokens: int          # gc_result.tokens_in_final
-    context_window: int          # gc_config.context_window
-    pressure_ratio: float        # current_tokens / context_window
+
+    current_tokens: int  # gc_result.tokens_in_final
+    context_window: int  # gc_config.context_window
+    pressure_ratio: float  # current_tokens / context_window
     current_msg_turn_index: int  # gc_result.sweep_result.sweep_entries[-1].turn_index
     # ^ how far into the conversation this is - not how many turns are
     # currently visible, which is a different (and smaller) number once any
@@ -49,24 +51,25 @@ class GCBreakdownSignal(BaseModel):
     the counts alone) so a bypassed or failed pass is visible on the dashboard,
     rather than silently hiding behind a breakdown that still looks normal.
     """
+
     keep_count: int
     compact_count: int
     archive_count: int
     keep_tokens: int
     compact_tokens: int
     archive_tokens: int
-    tokens_before: int          # gc_result.tokens_before - raw size going into the last pass
-    tokens_saved: int           # gc_result.tokens_saved - copied, not recomputed
-    thinking_dropped_tokens: int = 0   # estimated earlier thinking a collection stopped sending, on top of tokens_saved
+    tokens_before: int  # gc_result.tokens_before - raw size going into the last pass
+    tokens_saved: int  # gc_result.tokens_saved - copied, not recomputed
+    thinking_dropped_tokens: int = 0  # estimated earlier thinking a collection stopped sending, on top of tokens_saved
     gc_run_id: str
     gc_status: GCStatus
-    gc_completed_at: float      # the GC_FINISHED event's own timestamp, not this snapshot's build time
+    gc_completed_at: float  # the GC_FINISHED event's own timestamp, not this snapshot's build time
     duration_ms: float
     failure_reason: str | None  # None unless gc_status is BYPASSED_ON_ERROR
-    failure_stage: str | None   # "score" | "sweep" | "compose" | None
-    newest_turn_index: int | None = None   # the newest turn the pass saw; None for an empty conversation.
-                                           # Places the pass in the conversation, so its prompt size can be
-                                           # set beside the conversation's own size at that point
+    failure_stage: str | None  # "score" | "sweep" | "compose" | None
+    newest_turn_index: int | None = None  # the newest turn the pass saw; None for an empty conversation.
+    # Places the pass in the conversation, so its prompt size can be
+    # set beside the conversation's own size at that point
 
     degradations: list[AgingDegradation] = Field(default_factory=list)
     """What the pass intended and did not manage - copied from GCResult.
@@ -78,8 +81,8 @@ class GCBreakdownSignal(BaseModel):
     falsehood this component exists to prevent. Empty on a clean pass.
     """
 
-    outcome: CutOutcome | None = None           # where a committed cut's turns ended up; the counts are the decision
-    abandoned_cut: AbandonedCut | None = None   # a cut planned and not made: it would not have shrunk the context
+    outcome: CutOutcome | None = None  # where a committed cut's turns ended up; the counts are the decision
+    abandoned_cut: AbandonedCut | None = None  # a cut planned and not made: it would not have shrunk the context
 
     @property
     def is_degraded(self) -> bool:
@@ -106,8 +109,9 @@ class GenerationTransition(BaseModel):
     objects, never one object with a count. It names the turn, never what was
     said in it: what a retired fact said is read from the session's knowledge.
     """
+
     transition_type: TransitionType
-    turn_index: int    # the turn moved; for SUPERSEDED, the turn that stated the retired fact
+    turn_index: int  # the turn moved; for SUPERSEDED, the turn that stated the retired fact
     occurred_at: float
 
 
@@ -117,6 +121,7 @@ class RecordedDegradation(BaseModel):
     Kept across passes: the last pass's breakdown shows only its own, so a refusal
     followed by a quiet pass would otherwise vanish from view.
     """
+
     degradation: AgingDegradation
     occurred_at: float
 
@@ -133,6 +138,7 @@ class GenerationLifeCycleSignal(BaseModel):
     standalone storage, because an archived turn is removed from the live
     context entirely - without that storage, its knowledge would be gone.
     """
+
     young_gen_count: int
     old_gen_count: int
     permanent_gen_count: int
@@ -156,11 +162,12 @@ class ContextHealth(BaseModel):
     a standing fact about the world, true (and correctly empty) even before any
     collect() call has ever run.
     """
+
     model_config = ConfigDict(frozen=True)
     token_budget: TokenBudgetSignal | None
     gc_breakdown: GCBreakdownSignal | None
     generation_lifecycle: GenerationLifeCycleSignal
     transformation_ratio: float | None  # internal baseline signal - never surfaced as a headline number
     recent_degradations: list[RecordedDegradation] = Field(default_factory=list)  # bounded, oldest first
-    recent_passes: list[GCBreakdownSignal] = Field(default_factory=list)          # bounded, oldest first
-    snapshot_taken_at: float            # when this snapshot was built, distinct from gc_breakdown.gc_completed_at
+    recent_passes: list[GCBreakdownSignal] = Field(default_factory=list)  # bounded, oldest first
+    snapshot_taken_at: float  # when this snapshot was built, distinct from gc_breakdown.gc_completed_at

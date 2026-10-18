@@ -48,8 +48,9 @@ class StyledCommand(click.Command):
 
     context_class = StyledContext
 
-    def make_context(self, info_name: str | None, args: list[str], parent: click.Context | None = None,
-                     **extra: Any) -> click.Context:
+    def make_context(
+        self, info_name: str | None, args: list[str], parent: click.Context | None = None, **extra: Any
+    ) -> click.Context:
         with _usage_errors_styled():
             return super().make_context(info_name, args, parent=parent, **extra)
 
@@ -62,13 +63,15 @@ class StyledGroup(click.Group):
     # `type` means: subgroups are built from this same class.
     group_class = type
 
-    def make_context(self, info_name: str | None, args: list[str], parent: click.Context | None = None,
-                     **extra: Any) -> click.Context:
+    def make_context(
+        self, info_name: str | None, args: list[str], parent: click.Context | None = None, **extra: Any
+    ) -> click.Context:
         with _usage_errors_styled():
             return super().make_context(info_name, args, parent=parent, **extra)
 
-    def resolve_command(self, ctx: click.Context,
-                        args: list[str]) -> tuple[str | None, click.Command | None, list[str]]:
+    def resolve_command(
+        self, ctx: click.Context, args: list[str]
+    ) -> tuple[str | None, click.Command | None, list[str]]:
         # Where "No such command" is raised, after the group's own context is made.
         with _usage_errors_styled():
             return super().resolve_command(ctx, args)
@@ -111,5 +114,7 @@ def _style_term(term: str) -> str:
     """A command's name in cyan; an option's flags in cyan and its value placeholder dimmed."""
     if not term.startswith("-"):
         return style(term, fg="cyan")
-    return " ".join(style(word, fg="cyan") if word.startswith("-") else word if word == "/" else style(word, dim=True)
-                    for word in term.split(" "))
+    return " ".join(
+        style(word, fg="cyan") if word.startswith("-") else word if word == "/" else style(word, dim=True)
+        for word in term.split(" ")
+    )

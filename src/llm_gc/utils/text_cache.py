@@ -43,13 +43,13 @@ class TextCache[T]:
         # UTF-8 encode refuses. Failing here would be a new way for a request to fail.
         key = hashlib.blake2b(text.encode("utf-8", "surrogatepass"), digest_size=_DIGEST_BYTES).digest()
         with self._lock:
-            if key in self._values:         # not `if found:`; a remembered value can be 0
+            if key in self._values:  # not `if found:`; a remembered value can be 0
                 self._values.move_to_end(key)
                 return self._values[key]
         value = self._compute(text)
         with self._lock:
             self._values[key] = value
-            self._values.move_to_end(key)   # another thread may have computed it meanwhile
+            self._values.move_to_end(key)  # another thread may have computed it meanwhile
             while len(self._values) > self._capacity:
                 self._values.popitem(last=False)
         return value

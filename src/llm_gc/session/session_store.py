@@ -60,4 +60,3 @@ class SessionStore:
 
     def count(self) -> int:
         return len(self._sessions)
-

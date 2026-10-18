@@ -28,9 +28,9 @@ class CacheReading:
     """A conversation's cache state, with what it was read from, for showing to a person."""
 
     state: CacheState
-    uses_cache: bool | None = None    # whether any reply used the cache; None before one was answered
-    idle_s: float | None = None       # since its newest answered request began
-    lifetime_s: float | None = None   # how long that request asked the provider to keep its entry
+    uses_cache: bool | None = None  # whether any reply used the cache; None before one was answered
+    idle_s: float | None = None  # since its newest answered request began
+    lifetime_s: float | None = None  # how long that request asked the provider to keep its entry
 
 
 class SwitchReason(Enum):
@@ -87,8 +87,12 @@ def decide_switch(
     its rewrite and was forced. A zero `min_saving_share` or `stale_bound_tokens` switches
     as soon as there is a saving.
     """
-    for name, value in (("rewritten_tokens", rewritten_tokens), ("stale_tokens", stale_tokens),
-                        ("stale_bound_tokens", stale_bound_tokens), ("min_saving_share", min_saving_share)):
+    for name, value in (
+        ("rewritten_tokens", rewritten_tokens),
+        ("stale_tokens", stale_tokens),
+        ("stale_bound_tokens", stale_bound_tokens),
+        ("min_saving_share", min_saving_share),
+    ):
         if value < 0:
             raise ValueError(f"{name} cannot be negative, got {value}")
 

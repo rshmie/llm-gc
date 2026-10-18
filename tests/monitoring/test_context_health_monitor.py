@@ -1,4 +1,3 @@
-
 import pytest
 from pydantic import ValidationError
 
@@ -24,8 +23,9 @@ def _make_message(turn_index: int = 0, token_count: int = 10, content: str = "ms
     return Message(role="user", content=content, token_count=token_count, turn_index=turn_index)
 
 
-def _make_completed_result(classifications: dict[int, TurnFidelity], token_count: int = 10,
-                           gc_run_id: str = "run-1") -> GCResult:
+def _make_completed_result(
+    classifications: dict[int, TurnFidelity], token_count: int = 10, gc_run_id: str = "run-1"
+) -> GCResult:
     """A completed pass from {turn_index: what became of it}, every turn token_count tokens.
 
     VERBATIM turns stay in the tail, forwarded word for word; COMPACTED and ARCHIVED
@@ -33,31 +33,53 @@ def _make_completed_result(classifications: dict[int, TurnFidelity], token_count
     """
     count = {c: sum(1 for v in classifications.values() if v == c) for c in TurnFidelity}
     tail = [_make_message(turn, token_count) for turn, c in classifications.items() if c == TurnFidelity.VERBATIM]
-    front = Message(role="user", content="front", token_count=count[TurnFidelity.COMPACTED] * token_count,
-                    turn_index=-1)
-    return GCResult(final_messages=[front, *tail], gc_run_id=gc_run_id, status=GCStatus.COMPLETED,
-                    tokens_before=len(classifications) * token_count,
-                    tokens_in_final=(count[TurnFidelity.VERBATIM] + count[TurnFidelity.COMPACTED]) * token_count,
-                    kept_count=count[TurnFidelity.VERBATIM], compacted_count=count[TurnFidelity.COMPACTED],
-                    archived_count=count[TurnFidelity.ARCHIVED],
-                    compacted_tokens=count[TurnFidelity.COMPACTED] * token_count,
-                    archived_tokens=count[TurnFidelity.ARCHIVED] * token_count, duration_ms=2.0)
+    front = Message(
+        role="user", content="front", token_count=count[TurnFidelity.COMPACTED] * token_count, turn_index=-1
+    )
+    return GCResult(
+        final_messages=[front, *tail],
+        gc_run_id=gc_run_id,
+        status=GCStatus.COMPLETED,
+        tokens_before=len(classifications) * token_count,
+        tokens_in_final=(count[TurnFidelity.VERBATIM] + count[TurnFidelity.COMPACTED]) * token_count,
+        kept_count=count[TurnFidelity.VERBATIM],
+        compacted_count=count[TurnFidelity.COMPACTED],
+        archived_count=count[TurnFidelity.ARCHIVED],
+        compacted_tokens=count[TurnFidelity.COMPACTED] * token_count,
+        archived_tokens=count[TurnFidelity.ARCHIVED] * token_count,
+        duration_ms=2.0,
+    )
 
 
-def _make_bypassed_result(messages: list[Message], status: GCStatus = GCStatus.BYPASSED_BATCH_TOO_SMALL,
-                          failure_reason: str | None = None, failure_stage: str | None = None) -> GCResult:
+def _make_bypassed_result(
+    messages: list[Message],
+    status: GCStatus = GCStatus.BYPASSED_BATCH_TOO_SMALL,
+    failure_reason: str | None = None,
+    failure_stage: str | None = None,
+) -> GCResult:
     """A bypassed run passes messages through untouched."""
     total = sum(m.token_count for m in messages)
-    return GCResult(final_messages=messages, gc_run_id="run-bypass", status=status,
-                    failure_reason=failure_reason, failure_stage=failure_stage,
-                    tokens_before=total, tokens_in_final=total, kept_count=len(messages),
-                    compacted_count=0, archived_count=0, duration_ms=1.0)
+    return GCResult(
+        final_messages=messages,
+        gc_run_id="run-bypass",
+        status=status,
+        failure_reason=failure_reason,
+        failure_stage=failure_stage,
+        tokens_before=total,
+        tokens_in_final=total,
+        kept_count=len(messages),
+        compacted_count=0,
+        archived_count=0,
+        duration_ms=1.0,
+    )
 
 
-def _make_knowledge_entry(message_turn: int = 1, topic_label: str = "database",
-                          content: str = "postgres") -> KnowledgeEntry:
-    return KnowledgeEntry(message_turn=message_turn, content=content, topic_label=topic_label,
-                          knowledge_type=KnowledgeType.FACT)
+def _make_knowledge_entry(
+    message_turn: int = 1, topic_label: str = "database", content: str = "postgres"
+) -> KnowledgeEntry:
+    return KnowledgeEntry(
+        message_turn=message_turn, content=content, topic_label=topic_label, knowledge_type=KnowledgeType.FACT
+    )
 
 
 class _Generations:
@@ -67,8 +89,9 @@ class _Generations:
         self.snapshot = GenerationSnapshot()
 
 
-def _make_monitor(max_recent_transitions: int | None = None,
-                  context_window: int = 1000) -> tuple[ContextHealthMonitor, EventBus, "_Generations"]:
+def _make_monitor(
+    max_recent_transitions: int | None = None, context_window: int = 1000
+) -> tuple[ContextHealthMonitor, EventBus, "_Generations"]:
     """Monitor on a real EventBus, reading a snapshot the test sets directly.
 
     The bus is cheap and already tested; generations are a plain value, so these
@@ -77,20 +100,32 @@ def _make_monitor(max_recent_transitions: int | None = None,
     bus = EventBus()
     gen_memory = _Generations()
     kwargs = {} if max_recent_transitions is None else {"max_recent_transitions": max_recent_transitions}
-    monitor = ContextHealthMonitor(event_bus=bus, gc_config=GCConfig(context_window=context_window),
-                                   read_generations=lambda _session_id: gen_memory.snapshot, **kwargs)
+    monitor = ContextHealthMonitor(
+        event_bus=bus,
+        gc_config=GCConfig(context_window=context_window),
+        read_generations=lambda _session_id: gen_memory.snapshot,
+        **kwargs,
+    )
     return monitor, bus, gen_memory
 
 
 def _emit_gc_finished(bus: EventBus, gc_result: GCResult, timestamp: float | None = None) -> None:
     kwargs = {} if timestamp is None else {"timestamp": timestamp}
-    bus.emit(Event(event_type=EventType.GC_FINISHED,
-                   data={"gc_run_id": gc_result.gc_run_id, "report": gc_result.report()}, **kwargs))
+    bus.emit(
+        Event(
+            event_type=EventType.GC_FINISHED,
+            data={"gc_run_id": gc_result.gc_run_id, "report": gc_result.report()},
+            **kwargs,
+        )
+    )
 
 
 def _transitions_of(monitor: ContextHealthMonitor, transition_type: TransitionType) -> list:
-    return [t for t in monitor.get_snapshot().generation_lifecycle.recent_transitions
-            if t.transition_type == transition_type]
+    return [
+        t
+        for t in monitor.get_snapshot().generation_lifecycle.recent_transitions
+        if t.transition_type == transition_type
+    ]
 
 
 # ---- Promotion recording ------------------------------------------------------
@@ -98,10 +133,18 @@ def _transitions_of(monitor: ContextHealthMonitor, transition_type: TransitionTy
 
 def _emit_promoted(bus: EventBus, source_turn_indices: list[int], timestamp: float | None = None) -> None:
     kwargs = {} if timestamp is None else {"timestamp": timestamp}
-    bus.emit(Event(event_type=EventType.MESSAGE_PROMOTED_TO_OLD_GEN,
-                   data={"source_turn_indices": source_turn_indices,
-                         "messages_compacted": len(source_turn_indices),
-                         "tokens_before": 100, "tokens_after": 20}, **kwargs))
+    bus.emit(
+        Event(
+            event_type=EventType.MESSAGE_PROMOTED_TO_OLD_GEN,
+            data={
+                "source_turn_indices": source_turn_indices,
+                "messages_compacted": len(source_turn_indices),
+                "tokens_before": 100,
+                "tokens_after": 20,
+            },
+            **kwargs,
+        )
+    )
 
 
 class TestPromotionRecording:
@@ -170,9 +213,13 @@ class TestArchiveAndSupersedeHandlers:
     def test_message_archived_appends_one_transition_per_turn_of_its_span(self):
         """A reply is archived with the question it answered: both move, so both are listed."""
         monitor, bus, _ = _make_monitor()
-        bus.emit(Event(event_type=EventType.MESSAGE_ARCHIVED,
-                       data={"source_turn_indices": [7, 8], "knowledge_entries_filed": 0},
-                       timestamp=111.0))
+        bus.emit(
+            Event(
+                event_type=EventType.MESSAGE_ARCHIVED,
+                data={"source_turn_indices": [7, 8], "knowledge_entries_filed": 0},
+                timestamp=111.0,
+            )
+        )
 
         archived = _transitions_of(monitor, TransitionType.ARCHIVED)
         assert [t.turn_index for t in archived] == [7, 8]
@@ -180,8 +227,9 @@ class TestArchiveAndSupersedeHandlers:
 
     def test_superseded_appends_one_transition_per_entry(self):
         monitor, bus, _ = _make_monitor()
-        bus.emit(Event(event_type=EventType.KNOWLEDGE_ENTRY_SUPERSEDED,
-                       data={"message_turn": 9, "superseded_turns": [1, 3]}))
+        bus.emit(
+            Event(event_type=EventType.KNOWLEDGE_ENTRY_SUPERSEDED, data={"message_turn": 9, "superseded_turns": [1, 3]})
+        )
 
         superseded = _transitions_of(monitor, TransitionType.SUPERSEDED)
         # turn_index points at the *origin turn of the superseded fact*, not the new one.
@@ -190,8 +238,12 @@ class TestArchiveAndSupersedeHandlers:
     def test_transitions_bounded_to_max_oldest_evicted(self):
         monitor, bus, _ = _make_monitor(max_recent_transitions=3)
         for turn in range(5):
-            bus.emit(Event(event_type=EventType.MESSAGE_ARCHIVED,
-                           data={"source_turn_indices": [turn], "knowledge_entries_filed": 0}))
+            bus.emit(
+                Event(
+                    event_type=EventType.MESSAGE_ARCHIVED,
+                    data={"source_turn_indices": [turn], "knowledge_entries_filed": 0},
+                )
+            )
 
         transitions = monitor.get_snapshot().generation_lifecycle.recent_transitions
         assert [t.turn_index for t in transitions] == [2, 3, 4]
@@ -221,8 +273,12 @@ class TestSnapshotNeverRan:
 
 
 class TestSnapshotCompleted:
-    CLASSIFICATIONS = {0: TurnFidelity.ARCHIVED, 1: TurnFidelity.COMPACTED,
-                       2: TurnFidelity.COMPACTED, 3: TurnFidelity.VERBATIM}
+    CLASSIFICATIONS = {
+        0: TurnFidelity.ARCHIVED,
+        1: TurnFidelity.COMPACTED,
+        2: TurnFidelity.COMPACTED,
+        3: TurnFidelity.VERBATIM,
+    }
 
     def _snapshot(self, monitor, bus, timestamp: float = 500.0):
         _emit_gc_finished(bus, _make_completed_result(self.CLASSIFICATIONS), timestamp=timestamp)
@@ -247,7 +303,7 @@ class TestSnapshotCompleted:
         assert breakdown.gc_status == GCStatus.COMPLETED
         assert breakdown.gc_completed_at == 500.0  # the event's timestamp, not snapshot build time
         assert breakdown.failure_reason is None and breakdown.failure_stage is None
-        assert breakdown.newest_turn_index == 3     # places the pass in the conversation
+        assert breakdown.newest_turn_index == 3  # places the pass in the conversation
 
     def test_transformation_ratio_is_transformed_over_total(self):
         monitor, bus, _ = _make_monitor()
@@ -257,7 +313,7 @@ class TestSnapshotCompleted:
     def test_young_gen_is_what_is_forwarded_word_for_word(self):
         monitor, bus, _ = _make_monitor()
         lifecycle = self._snapshot(monitor, bus).generation_lifecycle
-        assert lifecycle.young_gen_turn_indices == [3]      # the tail, not the front
+        assert lifecycle.young_gen_turn_indices == [3]  # the tail, not the front
         assert lifecycle.young_gen_count == 1
         assert lifecycle.young_gen_tokens == 10
 
@@ -266,8 +322,11 @@ class TestSnapshotCompleted:
         landed. The sweep below classifies two turns COMPACT while storage holds
         one summary from an earlier pass - the signal must report storage."""
         monitor, bus, gen_memory = _make_monitor()
-        summary = Span(turns=(_make_message(turn_index=7), _make_message(turn_index=8)), level=DetailLevel.COMPACTED,
-                       summary=_make_message(turn_index=7, token_count=5))
+        summary = Span(
+            turns=(_make_message(turn_index=7), _make_message(turn_index=8)),
+            level=DetailLevel.COMPACTED,
+            summary=_make_message(turn_index=7, token_count=5),
+        )
         gen_memory.snapshot = GenerationSnapshot(old=(summary,))
 
         lifecycle = self._snapshot(monitor, bus).generation_lifecycle
@@ -275,8 +334,9 @@ class TestSnapshotCompleted:
         assert lifecycle.old_gen_turn_indices == [7]
         assert lifecycle.old_gen_count == 1
         front = render_front((summary,), ())
-        assert lifecycle.old_gen_tokens == front.message.token_count - FRONT_OVERHEAD_TOKENS, \
+        assert lifecycle.old_gen_tokens == front.message.token_count - FRONT_OVERHEAD_TOKENS, (
             "what the front spends on it, not the summary's own size"
+        )
 
     def test_old_gen_reads_empty_on_the_stateless_path(self):
         """The stateless collect path classifies COMPACT but never promotes, so
@@ -303,10 +363,16 @@ class TestSnapshotBypassed:
 
         snapshot = monitor.get_snapshot()
         assert snapshot.gc_breakdown.gc_status == GCStatus.BYPASSED_BATCH_TOO_SMALL
-        assert (snapshot.gc_breakdown.keep_count, snapshot.gc_breakdown.compact_count,
-                snapshot.gc_breakdown.archive_count) == (3, 0, 0)
-        assert (snapshot.gc_breakdown.keep_tokens, snapshot.gc_breakdown.compact_tokens,
-                snapshot.gc_breakdown.archive_tokens) == (30, 0, 0)
+        assert (
+            snapshot.gc_breakdown.keep_count,
+            snapshot.gc_breakdown.compact_count,
+            snapshot.gc_breakdown.archive_count,
+        ) == (3, 0, 0)
+        assert (
+            snapshot.gc_breakdown.keep_tokens,
+            snapshot.gc_breakdown.compact_tokens,
+            snapshot.gc_breakdown.archive_tokens,
+        ) == (30, 0, 0)
         assert snapshot.transformation_ratio is None  # nothing was condensed - nothing measured
 
     def test_below_threshold_turn_index_from_final_messages(self):
@@ -327,8 +393,12 @@ class TestSnapshotBypassed:
 
     def test_on_error_failure_detail_is_visible(self):
         monitor, bus, _ = _make_monitor()
-        _emit_gc_finished(bus, _make_bypassed_result([_make_message()], status=GCStatus.BYPASSED_ON_ERROR,
-                                                     failure_reason="boom", failure_stage="sweep"))
+        _emit_gc_finished(
+            bus,
+            _make_bypassed_result(
+                [_make_message()], status=GCStatus.BYPASSED_ON_ERROR, failure_reason="boom", failure_stage="sweep"
+            ),
+        )
 
         breakdown = monitor.get_snapshot().gc_breakdown
         assert breakdown.gc_status == GCStatus.BYPASSED_ON_ERROR
@@ -380,8 +450,12 @@ class TestSessionsAreKeptApart:
 
     def test_each_session_sees_only_its_own_pass_and_transitions(self):
         monitor, bus, _ = _make_monitor()
-        _emit_for(bus, "alice", EventType.GC_FINISHED, report=_make_completed_result(
-            {0: TurnFidelity.VERBATIM}, gc_run_id="alice-run").report())
+        _emit_for(
+            bus,
+            "alice",
+            EventType.GC_FINISHED,
+            report=_make_completed_result({0: TurnFidelity.VERBATIM}, gc_run_id="alice-run").report(),
+        )
         _emit_for(bus, "bob", EventType.MESSAGE_PROMOTED_TO_OLD_GEN, source_turn_indices=[4])
 
         alice, bob = monitor.get_snapshot("alice"), monitor.get_snapshot("bob")
@@ -393,8 +467,7 @@ class TestSessionsAreKeptApart:
 
     def test_generations_are_read_for_the_session_asked_about(self):
         snapshots = {"alice": GenerationSnapshot(knowledge=(_make_knowledge_entry(topic_label="db"),))}
-        monitor = ContextHealthMonitor(event_bus=EventBus(), gc_config=GCConfig(),
-                                       read_generations=snapshots.get)
+        monitor = ContextHealthMonitor(event_bus=EventBus(), gc_config=GCConfig(), read_generations=snapshots.get)
 
         assert monitor.get_snapshot("alice").generation_lifecycle.permanent_gen_count == 1
         # A session that no longer exists reads as empty, not as an error.
@@ -410,11 +483,12 @@ class TestSessionsAreKeptApart:
 
     def test_the_quietest_session_is_dropped_past_the_bound(self):
         bus = EventBus()
-        monitor = ContextHealthMonitor(event_bus=bus, gc_config=GCConfig(),
-                                       read_generations=lambda _session_id: None, max_sessions=2)
+        monitor = ContextHealthMonitor(
+            event_bus=bus, gc_config=GCConfig(), read_generations=lambda _session_id: None, max_sessions=2
+        )
         for session_id in ("a", "b"):
             _emit_for(bus, session_id, EventType.MESSAGE_PROMOTED_TO_OLD_GEN, source_turn_indices=[1])
-        _emit_for(bus, "a", EventType.MESSAGE_PROMOTED_TO_OLD_GEN, source_turn_indices=[2])   # a is now newest
+        _emit_for(bus, "a", EventType.MESSAGE_PROMOTED_TO_OLD_GEN, source_turn_indices=[2])  # a is now newest
         _emit_for(bus, "c", EventType.MESSAGE_PROMOTED_TO_OLD_GEN, source_turn_indices=[1])
 
         assert monitor.get_snapshot("b").generation_lifecycle.recent_transitions == []
@@ -424,11 +498,20 @@ class TestSessionsAreKeptApart:
 class TestDegradationsOutliveTheirPass:
     def test_a_refusal_stays_visible_after_a_quiet_pass(self):
         monitor, bus, _ = _make_monitor()
-        refused = AgingDegradation(reason=DegradationReason.COMPACTION_REFUSED, turn_indices=[3, 4],
-                                   detail="summary was not shorter than the run")
+        refused = AgingDegradation(
+            reason=DegradationReason.COMPACTION_REFUSED,
+            turn_indices=[3, 4],
+            detail="summary was not shorter than the run",
+        )
         _emit_for(bus, "alice", EventType.AGING_DEGRADED, degradation=refused)
-        _emit_for(bus, "alice", EventType.GC_FINISHED, report=_make_bypassed_result(
-            [_make_message(turn_index=5)], status=GCStatus.BYPASSED_BATCH_TOO_SMALL).report())
+        _emit_for(
+            bus,
+            "alice",
+            EventType.GC_FINISHED,
+            report=_make_bypassed_result(
+                [_make_message(turn_index=5)], status=GCStatus.BYPASSED_BATCH_TOO_SMALL
+            ).report(),
+        )
 
         snapshot = monitor.get_snapshot("alice")
 
@@ -441,10 +524,18 @@ class TestPassHistory:
         """The dashboard's activity timeline: what each pass did, not only the last."""
         monitor, bus, _ = _make_monitor()
         for run in ("one", "two"):
-            _emit_for(bus, "alice", EventType.GC_FINISHED, report=_make_completed_result(
-                {0: TurnFidelity.VERBATIM}, gc_run_id=run).report())
-        _emit_for(bus, "bob", EventType.GC_FINISHED, report=_make_completed_result(
-            {0: TurnFidelity.VERBATIM}, gc_run_id="bob-run").report())
+            _emit_for(
+                bus,
+                "alice",
+                EventType.GC_FINISHED,
+                report=_make_completed_result({0: TurnFidelity.VERBATIM}, gc_run_id=run).report(),
+            )
+        _emit_for(
+            bus,
+            "bob",
+            EventType.GC_FINISHED,
+            report=_make_completed_result({0: TurnFidelity.VERBATIM}, gc_run_id="bob-run").report(),
+        )
 
         assert [p.gc_run_id for p in monitor.get_snapshot("alice").recent_passes] == ["one", "two"]
         assert [p.gc_run_id for p in monitor.get_snapshot("bob").recent_passes] == ["bob-run"]

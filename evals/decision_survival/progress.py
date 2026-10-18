@@ -17,7 +17,7 @@ class Progress:
         self.total, self.kept, self.out = total, 0, out
         self.seconds: list[float] = []
         self.label, self.status, self.started = "", "", 0.0
-        self.live = out.isatty()   # a log file gets the finished lines only
+        self.live = out.isatty()  # a log file gets the finished lines only
         self._lock = threading.Lock()
         self._stop = threading.Event()
 

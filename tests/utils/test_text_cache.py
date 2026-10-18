@@ -56,7 +56,7 @@ class TestTextCache:
         conversation's oldest turns first, and every request asks for those."""
         counter = _Counter()
         cache = TextCache(counter, capacity=2)
-        for text in ("a", "b", "a", "c"):      # "b" is now the least recent
+        for text in ("a", "b", "a", "c"):  # "b" is now the least recent
             cache.get(text)
         counter.asked.clear()
 
@@ -70,6 +70,7 @@ class TestTextCache:
     def test_a_failed_count_is_not_remembered(self):
         """The tokenizer refuses some text, such as a special token written out. A refusal
         must not turn into a stored count."""
+
         def refuse(text):
             raise ValueError("refused")
 

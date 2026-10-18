@@ -23,8 +23,9 @@ PATIENT = {"min_saving_share": 1000.0, "max_stale_ratio": 1.0}
 
 
 def _service(**config):
-    service, _, provider = make_service(GCConfig(**{"min_cut_tokens": 0, "last_n_turns_to_keep": 1, **config}),
-                                        default_score=COMPACTED_SCORE)
+    service, _, provider = make_service(
+        GCConfig(**{"min_cut_tokens": 0, "last_n_turns_to_keep": 1, **config}), default_score=COMPACTED_SCORE
+    )
     return service, provider
 
 
@@ -65,8 +66,9 @@ class TestAPassChangesNothingTheModelIsSent:
     def test_staging_announces_no_collection(self):
         service, _ = _service()
         _record(service, 0, 1, 2, 3)
-        heard = _listen(service, EventType.MESSAGE_PROMOTED_TO_OLD_GEN, EventType.MESSAGE_ARCHIVED,
-                        EventType.KNOWLEDGE_ENTRY_ADDED)
+        heard = _listen(
+            service, EventType.MESSAGE_PROMOTED_TO_OLD_GEN, EventType.MESSAGE_ARCHIVED, EventType.KNOWLEDGE_ENTRY_ADDED
+        )
 
         _prepare(service)
 
@@ -166,10 +168,17 @@ class _GatedCompactor(BaseCompactor):
     async def compact(self, messages):
         self.started.set()
         await self.gate.wait()
-        summary = Message(role="assistant", content=f"[Compacted] from turn {messages[0].turn_index}",
-                          token_count=1, turn_index=messages[0].turn_index)
-        return CompactionResult(summary=summary, original_token_count=sum(m.token_count for m in messages),
-                                compaction_strategy=self.COMPACTION_STRATEGY)
+        summary = Message(
+            role="assistant",
+            content=f"[Compacted] from turn {messages[0].turn_index}",
+            token_count=1,
+            turn_index=messages[0].turn_index,
+        )
+        return CompactionResult(
+            summary=summary,
+            original_token_count=sum(m.token_count for m in messages),
+            compaction_strategy=self.COMPACTION_STRATEGY,
+        )
 
 
 class TestASwitchWhileAPassIsRunning:
@@ -182,8 +191,9 @@ class TestASwitchWhileAPassIsRunning:
             generational_memory=GenerationalMemory(fact_reader=PatternFactReader(), compactor=compactor),
             span_scorer=ScriptedSpanScorer(default=COMPACTED_SCORE),  # type: ignore[arg-type]
             event_bus=bus,
-            gc_config=GCConfig(context_window=1000, min_cut_tokens=0, last_n_turns_to_keep=0,
-                               archive_threshold=0.0, **PATIENT),
+            gc_config=GCConfig(
+                context_window=1000, min_cut_tokens=0, last_n_turns_to_keep=0, archive_threshold=0.0, **PATIENT
+            ),
         )
 
         async def scenario():
@@ -223,7 +233,9 @@ class TestTheInspectionShowsTheSwitchsVerdict:
         cold = service.inspect(SESSION, cache=CacheState.COLD).staged
 
         assert warm is not None and (warm.decision.switch, warm.decision.reason) == (
-            False, SwitchReason.WAITING_FOR_PAYBACK)
+            False,
+            SwitchReason.WAITING_FOR_PAYBACK,
+        )
         assert cold is not None and (cold.decision.switch, cold.decision.reason) == (True, SwitchReason.CACHE_COLD)
         assert service.gc_switch(SESSION, CacheState.WARM) is None
         assert service.gc_switch(SESSION, CacheState.COLD).switch_reason is cold.decision.reason
@@ -302,7 +314,9 @@ def _record_thinking(service, thinking: dict[int, int], *indices):
     state = service.session_manager.get_or_create(SESSION)
     for index in indices:
         recorded = turn(index, role="assistant" if index in thinking else "user")
-        state.snapshot = state.snapshot.with_turn(recorded.model_copy(update={"thinking_tokens": thinking.get(index, 0)}))
+        state.snapshot = state.snapshot.with_turn(
+            recorded.model_copy(update={"thinking_tokens": thinking.get(index, 0)})
+        )
     return state
 
 
@@ -313,15 +327,16 @@ class TestThinkingIsWeighed:
         service, _ = _service(**PATIENT)
         state = _record_thinking(service, {1: 100, 3: 300}, 0, 1, 2, 3)
         _prepare(service)
-        _record_thinking(service, {5: 500}, 4, 5)       # a reply after staging adds thinking too
+        _record_thinking(service, {5: 500}, 4, 5)  # a reply after staging adds thinking too
 
         preview = service.inspect(SESSION, cache=CacheState.WARM).staged
 
         assert preview.thinking_dropped_tokens == 100 + 300 + 500
         assert preview.saving_tokens == state.snapshot.staged.saving_tokens + 900
         tail = [t for t in state.snapshot.young if t.turn_index not in state.snapshot.staged.delta.departed_turns]
-        assert preview.rewritten_tokens == state.snapshot.staged.front_tokens + sum(t.token_count for t in tail), \
+        assert preview.rewritten_tokens == state.snapshot.staged.front_tokens + sum(t.token_count for t in tail), (
             "nothing sends its thinking after a switch, so none of it is cached again"
+        )
 
     def test_only_the_condensed_turns_thinking_is_stale(self):
         service, _ = _service(**PATIENT)
@@ -345,7 +360,9 @@ class TestThinkingIsWeighed:
         service, _ = _service(min_saving_share=10.0, max_stale_ratio=1.0)
         _record_thinking(service, {1: 0, 3: 0}, 0, 1, 2, 3)
         _prepare(service)
-        assert service.inspect(SESSION, cache=CacheState.WARM).staged.decision.reason is SwitchReason.WAITING_FOR_PAYBACK
+        assert (
+            service.inspect(SESSION, cache=CacheState.WARM).staged.decision.reason is SwitchReason.WAITING_FOR_PAYBACK
+        )
 
         thinking, _ = _service(min_saving_share=10.0, max_stale_ratio=1.0)
         _record_thinking(thinking, {1: 50_000, 3: 0}, 0, 1, 2, 3)
@@ -357,7 +374,7 @@ class TestThinkingIsWeighed:
     def test_a_condensed_turns_thinking_can_bring_stale_weight_to_the_bound(self):
         config = {"context_window": 10_000, "max_stale_ratio": 0.1, "min_saving_share": 1000.0}
         reasons = {}
-        for where in (None, 3, 1):     # no thinking, thinking in the tail, thinking in a condensed turn
+        for where in (None, 3, 1):  # no thinking, thinking in the tail, thinking in a condensed turn
             service, _ = _service(**config)
             _record_thinking(service, {where: 2_000} if where is not None else {}, 0, 1, 2, 3)
             _prepare(service)
@@ -410,5 +427,8 @@ class TestWhatASwitchCachesAgain:
         service.use_rewrite_overhead(SESSION, overhead)
         weighed = service.inspect(SESSION, cache=CacheState.WARM).staged
 
-        assert (weighed.rewritten_tokens, weighed.rewrite_overhead_tokens) == (bare.rewritten_tokens + overhead, overhead)
+        assert (weighed.rewritten_tokens, weighed.rewrite_overhead_tokens) == (
+            bare.rewritten_tokens + overhead,
+            overhead,
+        )
         assert weighed.decision.reason is SwitchReason.WAITING_FOR_PAYBACK

@@ -1,13 +1,23 @@
 import pytest
-from llm_gc.models.message import (CLIENT_SPEAKER, TOOL_SPEAKER, Message, TextPart, opens_exchange,
-                                   parts_by_writer, person_text, said_by_user, speaker_label)
-from tests.models.support import (COMMAND, INTERRUPTED, NOTICE, SKILL_RULES, turn_with_client_text,
-                                  turn_with_typed_words)
+from llm_gc.models.message import (
+    CLIENT_SPEAKER,
+    TOOL_SPEAKER,
+    Message,
+    TextPart,
+    opens_exchange,
+    parts_by_writer,
+    person_text,
+    said_by_user,
+    speaker_label,
+)
+from tests.models.support import COMMAND, INTERRUPTED, NOTICE, SKILL_RULES, turn_with_client_text, turn_with_typed_words
 from pydantic import ValidationError
+
 
 def test_invalid_role_raises_error():
     with pytest.raises(ValidationError):
         Message(role="doctor", content="hi")
+
 
 def test_valid_message_creation():
     msg = Message(role="user", content="Hello", token_count=5)
@@ -15,14 +25,17 @@ def test_valid_message_creation():
     assert msg.content == "Hello"
     assert msg.token_count == 5
 
+
 def test_default_token_count():
     msg = Message(role="assistant", content="Hi")
     assert msg.token_count == 0
+
 
 def test_a_negative_token_count_is_refused():
     """Every budget sums these counts; a negative one would make a turn look like it frees room."""
     with pytest.raises(ValidationError):
         Message(role="user", content="Hi", token_count=-1)
+
 
 def test_preview_content():
     msg = Message(role="user", content="Hello, how are you?")
@@ -31,8 +44,9 @@ def test_preview_content():
 
 def test_preview_content_with_truncation():
     msg = Message(role="system", content="This is a test message for previewing." * 10, token_count=100)
-    assert len(msg.preview(max_length = 50)) == 53
+    assert len(msg.preview(max_length=50)) == 53
     assert msg.preview().endswith("...")
+
 
 class TestTextTheClientWrote:
     """A user turn can hold text the client wrote; the person's words are the rest of it."""
@@ -43,9 +57,11 @@ class TestTextTheClientWrote:
     def test_the_turn_reads_in_order_as_the_persons_part_and_the_clients(self):
         turn = Message(role="user", content=self.TEXT, client_written=(self.EXPANSION,))
 
-        assert parts_by_writer(turn) == [TextPart("speaker", "<command-name>/audit</command-name>"),
-                                         TextPart("client", "Keep at most 5 rows."),
-                                         TextPart("speaker", "And use Postgres.")]
+        assert parts_by_writer(turn) == [
+            TextPart("speaker", "<command-name>/audit</command-name>"),
+            TextPart("client", "Keep at most 5 rows."),
+            TextPart("speaker", "And use Postgres."),
+        ]
         assert person_text(turn) == "<command-name>/audit</command-name>\n\nAnd use Postgres."
 
     def test_a_turn_the_client_wrote_none_of_is_one_part_untouched(self):
@@ -88,8 +104,11 @@ class TestATurnOfToolResultsIsNamedAsOne:
     def test_text_beside_the_results_is_the_tools_until_the_turn_is_divided(self):
         """Only the proxy, reading the blocks, can tell a person's words from Claude Code's text beside them."""
         typed = {"type": "text", "text": "Why do we keep the mypy override?"}
-        turn = Message(role="user", content="[tool result] 42 passed\nWhy do we keep the mypy override?",
-                       raw_content=[self.RESULT, typed])
+        turn = Message(
+            role="user",
+            content="[tool result] 42 passed\nWhy do we keep the mypy override?",
+            raw_content=[self.RESULT, typed],
+        )
         assert not said_by_user(turn) and speaker_label(turn) == TOOL_SPEAKER
 
 
@@ -99,8 +118,11 @@ class TestWhatAPersonTypesAfterInterruptingAToolRound:
     TURN = turn_with_typed_words(3, "t1", "Stop, use MySQL.", output="42 passed")
 
     def test_it_is_theirs_and_read_apart_from_the_results(self):
-        assert parts_by_writer(self.TURN) == [TextPart("tool", "[tool result] 42 passed"),
-                                              TextPart("client", INTERRUPTED), TextPart("speaker", "Stop, use MySQL.")]
+        assert parts_by_writer(self.TURN) == [
+            TextPart("tool", "[tool result] 42 passed"),
+            TextPart("client", INTERRUPTED),
+            TextPart("speaker", "Stop, use MySQL."),
+        ]
         assert person_text(self.TURN) == "Stop, use MySQL."
         assert said_by_user(self.TURN) and speaker_label(self.TURN) == "user"
 
@@ -111,9 +133,13 @@ class TestWhatAPersonTypesAfterInterruptingAToolRound:
     def test_a_divided_turn_without_their_words_is_the_tools(self):
         """A skill's instructions arrive beside the result of the call that loaded the skill."""
         result = "[tool result] Launching skill"
-        turn = Message(role="user", content=f"{result}\n{SKILL_RULES}",
-                       raw_content=[{"type": "tool_result", "tool_use_id": "t1", "content": "Launching skill"}],
-                       tool_output=((0, len(result)),), client_written=((len(result) + 1, len(result) + 1 + len(SKILL_RULES)),))
+        turn = Message(
+            role="user",
+            content=f"{result}\n{SKILL_RULES}",
+            raw_content=[{"type": "tool_result", "tool_use_id": "t1", "content": "Launching skill"}],
+            tool_output=((0, len(result)),),
+            client_written=((len(result) + 1, len(result) + 1 + len(SKILL_RULES)),),
+        )
         assert not said_by_user(turn) and person_text(turn) == ""
         assert speaker_label(turn) == TOOL_SPEAKER
 

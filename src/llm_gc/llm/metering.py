@@ -60,10 +60,12 @@ class MeteredProvider:
         # The wrapped provider's name; a stand-in that has none is named by its class.
         self.name: str = getattr(inner, "name", type(inner).__name__)
 
-    async def generate(self, *, messages: list[Message], system: str | None = None, max_output_tokens: int,
-                       timeout_s: float) -> LLMResponse:
-        response = await self.inner.generate(messages=messages, system=system,
-                                              max_output_tokens=max_output_tokens, timeout_s=timeout_s)
+    async def generate(
+        self, *, messages: list[Message], system: str | None = None, max_output_tokens: int, timeout_s: float
+    ) -> LLMResponse:
+        response = await self.inner.generate(
+            messages=messages, system=system, max_output_tokens=max_output_tokens, timeout_s=timeout_s
+        )
         usage = _open_measurement.get()
         if usage is not None:
             usage.add(ModelUsage(calls=1, input_tokens=response.input_tokens, output_tokens=response.output_tokens))

@@ -187,13 +187,9 @@ class AnthropicClient:
         except httpx2.TimeoutException as err:
             # The message deliberately names the budget and not the request: an
             # exception string reaches logs, and the prompt is user data.
-            raise LLMTimeoutError(
-                f"anthropic did not respond within {timeout_s}s", provider=self.name
-            ) from err
+            raise LLMTimeoutError(f"anthropic did not respond within {timeout_s}s", provider=self.name) from err
         except httpx2.RequestError as err:
-            raise LLMConnectionError(
-                f"could not reach anthropic: {type(err).__name__}", provider=self.name
-            ) from err
+            raise LLMConnectionError(f"could not reach anthropic: {type(err).__name__}", provider=self.name) from err
 
         if http_response.status_code != 200:
             raise self._as_error(http_response)
@@ -230,9 +226,7 @@ class AnthropicClient:
             return None
         return tokens if isinstance(tokens, int) and tokens > 0 else None
 
-    def _build_payload(
-        self, messages: list[Message], system: str | None, max_output_tokens: int
-    ) -> dict[str, Any]:
+    def _build_payload(self, messages: list[Message], system: str | None, max_output_tokens: int) -> dict[str, Any]:
         """Translate our vocabulary into Anthropic's request body.
 
         Two translations happen here. `system` becomes a top-level field rather than

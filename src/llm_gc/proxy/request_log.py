@@ -65,10 +65,10 @@ class RequestRecord:
     # provider refused its rewrite, has two records with the same ID.
     request_id: str
     origin: ClientOrigin | None
-    conversation_id: str | None    # None until recognised: a first request, or a side request never continued
-    position: int                  # messages it carried; its newest is the last of them
+    conversation_id: str | None  # None until recognised: a first request, or a side request never continued
+    position: int  # messages it carried; its newest is the last of them
     newest: NewestKind
-    newest_hash: str               # the conversation's chain hash through its newest message
+    newest_hash: str  # the conversation's chain hash through its newest message
     model: str | None
     forwarded_at: datetime
     tokens_from_client: int
@@ -98,17 +98,33 @@ class RequestLog:
     Single-threaded: called from the proxy's event loop only.
     """
 
-    def __init__(self, *, max_records: int = MAX_RECORDS, max_pending: int = MAX_PENDING_PER_ORIGIN,
-                 max_origins: int = MAX_ORIGINS_WATCHED, clock: Callable[[], datetime] = _now) -> None:
+    def __init__(
+        self,
+        *,
+        max_records: int = MAX_RECORDS,
+        max_pending: int = MAX_PENDING_PER_ORIGIN,
+        max_origins: int = MAX_ORIGINS_WATCHED,
+        clock: Callable[[], datetime] = _now,
+    ) -> None:
         self._records: deque[RequestRecord] = deque(maxlen=max_records)
         self._pending: OrderedDict[_OriginKey, list[RequestRecord]] = OrderedDict()
         self._max_pending, self._max_origins = max_pending, max_origins
         self._clock = clock
 
-    def begin(self, *, conversation_id: str | None, origin: ClientOrigin | None, hashes: Sequence[str],
-              newest: NewestKind, model: str | None, tokens_from_client: int, tokens_forwarded: int,
-              collected: bool, switch_reasons: Sequence[str | None] = (),
-              request_id: str | None = None) -> RequestRecord:
+    def begin(
+        self,
+        *,
+        conversation_id: str | None,
+        origin: ClientOrigin | None,
+        hashes: Sequence[str],
+        newest: NewestKind,
+        model: str | None,
+        tokens_from_client: int,
+        tokens_forwarded: int,
+        collected: bool,
+        switch_reasons: Sequence[str | None] = (),
+        request_id: str | None = None,
+    ) -> RequestRecord:
         """Open a record for a request about to be forwarded, and settle the earlier records it answers.
 
         `hashes` are the chain hashes of every message the request carries, in order.
@@ -116,12 +132,20 @@ class RequestLog:
         """
         if conversation_id is not None:
             self._settle(conversation_id, origin, hashes[:-1])
-        record = RequestRecord(request_id=request_id if request_id is not None else new_request_id(), origin=origin,
-                               conversation_id=conversation_id, position=len(hashes), newest=newest,
-                               newest_hash=hashes[-1], model=model,
-                               forwarded_at=self._clock(), tokens_from_client=tokens_from_client,
-                               tokens_forwarded=tokens_forwarded, collected=collected,
-                               switch_reasons=tuple(switch_reasons))
+        record = RequestRecord(
+            request_id=request_id if request_id is not None else new_request_id(),
+            origin=origin,
+            conversation_id=conversation_id,
+            position=len(hashes),
+            newest=newest,
+            newest_hash=hashes[-1],
+            model=model,
+            forwarded_at=self._clock(),
+            tokens_from_client=tokens_from_client,
+            tokens_forwarded=tokens_forwarded,
+            collected=collected,
+            switch_reasons=tuple(switch_reasons),
+        )
         self._records.append(record)
         self._watch(origin, record)
         return record
@@ -185,7 +209,7 @@ class RequestLog:
             self._pending.move_to_end(key)
         pending.append(record)
         # The oldest unsettled records stop being watched: side requests nothing will continue, mostly.
-        del pending[:-self._max_pending]
+        del pending[: -self._max_pending]
 
 
 def _key(origin: ClientOrigin | None) -> _OriginKey:

@@ -15,13 +15,21 @@ def _text(index: int, role: str) -> Message:
 
 
 def _call(index: int, *ids: str) -> Message:
-    return Message(role="assistant", content="", turn_index=index,
-                   raw_content=[{"type": "tool_use", "id": i, "name": "lookup", "input": {}} for i in ids])
+    return Message(
+        role="assistant",
+        content="",
+        turn_index=index,
+        raw_content=[{"type": "tool_use", "id": i, "name": "lookup", "input": {}} for i in ids],
+    )
 
 
 def _result(index: int, *ids: str) -> Message:
-    return Message(role="user", content="", turn_index=index,
-                   raw_content=[{"type": "tool_result", "tool_use_id": i, "content": "ok"} for i in ids])
+    return Message(
+        role="user",
+        content="",
+        turn_index=index,
+        raw_content=[{"type": "tool_result", "tool_use_id": i, "content": "ok"} for i in ids],
+    )
 
 
 def _chat(n: int) -> list[Message]:
@@ -44,8 +52,14 @@ class TestRecentTurnsStayVerbatim:
 class TestToolRoundsAreNeverSplit:
     def test_the_cut_moves_back_rather_than_orphan_a_tool_result(self):
         """A cut at 3 would send turn 3's tool result without the call in turn 2."""
-        turns = [_text(0, "user"), _text(1, "assistant"), _call(2, "t1"), _result(3, "t1"),
-                 _text(4, "assistant"), _text(5, "user")]
+        turns = [
+            _text(0, "user"),
+            _text(1, "assistant"),
+            _call(2, "t1"),
+            _result(3, "t1"),
+            _text(4, "assistant"),
+            _text(5, "user"),
+        ]
         assert find_cut_point(turns, keep_last=3) == 2
 
     def test_parallel_calls_answered_in_one_turn_stay_together(self):
@@ -55,8 +69,13 @@ class TestToolRoundsAreNeverSplit:
     def test_words_typed_beside_a_tool_result_begin_no_span(self):
         """After an interrupt, the person's words arrive in the turn carrying the round's results. Theirs, but a
         span beginning there would part the results from their call, and the reply after them begins none."""
-        turns = [_text(0, "user"), _call(1, "t1"), turn_with_typed_words(2, "t1", "Stop, use MySQL."),
-                 _text(3, "assistant"), _text(4, "user")]
+        turns = [
+            _text(0, "user"),
+            _call(1, "t1"),
+            turn_with_typed_words(2, "t1", "Stop, use MySQL."),
+            _text(3, "assistant"),
+            _text(4, "user"),
+        ]
         assert _span_starts(turns) == [True, False, False, True, True, True]
 
     def test_a_question_stays_with_the_tool_call_that_answers_it(self):
@@ -70,8 +89,16 @@ class TestALongAgenticExchangeIsStillCollected:
         """One question, then rounds of tool calls: with no later question to cut
         before, the cut falls between two rounds, so the exchange's start can still be
         condensed while the agent works on."""
-        turns = [_text(0, "user"), _call(1, "a"), _result(2, "a"), _call(3, "b"), _result(4, "b"),
-                 _call(5, "c"), _result(6, "c"), _text(7, "assistant")]
+        turns = [
+            _text(0, "user"),
+            _call(1, "a"),
+            _result(2, "a"),
+            _call(3, "b"),
+            _result(4, "b"),
+            _call(5, "c"),
+            _result(6, "c"),
+            _text(7, "assistant"),
+        ]
         assert find_cut_point(turns, keep_last=2) == 5
 
     def test_no_safe_cut_means_no_cut(self):
@@ -82,6 +109,7 @@ class TestALongAgenticExchangeIsStillCollected:
 
 def _conversations():
     """Text turns interleaved with tool rounds, some with parallel calls."""
+
     def build(shape: list[tuple[str, int]]) -> list[Message]:
         turns: list[Message] = []
         call_id = 0
@@ -94,6 +122,7 @@ def _conversations():
                 turns.append(_call(len(turns), *ids))
                 turns.append(_result(len(turns), *ids))
         return turns
+
     shape = st.lists(st.tuples(st.sampled_from(["text", "tool"]), st.integers(1, 3)), max_size=25)
     return shape.map(build)
 

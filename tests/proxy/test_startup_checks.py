@@ -10,14 +10,23 @@ from llm_gc.exceptions import ConfigError, LLMAuthError, LLMResponseError
 from llm_gc.llm import AnthropicClient
 from llm_gc.proxy.startup_checks import CHECK_OUTPUT_TOKENS, check_summariser
 
-ANSWER = {"id": "msg_01", "type": "message", "role": "assistant", "model": "gateway-sonnet",
-          "content": [{"type": "text", "text": "OK"}], "stop_reason": "max_tokens",
-          "usage": {"input_tokens": 9, "output_tokens": 1}}
+ANSWER = {
+    "id": "msg_01",
+    "type": "message",
+    "role": "assistant",
+    "model": "gateway-sonnet",
+    "content": [{"type": "text", "text": "OK"}],
+    "stop_reason": "max_tokens",
+    "usage": {"input_tokens": 9, "output_tokens": 1},
+}
 
 
 def _check(handler) -> str | None:
-    client = AnthropicClient(api_key="sk-test", model="gateway-sonnet",
-                             http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)))
+    client = AnthropicClient(
+        api_key="sk-test",
+        model="gateway-sonnet",
+        http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)),
+    )
     return asyncio.run(check_summariser(client))
 
 

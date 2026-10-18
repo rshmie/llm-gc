@@ -44,19 +44,28 @@ class TestWhatCountsAsTheSameTurn:
         every request; counted as an edit, every request would start a new conversation."""
         marked = [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
         unmarked = [{"type": "text", "text": "hi"}]
-        nested = [{"type": "tool_result", "tool_use_id": "t1",
-                   "content": [{"type": "text", "text": "ok", "cache_control": {"type": "ephemeral"}}]}]
+        nested = [
+            {
+                "type": "tool_result",
+                "tool_use_id": "t1",
+                "content": [{"type": "text", "text": "ok", "cache_control": {"type": "ephemeral"}}],
+            }
+        ]
         plain_nested = [{"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": "ok"}]}]
 
         assert chain_hashes([_turn("hi", "assistant", marked)]) == chain_hashes([_turn("hi", "assistant", unmarked)])
         assert chain_hashes([_turn("ok", raw=nested)]) == chain_hashes([_turn("ok", raw=plain_nested)])
 
     def test_a_plain_string_is_the_same_turn_as_its_one_text_block(self):
-        assert chain_hashes([_turn("hi", raw="hi")]) == chain_hashes([_turn("hi", raw=[{"type": "text", "text": "hi"}])])
+        assert chain_hashes([_turn("hi", raw="hi")]) == chain_hashes(
+            [_turn("hi", raw=[{"type": "text", "text": "hi"}])]
+        )
 
     def test_changing_what_a_turn_says_is_still_an_edit(self):
         marked = [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]
-        assert chain_hashes([_turn("hi", raw=marked)]) != chain_hashes([_turn("ho", raw=[{"type": "text", "text": "ho"}])])
+        assert chain_hashes([_turn("hi", raw=marked)]) != chain_hashes(
+            [_turn("ho", raw=[{"type": "text", "text": "ho"}])]
+        )
 
     def test_key_order_in_provider_content_does_not_count_as_an_edit(self):
         """An SDK may serialise the same block with its keys in another order;
@@ -93,19 +102,26 @@ class TestWhatCountsAsTheSameTurn:
         thought = [{"type": "thinking", "thinking": "", "signature": "EqQB" + "x" * 300}, said]
         redacted = [{"type": "redacted_thinking", "data": "EmwK" + "y" * 300}, said]
 
-        assert chain_hashes([_turn("Postgres.", "assistant", thought)]) == \
-            chain_hashes([_turn("Postgres.", "assistant", [said])])
-        assert chain_hashes([_turn("Postgres.", "assistant", redacted)]) == \
-            chain_hashes([_turn("Postgres.", "assistant", [said])])
+        assert chain_hashes([_turn("Postgres.", "assistant", thought)]) == chain_hashes(
+            [_turn("Postgres.", "assistant", [said])]
+        )
+        assert chain_hashes([_turn("Postgres.", "assistant", redacted)]) == chain_hashes(
+            [_turn("Postgres.", "assistant", [said])]
+        )
 
     def test_non_text_content_is_part_of_the_identity(self):
         """Two turns with the same text but different attached images are not the
         same turn."""
+
         def image(data: str):
-            return [{"type": "text", "text": "what is this?"},
-                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": data}}]
-        assert chain_hashes([_turn("what is this?", raw=image("AAA"))]) != \
-            chain_hashes([_turn("what is this?", raw=image("BBB"))])
+            return [
+                {"type": "text", "text": "what is this?"},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": data}},
+            ]
+
+        assert chain_hashes([_turn("what is this?", raw=image("AAA"))]) != chain_hashes(
+            [_turn("what is this?", raw=image("BBB"))]
+        )
 
 
 class TestRawContentStaysPrivate:

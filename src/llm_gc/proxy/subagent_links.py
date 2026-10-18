@@ -52,8 +52,14 @@ class SpawnLinker:
     Single-threaded: called from the proxy's event loop only.
     """
 
-    def __init__(self, *, window: timedelta = LINK_WINDOW, max_held: int = MAX_HELD_PER_SESSION,
-                 max_sessions: int = MAX_SESSIONS_HELD, clock: Callable[[], datetime] = _now) -> None:
+    def __init__(
+        self,
+        *,
+        window: timedelta = LINK_WINDOW,
+        max_held: int = MAX_HELD_PER_SESSION,
+        max_sessions: int = MAX_SESSIONS_HELD,
+        clock: Callable[[], datetime] = _now,
+    ) -> None:
         self._held: OrderedDict[str, _Held] = OrderedDict()
         self._window, self._max_held, self._max_sessions = window, max_held, max_sessions
         self._clock = clock
@@ -64,8 +70,11 @@ class SpawnLinker:
             return
         now = self._clock()
         held = self._session(client_session)
-        held.calls += [_Call(SpawnRef(record.request_id, call.call_id, call.name), prompts[call.call_id], now)
-                       for call in record.outline.tool_calls if call.call_id in prompts]
+        held.calls += [
+            _Call(SpawnRef(record.request_id, call.call_id, call.name), prompts[call.call_id], now)
+            for call in record.outline.tool_calls
+            if call.call_id in prompts
+        ]
         self._match(held, now)
 
     def offer_opening(self, client_session: str, record: RequestRecord, text: str) -> None:
@@ -93,11 +102,12 @@ class SpawnLinker:
         subagents in the order they were made.
         """
         fresh = now - self._window
-        held.calls = [call for call in held.calls if call.at >= fresh][-self._max_held:]
-        held.openings = [opening for opening in held.openings if opening.at >= fresh][-self._max_held:]
-        pairs = sorted(((call, opening) for call in held.calls for opening in held.openings
-                        if call.prompt in opening.text),
-                       key=lambda pair: (-len(pair[0].prompt), pair[0].at, pair[1].at))
+        held.calls = [call for call in held.calls if call.at >= fresh][-self._max_held :]
+        held.openings = [opening for opening in held.openings if opening.at >= fresh][-self._max_held :]
+        pairs = sorted(
+            ((call, opening) for call in held.calls for opening in held.openings if call.prompt in opening.text),
+            key=lambda pair: (-len(pair[0].prompt), pair[0].at, pair[1].at),
+        )
         used_calls: set[int] = set()
         used_openings: set[int] = set()
         for call, opening in pairs:

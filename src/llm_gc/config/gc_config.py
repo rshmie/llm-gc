@@ -2,10 +2,17 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing import Self
 
 from llm_gc.config.constants import (
-    DEFAULT_ARCHIVE_THRESHOLD, DEFAULT_CONTEXT_WINDOW, DEFAULT_KEEP_THRESHOLD, DEFAULT_LAST_N_TURNS_TO_KEEP,
-    DEFAULT_LEVEL_MARGIN, DEFAULT_MAX_RECAP_RATIO, DEFAULT_MAX_STALE_RATIO, DEFAULT_MIN_CUT_TOKENS,
+    DEFAULT_ARCHIVE_THRESHOLD,
+    DEFAULT_CONTEXT_WINDOW,
+    DEFAULT_KEEP_THRESHOLD,
+    DEFAULT_LAST_N_TURNS_TO_KEEP,
+    DEFAULT_LEVEL_MARGIN,
+    DEFAULT_MAX_RECAP_RATIO,
+    DEFAULT_MAX_STALE_RATIO,
+    DEFAULT_MIN_CUT_TOKENS,
     DEFAULT_MIN_SAVING_SHARE,
 )
+
 
 class GCConfig(BaseModel):
     """Central configuration for the GC engine.
@@ -22,8 +29,8 @@ class GCConfig(BaseModel):
     context_window: int = Field(default=DEFAULT_CONTEXT_WINDOW, gt=0)
     # The score lines between detail levels: at or above keep a span is shown word for
     # word, below archive only by its index line and facts, and summarised between.
-    keep_threshold: float = Field(default=DEFAULT_KEEP_THRESHOLD, ge=0.0, le = 1.0)
-    archive_threshold: float = Field(default=DEFAULT_ARCHIVE_THRESHOLD, ge=0.0, le = 1.0)
+    keep_threshold: float = Field(default=DEFAULT_KEEP_THRESHOLD, ge=0.0, le=1.0)
+    archive_threshold: float = Field(default=DEFAULT_ARCHIVE_THRESHOLD, ge=0.0, le=1.0)
     # How far past a line a score must be to move a span across it, either way.
     level_margin: float = Field(default=DEFAULT_LEVEL_MARGIN, ge=0.0)
     last_n_turns_to_keep: int = Field(default=DEFAULT_LAST_N_TURNS_TO_KEEP, ge=0)
@@ -39,11 +46,14 @@ class GCConfig(BaseModel):
     @model_validator(mode="after")
     def _bands_can_move_a_span(self) -> Self:
         if not self.archive_threshold < self.keep_threshold:
-            raise ValueError(f"keep_threshold ({self.keep_threshold}) must be above "
-                             f"archive_threshold ({self.archive_threshold})")
+            raise ValueError(
+                f"keep_threshold ({self.keep_threshold}) must be above archive_threshold ({self.archive_threshold})"
+            )
         if not self.level_margin < (self.keep_threshold - self.archive_threshold) / 2:
-            raise ValueError(f"level_margin ({self.level_margin}) must be under half the gap between the "
-                             "thresholds, or a score between them could never move a span")
+            raise ValueError(
+                f"level_margin ({self.level_margin}) must be under half the gap between the "
+                "thresholds, or a score between them could never move a span"
+            )
         return self
 
     @property

@@ -41,8 +41,11 @@ def named_session(headers: Mapping[str, str]) -> str | None:
     session_id = _client_id(value)
     if value is not None and session_id is None:
         # Only its length is logged: the value is what failed the check.
-        logger.warning("%s ignored: not 1-64 letters, digits, '_' or '-'; the conversation is matched by its content",
-                       SESSION_HEADER, extra={"header_length": len(value)})
+        logger.warning(
+            "%s ignored: not 1-64 letters, digits, '_' or '-'; the conversation is matched by its content",
+            SESSION_HEADER,
+            extra={"header_length": len(value)},
+        )
     return session_id
 
 
@@ -79,8 +82,9 @@ def chain_hashes(messages: Sequence[Message]) -> list[str]:
     previous = ""
     for message in messages:
         content = message.raw_content if message.raw_content is not None else message.content
-        turn = json.dumps([message.role, _as_said(content, message.role)], sort_keys=True, separators=(",", ":"),
-                          ensure_ascii=False)
+        turn = json.dumps(
+            [message.role, _as_said(content, message.role)], sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        )
         previous = hashlib.sha256(f"{previous}\x00{turn}".encode("utf-8")).hexdigest()
         hashes.append(previous)
     return hashes

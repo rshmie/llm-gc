@@ -14,10 +14,12 @@ ROOMY = 10**9
 _RANK = {OUT: 0, ARCHIVED: 1, COMPACTED: 2, KEPT: 3}
 
 
-def _span(score: float, current: DetailLevel | None = None, kept: int = 1000, compacted: int | None = 300,
-          archived: int = 40) -> LevelOptions:
-    return LevelOptions(score=score, current=current, kept_tokens=kept, compacted_tokens=compacted,
-                        archived_tokens=archived)
+def _span(
+    score: float, current: DetailLevel | None = None, kept: int = 1000, compacted: int | None = 300, archived: int = 40
+) -> LevelOptions:
+    return LevelOptions(
+        score=score, current=current, kept_tokens=kept, compacted_tokens=compacted, archived_tokens=archived
+    )
 
 
 def _levels(spans, budget=ROOMY, fold_line=10):
@@ -25,16 +27,24 @@ def _levels(spans, budget=ROOMY, fold_line=10):
 
 
 class TestTheScoreDecidesTheLevel:
-    @pytest.mark.parametrize("score,level", [(0.9, KEPT), (0.7, KEPT), (0.5, COMPACTED), (0.3, COMPACTED), (0.1, ARCHIVED)])
+    @pytest.mark.parametrize(
+        "score,level", [(0.9, KEPT), (0.7, KEPT), (0.5, COMPACTED), (0.3, COMPACTED), (0.1, ARCHIVED)]
+    )
     def test_a_new_span_takes_the_band_its_score_falls_in(self, score, level):
         assert _levels([_span(score)]) == [level]
 
-    @pytest.mark.parametrize("current,score,level", [
-        (COMPACTED, 0.72, COMPACTED), (COMPACTED, 0.76, KEPT),     # up only past the margin
-        (KEPT, 0.68, KEPT), (KEPT, 0.64, COMPACTED),               # down only past the margin
-        (ARCHIVED, 0.32, ARCHIVED), (ARCHIVED, 0.36, COMPACTED),
-        (ARCHIVED, 0.9, KEPT),                                     # a span the conversation returns to
-    ])
+    @pytest.mark.parametrize(
+        "current,score,level",
+        [
+            (COMPACTED, 0.72, COMPACTED),
+            (COMPACTED, 0.76, KEPT),  # up only past the margin
+            (KEPT, 0.68, KEPT),
+            (KEPT, 0.64, COMPACTED),  # down only past the margin
+            (ARCHIVED, 0.32, ARCHIVED),
+            (ARCHIVED, 0.36, COMPACTED),
+            (ARCHIVED, 0.9, KEPT),  # a span the conversation returns to
+        ],
+    )
     def test_a_span_moves_only_once_its_score_clears_a_line_by_the_margin(self, current, score, level):
         assert _levels([_span(score, current)]) == [level]
 
@@ -58,7 +68,7 @@ class TestALevelIsUsedOnlyIfItIsCheaper:
 
 class TestTheBudgetCapsTheTotal:
     def test_the_coldest_span_is_lowered_first(self):
-        spans = [_span(0.9), _span(0.8)]                  # both kept: 2000 tokens
+        spans = [_span(0.9), _span(0.8)]  # both kept: 2000 tokens
         assert _levels(spans, budget=1400) == [KEPT, COMPACTED]
 
     def test_on_equal_scores_the_older_span_is_lowered(self):
@@ -72,7 +82,7 @@ class TestTheBudgetCapsTheTotal:
         assert _levels([_span(0.1)], budget=ROOMY) == [ARCHIVED]
 
     def test_the_oldest_are_folded_only_when_nothing_can_go_lower(self):
-        spans = [_span(0.9), _span(0.1), _span(0.1)]      # 1000 + 40 + 40 at their bands
+        spans = [_span(0.9), _span(0.1), _span(0.1)]  # 1000 + 40 + 40 at their bands
         plan = plan_levels(spans, BANDS, budget=100, fold_line_tokens=10)
         assert list(plan.levels) == [OUT, ARCHIVED, ARCHIVED]
         assert plan.folded == 1 and plan.tokens == 10 + 40 + 40
@@ -84,8 +94,11 @@ class TestTheBudgetCapsTheTotal:
 
 
 class TestBandsAreValidated:
-    @pytest.mark.parametrize("keep,archive,margin", [(0.3, 0.3, 0.0), (0.7, 0.3, -0.01), (0.7, 0.3, 0.2)],
-                             ids=["no-gap", "negative-margin", "margin-swallows-the-band"])
+    @pytest.mark.parametrize(
+        "keep,archive,margin",
+        [(0.3, 0.3, 0.0), (0.7, 0.3, -0.01), (0.7, 0.3, 0.2)],
+        ids=["no-gap", "negative-margin", "margin-swallows-the-band"],
+    )
     def test_bands_that_could_not_work_are_refused(self, keep, archive, margin):
         with pytest.raises(ConfigError):
             Bands(keep=keep, archive=archive, margin=margin)
@@ -94,9 +107,17 @@ class TestBandsAreValidated:
 # Properties over generated spans: the rules the locked design states, checked on any input.
 
 _level = st.sampled_from([None, KEPT, COMPACTED, ARCHIVED, OUT])
-_spans = st.lists(st.builds(LevelOptions, score=st.floats(0, 1), current=_level,
-                            kept_tokens=st.integers(1, 3000), compacted_tokens=st.none() | st.integers(1, 3000),
-                            archived_tokens=st.integers(1, 300)), max_size=12)
+_spans = st.lists(
+    st.builds(
+        LevelOptions,
+        score=st.floats(0, 1),
+        current=_level,
+        kept_tokens=st.integers(1, 3000),
+        compacted_tokens=st.none() | st.integers(1, 3000),
+        archived_tokens=st.integers(1, 300),
+    ),
+    max_size=12,
+)
 
 
 def _at_floor(span: LevelOptions, level: DetailLevel) -> bool:
@@ -122,7 +143,7 @@ class TestPlannerProperties:
     def test_folding_takes_the_oldest_spans_together(self, spans, budget):
         plan = plan_levels(spans, BANDS, budget, 10)
         assert all(level is OUT for level in plan.levels[: plan.folded])
-        assert not any(level is OUT for level in plan.levels[plan.folded:])
+        assert not any(level is OUT for level in plan.levels[plan.folded :])
 
     @given(spans=_spans, budget=st.integers(0, 20_000))
     def test_the_budget_only_ever_lowers_and_only_when_needed(self, spans, budget):
@@ -143,7 +164,14 @@ class TestPlannerProperties:
     def test_replanning_unchanged_scores_changes_nothing(self, spans):
         """No flapping: a span that settled stays settled until its score moves."""
         first = plan_levels(spans, BANDS, ROOMY, 10)
-        again = [LevelOptions(score=s.score, current=level, kept_tokens=s.kept_tokens,
-                              compacted_tokens=s.compacted_tokens, archived_tokens=s.archived_tokens)
-                 for s, level in zip(spans, first.levels)]
+        again = [
+            LevelOptions(
+                score=s.score,
+                current=level,
+                kept_tokens=s.kept_tokens,
+                compacted_tokens=s.compacted_tokens,
+                archived_tokens=s.archived_tokens,
+            )
+            for s, level in zip(spans, first.levels)
+        ]
         assert plan_levels(again, BANDS, ROOMY, 10).levels == first.levels

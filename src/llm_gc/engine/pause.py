@@ -25,7 +25,7 @@ def _now() -> datetime:
 class Pause:
     until: datetime
     reason: str
-    lasting: bool = False    # True when LLM-GC's own calls are failing, not when the upstream is busy
+    lasting: bool = False  # True when LLM-GC's own calls are failing, not when the upstream is busy
 
 
 class ModelCallPause:

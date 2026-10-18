@@ -22,31 +22,46 @@ from llm_gc.visualizer import TranscriptRecorder, create_dashboard_app
 from tests.engine.support import collect
 from tests.models.support import NOTICE, SKILL_RULES, turn_with_client_text
 
-SUMMARY = LLMResponse(text="Earlier turns covered the storage decision and the retention window in brief.",
-                      stop_reason=StopReason.COMPLETE, input_tokens=0, output_tokens=14,
-                      model="scripted", provider="offline")
+SUMMARY = LLMResponse(
+    text="Earlier turns covered the storage decision and the retention window in brief.",
+    stop_reason=StopReason.COMPLETE,
+    input_tokens=0,
+    output_tokens=14,
+    model="scripted",
+    provider="offline",
+)
 
 
 def _engine(*, model: bool = True) -> tuple[GcService, ContextHealthMonitor]:
-    config = GCConfig(context_window=700, keep_threshold=0.55, archive_threshold=0.25, last_n_turns_to_keep=3,
-                      min_cut_tokens=60)
+    config = GCConfig(
+        context_window=700, keep_threshold=0.55, archive_threshold=0.25, last_n_turns_to_keep=3, min_cut_tokens=60
+    )
     service = build_gc_service(config, summary_provider=FakeProvider(responses=[SUMMARY] * 400) if model else None)
     bus = service.event_bus
     store = service.session_manager.store
     monitor = ContextHealthMonitor(
-        event_bus=bus, gc_config=config,
-        read_generations=lambda session_id: (state.snapshot if session_id is not None
-                                             and (state := store.get(session_id)) is not None else None))
+        event_bus=bus,
+        gc_config=config,
+        read_generations=lambda session_id: (
+            state.snapshot if session_id is not None and (state := store.get(session_id)) is not None else None
+        ),
+    )
     return service, monitor
 
 
 def _converse(service: GcService, session_id: str, turns: int) -> None:
     async def scenario() -> None:
         for index in range(turns):
-            text = (f"the topic{index % 8} is version {index}. "
-                    + "We walked through the implications for throughput and retention at length. " * 4)
-            turn = Message(role="user" if index % 2 == 0 else "assistant", content=text,
-                           token_count=count_tokens(text), turn_index=index)
+            text = (
+                f"the topic{index % 8} is version {index}. "
+                + "We walked through the implications for throughput and retention at length. " * 4
+            )
+            turn = Message(
+                role="user" if index % 2 == 0 else "assistant",
+                content=text,
+                token_count=count_tokens(text),
+                turn_index=index,
+            )
             service.gc_record(session_id, [turn], [f"{session_id}-{index}"])
             await collect(service, session_id)
 
@@ -109,8 +124,13 @@ class TestOverview:
         _converse(service, "unnamed", 2)
         recorder = TranscriptRecorder()
         opening = "We need to decide on the storage layer\nfor the new ingest service " + "before Friday " * 10
-        recorder.record("named", [Message(role="assistant", content="hello", turn_index=0),
-                                  Message(role="user", content=opening, turn_index=1)])
+        recorder.record(
+            "named",
+            [
+                Message(role="assistant", content="hello", turn_index=0),
+                Message(role="user", content=opening, turn_index=1),
+            ],
+        )
 
         sessions = _client(service, monitor, transcripts=recorder).get("/api/overview").json()["sessions"]
         titles = {s["session_id"]: s["title"] for s in sessions}
@@ -219,7 +239,7 @@ class TestOneSession:
 class TestRunGcNow:
     def test_it_cuts_without_waiting_for_the_batch_minimum(self):
         service, monitor = _engine()
-        service.gc_config.min_cut_tokens = 100_000      # the automatic pass would never cut
+        service.gc_config.min_cut_tokens = 100_000  # the automatic pass would never cut
         _converse(service, "s", 20)
         assert service.session_manager.store.get("s").snapshot.cut_count == 0
 
@@ -230,8 +250,9 @@ class TestRunGcNow:
         assert response.json()["tokens_after"] < response.json()["tokens_before"]
         assert service.session_manager.store.get("s").snapshot.cut_count == 1
         outcome = response.json()["outcome"]
-        assert outcome["kept"] + outcome["compacted"] + outcome["archived"] + outcome["folded"], \
+        assert outcome["kept"] + outcome["compacted"] + outcome["archived"] + outcome["folded"], (
             "it names where the turns went"
+        )
 
     def test_it_is_refused_without_the_action_header(self):
         """Another site's page can make the browser send a plain POST to localhost;
@@ -269,11 +290,14 @@ class TestRunGcNow:
 class TestErrors:
     """Each error the dashboard answers carries an ID, and is logged under the same one."""
 
-    @pytest.mark.parametrize(("method", "path", "status", "level"), [
-        ("GET", "/api/sessions/gone", 404, logging.DEBUG),
-        ("GET", "/api/trace/cc-gone", 404, logging.DEBUG),
-        ("POST", "/api/sessions/s/gc", 403, logging.WARNING),
-    ])
+    @pytest.mark.parametrize(
+        ("method", "path", "status", "level"),
+        [
+            ("GET", "/api/sessions/gone", 404, logging.DEBUG),
+            ("GET", "/api/trace/cc-gone", 404, logging.DEBUG),
+            ("POST", "/api/sessions/s/gc", 403, logging.WARNING),
+        ],
+    )
     def test_its_body_names_the_request_its_log_line_was_written_in(self, caplog, method, path, status, level):
         service, monitor = _engine()
         client = _client(service, monitor, read_trace=lambda client_session: None)
@@ -302,14 +326,21 @@ class TestTranscript:
         service, monitor = _engine()
         _converse(service, "s", 3)
         recorder = TranscriptRecorder()
-        recorder.record("s", [Message(role="user", content="the database is postgres", token_count=5, turn_index=0),
-                              Message(role="assistant", content="noted", token_count=1, turn_index=1)])
+        recorder.record(
+            "s",
+            [
+                Message(role="user", content="the database is postgres", token_count=5, turn_index=0),
+                Message(role="assistant", content="noted", token_count=1, turn_index=1),
+            ],
+        )
 
         transcript = _client(service, monitor, transcripts=recorder).get("/api/sessions/s/transcript").json()
 
         assert transcript["captured"] is True
         assert [(t["turn_index"], t["role"], t["text"]) for t in transcript["turns"]] == [
-            (0, "user", "the database is postgres"), (1, "assistant", "noted")]
+            (0, "user", "the database is postgres"),
+            (1, "assistant", "noted"),
+        ]
         assert transcript["total_tokens"] == 6
 
     def test_a_turn_claude_code_wrote_part_of_comes_with_its_parts_by_writer(self):
@@ -317,14 +348,21 @@ class TestTranscript:
         service, monitor = _engine()
         _converse(service, "s", 2)
         recorder = TranscriptRecorder()
-        recorder.record("s", [turn_with_client_text(0, (False, "Run the audit 🙂"), (True, SKILL_RULES)),
-                              Message(role="assistant", content="ok", token_count=1, turn_index=1),
-                              turn_with_client_text(2, (True, NOTICE))])
+        recorder.record(
+            "s",
+            [
+                turn_with_client_text(0, (False, "Run the audit 🙂"), (True, SKILL_RULES)),
+                Message(role="assistant", content="ok", token_count=1, turn_index=1),
+                turn_with_client_text(2, (True, NOTICE)),
+            ],
+        )
 
         turns = _client(service, monitor, transcripts=recorder).get("/api/sessions/s/transcript").json()["turns"]
 
-        assert turns[0]["parts"] == [{"writer": "speaker", "text": "Run the audit 🙂"},
-                                     {"writer": "client", "text": SKILL_RULES}]
+        assert turns[0]["parts"] == [
+            {"writer": "speaker", "text": "Run the audit 🙂"},
+            {"writer": "client", "text": SKILL_RULES},
+        ]
         assert turns[1]["parts"] is None
         assert turns[2]["parts"] == [{"writer": "client", "text": NOTICE}]
 
@@ -335,8 +373,13 @@ class TestTranscript:
         _converse(service, "s", 2)
         recorder = TranscriptRecorder()
         rewritten = "<system-reminder>CLAUDE.md, memory, date</system-reminder>"
-        recorder.record("s", [Message(role="user", content="hello", token_count=1, turn_index=0, instructions=(rewritten,)),
-                              Message(role="assistant", content="hi", token_count=1, turn_index=1)])
+        recorder.record(
+            "s",
+            [
+                Message(role="user", content="hello", token_count=1, turn_index=0, instructions=(rewritten,)),
+                Message(role="assistant", content="hi", token_count=1, turn_index=1),
+            ],
+        )
 
         transcript = _client(service, monitor, transcripts=recorder).get("/api/sessions/s/transcript").json()
 
@@ -347,8 +390,14 @@ class TestTranscript:
         _converse(service, "s", 2)
         recorder = TranscriptRecorder()
         asked = Message(role="user", content="which database?", token_count=3, turn_index=2)
-        recorder.record("s", [Message(role="user", content="a", token_count=1, turn_index=0),
-                              Message(role="assistant", content="b", token_count=1, turn_index=1), asked])
+        recorder.record(
+            "s",
+            [
+                Message(role="user", content="a", token_count=1, turn_index=0),
+                Message(role="assistant", content="b", token_count=1, turn_index=1),
+                asked,
+            ],
+        )
 
         recorder.record_reply("s", asked, "Postgres.")
         client = _client(service, monitor, transcripts=recorder)
@@ -365,8 +414,14 @@ class TestTranscript:
         put its answer under a question it did not answer."""
         recorder = TranscriptRecorder()
         earlier = Message(role="user", content="which database?", token_count=3, turn_index=0)
-        recorder.record("s", [earlier, Message(role="assistant", content="Postgres.", token_count=2, turn_index=1),
-                              Message(role="user", content="and the cache?", token_count=4, turn_index=2)])
+        recorder.record(
+            "s",
+            [
+                earlier,
+                Message(role="assistant", content="Postgres.", token_count=2, turn_index=1),
+                Message(role="user", content="and the cache?", token_count=4, turn_index=2),
+            ],
+        )
 
         recorder.record_reply("s", earlier, "Postgres.")
         recorder.record_reply("s", Message(role="user", content="suggest a prompt", token_count=3, turn_index=2), "x")
@@ -378,11 +433,16 @@ class TestTranscript:
         Comparing the whole transcript with the context the model is sent showed a
         saving equal to that message - a saving that never happened."""
         service, monitor = _engine()
-        _converse(service, "s", 2)                     # the session has recorded turns 0 and 1
+        _converse(service, "s", 2)  # the session has recorded turns 0 and 1
         recorder = TranscriptRecorder()
-        recorder.record("s", [Message(role="user", content="a", token_count=5, turn_index=0),
-                              Message(role="assistant", content="b", token_count=7, turn_index=1),
-                              Message(role="user", content="c", token_count=11, turn_index=2)])
+        recorder.record(
+            "s",
+            [
+                Message(role="user", content="a", token_count=5, turn_index=0),
+                Message(role="assistant", content="b", token_count=7, turn_index=1),
+                Message(role="user", content="c", token_count=11, turn_index=2),
+            ],
+        )
 
         transcript = _client(service, monitor, transcripts=recorder).get("/api/sessions/s/transcript").json()
 
@@ -438,25 +498,47 @@ def test_the_page_sets_children_only_through_its_helper():
     page's setChildren, which skips and flattens, may call it."""
     static = Path(__file__).parents[2] / "src/llm_gc/visualizer/static"
     page = "\n".join(path.read_text() for path in sorted(static.glob("js/*.js")))
-    calls = [line.strip() for line in page.splitlines() if ".replaceChildren(" in line and not line.strip().startswith("//")]
+    calls = [
+        line.strip() for line in page.splitlines() if ".replaceChildren(" in line and not line.strip().startswith("//")
+    ]
     assert calls == ["export function setChildren(target, ...children) { target.replaceChildren(...nodes(children)); }"]
 
 
 class TestTheSessionTrace:
-    TRACE = {"client_session": "cc-1", "before": [], "subagents_before": [],
-             "turns": [{"index": 1, "conversation_id": "s_main", "position": 3, "requests": [],
-                        "subagents": [{"agent": "a1", "conversation_id": "s_a1", "requests": []}]}]}
+    TRACE = {
+        "client_session": "cc-1",
+        "before": [],
+        "subagents_before": [],
+        "turns": [
+            {
+                "index": 1,
+                "conversation_id": "s_main",
+                "position": 3,
+                "requests": [],
+                "subagents": [{"agent": "a1", "conversation_id": "s_a1", "requests": []}],
+            }
+        ],
+    }
 
     def _client(self, transcripts):
         service, monitor = _engine()
-        return _client(service, monitor, transcripts=transcripts,
-                       read_trace=lambda client_session: self.TRACE if client_session == "cc-1" else None)
+        return _client(
+            service,
+            monitor,
+            transcripts=transcripts,
+            read_trace=lambda client_session: self.TRACE if client_session == "cc-1" else None,
+        )
 
     def test_each_turn_and_subagent_carries_the_words_a_person_recognises_it_by(self):
         transcripts = TranscriptRecorder()
-        transcripts.record("s_main", [Message(role="user", content="first", turn_index=0),
-                                      Message(role="assistant", content="ok", turn_index=1),
-                                      Message(role="user", content="Use two   subagents,\nplease.", turn_index=2)])
+        transcripts.record(
+            "s_main",
+            [
+                Message(role="user", content="first", turn_index=0),
+                Message(role="assistant", content="ok", turn_index=1),
+                Message(role="user", content="Use two   subagents,\nplease.", turn_index=2),
+            ],
+        )
         transcripts.record("s_a1", [Message(role="user", content="Count the test files.", turn_index=0)])
 
         trace = self._client(transcripts).get("/api/trace/cc-1").json()
@@ -469,9 +551,14 @@ class TestTheSessionTrace:
         """A message typed after a local command opens with the caveat Claude Code writes."""
         transcripts = TranscriptRecorder()
         caveat = "<local-command-caveat>Caveat: generated by local commands.</local-command-caveat>"
-        transcripts.record("s_main", [Message(role="user", content="first", turn_index=0),
-                                      Message(role="assistant", content="ok", turn_index=1),
-                                      turn_with_client_text(2, (True, caveat), (False, "Now run the tests."))])
+        transcripts.record(
+            "s_main",
+            [
+                Message(role="user", content="first", turn_index=0),
+                Message(role="assistant", content="ok", turn_index=1),
+                turn_with_client_text(2, (True, caveat), (False, "Now run the tests.")),
+            ],
+        )
 
         trace = self._client(transcripts).get("/api/trace/cc-1").json()
 
@@ -501,11 +588,16 @@ class TestAPreparedCutIsShownWithWhatDecidesIt:
     @staticmethod
     def _staged(service: GcService, session_id: str, turns: int) -> None:
         """Record turns and prepare a cut, without switching it in."""
+
         async def scenario() -> None:
             for index in range(turns):
                 text = f"the topic{index % 8} is version {index}. " + "We walked through throughput at length. " * 4
-                turn = Message(role="user" if index % 2 == 0 else "assistant", content=text,
-                               token_count=count_tokens(text), turn_index=index)
+                turn = Message(
+                    role="user" if index % 2 == 0 else "assistant",
+                    content=text,
+                    token_count=count_tokens(text),
+                    turn_index=index,
+                )
                 service.gc_record(session_id, [turn], [f"{session_id}-{index}"])
             await service.gc_age(session_id, ignore_batch_minimum=True)
 
@@ -529,4 +621,3 @@ class TestAPreparedCutIsShownWithWhatDecidesIt:
 
         assert body["cache"] is None
         assert body["staged"]["switches"] is True and body["staged"]["reason"] == "cache_cold"
-

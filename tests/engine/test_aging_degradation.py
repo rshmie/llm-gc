@@ -25,8 +25,14 @@ SESSION = "s"
 # archived span keeps the collection worth making whatever happens to the summary.
 SCORES = {0: COMPACTED_SCORE, 1: ARCHIVED_SCORE}
 
-_TRUNCATED = LLMResponse(text="tail-less", stop_reason=StopReason.TRUNCATED, input_tokens=50, output_tokens=2,
-                         model="scripted", provider="offline")
+_TRUNCATED = LLMResponse(
+    text="tail-less",
+    stop_reason=StopReason.TRUNCATED,
+    input_tokens=50,
+    output_tokens=2,
+    model="scripted",
+    provider="offline",
+)
 
 
 class _NonLLMGCFailingCompactor(BaseCompactor):
@@ -85,8 +91,9 @@ class TestASpanMadeWithoutItsSummaryIsRecorded:
         results = _run(service)
 
         assert results[-1].status is GCStatus.COMPLETED
-        assert (DegradationReason.COMPACTION_REFUSED, [0]) in [(d.reason, d.turn_indices)
-                                                                for d in results[-1].degradations]
+        assert (DegradationReason.COMPACTION_REFUSED, [0]) in [
+            (d.reason, d.turn_indices) for d in results[-1].degradations
+        ]
 
     def test_the_span_is_kept_whole_rather_than_lost(self):
         """First do no harm: the front is correct, only larger than the plan wanted."""
@@ -173,9 +180,11 @@ class TestTheEventIsEmittedAsItHappens:
 class TestTheDashboardCanSeeIt:
     @staticmethod
     def _breakdown(service):
-        monitor = ContextHealthMonitor(event_bus=service.event_bus, gc_config=service.gc_config,
-                                       read_generations=lambda _session_id: service.session_manager.store.get(
-                                           SESSION).snapshot)
+        monitor = ContextHealthMonitor(
+            event_bus=service.event_bus,
+            gc_config=service.gc_config,
+            read_generations=lambda _session_id: service.session_manager.store.get(SESSION).snapshot,
+        )
         _run(service)
         return monitor.get_snapshot(SESSION).gc_breakdown
 

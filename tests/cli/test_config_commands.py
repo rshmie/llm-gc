@@ -10,7 +10,11 @@ from click.testing import CliRunner
 from llm_gc.cli.config_file import read_config_template, write_config_file
 from llm_gc.cli.main import build_cli
 from llm_gc.cli.settings import (
-    credential_fields, flatten_settings, load_settings, settings_origins, summary_model,
+    credential_fields,
+    flatten_settings,
+    load_settings,
+    settings_origins,
+    summary_model,
 )
 from llm_gc.exceptions import ConfigError
 
@@ -106,8 +110,12 @@ def test_path_says_when_there_is_no_file_and_where_it_looked_in_order():
     result = _run("path")
     assert result.exit_code == 0 and "No config file" in result.output and "config init" in result.output
     output = result.output
-    assert output.index("--config PATH") < output.index("LLM_GC_CONFIG") < output.index("./llm-gc.toml") \
+    assert (
+        output.index("--config PATH")
+        < output.index("LLM_GC_CONFIG")
+        < output.index("./llm-gc.toml")
         < output.index(".config/llm-gc/config.toml")
+    )
 
 
 def test_path_names_the_file_and_why(isolated):

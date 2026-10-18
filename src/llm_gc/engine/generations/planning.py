@@ -33,8 +33,10 @@ class Bands:
         if not self.archive < self.keep:
             raise ConfigError(f"the keep line ({self.keep}) must be above the archive line ({self.archive})")
         if not 0 <= self.margin < (self.keep - self.archive) / 2:
-            raise ConfigError(f"the level margin ({self.margin}) must be at least 0 and under half the gap "
-                              f"between the lines ({self.keep - self.archive})")
+            raise ConfigError(
+                f"the level margin ({self.margin}) must be at least 0 and under half the gap "
+                f"between the lines ({self.keep - self.archive})"
+            )
 
 
 @dataclass(frozen=True)
@@ -70,8 +72,11 @@ class LevelOptions:
             return False
         if level is DetailLevel.ARCHIVED and not self.archivable:
             return False
-        richer = [self.cost(other) for other in _RICHEST_FIRST
-                  if _RANK[other] > _RANK[level] and (other is not DetailLevel.COMPACTED or self.compacted_tokens is not None)]
+        richer = [
+            self.cost(other)
+            for other in _RICHEST_FIRST
+            if _RANK[other] > _RANK[level] and (other is not DetailLevel.COMPACTED or self.compacted_tokens is not None)
+        ]
         return all(self.cost(level) < cost for cost in richer)
 
 
@@ -106,8 +111,11 @@ def plan_levels(spans: Sequence[LevelOptions], bands: Bands, budget: int, fold_l
 
     lowered: set[int] = set()
     while tokens > budget:
-        options = [(span.score, index, lower) for index, span in enumerate(spans)
-                   if (lower := _next_lower(span, levels[index])) is not None]
+        options = [
+            (span.score, index, lower)
+            for index, span in enumerate(spans)
+            if (lower := _next_lower(span, levels[index])) is not None
+        ]
         if not options:
             break
         _, index, lower = min(options, key=lambda option: (option[0], option[1]))
@@ -121,8 +129,13 @@ def plan_levels(spans: Sequence[LevelOptions], bands: Bands, budget: int, fold_l
         levels[folded] = DetailLevel.OUT_OF_VIEW
         folded += 1
 
-    return Plan(levels=tuple(levels), tokens=tokens, lowered=frozenset(lowered - set(range(folded))),
-                folded=folded, over_budget=tokens > budget)
+    return Plan(
+        levels=tuple(levels),
+        tokens=tokens,
+        lowered=frozenset(lowered - set(range(folded))),
+        folded=folded,
+        over_budget=tokens > budget,
+    )
 
 
 def _band(span: LevelOptions, bands: Bands) -> DetailLevel:
@@ -162,7 +175,7 @@ def _next_lower(span: LevelOptions, level: DetailLevel) -> DetailLevel | None:
     """The next poorer level worth using, or None at the floor; folding is not a lowering."""
     if level is DetailLevel.OUT_OF_VIEW:
         return None
-    for candidate in _RICHEST_FIRST[_RICHEST_FIRST.index(level) + 1:]:
+    for candidate in _RICHEST_FIRST[_RICHEST_FIRST.index(level) + 1 :]:
         if span.worthwhile(candidate) and span.cost(candidate) < span.cost(level):
             return candidate
     return None

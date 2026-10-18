@@ -14,8 +14,11 @@ LONG_SCRIPTS = json.loads(SCRIPTS.read_text())["scripts"]
 
 def _obliging(turns, instructions):
     """States the figure it is told to and nothing else of note."""
-    figure = instructions.split("keeping its figure exactly: ", 1)[1].split(" Do not mention", 1)[0] \
-        if "keeping its figure exactly" in instructions else ""
+    figure = (
+        instructions.split("keeping its figure exactly: ", 1)[1].split(" Do not mention", 1)[0]
+        if "keeping its figure exactly" in instructions
+        else ""
+    )
     return f"Here is how I would approach it. {figure}".strip()
 
 
@@ -88,7 +91,7 @@ def test_a_conversation_that_fails_validation_never_replaces_the_dataset(tmp_pat
 
 class TestProgress:
     def test_each_answer_reports_how_many_are_done_and_the_time_left(self):
-        out = io.StringIO()   # not a terminal: finished lines only, no redrawn live line
+        out = io.StringIO()  # not a terminal: finished lines only, no redrawn live line
         script = LONG_SCRIPTS[0]
 
         author_conversation(script, _obliging, Progress(total=len(script["pairs"]), out=out))

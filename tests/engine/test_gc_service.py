@@ -56,9 +56,17 @@ class _ScriptedReader:
         self.values = values
 
     async def read(self, spans, on_record):
-        return [KnowledgeEntry(message_turn=message.turn_index, content=self.values[message.turn_index],
-                               topic_label="primary database", knowledge_type=KnowledgeType.DECISION, speaker="user")
-                for span in spans for message in span]
+        return [
+            KnowledgeEntry(
+                message_turn=message.turn_index,
+                content=self.values[message.turn_index],
+                topic_label="primary database",
+                knowledge_type=KnowledgeType.DECISION,
+                speaker="user",
+            )
+            for span in spans
+            for message in span
+        ]
 
 
 def _record(service, message) -> None:
@@ -148,8 +156,9 @@ class TestNowIsWhatTheUserIsDiscussing:
     def test_spans_are_scored_against_the_users_turns_in_the_tail(self):
         """Not the assistant's replies, which restate and expand and would make every
         span look relevant; not tool results, which are output rather than a subject."""
-        service, scorer, _ = make_service(GCConfig(min_cut_tokens=0, last_n_turns_to_keep=3),
-                                          default_score=COMPACTED_SCORE)
+        service, scorer, _ = make_service(
+            GCConfig(min_cut_tokens=0, last_n_turns_to_keep=3), default_score=COMPACTED_SCORE
+        )
         heard: list[list[int]] = []
         score = scorer.score
 
@@ -163,8 +172,9 @@ class TestNowIsWhatTheUserIsDiscussing:
             for index in range(5):
                 message = turn(index, role="user" if index % 2 == 0 else "assistant")
                 if index == 4:
-                    message = message.model_copy(update={"raw_content": [
-                        {"type": "tool_result", "tool_use_id": "t", "content": "ok"}]})
+                    message = message.model_copy(
+                        update={"raw_content": [{"type": "tool_result", "tool_use_id": "t", "content": "ok"}]}
+                    )
                 _record(service, message)
                 await collect(service, "s")
 
@@ -179,8 +189,9 @@ class TestTheBatchDecidesWhen:
 
     def test_below_the_minimum_nothing_is_collected_or_paid_for(self):
         """The plan runs on estimated summaries first: no model call until the batch is worth one."""
-        service, _, provider = make_service(GCConfig(min_cut_tokens=10_000, last_n_turns_to_keep=1),
-                                            default_score=COMPACTED_SCORE)
+        service, _, provider = make_service(
+            GCConfig(min_cut_tokens=10_000, last_n_turns_to_keep=1), default_score=COMPACTED_SCORE
+        )
 
         results = _converse(service, 3)
 
@@ -200,8 +211,9 @@ class TestTheBatchDecidesWhen:
 
     def test_reaching_the_minimum_collects_the_whole_batch(self):
         tokens = turn(0).token_count
-        service, _, _ = make_service(GCConfig(min_cut_tokens=2 * tokens, last_n_turns_to_keep=1),
-                                     default_score=COMPACTED_SCORE)
+        service, _, _ = make_service(
+            GCConfig(min_cut_tokens=2 * tokens, last_n_turns_to_keep=1), default_score=COMPACTED_SCORE
+        )
 
         results = _converse(service, 3)
 
@@ -209,8 +221,9 @@ class TestTheBatchDecidesWhen:
         assert _levels(service) == {0: COMPACTED, 1: COMPACTED}
 
     def test_the_manual_lever_waives_only_the_minimum(self):
-        service, _, _ = make_service(GCConfig(min_cut_tokens=10_000, last_n_turns_to_keep=1),
-                                     default_score=COMPACTED_SCORE)
+        service, _, _ = make_service(
+            GCConfig(min_cut_tokens=10_000, last_n_turns_to_keep=1), default_score=COMPACTED_SCORE
+        )
         _converse(service, 3)
 
         manual = asyncio.run(collect(service, "s", ignore_batch_minimum=True))
@@ -275,7 +288,7 @@ class TestLevelsAreReplannedAtEveryCollection:
         service, scorer, _ = make_service(default_score=COMPACTED_SCORE)
         _converse(service, 3)
 
-        scorer.scores[0] = 0.28   # under the archive line, inside its margin
+        scorer.scores[0] = 0.28  # under the archive line, inside its margin
         _converse(service, 2, start=3)
 
         assert _levels(service)[0] is COMPACTED
@@ -297,8 +310,9 @@ class _FailingReader:
 
 class TestFailuresAreReportedAndLoseNothing:
     def test_a_failed_summary_keeps_the_span_whole_and_says_so(self):
-        service, _, _ = make_service(compactor=_FailingCompactor(event_bus=None),
-                                     scores={0: COMPACTED_SCORE, 1: ARCHIVED_SCORE})
+        service, _, _ = make_service(
+            compactor=_FailingCompactor(event_bus=None), scores={0: COMPACTED_SCORE, 1: ARCHIVED_SCORE}
+        )
 
         result = _converse(service, 3)[-1]
 
@@ -323,7 +337,9 @@ class TestFailuresAreReportedAndLoseNothing:
         service, _, _ = make_service(fact_reader=_FailingReader(), default_score=ARCHIVED_SCORE)  # type: ignore[arg-type]
         _converse(service, 2)
         state = service.session_manager.store.get("s")
-        state.snapshot = replace(state.snapshot, old=tuple(replace(span, level=ARCHIVED) for span in state.snapshot.old))
+        state.snapshot = replace(
+            state.snapshot, old=tuple(replace(span, level=ARCHIVED) for span in state.snapshot.old)
+        )
 
         _converse(service, 2, start=2)
 
@@ -331,8 +347,11 @@ class TestFailuresAreReportedAndLoseNothing:
 
     def test_with_neither_its_summary_nor_its_facts_a_span_is_kept_whole(self):
         """Both calls failed, as when the summary account ran out of credit."""
-        service, _, _ = make_service(compactor=_FailingCompactor(event_bus=None), fact_reader=_FailingReader(),  # type: ignore[arg-type]
-                                     default_score=ARCHIVED_SCORE)
+        service, _, _ = make_service(
+            compactor=_FailingCompactor(event_bus=None),
+            fact_reader=_FailingReader(),  # type: ignore[arg-type]
+            default_score=ARCHIVED_SCORE,
+        )
 
         results = _converse(service, 3)
 
@@ -350,10 +369,13 @@ class TestFailuresAreReportedAndLoseNothing:
         assert result.failure_stage == "plan" and result.failure_reason == "RuntimeError"
         assert _young(service) == [0, 1] and _snapshot(service).old == ()
 
-    @pytest.mark.parametrize("error, shown", [
-        (RuntimeError("could not score: the user wrote 'my card is 4242'"), "RuntimeError"),
-        (ConfigError("span weights must be positive"), "span weights must be positive"),
-    ])
+    @pytest.mark.parametrize(
+        "error, shown",
+        [
+            (RuntimeError("could not score: the user wrote 'my card is 4242'"), "RuntimeError"),
+            (ConfigError("span weights must be positive"), "span weights must be positive"),
+        ],
+    )
     def test_a_failure_shows_a_message_only_when_the_error_is_llm_gcs_own(self, error, shown):
         """The result reaches the bus and the dashboard, and another library's message may quote the conversation."""
         service, _, _ = make_service()
@@ -384,19 +406,28 @@ class TestTheBusSeesWhatTheCollectionDid:
         """A subscriber may log or export whatever it hears, so the conversation stays in the
         session: events name turns and counts. Every turn and summary here is about storage,
         and every fact names a database."""
-        service, _, _ = make_service(scores={0: COMPACTED_SCORE}, default_score=ARCHIVED_SCORE,
-                                     fact_reader=_ScriptedReader("SQLite", "Postgres", "MySQL", "MariaDB"))
+        service, _, _ = make_service(
+            scores={0: COMPACTED_SCORE},
+            default_score=ARCHIVED_SCORE,
+            fact_reader=_ScriptedReader("SQLite", "Postgres", "MySQL", "MariaDB"),
+        )
         heard = []
         for event_type in EventType:
             service.event_bus.subscribe(event_type, heard.append)
 
         _converse(service, 4)
 
-        assert {EventType.GC_FINISHED, EventType.MESSAGE_COMPACTED, EventType.MESSAGE_PROMOTED_TO_OLD_GEN,
-                EventType.MESSAGE_ARCHIVED, EventType.KNOWLEDGE_ENTRY_ADDED,
-                EventType.KNOWLEDGE_ENTRY_SUPERSEDED} <= {event.event_type for event in heard}, "every kind was heard"
-        assert all(isinstance(event.data["report"], PassReport)
-                   for event in heard if event.event_type is EventType.GC_FINISHED)
+        assert {
+            EventType.GC_FINISHED,
+            EventType.MESSAGE_COMPACTED,
+            EventType.MESSAGE_PROMOTED_TO_OLD_GEN,
+            EventType.MESSAGE_ARCHIVED,
+            EventType.KNOWLEDGE_ENTRY_ADDED,
+            EventType.KNOWLEDGE_ENTRY_SUPERSEDED,
+        } <= {event.event_type for event in heard}, "every kind was heard"
+        assert all(
+            isinstance(event.data["report"], PassReport) for event in heard if event.event_type is EventType.GC_FINISHED
+        )
         for event in heard:
             payload = event.model_dump_json()
             for words in ("storage", "SQLite", "Postgres", "MySQL", "primary database"):
@@ -414,13 +445,21 @@ class TestTheBusSeesWhatTheCollectionDid:
 
         filed = service.session_manager.store.get("s").snapshot.knowledge
         assert [entry.message_turn for entry in filed] == [0], "later turns only restate turn 0's value"
-        assert [event.data for event in added] == [{"session_id": "s", "message_turn": 0, "knowledge_type": "decision",
-                                                    "knowledge_status": "active", "speaker": "user"}]
+        assert [event.data for event in added] == [
+            {
+                "session_id": "s",
+                "message_turn": 0,
+                "knowledge_type": "decision",
+                "knowledge_status": "active",
+                "speaker": "user",
+            }
+        ]
         assert sum(event.data["knowledge_entries_filed"] for event in archived) == 1
 
     def test_a_replaced_value_is_announced_by_its_turns(self):
-        service, _, _ = make_service(default_score=ARCHIVED_SCORE,
-                                     fact_reader=_ScriptedReader("SQLite", "Postgres", "MySQL"))
+        service, _, _ = make_service(
+            default_score=ARCHIVED_SCORE, fact_reader=_ScriptedReader("SQLite", "Postgres", "MySQL")
+        )
         superseded = []
         service.event_bus.subscribe(EventType.KNOWLEDGE_ENTRY_SUPERSEDED, superseded.append)
 
@@ -446,7 +485,8 @@ class TestTheBusSeesWhatTheCollectionDid:
 
         assert [event.data["source_turn_indices"] for event in promoted] == [[0]]
         assert [(event.data["source_turn_indices"], event.data["source_generation"]) for event in archived] == [
-            ([1], "young")]
+            ([1], "young")
+        ]
 
 
 class TestNothingRecordedIsDestroyed:
@@ -454,9 +494,12 @@ class TestNothingRecordedIsDestroyed:
     and a span is never removed - whatever the plan decides."""
 
     @settings(max_examples=40, deadline=None)
-    @given(scores=st.lists(st.sampled_from([KEPT_SCORE, COMPACTED_SCORE, ARCHIVED_SCORE, 0.31, 0.69]),
-                           min_size=1, max_size=14),
-           ratio=st.sampled_from([0.02, 0.1, 0.3]))
+    @given(
+        scores=st.lists(
+            st.sampled_from([KEPT_SCORE, COMPACTED_SCORE, ARCHIVED_SCORE, 0.31, 0.69]), min_size=1, max_size=14
+        ),
+        ratio=st.sampled_from([0.02, 0.1, 0.3]),
+    )
     def test_every_turn_is_held_exactly_once(self, scores, ratio):
         config = GCConfig(context_window=2000, max_recap_ratio=ratio, min_cut_tokens=0, last_n_turns_to_keep=1)
         service, _, _ = make_service(config, scores=dict(enumerate(scores)))
@@ -512,10 +555,11 @@ class TestTheLibrarysLoopChecksEachTurn:
 
         assert service.session_manager.store.get("new") is None
 
-    @pytest.mark.parametrize(("content", "given", "recorded"),
-                             [("Postgres it is.", 0, count_tokens("Postgres it is.")), ("Postgres it is.", 7, 7),
-                              ("", 0, 0)],
-                             ids=["uncounted", "counted-by-the-caller", "empty"])
+    @pytest.mark.parametrize(
+        ("content", "given", "recorded"),
+        [("Postgres it is.", 0, count_tokens("Postgres it is.")), ("Postgres it is.", 7, 7), ("", 0, 0)],
+        ids=["uncounted", "counted-by-the-caller", "empty"],
+    )
     def test_a_turn_without_a_count_is_counted_and_a_given_count_is_kept(self, content, given, recorded):
         service, _, _ = make_service()
 
@@ -526,8 +570,9 @@ class TestTheLibrarysLoopChecksEachTurn:
     def test_turns_the_caller_did_not_count_are_still_collected(self):
         """Uncounted, every batch weighed nothing, so no pass ever reached the minimum."""
         tokens = turn(0).token_count
-        service, _, _ = make_service(GCConfig(min_cut_tokens=2 * tokens, last_n_turns_to_keep=1),
-                                     default_score=COMPACTED_SCORE)
+        service, _, _ = make_service(
+            GCConfig(min_cut_tokens=2 * tokens, last_n_turns_to_keep=1), default_score=COMPACTED_SCORE
+        )
 
         _update(service, *(Message(role="user", content=turn(index).content, turn_index=index) for index in range(3)))
 
@@ -593,7 +638,11 @@ class TestTheWindowIsSetAgainstLLMGCsOwnCount:
 
         inspection = service.inspect("s")
 
-        assert (inspection.token_rate, inspection.window_in_own_count, inspection.recap_budget) == (None, 200_000, 60_000)
+        assert (inspection.token_rate, inspection.window_in_own_count, inspection.recap_budget) == (
+            None,
+            200_000,
+            60_000,
+        )
 
     @pytest.mark.parametrize("rate", [0.0, -1.48, math.nan, math.inf])
     def test_a_rate_that_measures_nothing_is_refused(self, rate):
@@ -699,8 +748,9 @@ class TestLlmGcYieldsToTheUpstreamsRateLimit:
     def test_llm_gcs_own_call_being_rate_limited_pauses_it_too(self):
         """Its calls share the limit with the client's: a 429 on one of them is the same pressure."""
         limited = FakeProvider(responses=[LLMRateLimitError("slow down", retry_after_s=45)] * 20)
-        service, _, _ = make_service(compactor=LLMCompactor(event_bus=EventBus(), provider=limited),
-                                     default_score=COMPACTED_SCORE)
+        service, _, _ = make_service(
+            compactor=LLMCompactor(event_bus=EventBus(), provider=limited), default_score=COMPACTED_SCORE
+        )
 
         _converse(service, 3)
 
@@ -709,8 +759,12 @@ class TestLlmGcYieldsToTheUpstreamsRateLimit:
 
 
 # What the provider answered when the account LLM-GC summarises with ran out of credit.
-NO_CREDIT = LLMResponseError("anthropic returned 400: Your credit balance is too low to access the Anthropic API.",
-                             provider="anthropic", status_code=400, retryable=False)
+NO_CREDIT = LLMResponseError(
+    "anthropic returned 400: Your credit balance is too low to access the Anthropic API.",
+    provider="anthropic",
+    status_code=400,
+    retryable=False,
+)
 
 
 class _Refusing:
@@ -737,9 +791,11 @@ class TestLlmGcPausesWhenItsOwnCallsCannotSucceed:
     showed ordinary shortfalls rather than saying something needed fixing."""
 
     def _service(self, summary_error: Exception | None, facts_error: Exception | None):
-        service, _, _ = make_service(compactor=_RefusingCompactor(summary_error) if summary_error else None,
-                                     fact_reader=_Refusing(facts_error) if facts_error else None,  # type: ignore[arg-type]
-                                     default_score=COMPACTED_SCORE)
+        service, _, _ = make_service(
+            compactor=_RefusingCompactor(summary_error) if summary_error else None,
+            fact_reader=_Refusing(facts_error) if facts_error else None,  # type: ignore[arg-type]
+            default_score=COMPACTED_SCORE,
+        )
         return service
 
     @pytest.mark.parametrize("error", [NO_CREDIT, LLMAuthError("anthropic rejected our credentials (401)")])
@@ -759,10 +815,13 @@ class TestLlmGcPausesWhenItsOwnCallsCannotSucceed:
 
         assert service.model_calls.current() is None
 
-    @pytest.mark.parametrize("error", [
-        LLMResponseError("anthropic returned 503: overloaded", status_code=503, retryable=True),
-        RuntimeError("a third-party summariser broke"),
-    ])
+    @pytest.mark.parametrize(
+        "error",
+        [
+            LLMResponseError("anthropic returned 503: overloaded", status_code=503, retryable=True),
+            RuntimeError("a third-party summariser broke"),
+        ],
+    )
     def test_a_failure_retrying_could_fix_does_not_pause(self, error):
         service = self._service(error, error)
 
@@ -800,8 +859,11 @@ class TestFactsThatFailedAreReadAgain:
 
     def _after_the_outage(self, **config):
         reader = _RecoveringReader(failing={0})
-        service, _, _ = make_service(GCConfig(**{"min_cut_tokens": 0, "last_n_turns_to_keep": 1, **config}),
-                                     fact_reader=reader, default_score=ARCHIVED_SCORE)  # type: ignore[arg-type]
+        service, _, _ = make_service(
+            GCConfig(**{"min_cut_tokens": 0, "last_n_turns_to_keep": 1, **config}),
+            fact_reader=reader,
+            default_score=ARCHIVED_SCORE,
+        )  # type: ignore[arg-type]
         _said_turns(service, (0, "The database is Postgres."), (1, "Turn 1 is about storage."))
         asyncio.run(collect(service, "s"))
         assert [span.facts_unread for span in _snapshot(service).old] == [True]
@@ -817,7 +879,9 @@ class TestFactsThatFailedAreReadAgain:
         assert [0] in reader.calls[1:], "read again, in a call of its own"
         knowledge = _snapshot(service).knowledge
         assert [(e.message_turn, e.content, e.knowledge_status) for e in knowledge if e.topic_label == "database"] == [
-            (0, "Postgres", KnowledgeStatus.SUPERSEDED), (2, "MySQL", KnowledgeStatus.ACTIVE)]
+            (0, "Postgres", KnowledgeStatus.SUPERSEDED),
+            (2, "MySQL", KnowledgeStatus.ACTIVE),
+        ]
         assert not any(span.facts_unread for span in _snapshot(service).old)
         assert _levels(service)[0] is ARCHIVED, "with its facts read, it can be archived again"
 
@@ -844,5 +908,8 @@ class TestFactsThatFailedAreReadAgain:
         assert switched is not None
         assert sum(0 in call for call in reader.calls) == reads_of_turn_0, "not read a second time"
         assert not _snapshot(service).old[0].facts_unread
-        assert [e.content for e in _snapshot(service).knowledge if e.knowledge_status is KnowledgeStatus.ACTIVE
-                and e.topic_label == "database"] == ["MySQL"]
+        assert [
+            e.content
+            for e in _snapshot(service).knowledge
+            if e.knowledge_status is KnowledgeStatus.ACTIVE and e.topic_label == "database"
+        ] == ["MySQL"]

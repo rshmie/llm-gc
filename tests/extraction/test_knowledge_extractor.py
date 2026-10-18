@@ -168,9 +168,7 @@ class TestTopicLabelsAreBounded:
 
     def test_a_topic_is_at_most_four_words(self):
         extractor = _make_extractor()
-        message = _make_message(
-            "Alpha beta gamma delta epsilon zeta eta theta is the value we settled on"
-        )
+        message = _make_message("Alpha beta gamma delta epsilon zeta eta theta is the value we settled on")
 
         entries = extractor.extract_knowledge(message, message_turn=1)
 
@@ -183,9 +181,7 @@ class TestTopicLabelsAreBounded:
         'A timeout in teardown usually means a connection'. Nothing matches now, so
         the caller archives the turn verbatim instead — which claims nothing."""
         extractor = _make_extractor()
-        message = _make_message(
-            "A timeout in teardown usually means a connection is being held open past the test."
-        )
+        message = _make_message("A timeout in teardown usually means a connection is being held open past the test.")
 
         entries = extractor.extract_knowledge(message, message_turn=1)
 
@@ -225,9 +221,7 @@ class TestTopicLabelsAreNormalised:
 
     def test_internal_whitespace_is_collapsed(self):
         extractor = _make_extractor()
-        entries = extractor.extract_knowledge(
-            _make_message("The  read   path is redis backed"), message_turn=1
-        )
+        entries = extractor.extract_knowledge(_make_message("The  read   path is redis backed"), message_turn=1)
 
         for entry in entries:
             assert "  " not in entry.topic_label
@@ -276,9 +270,7 @@ class TestMatchingIsPerSentence:
 
     def test_a_fact_in_a_later_sentence_is_found(self):
         extractor = _make_extractor()
-        message = _make_message(
-            "We walked through the numbers this morning. The database is postgres."
-        )
+        message = _make_message("We walked through the numbers this morning. The database is postgres.")
 
         entries = extractor.extract_knowledge(message, message_turn=1)
 
@@ -322,9 +314,7 @@ class TestOneEntryPerTypePerSentence:
         message = _make_message("The api is using redis for the cache")
 
         facts = [
-            e
-            for e in extractor.extract_knowledge(message, message_turn=1)
-            if e.knowledge_type == KnowledgeType.FACT
+            e for e in extractor.extract_knowledge(message, message_turn=1) if e.knowledge_type == KnowledgeType.FACT
         ]
 
         assert len(facts) == 1
@@ -334,27 +324,33 @@ class TestSentencesAsPeopleWriteThem:
     """Real sentences end in a full stop and often open with "OK," or "Decision:".
     The tests above mostly used neither, and every one of these failed in use."""
 
-    @pytest.mark.parametrize("text, topic, content", [
-        ("We decided to use Postgres for the database.", "database", "use Postgres"),
-        ("Let's go with Redis for caching.", "caching", "Redis"),
-        ("I prefer tabs for indentation!", "indentation", "tabs"),
-    ])
+    @pytest.mark.parametrize(
+        "text, topic, content",
+        [
+            ("We decided to use Postgres for the database.", "database", "use Postgres"),
+            ("Let's go with Redis for caching.", "caching", "Redis"),
+            ("I prefer tabs for indentation!", "indentation", "tabs"),
+        ],
+    )
     def test_a_trailing_topic_is_read_through_the_full_stop(self, text, topic, content):
         entries = _make_extractor().extract_knowledge(_make_message(text), message_turn=1)
         assert [(e.topic_label, e.content) for e in entries] == [(topic, content)]
 
-    @pytest.mark.parametrize("text", [
-        "OK, the database is postgres.",
-        "Decision: the database is postgres.",
-        "OK, decision: the database is postgres.",
-        "So, the database is postgres!",
-    ])
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "OK, the database is postgres.",
+            "Decision: the database is postgres.",
+            "OK, decision: the database is postgres.",
+            "So, the database is postgres!",
+        ],
+    )
     def test_an_opener_or_a_label_does_not_hide_the_subject(self, text):
         entries = _make_extractor().extract_knowledge(_make_message(text), message_turn=1)
         assert [(e.topic_label, e.content) for e in entries] == [("database", "postgres")]
 
     def test_a_qualifying_lead_in_is_not_stripped(self):
-        """"In production" narrows the claim; dropping it would file a fact the
+        """ "In production" narrows the claim; dropping it would file a fact the
         conversation never stated, so the sentence is refused instead."""
         message = _make_message("In production, the database is postgres.")
         assert _make_extractor().extract_knowledge(message, message_turn=1) == []
@@ -363,7 +359,9 @@ class TestSentencesAsPeopleWriteThem:
         entries = _make_extractor().extract_knowledge(_make_message("The deadline is 10:30 on Friday."), 1)
         assert [(e.topic_label, e.content) for e in entries] == [("deadline", "10:30 on Friday")]
 
-    @pytest.mark.parametrize("text", ["The database is postgres, right?", "Should we go with Postgres for the database?"])
+    @pytest.mark.parametrize(
+        "text", ["The database is postgres, right?", "Should we go with Postgres for the database?"]
+    )
     def test_a_question_states_nothing(self, text):
         assert _make_extractor().extract_knowledge(_make_message(text), message_turn=1) == []
 
@@ -382,10 +380,17 @@ class TestSentencesAsPeopleWriteThem:
 
     def test_a_change_of_mind_supersedes_and_unrelated_decisions_do_not(self):
         extractor = _make_extractor()
-        said = ["OK, decision: the database is postgres.", "We decided to ship on Friday.",
-                "We decided to use microservices.", "Actually, change of plan: the database is mysql."]
-        entries = [entry for turn, text in enumerate(said)
-                   for entry in extractor.extract_knowledge(_make_message(text), message_turn=turn)]
+        said = [
+            "OK, decision: the database is postgres.",
+            "We decided to ship on Friday.",
+            "We decided to use microservices.",
+            "Actually, change of plan: the database is mysql.",
+        ]
+        entries = [
+            entry
+            for turn, text in enumerate(said)
+            for entry in extractor.extract_knowledge(_make_message(text), message_turn=turn)
+        ]
 
         filed, _ = file_knowledge((), tuple(entries))
 

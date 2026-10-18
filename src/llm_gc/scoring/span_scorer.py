@@ -48,10 +48,30 @@ class Relevance(Protocol):
 # Words saying that a message refers back to the conversation, not what it refers to:
 # "as I mentioned earlier, what was the fee?" is about the fee. Counted as words asked
 # about, they match no span and dilute the match with the span that is meant.
-_BACK_REFERENCES = frozenset({
-    "mention", "mentioned", "earlier", "before", "previously", "discuss", "discussed", "say", "said",
-    "tell", "told", "talk", "talked", "remember", "recall", "remind", "back", "above", "again", "conversation",
-})
+_BACK_REFERENCES = frozenset(
+    {
+        "mention",
+        "mentioned",
+        "earlier",
+        "before",
+        "previously",
+        "discuss",
+        "discussed",
+        "say",
+        "said",
+        "tell",
+        "told",
+        "talk",
+        "talked",
+        "remember",
+        "recall",
+        "remind",
+        "back",
+        "above",
+        "again",
+        "conversation",
+    }
+)
 
 
 class LexicalRelevance:
@@ -75,8 +95,9 @@ class LexicalRelevance:
         spans_using = Counter(word for counts in mentions for word in counts)
         weight = {word: math.log(1 + len(spans) / (1 + spans_using[word])) for word in asked}
         total = sum(weight.values())
-        return [sum(weight[word] * count / (count + 1) for word, count in counts.items()) / total
-                for counts in mentions]
+        return [
+            sum(weight[word] * count / (count + 1) for word, count in counts.items()) / total for counts in mentions
+        ]
 
 
 @dataclass(frozen=True)
@@ -114,18 +135,25 @@ class SpanScorer:
             a weight is negative, or the weights add up to zero.
     """
 
-    def __init__(self, importance: Sequence[BaseScorer] = (), *, relevance: Relevance | None = None,
-                 liveness_weight: float = DEFAULT_LIVENESS_WEIGHT,
-                 importance_weights: Mapping[RelevanceType, float] = DEFAULT_IMPORTANCE_WEIGHTS,
-                 recency_decay: float = DEFAULT_SPAN_RECENCY_DECAY) -> None:
+    def __init__(
+        self,
+        importance: Sequence[BaseScorer] = (),
+        *,
+        relevance: Relevance | None = None,
+        liveness_weight: float = DEFAULT_LIVENESS_WEIGHT,
+        importance_weights: Mapping[RelevanceType, float] = DEFAULT_IMPORTANCE_WEIGHTS,
+        recency_decay: float = DEFAULT_SPAN_RECENCY_DECAY,
+    ) -> None:
         if {scorer.scorer_name for scorer in importance} != set(importance_weights):
-            raise ConfigError("every importance scorer needs a weight, and every weight a scorer: "
-                              f"scorers {sorted(s.scorer_name.value for s in importance)}, "
-                              f"weights {sorted(part.value for part in importance_weights)}")
+            raise ConfigError(
+                "every importance scorer needs a weight, and every weight a scorer: "
+                f"scorers {sorted(s.scorer_name.value for s in importance)}, "
+                f"weights {sorted(part.value for part in importance_weights)}"
+            )
         weights = [liveness_weight, *importance_weights.values()]
         if min(weights) < 0 or sum(weights) <= 0:
             raise ConfigError("span weights must be non-negative and add up to more than zero")
-        self.importance = tuple(importance)     # fixed once importance is remembered by text
+        self.importance = tuple(importance)  # fixed once importance is remembered by text
         self.relevance = relevance if relevance is not None else LexicalRelevance()
         self.liveness_weight = liveness_weight
         self.importance_weights = dict(importance_weights)
@@ -160,8 +188,10 @@ class SpanScorer:
         """
         texts = ["\n".join(turn.content for turn in span) for span in spans]
         relevance = self.relevance.score(texts, "\n".join(person_text(turn) for turn in now))
-        return [self._score_one(span, text, similarity, newest_turn)
-                for span, text, similarity in zip(spans, texts, relevance, strict=True)]
+        return [
+            self._score_one(span, text, similarity, newest_turn)
+            for span, text, similarity in zip(spans, texts, relevance, strict=True)
+        ]
 
     def _score_one(self, span: Sequence[Message], text: str, similarity: float, newest_turn: int) -> SpanScore:
         recency = math.exp(-self.recency_decay * max(0, newest_turn - span[-1].turn_index))
@@ -169,8 +199,9 @@ class SpanScorer:
         parts = {RelevanceType.RECENCY: recency, RelevanceType.SIMILARITY: similarity, **self._importance.get(text)}
         liveness = max(recency, similarity)
         importance = sum(weight * parts[part] for part, weight in self.importance_weights.items())
-        return SpanScore(combined=(self.liveness_weight * liveness + importance) / self._total_weight,
-                         liveness=liveness, parts=parts)
+        return SpanScore(
+            combined=(self.liveness_weight * liveness + importance) / self._total_weight, liveness=liveness, parts=parts
+        )
 
     def _measure_importance(self, text: str) -> dict[RelevanceType, float]:
         """Each importance measure of a span's text.

@@ -27,8 +27,9 @@ class FactReader(Protocol):
         """
         ...
 
-    async def read(self, spans: Sequence[Sequence[Message]], on_record: Sequence[KnowledgeEntry]
-                   ) -> list[KnowledgeEntry]:
+    async def read(
+        self, spans: Sequence[Sequence[Message]], on_record: Sequence[KnowledgeEntry]
+    ) -> list[KnowledgeEntry]:
         """The facts these spans state, in conversation order.
 
         Args:
@@ -58,12 +59,17 @@ class PatternFactReader:
     def __init__(self, extractor: KnowledgeExtractor | None = None) -> None:
         self.extractor = extractor if extractor is not None else KnowledgeExtractor()
 
-    async def read(self, spans: Sequence[Sequence[Message]], on_record: Sequence[KnowledgeEntry]
-                   ) -> list[KnowledgeEntry]:
+    async def read(
+        self, spans: Sequence[Sequence[Message]], on_record: Sequence[KnowledgeEntry]
+    ) -> list[KnowledgeEntry]:
         """See `FactReader.read`. Patterns do not consult the facts on record."""
-        return [replace(entry, speaker="user") for span in spans for turn in span
-                if said_by_user(turn)
-                for entry in self.extractor.extract_knowledge(_person_words(turn), turn.turn_index)]
+        return [
+            replace(entry, speaker="user")
+            for span in spans
+            for turn in span
+            if said_by_user(turn)
+            for entry in self.extractor.extract_knowledge(_person_words(turn), turn.turn_index)
+        ]
 
 
 def _person_words(turn: Message) -> Message:

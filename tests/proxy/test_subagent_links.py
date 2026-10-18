@@ -28,16 +28,32 @@ class _Session:
         self.linker = SpawnLinker(clock=self.clock)
 
     def reply_calls(self, *prompts: str, session: str = "cc-1"):
-        record = self.log.begin(conversation_id=None, origin=ClientOrigin(session), hashes=["m"], newest="typed",
-                                model="m", tokens_from_client=1, tokens_forwarded=1, collected=True)
+        record = self.log.begin(
+            conversation_id=None,
+            origin=ClientOrigin(session),
+            hashes=["m"],
+            newest="typed",
+            model="m",
+            tokens_from_client=1,
+            tokens_forwarded=1,
+            collected=True,
+        )
         calls = tuple(ToolCall(name="Agent", call_id=f"toolu_{i}") for i in range(len(prompts)))
         self.log.finish(record, ReplyOutline(status=200, finished=True, stop_reason="tool_use", tool_calls=calls))
         self.linker.offer_calls(session, record, {call.call_id: prompt for call, prompt in zip(calls, prompts)})
         return record
 
     def subagent_opens(self, prompt: str, agent: str, session: str = "cc-1"):
-        record = self.log.begin(conversation_id=None, origin=ClientOrigin(session, agent), hashes=[agent],
-                                newest="typed", model="m", tokens_from_client=1, tokens_forwarded=1, collected=False)
+        record = self.log.begin(
+            conversation_id=None,
+            origin=ClientOrigin(session, agent),
+            hashes=[agent],
+            newest="typed",
+            model="m",
+            tokens_from_client=1,
+            tokens_forwarded=1,
+            collected=False,
+        )
         # The client adds its own context around the prompt it was given.
         self.linker.offer_opening(session, record, f"<system-reminder>context</system-reminder>\n{prompt}\nYour task.")
         return record

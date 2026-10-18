@@ -13,4 +13,4 @@ class ClientOrigin:
     """
 
     session_id: str
-    agent_id: str | None = None   # set for a sub-agent's conversation, None for the main one
+    agent_id: str | None = None  # set for a sub-agent's conversation, None for the main one

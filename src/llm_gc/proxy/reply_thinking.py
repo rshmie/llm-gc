@@ -27,9 +27,9 @@ MODELS_REMEMBERED = 64
 
 @dataclass(frozen=True, slots=True)
 class _Measured:
-    output_tokens: int    # the reply's total output as the provider counted it, thinking included
-    token_rate: float     # provider tokens per LLM-GC token for its model, when it was measured
-    model: str | None     # the model that wrote the reply
+    output_tokens: int  # the reply's total output as the provider counted it, thinking included
+    token_rate: float  # provider tokens per LLM-GC token for its model, when it was measured
+    model: str | None  # the model that wrote the reply
 
 
 class ReplyThinking:

@@ -31,11 +31,11 @@ DEFAULT_TRANSCRIPT_MAX_SESSIONS = 50
 class TranscriptTurn:
     turn_index: int
     role: str
-    text: str     # the turn's text; empty for a turn that is only tool calls or attachments
+    text: str  # the turn's text; empty for a turn that is only tool calls or attachments
     tokens: int
-    instruction_tokens: int = 0   # the client's instructions inside the turn as it sends them now
-    relayed: bool = False         # another agent's report, relayed under the user role
-    parts: list[TurnPart] | None = None   # the text by writer, when more than one wrote it
+    instruction_tokens: int = 0  # the client's instructions inside the turn as it sends them now
+    relayed: bool = False  # another agent's report, relayed under the user role
+    parts: list[TurnPart] | None = None  # the text by writer, when more than one wrote it
 
     @property
     def person_text(self) -> str:
@@ -63,11 +63,16 @@ class TranscriptRecorder:
         names no client session keeps the origin an earlier one named.
         """
         self._transcripts[session_id] = tuple(
-            TranscriptTurn(turn_index=message.turn_index, role=message.role, text=message.content,
-                           tokens=message.token_count,
-                           # Every request records the whole history again, so these were counted before.
-                           instruction_tokens=sum(count_tokens_cached(text) for text in message.instructions),
-                           relayed=message.relayed, parts=turn_parts(message))
+            TranscriptTurn(
+                turn_index=message.turn_index,
+                role=message.role,
+                text=message.content,
+                tokens=message.token_count,
+                # Every request records the whole history again, so these were counted before.
+                instruction_tokens=sum(count_tokens_cached(text) for text in message.instructions),
+                relayed=message.relayed,
+                parts=turn_parts(message),
+            )
             for message in messages
         )
         if origin is not None:
@@ -88,8 +93,9 @@ class TranscriptRecorder:
         newest = turns[-1] if turns else None
         if newest is None or newest.turn_index != answering.turn_index or newest.text != answering.content:
             return
-        self._replies[session_id] = TranscriptTurn(turn_index=answering.turn_index + 1, role="assistant", text=text,
-                                                   tokens=count_tokens(text))
+        self._replies[session_id] = TranscriptTurn(
+            turn_index=answering.turn_index + 1, role="assistant", text=text, tokens=count_tokens(text)
+        )
 
     def get(self, session_id: str) -> tuple[TranscriptTurn, ...] | None:
         return self._transcripts.get(session_id)

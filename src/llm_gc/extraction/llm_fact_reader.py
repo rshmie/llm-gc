@@ -51,11 +51,17 @@ class LLMFactReader:
 
     speakers: frozenset[Literal["user", "assistant"]] = frozenset({"user", "assistant"})
 
-    def __init__(self, provider: LLMProvider, *, timeout_s: float = DEFAULT_FACTS_TIMEOUT_S,
-                 output_tokens: int = DEFAULT_FACTS_OUTPUT_TOKENS,
-                 thinking_allowance_tokens: int = DEFAULT_FACTS_THINKING_ALLOWANCE_TOKENS,
-                 max_batch_tokens: int = DEFAULT_FACTS_MAX_BATCH_TOKENS,
-                 on_record_max: int = DEFAULT_FACTS_ON_RECORD_MAX, system_prompt: str | None = None) -> None:
+    def __init__(
+        self,
+        provider: LLMProvider,
+        *,
+        timeout_s: float = DEFAULT_FACTS_TIMEOUT_S,
+        output_tokens: int = DEFAULT_FACTS_OUTPUT_TOKENS,
+        thinking_allowance_tokens: int = DEFAULT_FACTS_THINKING_ALLOWANCE_TOKENS,
+        max_batch_tokens: int = DEFAULT_FACTS_MAX_BATCH_TOKENS,
+        on_record_max: int = DEFAULT_FACTS_ON_RECORD_MAX,
+        system_prompt: str | None = None,
+    ) -> None:
         """Build the reader.
 
         Args:
@@ -76,8 +82,9 @@ class LLMFactReader:
         self._on_record_max = on_record_max
         self._system_prompt = system_prompt if system_prompt is not None else load_prompt(FACTS_PROMPT)
 
-    async def read(self, spans: Sequence[Sequence[Message]], on_record: Sequence[KnowledgeEntry]
-                   ) -> list[KnowledgeEntry]:
+    async def read(
+        self, spans: Sequence[Sequence[Message]], on_record: Sequence[KnowledgeEntry]
+    ) -> list[KnowledgeEntry]:
         """See `FactReader.read`.
 
         Raises:
@@ -107,13 +114,17 @@ class LLMFactReader:
         return [batch for batch in batches if batch]
 
     async def _read_batch(self, turns: list[Message], record: list[KnowledgeEntry]) -> list[KnowledgeEntry]:
-        response = await self.provider.generate(messages=[self._as_request(turns, record)],
-                                                system=self._system_prompt,
-                                                max_output_tokens=self._max_output_tokens, timeout_s=self._timeout_s)
+        response = await self.provider.generate(
+            messages=[self._as_request(turns, record)],
+            system=self._system_prompt,
+            max_output_tokens=self._max_output_tokens,
+            timeout_s=self._timeout_s,
+        )
         if not response.is_complete:
             # A list cut short can still parse, and would silently lose its last facts.
-            raise LLMResponseError(f"the facts answer was cut off (stop_reason={response.stop_reason.value})",
-                                   provider=response.provider)
+            raise LLMResponseError(
+                f"the facts answer was cut off (stop_reason={response.stop_reason.value})", provider=response.provider
+            )
         return self._facts_in(response, {turn.turn_index: turn for turn in turns})
 
     def _as_request(self, turns: list[Message], record: list[KnowledgeEntry]) -> Message:
@@ -127,13 +138,15 @@ class LLMFactReader:
         turn must hold only the speaker's words. A value only the client or a tool wrote
         becomes a fact when a later turn settles on it.
         """
-        shown = record[-self._on_record_max:]
+        shown = record[-self._on_record_max :]
         facts = "\n".join(escape_delimiters(f"{fact.topic_label}: {fact.content}") for fact in shown) or "(none yet)"
         transcript = transcript_block(
             (turn.turn_index, speaker_label(turn), person_text(turn) if said_by_user(turn) else turn.content)
-            for turn in turns)
-        return Message(role="user", turn_index=turns[0].turn_index,
-                       content=f"{FACTS_OPEN}\n{facts}\n{FACTS_CLOSE}\n\n{transcript}")
+            for turn in turns
+        )
+        return Message(
+            role="user", turn_index=turns[0].turn_index, content=f"{FACTS_OPEN}\n{facts}\n{FACTS_CLOSE}\n\n{transcript}"
+        )
 
     def _facts_in(self, response: LLMResponse, turns: dict[int, Message]) -> list[KnowledgeEntry]:
         """The answer's valid facts. Malformed JSON fails the read; a single bad fact is dropped."""
@@ -143,10 +156,11 @@ class LLMFactReader:
             raise LLMResponseError("the facts answer held no JSON object", provider=response.provider)
         try:
             # From the first brace to the last, so a code fence or a stray word around it does not fail the read.
-            answer = _Answer.model_validate_json(text[start:end + 1])
+            answer = _Answer.model_validate_json(text[start : end + 1])
         except ValidationError as err:
-            raise LLMResponseError("the facts answer did not match the expected shape",
-                                   provider=response.provider) from err
+            raise LLMResponseError(
+                "the facts answer did not match the expected shape", provider=response.provider
+            ) from err
         facts = [entry for fact in answer.facts if (entry := _entry(fact, turns)) is not None]
         if dropped := len(answer.facts) - len(facts):
             logger.info("facts dropped from a model's answer", extra={"dropped": dropped, "kept": len(facts)})
@@ -164,10 +178,18 @@ def _entry(fact: _Fact, turns: dict[int, Message]) -> KnowledgeEntry | None:
     """
     topic = " ".join(fact.topic.split()).strip(" .:").casefold()
     value = " ".join(fact.value.split()).strip()
-    if (fact.turn not in turns or not topic or len(topic.split()) > FACT_TOPIC_MAX_WORDS
-            or len(topic) > FACT_TOPIC_MAX_CHARS or not value or len(value) > FACT_VALUE_MAX_CHARS):
+    if (
+        fact.turn not in turns
+        or not topic
+        or len(topic.split()) > FACT_TOPIC_MAX_WORDS
+        or len(topic) > FACT_TOPIC_MAX_CHARS
+        or not value
+        or len(value) > FACT_VALUE_MAX_CHARS
+    ):
         return None
     kind = next((kind for kind in KnowledgeType if kind.value == fact.kind.casefold()), KnowledgeType.FACT)
     turn = turns[fact.turn]
     speaker: Literal["user", "assistant"] = "user" if said_by_user(turn) else "assistant"
-    return KnowledgeEntry(message_turn=fact.turn, content=value, topic_label=topic, knowledge_type=kind, speaker=speaker)
+    return KnowledgeEntry(
+        message_turn=fact.turn, content=value, topic_label=topic, knowledge_type=kind, speaker=speaker
+    )

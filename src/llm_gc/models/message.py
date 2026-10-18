@@ -44,6 +44,7 @@ class Message(BaseModel):
     is sent with its thinking, but it has no readable text. It only counts toward prompt
     cost; scoring and summarising ignore it. It is 0 when unknown.
     """
+
     role: Literal["user", "assistant", "system"]
     content: str
     token_count: int = Field(default=0, ge=0)
@@ -83,8 +84,11 @@ def tool_use_ids(message: Message) -> list[str]:
 
 
 def tool_result_ids(message: Message) -> list[str]:
-    return [block["tool_use_id"] for block in _blocks(message)
-            if block.get("type") == "tool_result" and "tool_use_id" in block]
+    return [
+        block["tool_use_id"]
+        for block in _blocks(message)
+        if block.get("type") == "tool_result" and "tool_use_id" in block
+    ]
 
 
 # How a quote or a transcript names a relayed report's speaker, text the client wrote, and tool output.
@@ -114,7 +118,8 @@ def parts_by_writer(message: Message) -> list[TextPart]:
         return [TextPart("speaker", message.content)]
     marked: list[tuple[int, int, Writer]] = sorted(
         [(start, end, "client") for start, end in message.client_written]
-        + [(start, end, "tool") for start, end in message.tool_output])
+        + [(start, end, "tool") for start, end in message.tool_output]
+    )
     parts: list[TextPart] = []
     cursor = 0
     for start, end, writer in marked:

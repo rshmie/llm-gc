@@ -11,10 +11,10 @@ from llm_gc.cli.logs import JsonFormatter, RequestIdFilter, TextFormatter
 from llm_gc.web.request_id import REQUEST_ID_CHARS, RequestIdMiddleware
 
 
-def _record(message: str = "claude -> 200", *, extra: dict | None = None,
-            exc_info: bool = False) -> logging.LogRecord:
-    record = logging.makeLogRecord({"name": "llm_gc.proxy.server", "levelno": logging.INFO, "levelname": "INFO",
-                                    "msg": message, **(extra or {})})
+def _record(message: str = "claude -> 200", *, extra: dict | None = None, exc_info: bool = False) -> logging.LogRecord:
+    record = logging.makeLogRecord(
+        {"name": "llm_gc.proxy.server", "levelno": logging.INFO, "levelname": "INFO", "msg": message, **(extra or {})}
+    )
     if exc_info:
         try:
             raise ValueError("boom")
@@ -25,6 +25,7 @@ def _record(message: str = "claude -> 200", *, extra: dict | None = None,
 
 def _inside_a_request(action: Callable[[], None]) -> None:
     """Run `action` as the proxy's routes run: inside the middleware that gives the request its ID."""
+
     async def app(scope, receive, send) -> None:
         action()
 
@@ -91,8 +92,9 @@ class TestTheJsonFormat:
         class Status(Enum):
             COMPLETED = "completed"
 
-        entry = json.loads(JsonFormatter().format(_stamped(_record(extra={"outcome": Status.COMPLETED}),
-                                                           in_a_request=False)))
+        entry = json.loads(
+            JsonFormatter().format(_stamped(_record(extra={"outcome": Status.COMPLETED}), in_a_request=False))
+        )
 
         assert entry["outcome"] == "Status.COMPLETED"
 

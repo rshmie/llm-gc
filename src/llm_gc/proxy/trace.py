@@ -20,15 +20,21 @@ from typing import Any, Literal
 from llm_gc.llm.metering import ModelUsage
 from llm_gc.proxy.request_log import RequestRecord
 
-RowKind = Literal["turn", "tool_round", "report", "notice", "reply", "task", "retry", "replaced", "pending",
-                  "unclaimed", "closing"]
+RowKind = Literal[
+    "turn", "tool_round", "report", "notice", "reply", "task", "retry", "replaced", "pending", "unclaimed", "closing"
+]
 # What a request was, by its newest message, when that is not a message the person typed.
-_FROM_NEWEST: dict[str, RowKind] = {"tool_results": "tool_round", "relayed": "report", "client": "notice",
-                                    "assistant": "reply"}
+_FROM_NEWEST: dict[str, RowKind] = {
+    "tool_results": "tool_round",
+    "relayed": "report",
+    "client": "notice",
+    "assistant": "reply",
+}
 
 
-def build_trace(records: Sequence[RequestRecord], client_session: str, *,
-                summaries: ModelUsage | None = None) -> dict[str, Any] | None:
+def build_trace(
+    records: Sequence[RequestRecord], client_session: str, *, summaries: ModelUsage | None = None
+) -> dict[str, Any] | None:
     """The trace of `client_session`, or None when no request named it.
 
     `summaries` are LLM-GC's own model calls for the session's conversations.
@@ -70,31 +76,53 @@ def build_trace(records: Sequence[RequestRecord], client_session: str, *,
         made_calls = record.outline is not None and bool(record.outline.tool_calls)
         return _row(record, kinds[record], spawned.get(record.request_id, []) if made_calls else [])
 
-    nodes = {agent: {"agent": agent, "label": f"Subagent {number}", "conversation_id": requests[-1].conversation_id,
-                     "collected": requests[-1].collected, "model": requests[-1].model,
-                     "spawned_by": asdict(link) if (link := next((r.spawned_by for r in requests
-                                                                    if r.spawned_by is not None), None)) else None,
-                     "started_at": requests[0].forwarded_at.isoformat(), "ended_at": _ended(requests),
-                     "totals": _totals(requests), "requests": [row(r) for r in requests]}
-             for number, (agent, requests) in enumerate(agents.items(), start=1)}
+    nodes = {
+        agent: {
+            "agent": agent,
+            "label": f"Subagent {number}",
+            "conversation_id": requests[-1].conversation_id,
+            "collected": requests[-1].collected,
+            "model": requests[-1].model,
+            "spawned_by": asdict(link)
+            if (link := next((r.spawned_by for r in requests if r.spawned_by is not None), None))
+            else None,
+            "started_at": requests[0].forwarded_at.isoformat(),
+            "ended_at": _ended(requests),
+            "totals": _totals(requests),
+            "requests": [row(r) for r in requests],
+        }
+        for number, (agent, requests) in enumerate(agents.items(), start=1)
+    }
 
     turns = []
     for index, start in enumerate(starts):
         requests = [r for r in main if turn_of[r.request_id] == index]
         everything = [r for r in mine if turn_of[r.request_id] == index]
-        turns.append({"index": index + 1, "conversation_id": start.conversation_id, "position": start.position,
-                      "part": "main" if start.conversation_id == mains[-1] else "earlier_main",
-                      "new_conversation": index > 0 and start.conversation_id != starts[index - 1].conversation_id,
-                      "started_at": start.forwarded_at.isoformat(), "ended_at": _ended(everything),
-                      "totals": _totals(everything), "requests": [row(r) for r in requests],
-                      "subagents": [nodes[agent] for agent, turn in agent_turn.items() if turn == index]})
-    return {"client_session": client_session, "started_at": mine[0].forwarded_at.isoformat(), "ended_at": _ended(mine),
-            "totals": _totals(mine),
-            "summaries": asdict(summaries) if summaries is not None else None,
-            # Requests before the first message the person typed that a conversation kept: checks, titles.
-            "before": [row(r) for r in main if turn_of[r.request_id] < 0],
-            "turns": turns,
-            "subagents_before": [nodes[agent] for agent, turn in agent_turn.items() if turn < 0]}
+        turns.append(
+            {
+                "index": index + 1,
+                "conversation_id": start.conversation_id,
+                "position": start.position,
+                "part": "main" if start.conversation_id == mains[-1] else "earlier_main",
+                "new_conversation": index > 0 and start.conversation_id != starts[index - 1].conversation_id,
+                "started_at": start.forwarded_at.isoformat(),
+                "ended_at": _ended(everything),
+                "totals": _totals(everything),
+                "requests": [row(r) for r in requests],
+                "subagents": [nodes[agent] for agent, turn in agent_turn.items() if turn == index],
+            }
+        )
+    return {
+        "client_session": client_session,
+        "started_at": mine[0].forwarded_at.isoformat(),
+        "ended_at": _ended(mine),
+        "totals": _totals(mine),
+        "summaries": asdict(summaries) if summaries is not None else None,
+        # Requests before the first message the person typed that a conversation kept: checks, titles.
+        "before": [row(r) for r in main if turn_of[r.request_id] < 0],
+        "turns": turns,
+        "subagents_before": [nodes[agent] for agent, turn in agent_turn.items() if turn < 0],
+    }
 
 
 def _agent(record: RequestRecord) -> str | None:
@@ -167,37 +195,51 @@ def _contested(records: Sequence[RequestRecord]) -> set[RequestRecord]:
 
 def _row(record: RequestRecord, kind: RowKind, spawned: list[str]) -> dict[str, Any]:
     outline = record.outline
-    return {"request_id": record.request_id, "kind": kind, "conversation_id": record.conversation_id,
-            "position": record.position, "model": record.model,
-            "forwarded_at": record.forwarded_at.isoformat(),
-            "ended_at": record.ended_at.isoformat() if record.ended_at is not None else None,
-            "status": outline.status if outline is not None else None,
-            "finished": outline.finished if outline is not None else False,
-            "stop_reason": outline.stop_reason if outline is not None else None,
-            "tool_calls": [call.name for call in outline.tool_calls] if outline is not None else [],
-            "spawned": spawned, "tokens_from_client": record.tokens_from_client,
-            "tokens_forwarded": record.tokens_forwarded, "collected": record.collected,
-            "carries_collections": record.carries_collections, "switch_reasons": list(record.switch_reasons),
-            "error_type": outline.error_type if outline is not None else None,
-            "resent_as_written": record.resent_as_written,
-            "provider": asdict(outline.usage) if outline is not None and outline.usage is not None else None}
+    return {
+        "request_id": record.request_id,
+        "kind": kind,
+        "conversation_id": record.conversation_id,
+        "position": record.position,
+        "model": record.model,
+        "forwarded_at": record.forwarded_at.isoformat(),
+        "ended_at": record.ended_at.isoformat() if record.ended_at is not None else None,
+        "status": outline.status if outline is not None else None,
+        "finished": outline.finished if outline is not None else False,
+        "stop_reason": outline.stop_reason if outline is not None else None,
+        "tool_calls": [call.name for call in outline.tool_calls] if outline is not None else [],
+        "spawned": spawned,
+        "tokens_from_client": record.tokens_from_client,
+        "tokens_forwarded": record.tokens_forwarded,
+        "collected": record.collected,
+        "carries_collections": record.carries_collections,
+        "switch_reasons": list(record.switch_reasons),
+        "error_type": outline.error_type if outline is not None else None,
+        "resent_as_written": record.resent_as_written,
+        "provider": asdict(outline.usage) if outline is not None and outline.usage is not None else None,
+    }
 
 
 def _totals(records: Sequence[RequestRecord]) -> dict[str, int]:
     usage = [r.outline.usage for r in records if r.outline is not None and r.outline.usage is not None]
     sent = sum(r.tokens_from_client for r in records)
     forwarded = sum(r.tokens_forwarded for r in records)
-    return {"requests": len(records), "tokens_from_client": sent, "tokens_forwarded": forwarded,
-            # Tokens the provider wrote to its cache on requests that carried a collection: the recap changed,
-            # so the prompt after the system prompt was cached again. As the provider counts them.
-            "collection_cache_write_tokens": sum(r.outline.usage.cache_creation_input_tokens for r in records
-                                                 if r.carries_collections and r.outline is not None
-                                                 and r.outline.usage is not None),
-            "tokens_saved": sent - forwarded,
-            "input_tokens": sum(u.input_tokens for u in usage),
-            "cache_read_input_tokens": sum(u.cache_read_input_tokens for u in usage),
-            "cache_creation_input_tokens": sum(u.cache_creation_input_tokens for u in usage),
-            "output_tokens": sum(u.output_tokens for u in usage)}
+    return {
+        "requests": len(records),
+        "tokens_from_client": sent,
+        "tokens_forwarded": forwarded,
+        # Tokens the provider wrote to its cache on requests that carried a collection: the recap changed,
+        # so the prompt after the system prompt was cached again. As the provider counts them.
+        "collection_cache_write_tokens": sum(
+            r.outline.usage.cache_creation_input_tokens
+            for r in records
+            if r.carries_collections and r.outline is not None and r.outline.usage is not None
+        ),
+        "tokens_saved": sent - forwarded,
+        "input_tokens": sum(u.input_tokens for u in usage),
+        "cache_read_input_tokens": sum(u.cache_read_input_tokens for u in usage),
+        "cache_creation_input_tokens": sum(u.cache_creation_input_tokens for u in usage),
+        "output_tokens": sum(u.output_tokens for u in usage),
+    }
 
 
 def _ended(records: Sequence[RequestRecord]) -> str | None:

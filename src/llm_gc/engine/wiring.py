@@ -15,9 +15,13 @@ from llm_gc.scoring import DecisionScorer, DensityScorer, SpanScorer
 from llm_gc.session import SessionManager
 
 
-def build_gc_service(config: GCConfig, *, summary_provider: LLMProvider | None,
-                     session_manager: SessionManager | None = None, fact_reader: FactReader | None = None
-                     ) -> GcService:
+def build_gc_service(
+    config: GCConfig,
+    *,
+    summary_provider: LLMProvider | None,
+    session_manager: SessionManager | None = None,
+    fact_reader: FactReader | None = None,
+) -> GcService:
     """A `GcService` wired with the default components.
 
     Args:
@@ -35,13 +39,21 @@ def build_gc_service(config: GCConfig, *, summary_provider: LLMProvider | None,
     bus = EventBus()
     # Metered, so each collection can report what its own model calls spent.
     summary_provider = MeteredProvider(summary_provider) if summary_provider is not None else None
-    compactor: BaseCompactor = (NoOpCompactor(event_bus=bus) if summary_provider is None
-                                else LLMCompactor(event_bus=bus, provider=summary_provider))
+    compactor: BaseCompactor = (
+        NoOpCompactor(event_bus=bus)
+        if summary_provider is None
+        else LLMCompactor(event_bus=bus, provider=summary_provider)
+    )
     return GcService(
         session_manager=session_manager if session_manager is not None else SessionManager(event_bus=bus),
-        generational_memory=GenerationalMemory(fact_reader=fact_reader if fact_reader is not None
-                                               else PatternFactReader() if summary_provider is None
-                                               else LLMFactReader(summary_provider), compactor=compactor),
+        generational_memory=GenerationalMemory(
+            fact_reader=fact_reader
+            if fact_reader is not None
+            else PatternFactReader()
+            if summary_provider is None
+            else LLMFactReader(summary_provider),
+            compactor=compactor,
+        ),
         span_scorer=SpanScorer([DecisionScorer(), DensityScorer()]),
         event_bus=bus,
         gc_config=config,

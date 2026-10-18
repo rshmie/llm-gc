@@ -22,19 +22,20 @@ from evals.decision_survival.progress import Progress
 
 SCRIPTS = Path(__file__).with_name("long_scripts.json")
 DEFAULT_MODEL = "claude-sonnet-5-5"
-ATTEMPTS = 3   # per answer, before the run stops and names the turn
+ATTEMPTS = 3  # per answer, before the run stops and names the turn
 
-PERSONA = ("You are an experienced software architect helping a product team design a system over a long "
-           "conversation. Answer each message as you would in a detailed design review: concrete "
-           "recommendations, trade-offs and specifics, with headings and lists where they help. "
-           "Aim for 900 to 1,400 words.")
+PERSONA = (
+    "You are an experienced software architect helping a product team design a system over a long "
+    "conversation. Answer each message as you would in a detailed design review: concrete "
+    "recommendations, trade-offs and specifics, with headings and lists where they help. "
+    "Aim for 900 to 1,400 words."
+)
 
 # The conversation so far, ending with the user's turn, and this answer's instructions -> the answer.
 Answer = Callable[[list[dict[str, str]], str], str]
 
 
-def author_conversation(script: dict[str, Any], answer: Answer, progress: Progress | None = None
-                        ) -> dict[str, Any]:
+def author_conversation(script: dict[str, Any], answer: Answer, progress: Progress | None = None) -> dict[str, Any]:
     """The script with every assistant turn written and checked; raises naming a turn that could not be."""
     probes = script["probes"]
     turns: list[dict[str, str]] = []
@@ -51,8 +52,9 @@ def author_conversation(script: dict[str, Any], answer: Answer, progress: Progre
             text = answer(turns, instructions)
             problem = _problem(text, stated_here, forbidden)
             if progress is not None:
-                progress.end(problem is None, f"{len(text.split()):,} words" if problem is None
-                             else f"{problem}, asking again")
+                progress.end(
+                    problem is None, f"{len(text.split()):,} words" if problem is None else f"{problem}, asking again"
+                )
             if problem is None:
                 break
         else:
@@ -85,14 +87,18 @@ def dump_dataset(data: dict[str, Any]) -> str:
         turns = conversation["turns"]
         for t_index, turn in enumerate(turns):
             comma = "," if t_index < len(turns) - 1 else ""
-            lines.append(f'        {{"role": {json.dumps(turn["role"])}, '
-                         f'"text": {json.dumps(turn["text"], ensure_ascii=False)}}}{comma}')
+            lines.append(
+                f'        {{"role": {json.dumps(turn["role"])}, '
+                f'"text": {json.dumps(turn["text"], ensure_ascii=False)}}}{comma}'
+            )
         lines += ["      ],", '      "probes": [']
         probes = conversation["probes"]
         for p_index, probe in enumerate(probes):
-            fields = ", ".join(f"{json.dumps(key)}: {json.dumps(probe[key], ensure_ascii=False)}"
-                               for key in ("id", "question", "accept", "reject", "established_at", "also_in")
-                               if key in probe)
+            fields = ", ".join(
+                f"{json.dumps(key)}: {json.dumps(probe[key], ensure_ascii=False)}"
+                for key in ("id", "question", "accept", "reject", "established_at", "also_in")
+                if key in probe
+            )
             lines.append(f"        {{{fields}}}" + ("," if p_index < len(probes) - 1 else ""))
         lines += ["      ]", "    }" + ("," if c_index < len(data["conversations"]) - 1 else "")]
     lines += ["  ]", "}"]
@@ -104,8 +110,10 @@ def _instructions(must_state: str | None, forbidden: list[str]) -> str:
     if must_state:
         parts.append(f"In this answer, make this recommendation explicitly, keeping its figure exactly: {must_state}")
     if forbidden:
-        parts.append("Do not mention any of the following anywhere in this answer, not even in passing or as an "
-                     f"example: {'; '.join(forbidden)}.")
+        parts.append(
+            "Do not mention any of the following anywhere in this answer, not even in passing or as an "
+            f"example: {'; '.join(forbidden)}."
+        )
     return " ".join(parts)
 
 
@@ -130,13 +138,23 @@ def _claude(model: str, effort: Effort, usage: dict[str, int], on_words: Callabl
         messages: list[Any] = [{"role": turn["role"], "content": turn["text"]} for turn in turns[:-1]]
         # The breakpoint on the newest user turn caches the history; the per-turn instructions
         # come after it as a system message, so they never change the cached prefix.
-        messages.append({"role": "user", "content": [
-            {"type": "text", "text": turns[-1]["text"], "cache_control": {"type": "ephemeral"}}]})
+        messages.append(
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": turns[-1]["text"], "cache_control": {"type": "ephemeral"}}],
+            }
+        )
         if instructions:
             messages.append({"role": "system", "content": instructions})
-        with client.beta.messages.stream(model=model, max_tokens=16_000, system=PERSONA, messages=messages,
-                                         output_config=output_config,
-                                         betas=["server-side-fallback-2026-07-01"], fallbacks="default") as stream:
+        with client.beta.messages.stream(
+            model=model,
+            max_tokens=16_000,
+            system=PERSONA,
+            messages=messages,
+            output_config=output_config,
+            betas=["server-side-fallback-2026-07-01"],
+            fallbacks="default",
+        ) as stream:
             words = 0
             for text in stream.text_stream:
                 words += text.count(" ") + text.count("\n")
@@ -161,8 +179,9 @@ def main() -> None:
     scripts = [s for s in json.loads(SCRIPTS.read_text())["scripts"] if not args.only or s["id"] in args.only]
     usage: dict[str, int] = {}
     progress = Progress(total=sum(len(script["pairs"]) for script in scripts))
-    answer = _claude(args.model, cast(Effort, args.effort), usage,
-                     lambda words: progress.update(f"writing… {words:,} words"))
+    answer = _claude(
+        args.model, cast(Effort, args.effort), usage, lambda words: progress.update(f"writing… {words:,} words")
+    )
     print(f"{progress.total} answers to write, each a minute or so")
     conversations = [author_conversation(script, answer, progress) for script in scripts]
     freeze(conversations)

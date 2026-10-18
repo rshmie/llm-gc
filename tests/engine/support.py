@@ -24,12 +24,19 @@ from llm_gc.utils import count_tokens
 
 KEPT_SCORE, COMPACTED_SCORE, ARCHIVED_SCORE = 0.9, 0.5, 0.1
 
-SUMMARY = LLMResponse(text="The turn weighed storage options, replication and failover in brief.",
-                      stop_reason=StopReason.COMPLETE, input_tokens=0, output_tokens=14, model="scripted",
-                      provider="offline")
+SUMMARY = LLMResponse(
+    text="The turn weighed storage options, replication and failover in brief.",
+    stop_reason=StopReason.COMPLETE,
+    input_tokens=0,
+    output_tokens=14,
+    model="scripted",
+    provider="offline",
+)
 
-_SENTENCE = ("We compared the storage layer options at length, weighing replication, failover, retention "
-             "and the cost of each replica under the expected load. ")
+_SENTENCE = (
+    "We compared the storage layer options at length, weighing replication, failover, retention "
+    "and the cost of each replica under the expected load. "
+)
 
 
 def turn(index: int, role: str = "user", opening: str | None = None, length: int = 4) -> Message:
@@ -53,9 +60,14 @@ class ScriptedSpanScorer:
         return [SpanScore(combined=value, liveness=value, parts={}) for value in values]
 
 
-def make_service(config: GCConfig | None = None, scores: Mapping[int, float] | None = None, *,
-                 compactor: BaseCompactor | None = None, fact_reader: FactReader | None = None,
-                 default_score: float = KEPT_SCORE) -> tuple[GcService, ScriptedSpanScorer, FakeProvider]:
+def make_service(
+    config: GCConfig | None = None,
+    scores: Mapping[int, float] | None = None,
+    *,
+    compactor: BaseCompactor | None = None,
+    fact_reader: FactReader | None = None,
+    default_score: float = KEPT_SCORE,
+) -> tuple[GcService, ScriptedSpanScorer, FakeProvider]:
     """A service on a scripted scorer and a scripted summariser; returns both for the test to steer."""
     bus = EventBus()
     provider = FakeProvider(responses=[SUMMARY] * 500)
@@ -64,7 +76,8 @@ def make_service(config: GCConfig | None = None, scores: Mapping[int, float] | N
         session_manager=SessionManager(),
         generational_memory=GenerationalMemory(
             fact_reader=fact_reader if fact_reader is not None else PatternFactReader(),
-            compactor=compactor if compactor is not None else LLMCompactor(event_bus=bus, provider=provider)),
+            compactor=compactor if compactor is not None else LLMCompactor(event_bus=bus, provider=provider),
+        ),
         span_scorer=scorer,  # type: ignore[arg-type]  # duck-typed: only `score` is called
         event_bus=bus,
         gc_config=config if config is not None else GCConfig(min_cut_tokens=0, last_n_turns_to_keep=1),
@@ -82,6 +95,10 @@ async def collect(service: GcService, session_id: str, *, ignore_batch_minimum: 
     switched = service.gc_switch(session_id, CacheState.COLD)
     if switched is None:
         return prepared
-    return switched.model_copy(update={"summary_calls": prepared.summary_calls,
-                                       "summary_input_tokens": prepared.summary_input_tokens,
-                                       "summary_output_tokens": prepared.summary_output_tokens})
+    return switched.model_copy(
+        update={
+            "summary_calls": prepared.summary_calls,
+            "summary_input_tokens": prepared.summary_input_tokens,
+            "summary_output_tokens": prepared.summary_output_tokens,
+        }
+    )

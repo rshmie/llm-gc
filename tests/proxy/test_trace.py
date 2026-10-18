@@ -32,16 +32,43 @@ class _Session:
     def __init__(self) -> None:
         self.log = RequestLog(clock=_Clock())
 
-    def send(self, conversation, turns, newest="typed", origin=MAIN, calls=(), status=200, reasons=(), sent=100,
-             forwarded=100, request_id=None):
-        record = self.log.begin(conversation_id=conversation, origin=origin,
-                                hashes=[turns[:end] for end in range(1, len(turns) + 1)], newest=newest, model="m",
-                                tokens_from_client=sent, tokens_forwarded=forwarded, collected=origin.agent_id is None,
-                                switch_reasons=reasons, request_id=request_id)
-        self.log.finish(record, ReplyOutline(
-            status=status, finished=status == 200, stop_reason="tool_use" if calls else "end_turn",
-            usage=ProviderUsage(replies=1, cache_read_input_tokens=sent, cache_creation_input_tokens=sent, output_tokens=10),
-            tool_calls=tuple(ToolCall(name="Agent", call_id=call) for call in calls)))
+    def send(
+        self,
+        conversation,
+        turns,
+        newest="typed",
+        origin=MAIN,
+        calls=(),
+        status=200,
+        reasons=(),
+        sent=100,
+        forwarded=100,
+        request_id=None,
+    ):
+        record = self.log.begin(
+            conversation_id=conversation,
+            origin=origin,
+            hashes=[turns[:end] for end in range(1, len(turns) + 1)],
+            newest=newest,
+            model="m",
+            tokens_from_client=sent,
+            tokens_forwarded=forwarded,
+            collected=origin.agent_id is None,
+            switch_reasons=reasons,
+            request_id=request_id,
+        )
+        self.log.finish(
+            record,
+            ReplyOutline(
+                status=status,
+                finished=status == 200,
+                stop_reason="tool_use" if calls else "end_turn",
+                usage=ProviderUsage(
+                    replies=1, cache_read_input_tokens=sent, cache_creation_input_tokens=sent, output_tokens=10
+                ),
+                tool_calls=tuple(ToolCall(name="Agent", call_id=call) for call in calls),
+            ),
+        )
         return record
 
     def trace(self, client_session="cc-1"):
@@ -58,19 +85,19 @@ def _kinds(rows):
 
 def test_a_live_runs_requests_become_turns_and_the_subagents_each_turn_started():
     s = _Session()
-    s.send(None, "q")                                                          # a quota check
-    s.send(None, "z")                                                          # a title request
-    first = s.send(None, "a", calls=("toolu_0", "toolu_1"))                    # "use two subagents"
+    s.send(None, "q")  # a quota check
+    s.send(None, "z")  # a title request
+    first = s.send(None, "a", calls=("toolu_0", "toolu_1"))  # "use two subagents"
     count = s.send(None, "P", origin=_agent("a1"))
     count.spawned_by = SpawnRef(first.request_id, "toolu_0", "Agent")
     readme = s.send(None, "S", origin=_agent("a2"))
     readme.spawned_by = SpawnRef(first.request_id, "toolu_1", "Agent")
-    s.send("s_main", "abc", newest="tool_results")                             # both started
+    s.send("s_main", "abc", newest="tool_results")  # both started
     s.send("s_a1", "PQR", newest="tool_results", origin=_agent("a1"))
-    s.send("s_main", "abcdX")                                                   # a side request
-    s.send("s_main", "abcdR", newest="relayed")                                 # subagent 1 reports
-    s.send("s_main", "abcdRfG")                                                 # the person's next message
-    s.send("s_a2", "STU", newest="tool_results", origin=_agent("a2"))           # subagent 2 still at work
+    s.send("s_main", "abcdX")  # a side request
+    s.send("s_main", "abcdR", newest="relayed")  # subagent 1 reports
+    s.send("s_main", "abcdRfG")  # the person's next message
+    s.send("s_a2", "STU", newest="tool_results", origin=_agent("a2"))  # subagent 2 still at work
 
     trace = s.trace()
 
@@ -78,8 +105,9 @@ def test_a_live_runs_requests_become_turns_and_the_subagents_each_turn_started()
     first_turn, second_turn = trace["turns"]
     assert _kinds(first_turn["requests"]) == ["turn", "tool_round", "replaced", "report"]
     assert first_turn["requests"][0]["spawned"] == ["a1", "a2"]
-    assert [(node["label"], node["spawned_by"]["call_id"], len(node["requests"])) for node in first_turn["subagents"]] == [
-        ("Subagent 1", "toolu_0", 2), ("Subagent 2", "toolu_1", 2)]
+    assert [
+        (node["label"], node["spawned_by"]["call_id"], len(node["requests"])) for node in first_turn["subagents"]
+    ] == [("Subagent 1", "toolu_0", 2), ("Subagent 2", "toolu_1", 2)]
     assert _kinds(first_turn["subagents"][0]["requests"]) == ["task", "tool_round"]
     assert first_turn["totals"]["requests"] == 8, "the turn costs its own requests and its subagents'"
     assert _kinds(second_turn["requests"]) == ["turn"] and second_turn["subagents"] == []
@@ -101,12 +129,15 @@ def test_a_new_main_conversation_after_compact_is_marked_and_the_old_one_is_earl
     s = _Session()
     s.send("s_old", "abc")
     s.send("s_old", "abcde")
-    s.send("s_old", "abcdeSU")                                                 # /compact asks for a summary
+    s.send("s_old", "abcdeSU")  # /compact asks for a summary
     s.send("s_new", "xyz")
 
     turns = s.trace()["turns"]
     assert [(t["part"], t["new_conversation"]) for t in turns] == [
-        ("earlier_main", False), ("earlier_main", False), ("main", True)]
+        ("earlier_main", False),
+        ("earlier_main", False),
+        ("main", True),
+    ]
     assert _kinds(turns[1]["requests"]) == ["turn", "closing"], "the summary request was not typed by the person"
 
 
@@ -135,7 +166,7 @@ def test_a_subagent_started_by_a_subagent_stays_in_the_turn_that_started_the_fir
     first = s.send("s_main", "abc", calls=("toolu_0",))
     parent = s.send(None, "P", origin=_agent("a1"), calls=("toolu_9",))
     parent.spawned_by = SpawnRef(first.request_id, "toolu_0", "Agent")
-    s.send("s_main", "abcdef")                                                  # the person types again
+    s.send("s_main", "abcdef")  # the person types again
     child = s.send(None, "C", origin=_agent("a2"))
     child.spawned_by = SpawnRef(parent.request_id, "toolu_9", "Agent")
 
@@ -162,7 +193,7 @@ def test_a_tools_own_model_call_inside_a_subagent_is_not_taken_for_its_task():
     first = s.send("s_main", "abc", calls=("toolu_0",))
     opening = s.send(None, "P", origin=_agent("a1"))
     opening.spawned_by = SpawnRef(first.request_id, "toolu_0", "Agent")
-    s.send(None, "W", origin=_agent("a1"))                                      # WebFetch reads a page
+    s.send(None, "W", origin=_agent("a1"))  # WebFetch reads a page
 
     [turn] = s.trace()["turns"]
     assert _kinds(turn["subagents"][0]["requests"]) == ["task", "unclaimed"], "the opening is known by its call"

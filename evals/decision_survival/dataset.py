@@ -16,7 +16,7 @@ DATASET = Path(__file__).with_name("conversations.json")
 
 @dataclass(frozen=True)
 class Turn:
-    role: str   # "user" or "assistant"
+    role: str  # "user" or "assistant"
     text: str
 
 
@@ -26,10 +26,10 @@ class Probe:
 
     id: str
     question: str
-    accept: tuple[str, ...]          # a right answer names one of these
-    established_at: int              # the turn that states the current value
-    reject: tuple[str, ...] = ()     # values the conversation later replaced
-    also_in: tuple[int, ...] = ()    # turns allowed to repeat it, such as the reply to a change of mind
+    accept: tuple[str, ...]  # a right answer names one of these
+    established_at: int  # the turn that states the current value
+    reject: tuple[str, ...] = ()  # values the conversation later replaced
+    also_in: tuple[int, ...] = ()  # turns allowed to repeat it, such as the reply to a change of mind
 
 
 @dataclass(frozen=True)
@@ -62,10 +62,17 @@ def _conversation(item: dict) -> Conversation:
     conversation = Conversation(
         id=item["id"],
         turns=tuple(Turn(role=turn["role"], text=turn["text"]) for turn in item["turns"]),
-        probes=tuple(Probe(id=probe["id"], question=probe["question"], accept=tuple(probe["accept"]),
-                           established_at=probe["established_at"], reject=tuple(probe.get("reject", ())),
-                           also_in=tuple(probe.get("also_in", ())))
-                     for probe in item["probes"]),
+        probes=tuple(
+            Probe(
+                id=probe["id"],
+                question=probe["question"],
+                accept=tuple(probe["accept"]),
+                established_at=probe["established_at"],
+                reject=tuple(probe.get("reject", ())),
+                also_in=tuple(probe.get("also_in", ())),
+            )
+            for probe in item["probes"]
+        ),
     )
     _validate(conversation)
     return conversation

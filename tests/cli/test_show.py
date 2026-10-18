@@ -31,7 +31,7 @@ def _credential(output: str, name: str) -> str | None:
     """A credential's status in the report, or None when it is not listed."""
     for line in output.splitlines():
         if line.startswith(f"#   {name} "):
-            return line[len(f"#   {name} "):].strip()
+            return line[len(f"#   {name} ") :].strip()
     return None
 
 
@@ -47,7 +47,7 @@ def test_everything_is_a_default_when_no_layer_says_otherwise():
 
 def test_each_layer_is_named_for_the_values_it_supplied(isolated, monkeypatch):
     file = isolated / "c.toml"
-    file.write_text("log_level = \"WARNING\"\n[engine]\nmin_cut_tokens = 2000\n")
+    file.write_text('log_level = "WARNING"\n[engine]\nmin_cut_tokens = 2000\n')
     (isolated / ".env").write_text("LLM_GC_DASHBOARD_PORT=9500\n")
     monkeypatch.setenv("LLM_GC_PORT", "9200")
     output = _show(file, compactor="noop")
@@ -94,7 +94,7 @@ def test_an_unset_value_is_a_comment_because_toml_has_no_null():
 
 
 def test_an_unset_summary_setting_says_what_is_used_instead():
-    """"not set" alone reads as a fault; for these two, leaving them out is the normal setup."""
+    """ "not set" alone reads as a fault; for these two, leaving them out is the normal setup."""
     output = _show(upstream="https://gateway.example.com")
     assert f"# model: not set: the provider's default, {DEFAULT_MODELS['anthropic']}" in output
     assert "# base_url: not set: follows upstream, https://gateway.example.com" in output

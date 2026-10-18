@@ -7,8 +7,14 @@ import click
 from llm_gc.cli.config_file import read_config_template, write_config_file
 from llm_gc.cli.options import config_file_option
 from llm_gc.cli.settings import (
-    CONFIG_PATH_ENV, DEFAULT_CONFIG_FILENAME, ENV_FILENAME, ConfigLocation, find_config_file, load_settings,
-    settings_origins, user_config_path,
+    CONFIG_PATH_ENV,
+    DEFAULT_CONFIG_FILENAME,
+    ENV_FILENAME,
+    ConfigLocation,
+    find_config_file,
+    load_settings,
+    settings_origins,
+    user_config_path,
 )
 from llm_gc.cli.show import render_settings
 from llm_gc.cli.style import INDENT, style, tidy_path
@@ -51,19 +57,25 @@ def add_config_commands(cli: click.Group) -> None:
         except ConfigError as err:
             raise CommandError(str(err)) from err
         env_file = Path.cwd() / ENV_FILENAME
-        key_step = (f"Check that {tidy_path(env_file)} holds LLM-GC's own key: llm-gc config show says"
-                    if env_file.exists() else
-                    f"Put LLM-GC's own key in {tidy_path(env_file)} " + style("(copy .env.example)", dim=True))
-        click.echo("\n".join([
-            "",
-            f"{INDENT}{style('✓', fg='green')} Wrote {tidy_path(target)} "
-            + style("(LLM-GC's settings, each one commented)", dim=True),
-            "",
-            INDENT + style("Next", bold=True),
-            f"{INDENT}  1. {key_step}",
-            f"{INDENT}  2. llm-gc start --dashboard",
-            "",
-        ]))
+        key_step = (
+            f"Check that {tidy_path(env_file)} holds LLM-GC's own key: llm-gc config show says"
+            if env_file.exists()
+            else f"Put LLM-GC's own key in {tidy_path(env_file)} " + style("(copy .env.example)", dim=True)
+        )
+        click.echo(
+            "\n".join(
+                [
+                    "",
+                    f"{INDENT}{style('✓', fg='green')} Wrote {tidy_path(target)} "
+                    + style("(LLM-GC's settings, each one commented)", dim=True),
+                    "",
+                    INDENT + style("Next", bold=True),
+                    f"{INDENT}  1. {key_step}",
+                    f"{INDENT}  2. llm-gc start --dashboard",
+                    "",
+                ]
+            )
+        )
 
     @config.command()
     @config_file_option
@@ -97,13 +109,15 @@ def _describe_location(location: ConfigLocation | None) -> str:
         (tidy_path(user_config_path()), "not found"),
     ]
     width = max(len(place) for place, _ in places) + 3
-    return "\n".join([
-        "",
-        f"{INDENT}No config file, so the built-in defaults apply.",
-        "",
-        INDENT + style("Looked for, in order:", bold=True),
-        *(f"{INDENT}  {place.ljust(width)}" + style(why, dim=True) for place, why in places),
-        "",
-        f"{INDENT}Create one here with: llm-gc config init",
-        "",
-    ])
+    return "\n".join(
+        [
+            "",
+            f"{INDENT}No config file, so the built-in defaults apply.",
+            "",
+            INDENT + style("Looked for, in order:", bold=True),
+            *(f"{INDENT}  {place.ljust(width)}" + style(why, dim=True) for place, why in places),
+            "",
+            f"{INDENT}Create one here with: llm-gc config init",
+            "",
+        ]
+    )

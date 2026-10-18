@@ -23,8 +23,9 @@ def _user(index: int, text: str = "a question about the design", tokens: int = 2
     return Message(role="user", content=text, token_count=tokens, turn_index=index)
 
 
-def _assistant(index: int, text: str = "an answer about the design", tokens: int = 200, calls: tuple[str, ...] = ()
-               ) -> Message:
+def _assistant(
+    index: int, text: str = "an answer about the design", tokens: int = 200, calls: tuple[str, ...] = ()
+) -> Message:
     raw = [{"type": "tool_use", "id": call, "name": "lookup", "input": {}} for call in calls] or None
     return Message(role="assistant", content=text, token_count=tokens, turn_index=index, raw_content=raw)
 
@@ -54,13 +55,24 @@ class TestGroupingIntoExchanges:
         assert _indices(group_exchanges(turns)) == [[0, 1, 2, 3]]
 
     def test_words_typed_beside_tool_results_stay_in_the_exchange_that_called_for_them(self):
-        turns = [_user(0), _assistant(1, calls=("a",)), turn_with_typed_words(2, "a", "Stop, use MySQL."),
-                 _assistant(3), _user(4)]
+        turns = [
+            _user(0),
+            _assistant(1, calls=("a",)),
+            turn_with_typed_words(2, "a", "Stop, use MySQL."),
+            _assistant(3),
+            _user(4),
+        ]
         assert _indices(group_exchanges(turns)) == [[0, 1, 2, 3], [4]]
 
     def test_a_large_exchange_is_divided_between_tool_rounds(self):
-        turns = [_user(0), _assistant(1, tokens=600, calls=("a",)), _results(2, ("a",)),
-                 _assistant(3, tokens=600, calls=("b",)), _results(4, ("b",)), _assistant(5, tokens=600)]
+        turns = [
+            _user(0),
+            _assistant(1, tokens=600, calls=("a",)),
+            _results(2, ("a",)),
+            _assistant(3, tokens=600, calls=("b",)),
+            _results(4, ("b",)),
+            _assistant(5, tokens=600),
+        ]
         assert _indices(group_exchanges(turns, max_span_tokens=1000)) == [[0, 1, 2], [3, 4], [5]]
 
     def test_a_question_is_never_parted_from_its_first_answer(self):
@@ -73,9 +85,12 @@ class TestGroupingIntoExchanges:
         turns = [_assistant(4), _user(5), _assistant(6)]
         assert _indices(group_exchanges(turns)) == [[4], [5, 6]]
 
-    @given(exchanges=st.lists(st.tuples(st.integers(0, 3), st.lists(st.integers(1, 3000), min_size=4, max_size=4)),
-                              min_size=1, max_size=8),
-           limit=st.integers(100, 5000))
+    @given(
+        exchanges=st.lists(
+            st.tuples(st.integers(0, 3), st.lists(st.integers(1, 3000), min_size=4, max_size=4)), min_size=1, max_size=8
+        ),
+        limit=st.integers(100, 5000),
+    )
     def test_spans_partition_the_turns_and_never_part_a_call_from_its_result(self, exchanges, limit):
         turns: list[Message] = []
         for number, (rounds, sizes) in enumerate(exchanges):
@@ -108,14 +123,21 @@ class TestTheIndexLine:
 
     def test_words_typed_beside_tool_results_are_what_was_asked_when_the_span_has_no_question(self):
         """A large exchange divided between tool rounds gives spans that open on the assistant's turn."""
-        turns = [_assistant(0, "Running the suite.", calls=("a",)),
-                 turn_with_typed_words(1, "a", "Stop, use MySQL. It is faster here.", output="42 passed")]
+        turns = [
+            _assistant(0, "Running the suite.", calls=("a",)),
+            turn_with_typed_words(1, "a", "Stop, use MySQL. It is faster here.", output="42 passed"),
+        ]
         assert self.writer.write(turns) == "Stop, use MySQL."
 
     def test_it_is_never_text_the_client_wrote(self):
         """Claude Code writes a local command's caveat before the person's words, in the same turn."""
-        turns = [turn_with_client_text(0, (True, "<local-command-caveat>Caveat: local.</local-command-caveat>"),
-                                       (False, "Which runner is faster? Tell me."))]
+        turns = [
+            turn_with_client_text(
+                0,
+                (True, "<local-command-caveat>Caveat: local.</local-command-caveat>"),
+                (False, "Which runner is faster? Tell me."),
+            )
+        ]
         assert self.writer.write(turns) == "Which runner is faster?"
 
     def test_a_long_sentence_is_cut_at_a_word_on_one_line(self):
@@ -126,16 +148,22 @@ class TestTheIndexLine:
         assert line.startswith("We need to decide how the ingest service")
 
 
-_SUMMARY = LLMResponse(text="They settled on mysql for the database after a long discussion.",
-                       stop_reason=StopReason.COMPLETE, input_tokens=0, output_tokens=14,
-                       model="scripted", provider="offline")
+_SUMMARY = LLMResponse(
+    text="They settled on mysql for the database after a long discussion.",
+    stop_reason=StopReason.COMPLETE,
+    input_tokens=0,
+    output_tokens=14,
+    model="scripted",
+    provider="offline",
+)
 
 
 def _memory(responses) -> tuple[GenerationalMemory, FakeProvider]:
     bus = EventBus()
     provider = FakeProvider(responses=responses)
-    return GenerationalMemory(fact_reader=PatternFactReader(),
-                              compactor=LLMCompactor(event_bus=bus, provider=provider)), provider
+    return GenerationalMemory(
+        fact_reader=PatternFactReader(), compactor=LLMCompactor(event_bus=bus, provider=provider)
+    ), provider
 
 
 def _said(index: int, role: str, text: str) -> Message:
@@ -160,8 +188,11 @@ class TestCondensing:
     def test_nothing_is_kept_as_raw_text(self):
         """The span keeps the turns themselves, so text extraction cannot read is not copied anywhere."""
         memory, _ = _memory([_SUMMARY])
-        [span] = asyncio.run(memory.condense([_said(0, "user", "Thanks, that helps a lot."),
-                                              _said(1, "assistant", "Glad to hear it. " * 40)]))
+        [span] = asyncio.run(
+            memory.condense(
+                [_said(0, "user", "Thanks, that helps a lot."), _said(1, "assistant", "Glad to hear it. " * 40)]
+            )
+        )
 
         assert span.facts == ()
 
@@ -183,8 +214,16 @@ class TestCondensing:
 
     def test_each_span_gets_its_own_summary(self):
         memory, provider = _memory([_SUMMARY, _SUMMARY])
-        spans = asyncio.run(memory.condense([_said(0, "user", "Which database?"), _said(1, "assistant", _LONG_ANSWER),
-                                             _said(2, "user", "And the cache?"), _said(3, "assistant", _LONG_ANSWER)]))
+        spans = asyncio.run(
+            memory.condense(
+                [
+                    _said(0, "user", "Which database?"),
+                    _said(1, "assistant", _LONG_ANSWER),
+                    _said(2, "user", "And the cache?"),
+                    _said(3, "assistant", _LONG_ANSWER),
+                ]
+            )
+        )
 
         assert [[turn.turn_index for turn in span.turns] for span in spans] == [[0, 1], [2, 3]]
         assert len(provider.calls) == 2
@@ -198,11 +237,21 @@ class _RecordingReader:
         self.asked: list[tuple[list[list[int]], list[str]]] = []
 
     async def read(self, spans, on_record):
-        self.asked.append(([[turn.turn_index for turn in span] for span in spans],
-                           [f"{fact.topic_label}: {fact.content}" for fact in on_record]))
-        return [KnowledgeEntry(message_turn=span[-1].turn_index, content=f"value {span[-1].turn_index}",
-                               topic_label=f"topic {span[-1].turn_index}", knowledge_type=KnowledgeType.FACT)
-                for span in spans]
+        self.asked.append(
+            (
+                [[turn.turn_index for turn in span] for span in spans],
+                [f"{fact.topic_label}: {fact.content}" for fact in on_record],
+            )
+        )
+        return [
+            KnowledgeEntry(
+                message_turn=span[-1].turn_index,
+                content=f"value {span[-1].turn_index}",
+                topic_label=f"topic {span[-1].turn_index}",
+                knowledge_type=KnowledgeType.FACT,
+            )
+            for span in spans
+        ]
 
 
 class TestFactsAreReadOncePerCollection:
@@ -211,12 +260,23 @@ class TestFactsAreReadOncePerCollection:
         before this collection: the reader sees them all at once."""
         reader = _RecordingReader()
         memory = GenerationalMemory(fact_reader=reader, compactor=NoOpCompactor(event_bus=EventBus()))
-        on_record = [KnowledgeEntry(message_turn=0, content="Google Cloud", topic_label="cloud",
-                                    knowledge_type=KnowledgeType.DECISION)]
+        on_record = [
+            KnowledgeEntry(
+                message_turn=0, content="Google Cloud", topic_label="cloud", knowledge_type=KnowledgeType.DECISION
+            )
+        ]
 
-        spans = asyncio.run(memory.condense([_said(4, "user", "Which database?"), _said(5, "assistant", "Postgres."),
-                                             _said(6, "user", "And the cache?"), _said(7, "assistant", "Redis.")],
-                                            on_record))
+        spans = asyncio.run(
+            memory.condense(
+                [
+                    _said(4, "user", "Which database?"),
+                    _said(5, "assistant", "Postgres."),
+                    _said(6, "user", "And the cache?"),
+                    _said(7, "assistant", "Redis."),
+                ],
+                on_record,
+            )
+        )
 
         assert reader.asked == [([[4, 5], [6, 7]], ["cloud: Google Cloud"])]
         assert [[fact.message_turn for fact in span.facts] for span in spans] == [[5], [7]], "each fact on its span"
@@ -237,8 +297,16 @@ class TestARelayedReportIsNotTheUsers:
     """A background subagent's report arrives under the user role, but the user did not write it."""
 
     def test_it_joins_the_exchange_that_started_the_subagent(self):
-        turns = [_user(0), _assistant(1, calls=("a",)), _results(2, ("a",)), _assistant(3), _report(4), _assistant(5),
-                 _user(6), _assistant(7)]
+        turns = [
+            _user(0),
+            _assistant(1, calls=("a",)),
+            _results(2, ("a",)),
+            _assistant(3),
+            _report(4),
+            _assistant(5),
+            _user(6),
+            _assistant(7),
+        ]
         assert _indices(group_exchanges(turns)) == [[0, 1, 2, 3, 4, 5], [6, 7]]
 
     def test_it_is_never_the_index_line(self):

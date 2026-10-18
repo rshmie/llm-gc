@@ -10,8 +10,9 @@ from llm_gc.proxy.server import DEFAULT_PROXY_PORT
 _LABEL_WIDTH = 11
 
 
-def render_header(settings: ProxySettings, location: ConfigLocation | None, version: str,
-                  columns: int | None = None) -> str:
+def render_header(
+    settings: ProxySettings, location: ConfigLocation | None, version: str, columns: int | None = None
+) -> str:
     """What this run loaded: the file, where requests go, and what summarises them.
 
     `columns` is the terminal's width, or None when output is not a terminal; the wordmark is
@@ -23,14 +24,16 @@ def render_header(settings: ProxySettings, location: ConfigLocation | None, vers
         title = [*wordmark, "", INDENT + style(f"v{version}", bold=True) + tagline]
     else:
         title = [INDENT + style(f"LLM-GC {version}", bold=True)]
-    return "\n".join([
-        "",
-        *title,
-        "",
-        _row("Config", _describe_config(location)),
-        _row("Upstream", settings.upstream),
-        _row("Summaries", _describe_summaries(settings)),
-    ])
+    return "\n".join(
+        [
+            "",
+            *title,
+            "",
+            _row("Config", _describe_config(location)),
+            _row("Upstream", settings.upstream),
+            _row("Summaries", _describe_summaries(settings)),
+        ]
+    )
 
 
 def render_check(warning: str | None) -> str:
@@ -46,15 +49,17 @@ def render_addresses(settings: ProxySettings) -> str:
         dashboard = style(f"http://{BIND_HOST}:{settings.dashboard_port}", fg="cyan")
     else:
         dashboard = "off " + style("(start with --dashboard to see your conversations)", dim=True)
-    return "\n".join([
-        "",
-        _row("Proxy", style(f"http://{BIND_HOST}:{settings.port}", fg="cyan")),
-        _row("Dashboard", dashboard),
-        _row("Stats", _stats_command(settings) + " " + style("(in another terminal)", dim=True)),
-        "",
-        INDENT + style("Leave this terminal open while you work. Ctrl-C stops LLM-GC.", dim=True),
-        "",
-    ])
+    return "\n".join(
+        [
+            "",
+            _row("Proxy", style(f"http://{BIND_HOST}:{settings.port}", fg="cyan")),
+            _row("Dashboard", dashboard),
+            _row("Stats", _stats_command(settings) + " " + style("(in another terminal)", dim=True)),
+            "",
+            INDENT + style("Leave this terminal open while you work. Ctrl-C stops LLM-GC.", dim=True),
+            "",
+        ]
+    )
 
 
 def _stats_command(settings: ProxySettings) -> str:

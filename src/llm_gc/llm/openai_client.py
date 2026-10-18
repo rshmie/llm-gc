@@ -370,9 +370,7 @@ class OpenAIClient:
             )
 
         if status in (401, 403):
-            return LLMAuthError(
-                f"openai rejected our credentials ({status}): {detail.message}", provider=self.name
-            )
+            return LLMAuthError(f"openai rejected our credentials ({status}): {detail.message}", provider=self.name)
 
         if status == 429:
             permanent = detail.type in _PERMANENT_RATE_LIMIT_TYPES or detail.code in _PERMANENT_RATE_LIMIT_TYPES

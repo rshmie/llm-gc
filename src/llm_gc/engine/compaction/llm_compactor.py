@@ -147,7 +147,10 @@ class LLMCompactor(BaseCompactor):
 
         # A summary is bought while a collection is prepared; whether and when it is applied is logged by the service.
         logger.debug(
-            "summarised turns %d-%d: %d -> %d tokens", first_turn, last_turn, original_token_count,
+            "summarised turns %d-%d: %d -> %d tokens",
+            first_turn,
+            last_turn,
+            original_token_count,
             summary_token_count,
             extra={
                 "turn_range": f"{first_turn}-{last_turn}",
@@ -217,6 +220,9 @@ class LLMCompactor(BaseCompactor):
         command's output or the results beside a person's words after an interrupt
         are never summarised as what the user said.
         """
-        lines = ((message.turn_index, _WRITER_LABELS.get(part.writer, speaker_label(message)), part.text)
-                 for message in messages for part in parts_by_writer(message))
+        lines = (
+            (message.turn_index, _WRITER_LABELS.get(part.writer, speaker_label(message)), part.text)
+            for message in messages
+            for part in parts_by_writer(message)
+        )
         return Message(role="user", content=transcript_block(lines), turn_index=messages[0].turn_index)

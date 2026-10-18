@@ -292,7 +292,10 @@ class TestErrorMapping:
         which is a different response from repeating the identical call."""
         body = {
             "type": "error",
-            "error": {"type": "invalid_request_error", "message": "prompt is too long: 250,000 tokens > 200,000 maximum"},
+            "error": {
+                "type": "invalid_request_error",
+                "message": "prompt is too long: 250,000 tokens > 200,000 maximum",
+            },
         }
         with pytest.raises(LLMContextOverflowError) as excinfo:
             _call(_client(_respond(status=400, body=body)))
@@ -372,6 +375,7 @@ class TestNetworkFailures:
         """Distinct from both neighbours: the provider did not answer badly and was
         not slow — we never reached it. For an operator that is the difference
         between checking their own network and checking a status page."""
+
         def handler(request):
             raise httpx2.ConnectError("connection refused", request=request)
 
@@ -490,7 +494,8 @@ class TestContextWindow:
 
     def test_a_refused_credential_raises_as_generate_would(self):
         handler = lambda request: httpx2.Response(  # noqa: E731
-            401, json={"type": "error", "error": {"type": "authentication_error", "message": "invalid x-api-key"}})
+            401, json={"type": "error", "error": {"type": "authentication_error", "message": "invalid x-api-key"}}
+        )
 
         with pytest.raises(LLMAuthError):
             asyncio.run(_client(handler).context_window("claude-opus-5-5", timeout_s=5.0))

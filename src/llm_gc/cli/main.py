@@ -31,8 +31,13 @@ PortProbe = Callable[[list[int]], int | None]
 _LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
 
-def build_cli(*, serve: ServeFn = serve_proxy, make_provider: ProviderFactory = create_summary_provider,
-              fetch_stats: StatsFetcher = fetch_proxy_stats, find_busy: PortProbe = find_busy_port) -> click.Group:
+def build_cli(
+    *,
+    serve: ServeFn = serve_proxy,
+    make_provider: ProviderFactory = create_summary_provider,
+    fetch_stats: StatsFetcher = fetch_proxy_stats,
+    find_busy: PortProbe = find_busy_port,
+) -> click.Group:
     """The command group, with its side effects passed in.
 
     Binding ports, calling a model and calling a running proxy are what a test must not
@@ -63,14 +68,31 @@ def build_cli(*, serve: ServeFn = serve_proxy, make_provider: ProviderFactory = 
     @click.option("--min-cut-tokens", type=int, help="Tokens a collection must condense.")
     @click.option("--keep-last", type=int, help="Newest turns always sent word for word.")
     @click.option("--context-window", type=int, help="The proxied model's window; sets the recap budget.")
-    @click.option("--log-level", type=click.Choice(_LOG_LEVELS, case_sensitive=False),
-                  help="How much LLM-GC logs; info prints a line per request.")
-    @click.option("--log-format", type=click.Choice(["text", "json"]),
-                  help="text for reading in the terminal; json for a program that reads the log.")
-    def start(config_path: Path | None, port: int | None, dashboard: bool | None, dashboard_port: int | None,
-              upstream: str | None, compactor: str | None, summary_provider: str | None,
-              summary_model: str | None, min_cut_tokens: int | None, keep_last: int | None,
-              context_window: int | None, log_level: str | None, log_format: str | None) -> None:
+    @click.option(
+        "--log-level",
+        type=click.Choice(_LOG_LEVELS, case_sensitive=False),
+        help="How much LLM-GC logs; info prints a line per request.",
+    )
+    @click.option(
+        "--log-format",
+        type=click.Choice(["text", "json"]),
+        help="text for reading in the terminal; json for a program that reads the log.",
+    )
+    def start(
+        config_path: Path | None,
+        port: int | None,
+        dashboard: bool | None,
+        dashboard_port: int | None,
+        upstream: str | None,
+        compactor: str | None,
+        summary_provider: str | None,
+        summary_model: str | None,
+        min_cut_tokens: int | None,
+        keep_last: int | None,
+        context_window: int | None,
+        log_level: str | None,
+        log_format: str | None,
+    ) -> None:
         """Start the proxy, and the dashboard with --dashboard.
 
         Every option is also a setting: a flag you leave out takes its value from the
@@ -80,11 +102,19 @@ def build_cli(*, serve: ServeFn = serve_proxy, make_provider: ProviderFactory = 
             location = find_config_file(config_path)
             settings = load_settings(
                 location.path if location else None,
-                port=port, dashboard=dashboard, dashboard_port=dashboard_port, upstream=upstream,
-                compactor=compactor, log_level=log_level.upper() if log_level else None, log_format=log_format,
+                port=port,
+                dashboard=dashboard,
+                dashboard_port=dashboard_port,
+                upstream=upstream,
+                compactor=compactor,
+                log_level=log_level.upper() if log_level else None,
+                log_format=log_format,
                 summary={"provider": summary_provider, "model": summary_model},
-                engine={"min_cut_tokens": min_cut_tokens, "last_n_turns_to_keep": keep_last,
-                        "context_window": context_window},
+                engine={
+                    "min_cut_tokens": min_cut_tokens,
+                    "last_n_turns_to_keep": keep_last,
+                    "context_window": context_window,
+                },
             )
         except ConfigError as err:
             raise CommandError(str(err)) from err
@@ -121,7 +151,9 @@ def build_cli(*, serve: ServeFn = serve_proxy, make_provider: ProviderFactory = 
             counters = fetch_stats(f"{base_url}/stats")
         except (ConfigError, ProxyUnavailableError) as err:
             raise CommandError(str(err)) from err
-        click.echo(json.dumps(counters.model_dump(mode="json"), indent=2) if as_json else render_stats(counters, base_url))
+        click.echo(
+            json.dumps(counters.model_dump(mode="json"), indent=2) if as_json else render_stats(counters, base_url)
+        )
 
     add_config_commands(cli)
     return cli

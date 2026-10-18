@@ -25,9 +25,9 @@ EXPIRY_MARGIN_S = 5.0
 
 @dataclass(slots=True)
 class _Watched:
-    last_used_at: float     # when the newest request the provider answered began, on the watch's clock
-    lifetime_s: float       # the lifetime that request asked for
-    uses_cache: bool        # any reply so far read from the cache or wrote to it
+    last_used_at: float  # when the newest request the provider answered began, on the watch's clock
+    lifetime_s: float  # the lifetime that request asked for
+    uses_cache: bool  # any reply so far read from the cache or wrote to it
 
 
 class CacheWatch:
@@ -37,8 +37,9 @@ class CacheWatch:
     `max_conversations` the least recently answered is forgotten, and reads as unknown.
     """
 
-    def __init__(self, *, max_conversations: int = MAX_CONVERSATIONS,
-                 clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(
+        self, *, max_conversations: int = MAX_CONVERSATIONS, clock: Callable[[], float] = time.monotonic
+    ) -> None:
         self._watched: OrderedDict[str, _Watched] = OrderedDict()
         self._max_conversations = max_conversations
         self._clock = clock
@@ -83,5 +84,9 @@ class CacheWatch:
             return CacheReading(CacheState.WARM)
         idle_s = self._clock() - watched.last_used_at
         cold = not watched.uses_cache or idle_s > watched.lifetime_s + EXPIRY_MARGIN_S
-        return CacheReading(CacheState.COLD if cold else CacheState.WARM, uses_cache=watched.uses_cache,
-                            idle_s=idle_s, lifetime_s=watched.lifetime_s)
+        return CacheReading(
+            CacheState.COLD if cold else CacheState.WARM,
+            uses_cache=watched.uses_cache,
+            idle_s=idle_s,
+            lifetime_s=watched.lifetime_s,
+        )

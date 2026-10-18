@@ -34,10 +34,17 @@ class _GatedCompactor(BaseCompactor):
     async def compact(self, messages):
         self.started.set()
         await self.gate.wait()
-        summary = Message(role="assistant", content=f"[Compacted] turns {messages[0].turn_index}-",
-                          token_count=1, turn_index=messages[0].turn_index)
-        return CompactionResult(summary=summary, original_token_count=sum(m.token_count for m in messages),
-                                compaction_strategy=self.COMPACTION_STRATEGY)
+        summary = Message(
+            role="assistant",
+            content=f"[Compacted] turns {messages[0].turn_index}-",
+            token_count=1,
+            turn_index=messages[0].turn_index,
+        )
+        return CompactionResult(
+            summary=summary,
+            original_token_count=sum(m.token_count for m in messages),
+            compaction_strategy=self.COMPACTION_STRATEGY,
+        )
 
 
 def _service():
@@ -71,8 +78,10 @@ async def _start_aging(service: GcService, compactor: _GatedCompactor) -> asynci
 
 def _run(coro):
     """A gated test that deadlocks fails in two seconds instead of hanging the suite."""
+
     async def bounded():
         return await asyncio.wait_for(coro, timeout=2)
+
     return asyncio.run(bounded())
 
 
@@ -197,8 +206,9 @@ class TestEventsDescribeCommittedChanges:
         event, old_gen_size_when_announced = promoted[0]
         assert event.data["session_id"] == SESSION
         committed = len(service.session_manager.store.get(SESSION).snapshot.old)
-        assert old_gen_size_when_announced == committed == 3, \
+        assert old_gen_size_when_announced == committed == 3, (
             "a subscriber reading state sees the change it was told about"
+        )
 
 
 class TestACancelledPassLeavesNothingBehind:

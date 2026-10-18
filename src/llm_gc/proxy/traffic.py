@@ -36,7 +36,7 @@ class ProviderUsage:
     """The `usage` the provider reported on its replies: what it bills, by its own tokenizer."""
 
     replies: int = 0
-    input_tokens: int = 0                  # read at the full price
+    input_tokens: int = 0  # read at the full price
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
     output_tokens: int = 0
@@ -44,14 +44,18 @@ class ProviderUsage:
     @classmethod
     def from_reported(cls, usage: Mapping[str, Any]) -> "ProviderUsage":
         """One reply's usage; a field the provider left out or sent as null counts as zero."""
+
         def tokens(key: str) -> int:
             value = usage.get(key)
             return value if isinstance(value, int) and value >= 0 else 0
 
-        return cls(replies=1, input_tokens=tokens("input_tokens"),
-                   cache_read_input_tokens=tokens("cache_read_input_tokens"),
-                   cache_creation_input_tokens=tokens("cache_creation_input_tokens"),
-                   output_tokens=tokens("output_tokens"))
+        return cls(
+            replies=1,
+            input_tokens=tokens("input_tokens"),
+            cache_read_input_tokens=tokens("cache_read_input_tokens"),
+            cache_creation_input_tokens=tokens("cache_creation_input_tokens"),
+            output_tokens=tokens("output_tokens"),
+        )
 
     @property
     def prompt_tokens(self) -> int:
@@ -74,8 +78,8 @@ class LastReply:
     against what the provider bills.
     """
 
-    tokens_forwarded: int     # the whole request as LLM-GC forwarded it, by LLM-GC's count
-    usage: ProviderUsage      # the provider's own count of its reply
+    tokens_forwarded: int  # the whole request as LLM-GC forwarded it, by LLM-GC's count
+    usage: ProviderUsage  # the provider's own count of its reply
 
     @property
     def provider_prompt_tokens(self) -> int:
@@ -102,13 +106,13 @@ class Traffic:
     """Requests through the proxy and what they carried, for one conversation, one client session, or all."""
 
     requests: int = 0
-    tokens_from_client: int = 0    # each request whole as the client sent it: system prompt, tools and messages
-    tokens_forwarded: int = 0      # the same requests as LLM-GC forwarded them
+    tokens_from_client: int = 0  # each request whole as the client sent it: system prompt, tools and messages
+    tokens_forwarded: int = 0  # the same requests as LLM-GC forwarded them
     provider: ProviderUsage = field(default_factory=ProviderUsage)
     # Of the provider's cache writes, those on requests that carried a collection: what to set a saving against.
     collection_cache_write_tokens: int = 0
-    summaries: ModelUsage = field(default_factory=ModelUsage)   # LLM-GC's own model calls
-    last_reply: LastReply | None = None   # the newest answered request: not added up, replaced
+    summaries: ModelUsage = field(default_factory=ModelUsage)  # LLM-GC's own model calls
+    last_reply: LastReply | None = None  # the newest answered request: not added up, replaced
 
     @property
     def tokens_saved(self) -> int:
@@ -124,9 +128,13 @@ class Traffic:
 
     def as_dict(self) -> dict[str, Any]:
         last = self.last_reply
-        return {**asdict(self), "tokens_saved": self.tokens_saved,
-                "last_reply": None if last is None else {**asdict(last), "provider_prompt_tokens": last.provider_prompt_tokens,
-                                                         "token_rate": last.token_rate}}
+        return {
+            **asdict(self),
+            "tokens_saved": self.tokens_saved,
+            "last_reply": None
+            if last is None
+            else {**asdict(last), "provider_prompt_tokens": last.provider_prompt_tokens, "token_rate": last.token_rate},
+        }
 
 
 @dataclass(slots=True)
@@ -135,9 +143,9 @@ class ConversationTraffic:
 
     conversation_id: str
     origin: ClientOrigin | None
-    model: str | None                  # as its newest request named it
+    model: str | None  # as its newest request named it
     context_window: ModelWindow | None  # that model's window, as its recap is sized for it
-    collected: bool                    # False: recorded and shown, never collected
+    collected: bool  # False: recorded and shown, never collected
     first_request_at: datetime
     last_request_at: datetime
     traffic: Traffic = field(default_factory=Traffic)
@@ -151,14 +159,18 @@ class ConversationTraffic:
         return len(self.waiting)
 
     def as_dict(self) -> dict[str, Any]:
-        return {"conversation_id": self.conversation_id,
-                "agent": self.origin.agent_id if self.origin is not None else None,
-                "model": self.model,
-                "context_window": asdict(self.context_window) if self.context_window is not None else None,
-                "collected": self.collected,
-                "first_request_at": self.first_request_at.isoformat(),
-                "last_request_at": self.last_request_at.isoformat(), "collections": self.collections,
-                "collections_not_yet_sent": self.collections_not_yet_sent, "traffic": self.traffic.as_dict()}
+        return {
+            "conversation_id": self.conversation_id,
+            "agent": self.origin.agent_id if self.origin is not None else None,
+            "model": self.model,
+            "context_window": asdict(self.context_window) if self.context_window is not None else None,
+            "collected": self.collected,
+            "first_request_at": self.first_request_at.isoformat(),
+            "last_request_at": self.last_request_at.isoformat(),
+            "collections": self.collections,
+            "collections_not_yet_sent": self.collections_not_yet_sent,
+            "traffic": self.traffic.as_dict(),
+        }
 
 
 @dataclass(slots=True)
@@ -184,8 +196,14 @@ RequestTargets = tuple[Traffic, ...]
 class TrafficLedger:
     """Counts each request where it belongs. Single-threaded: called from the proxy's event loop only."""
 
-    def __init__(self, *, max_conversations: int = MAX_CONVERSATIONS, max_client_sessions: int = MAX_CLIENT_SESSIONS,
-                 max_unclaimed: int = MAX_UNCLAIMED_OPENINGS, clock: Callable[[], datetime] = _now) -> None:
+    def __init__(
+        self,
+        *,
+        max_conversations: int = MAX_CONVERSATIONS,
+        max_client_sessions: int = MAX_CLIENT_SESSIONS,
+        max_unclaimed: int = MAX_UNCLAIMED_OPENINGS,
+        clock: Callable[[], datetime] = _now,
+    ) -> None:
         self.total = Traffic()
         self._conversations: OrderedDict[str, ConversationTraffic] = OrderedDict()
         self._client_sessions: OrderedDict[str, ClientSessionTraffic] = OrderedDict()
@@ -193,10 +211,19 @@ class TrafficLedger:
         self._limits = (max_conversations, max_client_sessions, max_unclaimed)
         self._clock = clock
 
-    def record_request(self, *, conversation_id: str | None, origin: ClientOrigin | None, model: str | None,
-                       opening: str, tokens_from_client: int, tokens_forwarded: int,
-                       context_window: ModelWindow | None = None, collected: bool = True,
-                       carries_front: bool = True) -> RequestTargets:
+    def record_request(
+        self,
+        *,
+        conversation_id: str | None,
+        origin: ClientOrigin | None,
+        model: str | None,
+        opening: str,
+        tokens_from_client: int,
+        tokens_forwarded: int,
+        context_window: ModelWindow | None = None,
+        collected: bool = True,
+        carries_front: bool = True,
+    ) -> RequestTargets:
         """Count one forwarded request. Returns where its reply's usage is to be added.
 
         `opening` identifies the conversation's first turn. A request with no conversation
@@ -229,8 +256,13 @@ class TrafficLedger:
         return tuple(targets)
 
     @staticmethod
-    def record_usage(targets: RequestTargets, usage: ProviderUsage, tokens_forwarded: int | None = None, *,
-                     carried_collection: bool = False) -> None:
+    def record_usage(
+        targets: RequestTargets,
+        usage: ProviderUsage,
+        tokens_forwarded: int | None = None,
+        *,
+        carried_collection: bool = False,
+    ) -> None:
         """Add what the provider reported for one reply to everything its request was counted in.
 
         With `tokens_forwarded`, LLM-GC's own count of that request, the pair becomes each target's
@@ -261,8 +293,9 @@ class TrafficLedger:
             # Made before any collection that arrived meanwhile, so they stay first.
             conversation.waiting[:0] = reasons
 
-    def record_collection(self, conversation_id: str, *, completed: bool, spent: ModelUsage,
-                          switch_reason: str | None = None) -> None:
+    def record_collection(
+        self, conversation_id: str, *, completed: bool, spent: ModelUsage, switch_reason: str | None = None
+    ) -> None:
         """Count a collection's own model calls, and the collection itself, with why it was switched in, when one was made."""
         self.total.summaries.add(spent)
         conversation = self._conversations.get(conversation_id)
@@ -280,32 +313,50 @@ class TrafficLedger:
         conversations = sorted(self._conversations.values(), key=lambda c: c.last_request_at, reverse=True)
         sessions = []
         for client in sorted(self._client_sessions.values(), key=lambda c: c.last_request_at, reverse=True):
-            members = [c for c in conversations if c.origin is not None and c.origin.session_id == client.client_session]
+            members = [
+                c for c in conversations if c.origin is not None and c.origin.session_id == client.client_session
+            ]
             listed = Traffic()
             for member in members:
                 listed.add(member.traffic)
-            sessions.append({"client_session": client.client_session,
-                             "first_request_at": client.first_request_at.isoformat(),
-                             "last_request_at": client.last_request_at.isoformat(),
-                             "traffic": client.traffic.as_dict(),
-                             # First requests no conversation claimed (side requests), and any dropped above the limit.
-                             "outside_conversations": _difference(client.traffic, listed).as_dict(),
-                             "conversations": [{**member.as_dict(), "part": part} for member, part in _parts(members)]})
+            sessions.append(
+                {
+                    "client_session": client.client_session,
+                    "first_request_at": client.first_request_at.isoformat(),
+                    "last_request_at": client.last_request_at.isoformat(),
+                    "traffic": client.traffic.as_dict(),
+                    # First requests no conversation claimed (side requests), and any dropped above the limit.
+                    "outside_conversations": _difference(client.traffic, listed).as_dict(),
+                    "conversations": [{**member.as_dict(), "part": part} for member, part in _parts(members)],
+                }
+            )
         # A conversation whose client session was dropped above the limit is listed here rather than lost.
-        return {"client_sessions": sessions,
-                "other_conversations": [c.as_dict() for c in conversations
-                                        if c.origin is None or c.origin.session_id not in self._client_sessions]}
+        return {
+            "client_sessions": sessions,
+            "other_conversations": [
+                c.as_dict()
+                for c in conversations
+                if c.origin is None or c.origin.session_id not in self._client_sessions
+            ],
+        }
 
-    def _conversation(self, conversation_id: str, origin: ClientOrigin | None, model: str | None, opening: str,
-                      now: datetime) -> ConversationTraffic:
+    def _conversation(
+        self, conversation_id: str, origin: ClientOrigin | None, model: str | None, opening: str, now: datetime
+    ) -> ConversationTraffic:
         conversation = self._conversations.get(conversation_id)
         if conversation is None:
             claimed = self._unclaimed.pop((opening, origin), None)
             conversation = ConversationTraffic(
-                conversation_id=conversation_id, origin=origin, model=model, context_window=None, collected=True,
-                first_request_at=claimed.first_request_at if claimed is not None else now, last_request_at=now,
+                conversation_id=conversation_id,
+                origin=origin,
+                model=model,
+                context_window=None,
+                collected=True,
+                first_request_at=claimed.first_request_at if claimed is not None else now,
+                last_request_at=now,
                 # The same object, so a reply to the first request still on its way lands here too.
-                traffic=claimed.traffic if claimed is not None else Traffic())
+                traffic=claimed.traffic if claimed is not None else Traffic(),
+            )
             self._conversations[conversation_id] = conversation
             _bound(self._conversations, self._limits[0])
             return conversation
@@ -336,8 +387,11 @@ def _parts(members: list[ConversationTraffic]) -> list[tuple[ConversationTraffic
     by_start = sorted(members, key=lambda c: c.first_request_at)
     mains = [c for c in by_start if c.origin is None or c.origin.agent_id is None]
     agents = [c for c in by_start if c.origin is not None and c.origin.agent_id is not None]
-    return ([(c, "main") for c in mains[-1:]] + [(c, "subagent") for c in agents]
-            + [(c, "earlier_main") for c in reversed(mains[:-1])])
+    return (
+        [(c, "main") for c in mains[-1:]]
+        + [(c, "subagent") for c in agents]
+        + [(c, "earlier_main") for c in reversed(mains[:-1])]
+    )
 
 
 def _bound(entries: "OrderedDict[_K, _V]", limit: int) -> None:
@@ -349,9 +403,11 @@ def _difference(whole: Traffic, part: Traffic) -> Traffic:
     def minus(a: _V, b: _V) -> _V:
         return type(a)(**{f.name: getattr(a, f.name) - getattr(b, f.name) for f in fields(a)})  # type: ignore[arg-type]
 
-    return Traffic(requests=whole.requests - part.requests,
-                   tokens_from_client=whole.tokens_from_client - part.tokens_from_client,
-                   tokens_forwarded=whole.tokens_forwarded - part.tokens_forwarded,
-                   provider=minus(whole.provider, part.provider),
-                   collection_cache_write_tokens=whole.collection_cache_write_tokens - part.collection_cache_write_tokens,
-                   summaries=minus(whole.summaries, part.summaries))
+    return Traffic(
+        requests=whole.requests - part.requests,
+        tokens_from_client=whole.tokens_from_client - part.tokens_from_client,
+        tokens_forwarded=whole.tokens_forwarded - part.tokens_forwarded,
+        provider=minus(whole.provider, part.provider),
+        collection_cache_write_tokens=whole.collection_cache_write_tokens - part.collection_cache_write_tokens,
+        summaries=minus(whole.summaries, part.summaries),
+    )

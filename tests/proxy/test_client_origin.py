@@ -5,8 +5,13 @@ import logging
 import pytest
 
 from llm_gc.models import ClientOrigin
-from llm_gc.proxy.session_identity import (CLIENT_AGENT_HEADER, CLIENT_SESSION_HEADER, SESSION_HEADER, client_origin,
-                                           named_session)
+from llm_gc.proxy.session_identity import (
+    CLIENT_AGENT_HEADER,
+    CLIENT_SESSION_HEADER,
+    SESSION_HEADER,
+    client_origin,
+    named_session,
+)
 
 SESSION = "c7a78c2f-d25c-44e4-af6f-dba30717fb9b"
 AGENT = "a1c50dab6bf4df2c1"

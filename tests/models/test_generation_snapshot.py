@@ -26,10 +26,15 @@ def _turn(index: int) -> Message:
 def _summary(first_turn: int, last_turn: int | None = None, content: str | None = None) -> Span:
     """A compacted span of `first_turn`..`last_turn` (two turns by default)."""
     last = first_turn + 1 if last_turn is None else last_turn
-    message = Message(role="assistant", content=content or f"summary from {first_turn}", token_count=3,
-                      turn_index=first_turn)
-    return Span(turns=tuple(_turn(i) for i in range(first_turn, last + 1)), level=DetailLevel.COMPACTED,
-                summary=message, summary_text=message.content)
+    message = Message(
+        role="assistant", content=content or f"summary from {first_turn}", token_count=3, turn_index=first_turn
+    )
+    return Span(
+        turns=tuple(_turn(i) for i in range(first_turn, last + 1)),
+        level=DetailLevel.COMPACTED,
+        summary=message,
+        summary_text=message.content,
+    )
 
 
 def _archived(*indices: int) -> tuple[Span, ...]:
@@ -75,25 +80,36 @@ class TestADeltaMergesOntoNewerState:
 
     def test_a_level_change_and_a_new_span_in_one_pass(self):
         snapshot = GenerationSnapshot(young=(_turn(5), _turn(6), _turn(7)), old=(_summary(0), _summary(2)))
-        delta = AgingDelta(departed_turns=frozenset({5, 6}), new_spans=(_summary(5),),
-                           level_changes=((_summary(0), DetailLevel.ARCHIVED),))
+        delta = AgingDelta(
+            departed_turns=frozenset({5, 6}),
+            new_spans=(_summary(5),),
+            level_changes=((_summary(0), DetailLevel.ARCHIVED),),
+        )
         aged = apply_aging(snapshot, delta).snapshot
         assert [(span.first_turn, span.level) for span in aged.old] == [
-            (0, DetailLevel.ARCHIVED), (2, DetailLevel.COMPACTED), (5, DetailLevel.COMPACTED)]
+            (0, DetailLevel.ARCHIVED),
+            (2, DetailLevel.COMPACTED),
+            (5, DetailLevel.COMPACTED),
+        ]
 
     def test_spans_sharing_a_first_turn_index_change_level_individually(self):
         """A caller that re-sends a turn index can leave two spans starting at it.
         Matching by index would change both."""
         first = _summary(4)
         second = _summary(4, content="a different summary")
-        aged = apply_aging(GenerationSnapshot(old=(first, second)),
-                           AgingDelta(level_changes=((first, DetailLevel.ARCHIVED),))).snapshot
+        aged = apply_aging(
+            GenerationSnapshot(old=(first, second)), AgingDelta(level_changes=((first, DetailLevel.ARCHIVED),))
+        ).snapshot
         assert [span.level for span in aged.old] == [DetailLevel.ARCHIVED, DetailLevel.COMPACTED]
 
-    @pytest.mark.parametrize("delta", [
-        AgingDelta(departed_turns=frozenset({99}), new_spans=_archived(99)),
-        AgingDelta(level_changes=((_summary(99), DetailLevel.ARCHIVED),)),
-    ], ids=["unknown-turn", "unknown-span"])
+    @pytest.mark.parametrize(
+        "delta",
+        [
+            AgingDelta(departed_turns=frozenset({99}), new_spans=_archived(99)),
+            AgingDelta(level_changes=((_summary(99), DetailLevel.ARCHIVED),)),
+        ],
+        ids=["unknown-turn", "unknown-span"],
+    )
     def test_a_delta_naming_content_that_is_gone_is_a_programmer_error(self, delta):
         """Only one pass ages a session at a time, so this means that rule broke.
         Merging anyway would silently drop or duplicate content."""
@@ -132,8 +148,9 @@ class TestNothingRecordedIsDestroyed:
     def test_archiving_a_span_keeps_its_originals_and_summary(self):
         """Archived is a level, not a deletion: the span can be shown in full again."""
         span = _summary(0)
-        aged = apply_aging(GenerationSnapshot(old=(span,)),
-                           AgingDelta(level_changes=((span, DetailLevel.ARCHIVED),))).snapshot
+        aged = apply_aging(
+            GenerationSnapshot(old=(span,)), AgingDelta(level_changes=((span, DetailLevel.ARCHIVED),))
+        ).snapshot
         assert aged.old[0].turns == span.turns
         assert aged.old[0].summary == span.summary
 
@@ -153,7 +170,9 @@ class TestKnowledgeFiling:
     def test_a_later_decision_supersedes_an_earlier_one_on_its_topic(self):
         knowledge, supersessions = file_knowledge((_fact("database", "postgres"),), (_fact("database", "mysql"),))
         assert [(e.content, e.knowledge_status) for e in knowledge] == [
-            ("postgres", KnowledgeStatus.SUPERSEDED), ("mysql", KnowledgeStatus.ACTIVE)]
+            ("postgres", KnowledgeStatus.SUPERSEDED),
+            ("mysql", KnowledgeStatus.ACTIVE),
+        ]
         assert supersessions[0].superseded[0].content == "postgres"
 
     def test_supersession_applies_within_one_batch(self):
@@ -162,8 +181,9 @@ class TestKnowledgeFiling:
 
     def test_superseded_entries_are_kept_but_not_active(self):
         """The record of a contradiction is part of what transparency reports."""
-        snapshot = apply_aging(GenerationSnapshot(knowledge=(_fact("db", "postgres"),)),
-                               AgingDelta(new_knowledge=(_fact("db", "mysql"),))).snapshot
+        snapshot = apply_aging(
+            GenerationSnapshot(knowledge=(_fact("db", "postgres"),)), AgingDelta(new_knowledge=(_fact("db", "mysql"),))
+        ).snapshot
         assert len(snapshot.knowledge) == 2
         assert [e.content for e in snapshot.active_knowledge] == ["mysql"]
 
@@ -171,23 +191,29 @@ class TestKnowledgeFiling:
 class TestSupersessionRules:
     def test_supersession_does_not_touch_other_topics(self):
         knowledge, _ = file_knowledge(
-            (_fact("database", "postgres"), _fact("auth", "jwt")), (_fact("database", "mysql"),))
+            (_fact("database", "postgres"), _fact("auth", "jwt")), (_fact("database", "mysql"),)
+        )
         auth = [e for e in knowledge if e.topic_label == "auth"]
         assert [e.knowledge_status for e in auth] == [KnowledgeStatus.ACTIVE]
 
     def test_an_already_superseded_entry_is_not_superseded_again(self):
         knowledge, supersessions = file_knowledge(
-            (), (_fact("database", "postgres"), _fact("database", "mysql"), _fact("database", "sqlite")))
+            (), (_fact("database", "postgres"), _fact("database", "mysql"), _fact("database", "sqlite"))
+        )
         assert [e.knowledge_status for e in knowledge] == [
-            KnowledgeStatus.SUPERSEDED, KnowledgeStatus.SUPERSEDED, KnowledgeStatus.ACTIVE]
+            KnowledgeStatus.SUPERSEDED,
+            KnowledgeStatus.SUPERSEDED,
+            KnowledgeStatus.ACTIVE,
+        ]
         assert [len(s.superseded) for s in supersessions] == [1, 1], "each supersedes only the one active entry"
 
     def test_topic_less_entries_never_supersede_each_other(self):
-        """"general" is a shared label too: every decision that names no topic gets it.
+        """ "general" is a shared label too: every decision that names no topic gets it.
         Matched like a topic, "we decided to ship on Friday" retired an unrelated
         earlier decision, which the model then never saw again."""
         knowledge, supersessions = file_knowledge(
-            (), (_fact("general", "use microservices"), _fact("general", "ship on Friday")))
+            (), (_fact("general", "use microservices"), _fact("general", "ship on Friday"))
+        )
         assert supersessions == ()
         assert all(e.knowledge_status == KnowledgeStatus.ACTIVE for e in knowledge)
 
@@ -202,7 +228,8 @@ class TestSupersessionRules:
         """Postgres, then MySQL, then Postgres again: the third statement replaces the
         active MySQL, because only an active value can be restated."""
         knowledge, supersessions = file_knowledge(
-            (), (_fact("database", "postgres"), _fact("database", "mysql"), _fact("database", "postgres")))
+            (), (_fact("database", "postgres"), _fact("database", "mysql"), _fact("database", "postgres"))
+        )
         assert [e.content for e in knowledge if e.knowledge_status == KnowledgeStatus.ACTIVE] == ["postgres"]
         assert len(supersessions) == 2
 
@@ -212,10 +239,20 @@ class TestSupersessionRules:
         and the model answered 3; filed beside it, "index shards: recommended 3" was
         the only labelled note and the model still led with 3. Only the user changes
         their own decision; the recommendation stays in its exchange's summary."""
-        users = KnowledgeEntry(message_turn=6, content="9", topic_label="index shards",
-                               knowledge_type=KnowledgeType.DECISION, speaker="user")
-        recommended = KnowledgeEntry(message_turn=7, content="recommended 3", topic_label="index shards",
-                                     knowledge_type=KnowledgeType.FACT, speaker="assistant")
+        users = KnowledgeEntry(
+            message_turn=6,
+            content="9",
+            topic_label="index shards",
+            knowledge_type=KnowledgeType.DECISION,
+            speaker="user",
+        )
+        recommended = KnowledgeEntry(
+            message_turn=7,
+            content="recommended 3",
+            topic_label="index shards",
+            knowledge_type=KnowledgeType.FACT,
+            speaker="assistant",
+        )
 
         knowledge, supersessions = file_knowledge((users,), (recommended,))
 
@@ -224,8 +261,13 @@ class TestSupersessionRules:
 
     def test_the_user_can_replace_anything_and_the_assistant_its_own_values(self):
         def fact(turn, content, speaker):
-            return KnowledgeEntry(message_turn=turn, content=content, topic_label="cache",
-                                  knowledge_type=KnowledgeType.DECISION, speaker=speaker)
+            return KnowledgeEntry(
+                message_turn=turn,
+                content=content,
+                topic_label="cache",
+                knowledge_type=KnowledgeType.DECISION,
+                speaker=speaker,
+            )
 
         _, by_user = file_knowledge((fact(1, "redis", "assistant"),), (fact(2, "memcached", "user"),))
         _, by_assistant = file_knowledge((fact(1, "redis", "assistant"),), (fact(2, "valkey", "assistant"),))
@@ -237,8 +279,12 @@ class TestAStagedCutFollowsTheHistory:
     @staticmethod
     def _staged_over_turns_0_and_1() -> GenerationSnapshot:
         snapshot = GenerationSnapshot().with_turns([_turn(i) for i in range(6)], [f"h{i}" for i in range(6)])
-        staged = StagedCut(delta=AgingDelta(departed_turns=frozenset({0, 1}), new_spans=(_summary(0),)),
-                           saving_tokens=5, stale_tokens=10, front_tokens=3)
+        staged = StagedCut(
+            delta=AgingDelta(departed_turns=frozenset({0, 1}), new_spans=(_summary(0),)),
+            saving_tokens=5,
+            stale_tokens=10,
+            front_tokens=3,
+        )
         return replace(snapshot, staged=staged)
 
     def test_a_rewind_behind_the_staged_turns_keeps_the_staged_cut(self):
@@ -280,8 +326,9 @@ class TestARewindKeepsNewThinkingValid:
 
 
 def _said(turn: int, content: str, speaker: str = "user", topic: str = "database") -> KnowledgeEntry:
-    return KnowledgeEntry(message_turn=turn, content=content, topic_label=topic,
-                          knowledge_type=KnowledgeType.DECISION, speaker=speaker)
+    return KnowledgeEntry(
+        message_turn=turn, content=content, topic_label=topic, knowledge_type=KnowledgeType.DECISION, speaker=speaker
+    )
 
 
 class TestAFactReadLateTakesItsPlaceInTheConversation:
@@ -297,7 +344,9 @@ class TestAFactReadLateTakesItsPlaceInTheConversation:
         record, _ = file_knowledge((), (_said(40, "MySQL"),))
 
         assert self._filed(record, _said(12, "Postgres")) == [
-            (12, "Postgres", KnowledgeStatus.SUPERSEDED), (40, "MySQL", KnowledgeStatus.ACTIVE)]
+            (12, "Postgres", KnowledgeStatus.SUPERSEDED),
+            (40, "MySQL", KnowledgeStatus.ACTIVE),
+        ]
 
     def test_it_replaces_only_what_was_stated_before_it(self):
         record, _ = file_knowledge((), (_said(5, "SQLite"),))
@@ -305,7 +354,9 @@ class TestAFactReadLateTakesItsPlaceInTheConversation:
         filed, supersessions = file_knowledge(record, (_said(12, "Postgres"),))
 
         assert [(e.content, e.knowledge_status) for e in filed] == [
-            ("SQLite", KnowledgeStatus.SUPERSEDED), ("Postgres", KnowledgeStatus.ACTIVE)]
+            ("SQLite", KnowledgeStatus.SUPERSEDED),
+            ("Postgres", KnowledgeStatus.ACTIVE),
+        ]
         assert [s.new_entry.content for s in supersessions] == ["Postgres"]
 
     def test_between_two_values_it_takes_its_place_in_the_chain(self):
@@ -313,8 +364,10 @@ class TestAFactReadLateTakesItsPlaceInTheConversation:
         record, _ = file_knowledge((), (_said(5, "SQLite"), _said(40, "MySQL")))
 
         assert self._filed(record, _said(12, "Postgres")) == [
-            (5, "SQLite", KnowledgeStatus.SUPERSEDED), (12, "Postgres", KnowledgeStatus.SUPERSEDED),
-            (40, "MySQL", KnowledgeStatus.ACTIVE)]
+            (5, "SQLite", KnowledgeStatus.SUPERSEDED),
+            (12, "Postgres", KnowledgeStatus.SUPERSEDED),
+            (40, "MySQL", KnowledgeStatus.ACTIVE),
+        ]
 
     def test_a_restatement_is_judged_against_the_value_in_force_at_its_turn(self):
         record, _ = file_knowledge((), (_said(5, "Postgres"), _said(40, "MySQL")))
@@ -325,17 +378,22 @@ class TestAFactReadLateTakesItsPlaceInTheConversation:
         """What the bus announces: a restatement is left out, and a value read late keeps the status it was filed with."""
         record, _ = file_knowledge((), (_said(5, "Postgres"), _said(40, "MySQL")))
 
-        applied = apply_aging(GenerationSnapshot(knowledge=record),
-                              AgingDelta(new_knowledge=(_said(12, "postgres."), _said(20, "SQLite"))))
+        applied = apply_aging(
+            GenerationSnapshot(knowledge=record),
+            AgingDelta(new_knowledge=(_said(12, "postgres."), _said(20, "SQLite"))),
+        )
 
         assert [(entry.message_turn, entry.knowledge_status) for entry in applied.filed] == [
-            (20, KnowledgeStatus.SUPERSEDED)]
+            (20, KnowledgeStatus.SUPERSEDED)
+        ]
 
     def test_an_assistant_value_stated_before_the_users_decision_is_kept_as_replaced(self):
         record, _ = file_knowledge((), (_said(20, "MySQL"),))
 
         assert self._filed(record, _said(10, "Postgres", speaker="assistant")) == [
-            (10, "Postgres", KnowledgeStatus.SUPERSEDED), (20, "MySQL", KnowledgeStatus.ACTIVE)]
+            (10, "Postgres", KnowledgeStatus.SUPERSEDED),
+            (20, "MySQL", KnowledgeStatus.ACTIVE),
+        ]
 
     def test_facts_read_in_any_order_file_as_the_conversation_said_them(self):
         in_order = self._filed((), _said(5, "SQLite"), _said(12, "Postgres"), _said(40, "MySQL"))

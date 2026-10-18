@@ -26,7 +26,8 @@ _CAVEAT = "local-command-caveat"
 _ELEMENT = re.compile(
     r"^<(?P<name>command-name|command-message|command-args|local-command-caveat|local-command-stdout"
     r"|local-command-stderr|task-notification)>(?:(?!<(?P=name)>).)*?</(?P=name)>[ \t]*$",
-    re.DOTALL | re.MULTILINE)
+    re.DOTALL | re.MULTILINE,
+)
 
 
 def client_written_ranges(text: str) -> tuple[tuple[int, int], ...]:
@@ -39,11 +40,11 @@ def client_written_ranges(text: str) -> tuple[tuple[int, int], ...]:
     """
     ranges: list[tuple[int, int]] = []
     cursor = 0
-    local = False        # a caveat came before the command being read
-    by_person = False    # the last text read was the person's
-    expands = False      # the last element was a command that expands into the text after it
+    local = False  # a caveat came before the command being read
+    by_person = False  # the last text read was the person's
+    expands = False  # the last element was a command that expands into the text after it
     for element in _ELEMENT.finditer(text):
-        if text[cursor:element.start()].strip():
+        if text[cursor : element.start()].strip():
             if expands:
                 _add(ranges, cursor, element.start(), text)
             by_person, local, expands = not expands, False, False
@@ -60,7 +61,7 @@ def client_written_ranges(text: str) -> tuple[tuple[int, int], ...]:
 
 def _add(ranges: list[tuple[int, int]], start: int, end: int, text: str) -> None:
     """Add a range, joined to the one before it when only blank space lies between them."""
-    if ranges and not text[ranges[-1][1]:start].strip():
+    if ranges and not text[ranges[-1][1] : start].strip():
         ranges[-1] = (ranges[-1][0], end)
     else:
         ranges.append((start, end))

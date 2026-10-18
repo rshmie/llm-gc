@@ -19,31 +19,55 @@ from tests.models.support import COMMAND, INTERRUPTED, SKILL_RULES, turn_with_cl
 
 SESSION = "s"
 
-SUMMARY = LLMResponse(text="Earlier turns covered the storage decision and the retention window in brief.",
-                      stop_reason=StopReason.COMPLETE, input_tokens=0, output_tokens=14,
-                      model="scripted", provider="offline")
+SUMMARY = LLMResponse(
+    text="Earlier turns covered the storage decision and the retention window in brief.",
+    stop_reason=StopReason.COMPLETE,
+    input_tokens=0,
+    output_tokens=14,
+    model="scripted",
+    provider="offline",
+)
 
 
 def _service(**overrides) -> GcService:
-    config = GCConfig(**{"context_window": 700, "keep_threshold": 0.55, "archive_threshold": 0.25,
-                         "last_n_turns_to_keep": 3, "min_cut_tokens": 60, **overrides})
-    return build_gc_service(config, summary_provider=FakeProvider(responses=[SUMMARY] * 400),
-                            fact_reader=PatternFactReader())
+    config = GCConfig(
+        **{
+            "context_window": 700,
+            "keep_threshold": 0.55,
+            "archive_threshold": 0.25,
+            "last_n_turns_to_keep": 3,
+            "min_cut_tokens": 60,
+            **overrides,
+        }
+    )
+    return build_gc_service(
+        config, summary_provider=FakeProvider(responses=[SUMMARY] * 400), fact_reader=PatternFactReader()
+    )
 
 
 # Eight subjects with their own words, in turn: a span goes quiet while the
 # conversation is elsewhere and becomes relevant again when its subject returns.
-_SUBJECTS = ("database postgres replicas failover", "cache redis eviction expiry", "queue kafka partitions consumers",
-             "auth tokens sessions oauth", "billing invoices stripe refunds", "search elasticsearch ranking synonyms",
-             "deploy kubernetes rollout canary", "metrics prometheus alerts dashboards")
+_SUBJECTS = (
+    "database postgres replicas failover",
+    "cache redis eviction expiry",
+    "queue kafka partitions consumers",
+    "auth tokens sessions oauth",
+    "billing invoices stripe refunds",
+    "search elasticsearch ranking synonyms",
+    "deploy kubernetes rollout canary",
+    "metrics prometheus alerts dashboards",
+)
 
 
 def _turn(index: int) -> Message:
     words = _SUBJECTS[index % 8].split()
-    text = f"The {words[0]} is version {index}. " + (f"We weighed {', '.join(words[1:])} and the {words[1]} "
-                                                       f"trade-offs at some length this morning. ") * 4
-    return Message(role="user" if index % 2 == 0 else "assistant", content=text,
-                   token_count=count_tokens(text), turn_index=index)
+    text = (
+        f"The {words[0]} is version {index}. "
+        + (f"We weighed {', '.join(words[1:])} and the {words[1]} trade-offs at some length this morning. ") * 4
+    )
+    return Message(
+        role="user" if index % 2 == 0 else "assistant", content=text, token_count=count_tokens(text), turn_index=index
+    )
 
 
 def _converse(service: GcService, turns: int) -> KnowledgeState:
@@ -66,8 +90,9 @@ def _fact(turn: int, topic: str, content: str, kind: KnowledgeType = KnowledgeTy
 
 
 def _span(level: DetailLevel, *said: tuple[int, str, str], opening: str = "") -> Span:
-    turns = tuple(Message(role=role, content=text, token_count=count_tokens(text), turn_index=turn)
-                  for turn, role, text in said)
+    turns = tuple(
+        Message(role=role, content=text, token_count=count_tokens(text), turn_index=turn) for turn, role, text in said
+    )
     return Span(turns=turns, level=level, index_line=opening)
 
 
@@ -112,14 +137,14 @@ class TestWhereEachTurnIs:
         assert condensed
         assert all(t.text == _turn(t.turn_index).content for t in condensed)
 
-
     def test_tool_turns_are_marked_so_tool_results_are_not_shown_as_the_users_words(self):
         call = [{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}}]
         result = [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "README.md"}]
-        turns = [Message(role="user", content="list the files", token_count=3, turn_index=0),
-                 Message(role="assistant", content="[tool call: Bash]", token_count=5, turn_index=1, raw_content=call),
-                 Message(role="user", content="[tool result] README.md", token_count=6, turn_index=2,
-                         raw_content=result)]
+        turns = [
+            Message(role="user", content="list the files", token_count=3, turn_index=0),
+            Message(role="assistant", content="[tool call: Bash]", token_count=5, turn_index=1, raw_content=call),
+            Message(role="user", content="[tool result] README.md", token_count=6, turn_index=2, raw_content=result),
+        ]
         service = _service(min_cut_tokens=100_000)
         service.gc_record(SESSION, turns, ["h0", "h1", "h2"])
 
@@ -129,8 +154,10 @@ class TestWhereEachTurnIs:
         assert [t.tool_results for t in state.turns] == [False, False, True]
 
     def test_a_turn_claude_code_wrote_part_of_is_shown_by_writer(self):
-        turns = [turn_with_client_text(0, (False, COMMAND), (True, SKILL_RULES)),
-                 Message(role="assistant", content="Auditing.", token_count=3, turn_index=1)]
+        turns = [
+            turn_with_client_text(0, (False, COMMAND), (True, SKILL_RULES)),
+            Message(role="assistant", content="Auditing.", token_count=3, turn_index=1),
+        ]
         service = _service(min_cut_tokens=100_000)
         service.gc_record(SESSION, turns, ["h0", "h1"])
 
@@ -140,10 +167,17 @@ class TestWhereEachTurnIs:
         assert state.turns[1].parts is None
 
     def test_words_typed_beside_tool_results_are_shown_apart_from_them(self):
-        turns = [Message(role="user", content="Run the suite.", token_count=3, turn_index=0),
-                 Message(role="assistant", content="", token_count=3, turn_index=1,
-                         raw_content=[{"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}]),
-                 turn_with_typed_words(2, "t1", "Stop, use MySQL.", output="42 passed")]
+        turns = [
+            Message(role="user", content="Run the suite.", token_count=3, turn_index=0),
+            Message(
+                role="assistant",
+                content="",
+                token_count=3,
+                turn_index=1,
+                raw_content=[{"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}],
+            ),
+            turn_with_typed_words(2, "t1", "Stop, use MySQL.", output="42 passed"),
+        ]
         service = _service(min_cut_tokens=100_000)
         service.gc_record(SESSION, turns, ["h0", "h1", "h2"])
 
@@ -151,7 +185,11 @@ class TestWhereEachTurnIs:
 
         assert state.turns[2].tool_results
         assert [(p.writer, p.text) for p in state.turns[2].parts] == [
-            ("tool", "[tool result] 42 passed"), ("client", INTERRUPTED), ("speaker", "Stop, use MySQL.")]
+            ("tool", "[tool result] 42 passed"),
+            ("client", INTERRUPTED),
+            ("speaker", "Stop, use MySQL."),
+        ]
+
 
 class TestThePassOutcome:
     def test_every_cut_reports_where_its_turns_actually_went(self):
@@ -170,14 +208,20 @@ class TestThePassOutcome:
                 passes.append((before, result, project_knowledge_state(service.inspect(SESSION))))
             return passes
 
-        cuts = [(before, result, after) for before, result, after in asyncio.run(scenario())
-                if result.status is GCStatus.COMPLETED]
+        cuts = [
+            (before, result, after)
+            for before, result, after in asyncio.run(scenario())
+            if result.status is GCStatus.COMPLETED
+        ]
         assert cuts
         for before, result, after in cuts:
             was = {t.turn_index: t.fidelity for t in before.turns}
             now = {t.turn_index: t.fidelity for t in after.turns}
-            taken = [turn for turn, fidelity in was.items() if fidelity is TurnFidelity.VERBATIM
-                     and now[turn] is not TurnFidelity.VERBATIM]
+            taken = [
+                turn
+                for turn, fidelity in was.items()
+                if fidelity is TurnFidelity.VERBATIM and now[turn] is not TurnFidelity.VERBATIM
+            ]
             outcome = result.outcome
             assert outcome is not None
             assert outcome.taken == taken
@@ -195,8 +239,12 @@ class TestWhatTheModelSees:
     def test_a_reply_without_facts_of_its_own_is_archived_not_out_of_view(self):
         """The model reads an archived span's line for every turn in it, so a reply
         that yielded no fact is no less visible than the question it answered."""
-        span = _span(DetailLevel.ARCHIVED, (0, "user", "Let's use Stripe for payments, with a 4% fee."),
-                     (1, "assistant", "Sounds good."), opening="Let's use Stripe for payments, with a 4% fee.")
+        span = _span(
+            DetailLevel.ARCHIVED,
+            (0, "user", "Let's use Stripe for payments, with a 4% fee."),
+            (1, "assistant", "Sounds good."),
+            opening="Let's use Stripe for payments, with a 4% fee.",
+        )
         state = _seed(_service(), GenerationSnapshot(old=(span,), knowledge=(_fact(0, "fee", "4%"),)))
 
         assert [t.fidelity for t in state.turns] == [TurnFidelity.ARCHIVED] * 2
@@ -205,8 +253,9 @@ class TestWhatTheModelSees:
 
     def test_a_span_whose_facts_could_not_be_read_says_so(self):
         """An empty facts panel read as "nothing settled" when the read had failed."""
-        unread = replace(_span(DetailLevel.ARCHIVED, (0, "user", "Let's use Stripe."), (1, "assistant", "Done.")),
-                         facts_unread=True)
+        unread = replace(
+            _span(DetailLevel.ARCHIVED, (0, "user", "Let's use Stripe."), (1, "assistant", "Done.")), facts_unread=True
+        )
         state = _seed(_service(), GenerationSnapshot(old=(unread,)))
 
         assert [span.facts_unread for span in state.spans] == [True]
@@ -214,9 +263,11 @@ class TestWhatTheModelSees:
     def test_a_folded_span_shares_its_runs_line_and_its_facts_are_not_sent(self):
         """The signal that matters most: kept, and still invisible to the model,
         because the front had no room even for its span's line."""
-        old = (_span(DetailLevel.OUT_OF_VIEW, (0, "user", "the region is frankfurt")),
-               _span(DetailLevel.ARCHIVED, (1, "user", "the database is postgres"), opening="the database"),
-               _span(DetailLevel.KEPT, (2, "user", "the cache is redis")))
+        old = (
+            _span(DetailLevel.OUT_OF_VIEW, (0, "user", "the region is frankfurt")),
+            _span(DetailLevel.ARCHIVED, (1, "user", "the database is postgres"), opening="the database"),
+            _span(DetailLevel.KEPT, (2, "user", "the cache is redis")),
+        )
         facts = (_fact(0, "region", "frankfurt"), _fact(1, "database", "postgres"), _fact(2, "cache", "redis"))
         state = _seed(_service(), GenerationSnapshot(old=old, knowledge=facts))
 
@@ -228,7 +279,8 @@ class TestWhatTheModelSees:
         assert [(f.content, f.sent, f.span_level) for f in state.facts] == [
             ("frankfurt", False, DetailLevel.OUT_OF_VIEW),
             ("postgres", True, DetailLevel.ARCHIVED),
-            ("redis", False, DetailLevel.KEPT)]
+            ("redis", False, DetailLevel.KEPT),
+        ]
 
     def test_a_contradicted_fact_names_what_replaced_it(self):
         knowledge, _ = file_knowledge((), (_fact(1, "database", "postgres"), _fact(6, "database", "mysql")))
@@ -250,7 +302,7 @@ class TestWhatTheModelSees:
 
 class TestTheNextCollection:
     def test_only_turns_the_cut_would_take_say_what_they_become(self):
-        service = _service(min_cut_tokens=100_000)   # never cut, so the preview has a full batch to show
+        service = _service(min_cut_tokens=100_000)  # never cut, so the preview has a full batch to show
         state = _converse(service, 12)
 
         in_cut = set(state.next_cut.turns)
@@ -265,10 +317,15 @@ class TestTheNextCollection:
         """Levels are re-planned at every collection, so a span already shown can
         change too: a long kept span nobody has mentioned since goes quiet."""
         words = "We compared the replicas, the failover drill and the backup schedule in detail. " * 12
-        old = (_span(DetailLevel.KEPT, (0, "user", "Which database?"), (1, "assistant", words),
-                     opening="Which database?"),)
-        young = tuple(Message(role="user" if i % 2 == 0 else "assistant", content="unrelated chatter",
-                              token_count=3, turn_index=i) for i in range(2, 120))
+        old = (
+            _span(DetailLevel.KEPT, (0, "user", "Which database?"), (1, "assistant", words), opening="Which database?"),
+        )
+        young = tuple(
+            Message(
+                role="user" if i % 2 == 0 else "assistant", content="unrelated chatter", token_count=3, turn_index=i
+            )
+            for i in range(2, 120)
+        )
         state = _seed(_service(context_window=100_000), GenerationSnapshot(old=old, young=young))
 
         [span] = state.spans
@@ -303,10 +360,12 @@ class TestWhatTheDashboardSaysIsWhatTheModelReceives:
         for state in states:
             front = state.front_text or ""
             verbatim = [turn for turn in state.turns if turn.fidelity is TurnFidelity.VERBATIM]
-            assert state.context_tokens == state.front_tokens + sum(turn.tokens for turn in verbatim), \
+            assert state.context_tokens == state.front_tokens + sum(turn.tokens for turn in verbatim), (
                 "the size shown is the recap plus the recent messages"
-            assert [turn.turn_index for turn in state.turns] == list(range(state.recorded_turns)), \
+            )
+            assert [turn.turn_index for turn in state.turns] == list(range(state.recorded_turns)), (
                 "every recorded message is shown, once"
+            )
             for span in state.spans:
                 assert span.text in front, "an exchange's text is exactly what the recap carries"
                 for index in span.turns:
@@ -356,8 +415,9 @@ class TestTheModelsEarlierThinking:
         service = _service(min_saving_share=1000.0)
         for index in range(10):
             turn = _turn(index)
-            service.gc_record(SESSION, [turn.model_copy(update={"thinking_tokens": 50 * (turn.role == "assistant")})],
-                              [f"h{index}"])
+            service.gc_record(
+                SESSION, [turn.model_copy(update={"thinking_tokens": 50 * (turn.role == "assistant")})], [f"h{index}"]
+            )
         asyncio.run(service.gc_age(SESSION, ignore_batch_minimum=True))
 
         staged = project_knowledge_state(service.inspect(SESSION)).staged

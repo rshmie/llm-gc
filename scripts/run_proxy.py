@@ -88,6 +88,7 @@ STUB_REPLIES = [
 def _stub_reply(index: int) -> str:
     return STUB_REPLIES[index % len(STUB_REPLIES)]
 
+
 _SCRIPTED_SUMMARIES = [
     "Earlier turns set a Friday deadline and chose the ingest storage layer.",
     "Postgres was chosen with ninety days of raw event retention, partitioned by day.",
@@ -99,7 +100,6 @@ _SCRIPTED_SUMMARIES = [
     "The incident gap was in alerting rather than ingest, so thresholds are the fix.",
     "The onboarding flow lost a screen; the second confirmation never caught a mistake.",
 ] * 6
-
 
 
 def demo_config() -> GCConfig:
@@ -116,15 +116,18 @@ def demo_config() -> GCConfig:
 
 def serve_config(args: argparse.Namespace) -> GCConfig:
     """The library defaults, with the two knobs worth turning while watching."""
-    return GCConfig(context_window=args.context_window, min_cut_tokens=args.min_cut_tokens,
-                    last_n_turns_to_keep=args.keep_last)
+    return GCConfig(
+        context_window=args.context_window, min_cut_tokens=args.min_cut_tokens, last_n_turns_to_keep=args.keep_last
+    )
 
 
 def build_engine(config: GCConfig, *, compactor_kind: str) -> tuple[GcService, str]:
     """The proxy's engine, and a label saying which summariser it calls."""
     if compactor_kind == "noop":
-        return (build_gc_service(config, summary_provider=None),
-                "NoOpCompactor (baseline: wraps the run, does not summarise)")
+        return (
+            build_gc_service(config, summary_provider=None),
+            "NoOpCompactor (baseline: wraps the run, does not summarise)",
+        )
     provider = FakeProvider(
         responses=[
             LLMResponse(
@@ -139,8 +142,10 @@ def build_engine(config: GCConfig, *, compactor_kind: str) -> tuple[GcService, s
         ]
     )
     # Canned summaries are not a model: facts are read by patterns, from the user's own words.
-    return (build_gc_service(config, summary_provider=provider, fact_reader=PatternFactReader()),
-            "LLMCompactor -> scripted provider (wording canned, arithmetic real)")
+    return (
+        build_gc_service(config, summary_provider=provider, fact_reader=PatternFactReader()),
+        "LLMCompactor -> scripted provider (wording canned, arithmetic real)",
+    )
 
 
 def _stub_upstream(forwarded: list[dict]):
@@ -167,6 +172,7 @@ def _stub_upstream(forwarded: list[dict]):
         )
 
     return handler
+
 
 def demo(compactor_kind: str) -> None:
     """Replay a conversation through the real proxy over real HTTP."""
@@ -218,18 +224,23 @@ def demo(compactor_kind: str) -> None:
             kinds.append("summaries")
         note = ", ".join(kinds) or "verbatim passthrough"
 
-        print(f"{index:>4} {f'{sent_turns:>2} turns / {sent_tokens:>4} tok':>22} "
-              f"{f'{out_turns:>2} turns / {out_tokens:>4} tok':>22} {saved:>+7}  {note}")
+        print(
+            f"{index:>4} {f'{sent_turns:>2} turns / {sent_tokens:>4} tok':>22} "
+            f"{f'{out_turns:>2} turns / {out_tokens:>4} tok':>22} {saved:>+7}  {note}"
+        )
 
         # The reply the client received, which a real client resends next time.
         history.append({"role": "assistant", "content": response.json()["content"][0]["text"]})
 
     print("-" * 100)
     stats = client.get("/stats").json()
-    print(f"\n{'':>4} requests={stats['requests']}  gc_applied={stats['gc_applied']}  "
-          f"gc_bypassed={stats['gc_bypassed']}")
-    print(f"{'':>4} client sent {stats['tokens_from_client']} tok -> forwarded "
-          f"{stats['tokens_forwarded']} tok   saved {stats['tokens_saved']:+d}  ({stats['ratio']}x)")
+    print(
+        f"\n{'':>4} requests={stats['requests']}  gc_applied={stats['gc_applied']}  gc_bypassed={stats['gc_bypassed']}"
+    )
+    print(
+        f"{'':>4} client sent {stats['tokens_from_client']} tok -> forwarded "
+        f"{stats['tokens_forwarded']} tok   saved {stats['tokens_saved']:+d}  ({stats['ratio']}x)"
+    )
 
     final = forwarded[-1]["messages"]
     print("\nWHAT THE PROVIDER RECEIVED ON THE LAST REQUEST\n")
@@ -245,18 +256,24 @@ def demo(compactor_kind: str) -> None:
     # Generations belong to the session, not to the shared GenerationalMemory.
     snapshot = service.session_manager.store.get(SESSION).snapshot
     levels = Counter(span.level.value for span in snapshot.old)
-    print(f"  old gen: {len(snapshot.old)} spans {dict(levels)}   permanent gen: {len(snapshot.active_knowledge)} facts\n")
+    print(
+        f"  old gen: {len(snapshot.old)} spans {dict(levels)}   permanent gen: {len(snapshot.active_knowledge)} facts\n"
+    )
+
 
 def serve(args: argparse.Namespace) -> None:
     """Serve the proxy offline, and the dashboard beside it if asked."""
     config = serve_config(args)
     service, label = build_engine(config, compactor_kind=args.compactor)
-    settings = load_settings(None, port=args.port, dashboard=args.dashboard, dashboard_port=args.dashboard_port,
-                             engine=config.model_dump())
+    settings = load_settings(
+        None, port=args.port, dashboard=args.dashboard, dashboard_port=args.dashboard_port, engine=config.model_dump()
+    )
     print(f"\ncompactor: {label}")
     print("upstream:  stub (canned replies, no network)")
-    print(f"settings:  min_cut_tokens={config.min_cut_tokens}  last_n_turns_to_keep={config.last_n_turns_to_keep}  "
-          f"context_window={config.context_window}")
+    print(
+        f"settings:  min_cut_tokens={config.min_cut_tokens}  last_n_turns_to_keep={config.last_n_turns_to_keep}  "
+        f"context_window={config.context_window}"
+    )
     print(f"\nproxy      http://127.0.0.1:{args.port}   (stats: /stats)")
     if args.dashboard:
         print(f"dashboard  http://127.0.0.1:{args.dashboard_port}")
@@ -283,21 +300,42 @@ def _stub_provider(request: httpx2.Request) -> httpx2.Response:
     payload = json.loads(request.content)
     turns = payload.get("messages", [])
     question = turns[-1]["content"] if turns and isinstance(turns[-1]["content"], str) else "that"
-    text = f"(stub reply {len(turns)}) On \"{question[:60]}\": {_STUB_PARAGRAPHS[len(turns) % len(_STUB_PARAGRAPHS)]}"
+    text = f'(stub reply {len(turns)}) On "{question[:60]}": {_STUB_PARAGRAPHS[len(turns) % len(_STUB_PARAGRAPHS)]}'
     usage = {"input_tokens": sum(count_tokens(json.dumps(t)) for t in turns), "output_tokens": count_tokens(text)}
-    message = {"id": f"msg_stub_{len(turns)}", "type": "message", "role": "assistant", "model": "stub",
-               "stop_reason": "end_turn", "stop_sequence": None, "usage": usage}
+    message = {
+        "id": f"msg_stub_{len(turns)}",
+        "type": "message",
+        "role": "assistant",
+        "model": "stub",
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": usage,
+    }
     if not payload.get("stream"):
         return httpx2.Response(200, json={**message, "content": [{"type": "text", "text": text}]})
 
     events = [
         ("message_start", {"type": "message_start", "message": {**message, "content": [], "stop_reason": None}}),
-        ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
-        *[("content_block_delta", {"type": "content_block_delta", "index": 0,
-                                   "delta": {"type": "text_delta", "text": word + " "}}) for word in text.split()],
+        (
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        *[
+            (
+                "content_block_delta",
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": word + " "}},
+            )
+            for word in text.split()
+        ],
         ("content_block_stop", {"type": "content_block_stop", "index": 0}),
-        ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-                           "usage": {"output_tokens": usage["output_tokens"]}}),
+        (
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": {"output_tokens": usage["output_tokens"]},
+            },
+        ),
         ("message_stop", {"type": "message_stop"}),
     ]
     body = "".join(f"event: {name}\ndata: {json.dumps(data)}\n\n" for name, data in events)
@@ -308,17 +346,30 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--serve", action="store_true", help="serve offline instead of running the demo")
     parser.add_argument("--port", type=int, default=DEFAULT_PROXY_PORT)
-    parser.add_argument("--compactor", choices=("noop", "llm"), default="llm",
-                        help="noop = the baseline that expands; llm = LLMCompactor over scripted summaries")
+    parser.add_argument(
+        "--compactor",
+        choices=("noop", "llm"),
+        default="llm",
+        help="noop = the baseline that expands; llm = LLMCompactor over scripted summaries",
+    )
     serving = parser.add_argument_group("serve mode")
     serving.add_argument("--dashboard", action="store_true", help="also serve the live dashboard (localhost only)")
     serving.add_argument("--dashboard-port", type=int, default=DEFAULT_DASHBOARD_PORT)
-    serving.add_argument("--min-cut-tokens", type=int, default=DEFAULT_MIN_CUT_TOKENS,
-                         help="tokens a collection must condense (lower it to see collections sooner)")
-    serving.add_argument("--keep-last", type=int, default=DEFAULT_LAST_N_TURNS_TO_KEEP,
-                         help="newest turns always kept verbatim")
-    serving.add_argument("--context-window", type=int, default=DEFAULT_PROXY_CONTEXT_WINDOW,
-                         help="the proxied model's window; sets the recap budget")
+    serving.add_argument(
+        "--min-cut-tokens",
+        type=int,
+        default=DEFAULT_MIN_CUT_TOKENS,
+        help="tokens a collection must condense (lower it to see collections sooner)",
+    )
+    serving.add_argument(
+        "--keep-last", type=int, default=DEFAULT_LAST_N_TURNS_TO_KEEP, help="newest turns always kept verbatim"
+    )
+    serving.add_argument(
+        "--context-window",
+        type=int,
+        default=DEFAULT_PROXY_CONTEXT_WINDOW,
+        help="the proxied model's window; sets the recap budget",
+    )
     args = parser.parse_args()
     # The application chooses how the library's logs are shown: what each request was and
     # why one was passed on untouched. They name sessions and counts, never content.

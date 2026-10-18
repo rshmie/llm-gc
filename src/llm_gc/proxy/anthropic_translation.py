@@ -40,8 +40,9 @@ _ATTACHMENTS = {"image": "[image]", "document": "[document]"}
 # Only as the client writes it, a block that opens at the start of a line and closes at the end of
 # one: a person who names the element in a sentence is talking about it. Never across a second
 # opening tag, so a stray one cannot carry the words before a real element into it.
-_REMINDER = re.compile(r"^<system-reminder>(?:(?!<system-reminder>).)*?</system-reminder>[ \t]*$",
-                       re.DOTALL | re.MULTILINE)
+_REMINDER = re.compile(
+    r"^<system-reminder>(?:(?!<system-reminder>).)*?</system-reminder>[ \t]*$", re.DOTALL | re.MULTILINE
+)
 _BLANK_RUN = re.compile(r"\n{3,}")
 
 # A client can place instructions inside its conversation, as messages of this role:
@@ -63,8 +64,13 @@ _INTERRUPTED = re.compile(r"\[Request interrupted by user(?: for tool use)?\]\s*
 # reads are short; a line longer than this is a content delta, which it never reads.
 _STREAM_LINE_MAX_BYTES = 64 * 1024
 # The stream events an outline reads, matched in a line before it is parsed.
-_OUTLINE_EVENTS = (b'"message_start"', b'"message_delta"', b'"content_block_start"', b'"signature_delta"',
-                   b'"message_stop"')
+_OUTLINE_EVENTS = (
+    b'"message_start"',
+    b'"message_delta"',
+    b'"content_block_start"',
+    b'"signature_delta"',
+    b'"message_stop"',
+)
 # A tool's name or id longer than this is not one; it is not kept or shown.
 _OUTLINE_STRING_MAX_CHARS = 128
 # A tool call that starts a subagent gives it a prompt: shorter than this, a string input is a
@@ -113,14 +119,25 @@ class Instruction:
     def token_count(self) -> int:
         return count_tokens_cached(_content_as_text(self.raw.get("content"), -1))
 
+
 # Hop-by-hop headers describe our connection to the client, not the request's
 # content. `content-length` in particular would be wrong by however many tokens
 # GC saved, since the body is rewritten after headers are built.
-_HOP_BY_HOP = frozenset({
-    "host", "content-length", "connection", "keep-alive", "transfer-encoding",
-    "upgrade", "proxy-authorization", "proxy-authenticate", "te", "trailer",
-    "accept-encoding",
-})
+_HOP_BY_HOP = frozenset(
+    {
+        "host",
+        "content-length",
+        "connection",
+        "keep-alive",
+        "transfer-encoding",
+        "upgrade",
+        "proxy-authorization",
+        "proxy-authenticate",
+        "te",
+        "trailer",
+        "accept-encoding",
+    }
+)
 
 
 def extract_messages(payload: dict[str, Any], size_thinking: ThinkingSizer | None = None) -> list[Message]:
@@ -181,13 +198,19 @@ def extract_messages(payload: dict[str, Any], size_thinking: ThinkingSizer | Non
 
 def _carries_tool_results(content: object) -> bool:
     return isinstance(content, list) and any(
-        isinstance(block, dict) and block.get("type") == "tool_result" for block in content)
+        isinstance(block, dict) and block.get("type") == "tool_result" for block in content
+    )
 
 
 def _holds_text_beside_tool_results(content: object) -> bool:
-    return isinstance(content, list) and _carries_tool_results(content) and any(
-        isinstance(block, dict) and block.get("type") != "tool_result" and _block_as_text(block) is not None
-        for block in content)
+    return (
+        isinstance(content, list)
+        and _carries_tool_results(content)
+        and any(
+            isinstance(block, dict) and block.get("type") != "tool_result" and _block_as_text(block) is not None
+            for block in content
+        )
+    )
 
 
 def _divide_by_writer(blocks: list[Any]) -> tuple[str, tuple[str, ...], Ranges, Ranges]:
@@ -224,9 +247,11 @@ def _divide_by_writer(blocks: list[Any]) -> tuple[str, tuple[str, ...], Ranges, 
         offset += len(piece) + 1
     # The person's words are read a run of blocks at a time, as in a turn they wrote: the text
     # a command expands to comes in a block of its own after the command.
-    client = ranges["client"] + [(run_start + start, run_start + end)
-                                 for run_start, run_end in _joined(ranges["speaker"], content)
-                                 for start, end in client_written_ranges(content[run_start:run_end])]
+    client = ranges["client"] + [
+        (run_start + start, run_start + end)
+        for run_start, run_end in _joined(ranges["speaker"], content)
+        for start, end in client_written_ranges(content[run_start:run_end])
+    ]
     return content, tuple(instructions), _joined(ranges["tool"], content), _joined(client, content)
 
 
@@ -234,7 +259,7 @@ def _joined(ranges: list[tuple[int, int]], text: str) -> Ranges:
     """The ranges in order, each joined to the one before it when only blank space lies between them."""
     joined: list[tuple[int, int]] = []
     for start, end in sorted(ranges):
-        if joined and not text[joined[-1][1]:start].strip():
+        if joined and not text[joined[-1][1] : start].strip():
             joined[-1] = (joined[-1][0], end)
         else:
             joined.append((start, end))
@@ -313,15 +338,24 @@ def fixed_prompt_tokens(payload: dict[str, Any]) -> int:
     """
     system = payload.get("system")
     tools = payload.get("tools")
-    system_text = system if isinstance(system, str) else (
-        "\n".join(block["text"] for block in system if isinstance(block, dict) and isinstance(block.get("text"), str))
-        if isinstance(system, list) else "")
+    system_text = (
+        system
+        if isinstance(system, str)
+        else (
+            "\n".join(
+                block["text"] for block in system if isinstance(block, dict) and isinstance(block.get("text"), str)
+            )
+            if isinstance(system, list)
+            else ""
+        )
+    )
     tools_text = json.dumps(tools, ensure_ascii=False) if isinstance(tools, list) and tools else ""
     return count_tokens_cached(system_text) + count_tokens_cached(tools_text)
 
 
-def rewrite_overhead_tokens(payload: dict[str, Any], messages: Sequence[Message],
-                            instructions: Sequence[Instruction] = ()) -> int:
+def rewrite_overhead_tokens(
+    payload: dict[str, Any], messages: Sequence[Message], instructions: Sequence[Instruction] = ()
+) -> int:
     """Tokens a collection makes the provider cache again besides the recap and the recent turns' text.
 
     These are the client's instructions, which LLM-GC sends after the system prompt (each
@@ -329,8 +363,11 @@ def rewrite_overhead_tokens(payload: dict[str, Any], messages: Sequence[Message]
     that the client's cache markers do not cover.
     """
     said_once = dict.fromkeys(text for message in messages for text in message.instructions)
-    return (uncached_prefix_tokens(payload) + sum(count_tokens_cached(text) for text in said_once)
-            + sum(instruction.token_count for instruction in instructions))
+    return (
+        uncached_prefix_tokens(payload)
+        + sum(count_tokens_cached(text) for text in said_once)
+        + sum(instruction.token_count for instruction in instructions)
+    )
 
 
 def uncached_prefix_tokens(payload: dict[str, Any]) -> int:
@@ -341,16 +378,22 @@ def uncached_prefix_tokens(payload: dict[str, Any]) -> int:
     """
     raw_tools, system = payload.get("tools"), payload.get("system")
     tools: list[Any] = raw_tools if isinstance(raw_tools, list) else []
-    system_blocks: list[Any] = system if isinstance(system, list) else [{"type": "text", "text": system}] if system else []
-    blocks = [*tools, *system_blocks]                 # the provider's prompt order: tools, then system
-    marked = [index for index, block in enumerate(blocks)
-              if isinstance(block, dict) and isinstance(block.get("cache_control"), dict)]
+    system_blocks: list[Any] = (
+        system if isinstance(system, list) else [{"type": "text", "text": system}] if system else []
+    )
+    blocks = [*tools, *system_blocks]  # the provider's prompt order: tools, then system
+    marked = [
+        index
+        for index, block in enumerate(blocks)
+        if isinstance(block, dict) and isinstance(block.get("cache_control"), dict)
+    ]
     start = marked[-1] + 1 if marked else 0
     later_tools = tools[start:]
-    later_system = system_blocks[max(0, start - len(tools)):]
+    later_system = system_blocks[max(0, start - len(tools)) :]
     tools_text = json.dumps(later_tools, ensure_ascii=False) if later_tools else ""
-    system_text = "\n".join(block["text"] for block in later_system
-                            if isinstance(block, dict) and isinstance(block.get("text"), str))
+    system_text = "\n".join(
+        block["text"] for block in later_system if isinstance(block, dict) and isinstance(block.get("text"), str)
+    )
     return count_tokens_cached(tools_text) + count_tokens_cached(system_text)
 
 
@@ -371,8 +414,9 @@ def cache_lifetime_s(payload: dict[str, Any]) -> float:
         if isinstance(message, dict) and isinstance(content := message.get("content"), list):
             blocks.extend(content)
     blocks.append(payload)
-    markers = [marker for block in blocks
-               if isinstance(block, dict) and isinstance(marker := block.get("cache_control"), dict)]
+    markers = [
+        marker for block in blocks if isinstance(block, dict) and isinstance(marker := block.get("cache_control"), dict)
+    ]
     ttl = markers[-1].get("ttl") if markers else None
     match = _CACHE_TTL.fullmatch(ttl) if isinstance(ttl, str) else None
     return float(int(match[1]) * _CACHE_TTL_UNIT_S[match[2]]) if match else DEFAULT_CACHE_LIFETIME_S
@@ -403,8 +447,9 @@ def _content_as_text(content: object, index: int) -> str:
         skipped = len(content) - len(texts)
         if skipped:
             # Logged without the content: conversation text is user data.
-            logger.debug("ignored content blocks with no text form",
-                         extra={"message_index": index, "blocks_ignored": skipped})
+            logger.debug(
+                "ignored content blocks with no text form", extra={"message_index": index, "blocks_ignored": skipped}
+            )
         return "\n".join(texts)
 
     raise ConfigError(f"messages[{index}] has unsupported content type {type(content).__name__}")
@@ -452,7 +497,7 @@ def _streamed_blocks(raw: bytes) -> list[Any] | None:
     for line in raw.decode("utf-8").splitlines():
         if not line.startswith("data:"):
             continue
-        event = json.loads(line[len("data:"):])
+        event = json.loads(line[len("data:") :])
         kind, index = event.get("type"), event.get("index")
         if kind == "content_block_start":
             blocks[index] = dict(event["content_block"])
@@ -482,18 +527,19 @@ class ToolCall:
 # A refusal's reason is logged up to this length: enough for the provider's sentence, not a payload.
 REFUSAL_REASON_MAX_CHARS = 300
 
+
 @dataclass(frozen=True, slots=True)
 class ReplyOutline:
     """What a reply did, never what it said: how it ended, the usage it reported, the tools it called."""
 
     status: int
-    finished: bool = False                # it reached its end: a whole body, or a stream's message_stop
+    finished: bool = False  # it reached its end: a whole body, or a stream's message_stop
     stop_reason: str | None = None
     usage: ProviderUsage | None = None
     tool_calls: tuple[ToolCall, ...] = ()
-    retry_after_s: float | None = None    # the upstream's Retry-After on a refusal, when it gave one
-    error_type: str | None = None         # the provider's name for a refusal, such as invalid_request_error
-    thinking_key: str | None = None       # key of the reply's first thinking block (a hash, not content)
+    retry_after_s: float | None = None  # the upstream's Retry-After on a refusal, when it gave one
+    error_type: str | None = None  # the provider's name for a refusal, such as invalid_request_error
+    thinking_key: str | None = None  # key of the reply's first thinking block (a hash, not content)
 
 
 def read_reply(status: int, raw: bytes, *, read_prompts: bool = False) -> tuple[ReplyOutline, dict[str, str]]:
@@ -509,17 +555,26 @@ def read_reply(status: int, raw: bytes, *, read_prompts: bool = False) -> tuple[
         return ReplyOutline(status=status), {}
     if status != 200 or not isinstance(body, dict) or body.get("type") != "message":
         error = body.get("error") if isinstance(body, dict) else None
-        return ReplyOutline(status=status, error_type=_plain(error.get("type")) if isinstance(error, dict) else None), {}
+        return ReplyOutline(
+            status=status, error_type=_plain(error.get("type")) if isinstance(error, dict) else None
+        ), {}
     usage = body.get("usage")
     content = body.get("content")
     blocks: list[Any] = content if isinstance(content, list) else []
     calls = [(call, block) for block in blocks if (call := _tool_call(block)) is not None]
-    outline = ReplyOutline(status=status, finished=True, stop_reason=_plain(body.get("stop_reason")),
-                           usage=ProviderUsage.from_reported(usage) if isinstance(usage, dict) else None,
-                           tool_calls=tuple(call for call, _ in calls),
-                           thinking_key=next(iter(thinking_keys(blocks)), None))
-    prompts = {call.call_id: prompt for call, block in calls
-               if read_prompts and (prompt := spawn_prompt(block.get("input"))) is not None}
+    outline = ReplyOutline(
+        status=status,
+        finished=True,
+        stop_reason=_plain(body.get("stop_reason")),
+        usage=ProviderUsage.from_reported(usage) if isinstance(usage, dict) else None,
+        tool_calls=tuple(call for call, _ in calls),
+        thinking_key=next(iter(thinking_keys(blocks)), None),
+    )
+    prompts = {
+        call.call_id: prompt
+        for call, block in calls
+        if read_prompts and (prompt := spawn_prompt(block.get("input"))) is not None
+    }
     return outline, prompts
 
 
@@ -557,7 +612,7 @@ class StreamOutlineReader:
         self._finished = False
         self._events = _OUTLINE_EVENTS + (_PROMPT_EVENTS if read_prompts else ())
         self._read_prompts = read_prompts
-        self._inputs: dict[int, tuple[str, list[str], int]] = {}   # block index -> call id, input pieces, their size
+        self._inputs: dict[int, tuple[str, list[str], int]] = {}  # block index -> call id, input pieces, their size
         self._prompts: dict[str, str] = {}
 
     def feed(self, chunk: bytes) -> None:
@@ -570,13 +625,18 @@ class StreamOutlineReader:
             self._partial = b""
         for line in lines:
             if line.startswith(b"data:") and any(name in line for name in self._events):
-                self._read(line[len(b"data:"):])
+                self._read(line[len(b"data:") :])
 
     def outline(self) -> ReplyOutline:
         """What the stream showed so far: the prompt's usage once it began, the output as far as it got."""
-        return ReplyOutline(status=200, finished=self._finished, stop_reason=self._stop_reason,
-                            usage=ProviderUsage.from_reported(self._usage) if self._usage is not None else None,
-                            tool_calls=tuple(self._calls), thinking_key=self._thinking_key)
+        return ReplyOutline(
+            status=200,
+            finished=self._finished,
+            stop_reason=self._stop_reason,
+            usage=ProviderUsage.from_reported(self._usage) if self._usage is not None else None,
+            tool_calls=tuple(self._calls),
+            thinking_key=self._thinking_key,
+        )
 
     def spawn_prompts(self) -> dict[str, str]:
         """The prompt each tool call gave a subagent, by call id: conversation content, for linking only."""
@@ -600,8 +660,11 @@ class StreamOutlineReader:
         elif kind == "content_block_start":
             # A redacted block's data comes in its start event; a thinking signature comes in a delta.
             self._thinking_key = self._thinking_key or _block_thinking_key(event.get("content_block"))
-        elif (kind == "content_block_delta" and isinstance(delta := event.get("delta"), dict)
-              and delta.get("type") == "signature_delta"):
+        elif (
+            kind == "content_block_delta"
+            and isinstance(delta := event.get("delta"), dict)
+            and delta.get("type") == "signature_delta"
+        ):
             self._thinking_key = self._thinking_key or thinking_key(delta.get("signature"))
         elif kind == "content_block_delta" and event.get("index") in self._inputs:
             self._gather(event["index"], event.get("delta"))
@@ -617,7 +680,11 @@ class StreamOutlineReader:
             self._finished = True
 
     def _read_long_thinking_line(self, head: bytes) -> None:
-        if self._thinking_key is None and head.startswith(b"data:") and any(mark in head for mark in _THINKING_LINE_MARKS):
+        if (
+            self._thinking_key is None
+            and head.startswith(b"data:")
+            and any(mark in head for mark in _THINKING_LINE_MARKS)
+        ):
             # Read from the raw JSON. Safe because the value is base64, which needs no escaping.
             opening = _THINKING_OPENING.search(head)
             self._thinking_key = thinking_key(opening[1].decode("ascii", "replace")) if opening else None
@@ -670,8 +737,12 @@ def _plain(value: object) -> str | None:
     return value if isinstance(value, str) and value.isprintable() and len(value) <= _OUTLINE_STRING_MAX_CHARS else None
 
 
-def rewrite_messages(payload: dict[str, Any], messages: list[Message], strip_thinking_before: int = 0,
-                     instructions: Sequence[Instruction] = ()) -> dict[str, Any]:
+def rewrite_messages(
+    payload: dict[str, Any],
+    messages: list[Message],
+    strip_thinking_before: int = 0,
+    instructions: Sequence[Instruction] = (),
+) -> dict[str, Any]:
     """Return a copy of the body with its conversation replaced.
 
     A copy, because the original is the fallback if anything downstream fails.
@@ -689,7 +760,7 @@ def rewrite_messages(payload: dict[str, Any], messages: list[Message], strip_thi
     is sent, word for word, exactly once.
     """
     turns = [message.turn_index for message in messages if message.turn_index >= 0]
-    covered = turns[0] if turns else 0     # the turns before this one are what the front stands in for
+    covered = turns[0] if turns else 0  # the turns before this one are what the front stands in for
     leading = [instruction.raw for instruction in instructions if instruction.after_turns <= covered]
     has_front = any(message.turn_index < 0 for message in messages)
     out: list[dict[str, Any]] = [] if has_front else list(leading)
@@ -700,8 +771,9 @@ def rewrite_messages(payload: dict[str, Any], messages: list[Message], strip_thi
         if message.turn_index < 0:
             out += leading
         else:
-            out += [instruction.raw for instruction in instructions
-                    if instruction.after_turns == message.turn_index + 1]
+            out += [
+                instruction.raw for instruction in instructions if instruction.after_turns == message.turn_index + 1
+            ]
     rewritten = dict(payload)
     rewritten["messages"] = out
     return rewritten
@@ -714,8 +786,12 @@ def sent_thinking_tokens(messages: Iterable[Message], strip_thinking_before: int
 
 def sends_thinking(messages: Iterable[Message], strip_thinking_before: int = 0) -> bool:
     """Return whether any thinking block is left in these turns after `rewrite_messages` strips thinking."""
-    return any(_keeps_thinking(message, strip_thinking_before) and isinstance(message.raw_content, list)
-               and any(map(is_thinking_block, message.raw_content)) for message in messages)
+    return any(
+        _keeps_thinking(message, strip_thinking_before)
+        and isinstance(message.raw_content, list)
+        and any(map(is_thinking_block, message.raw_content))
+        for message in messages
+    )
 
 
 def _keeps_thinking(message: Message, strip_thinking_before: int) -> bool:

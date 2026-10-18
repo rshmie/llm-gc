@@ -23,18 +23,19 @@ WindowLookup = Callable[[str], Awaitable[int | None]]
 @dataclass(frozen=True, slots=True)
 class ModelWindow:
     tokens: int
-    reported: bool    # True when the provider reported it for this model; False for the configured window
+    reported: bool  # True when the provider reported it for this model; False for the configured window
 
 
 class ModelWindows:
     """Each model's window: the provider's answer once it has one, the configured window until then."""
 
-    def __init__(self, configured: int, lookup: WindowLookup | None,
-                 schedule: Callable[[Awaitable[None]], None]) -> None:
+    def __init__(
+        self, configured: int, lookup: WindowLookup | None, schedule: Callable[[Awaitable[None]], None]
+    ) -> None:
         self._configured = ModelWindow(configured, reported=False)
         self._lookup = lookup
         self._schedule = schedule
-        self._known: dict[str, int | None] = {}   # None: asked, and no window came back
+        self._known: dict[str, int | None] = {}  # None: asked, and no window came back
         self._asking: set[str] = set()
 
     def window_for(self, model: str | None) -> ModelWindow:
@@ -54,16 +55,29 @@ class ModelWindows:
             tokens = await lookup(model)
         except Exception as err:
             # The reason's type only: an upstream's error text can echo the request.
-            logger.warning("could not ask the upstream for %s's context window (%s); using the configured %s",
-                           model, type(err).__name__, f"{self._configured.tokens:,}", extra={"model": model})
+            logger.warning(
+                "could not ask the upstream for %s's context window (%s); using the configured %s",
+                model,
+                type(err).__name__,
+                f"{self._configured.tokens:,}",
+                extra={"model": model},
+            )
             tokens = None
         else:
             if tokens is None:
-                logger.warning("the upstream reports no context window for %s; using the configured %s",
-                               model, f"{self._configured.tokens:,}", extra={"model": model})
+                logger.warning(
+                    "the upstream reports no context window for %s; using the configured %s",
+                    model,
+                    f"{self._configured.tokens:,}",
+                    extra={"model": model},
+                )
             else:
-                logger.info("%s has a %s-token context window, as the upstream reports it", model, f"{tokens:,}",
-                            extra={"model": model, "context_window": tokens})
+                logger.info(
+                    "%s has a %s-token context window, as the upstream reports it",
+                    model,
+                    f"{tokens:,}",
+                    extra={"model": model, "context_window": tokens},
+                )
         finally:
             self._asking.discard(model)
         self._known[model] = tokens

@@ -37,7 +37,7 @@ def test_a_model_is_sized_by_the_configured_window_until_the_upstream_answers():
     windows = _windows(upstream, pending)
 
     assert windows.window_for("claude-opus-5-5") == CONFIGURED
-    assert windows.window_for("claude-opus-5-5") == CONFIGURED   # still asking: never asked twice
+    assert windows.window_for("claude-opus-5-5") == CONFIGURED  # still asking: never asked twice
     _run(pending)
 
     assert windows.window_for("claude-opus-5-5") == ModelWindow(1_000_000, reported=True)

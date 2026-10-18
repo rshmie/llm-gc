@@ -100,20 +100,30 @@ class SessionManager:
         one finds it no longer live and discards its result instead of committing
         changes planned against a conversation that has since been rewound.
         """
-        fresh = SessionState(session_id=state.session_id, snapshot=snapshot, context_window=state.context_window,
-                             token_rate=state.token_rate, collection_enabled=state.collection_enabled)
+        fresh = SessionState(
+            session_id=state.session_id,
+            snapshot=snapshot,
+            context_window=state.context_window,
+            token_rate=state.token_rate,
+            collection_enabled=state.collection_enabled,
+        )
         self._store.put(fresh)
         self.retip(fresh)
         return fresh
 
     def _close_beyond_cap(self, keep: str) -> None:
-        held = [state for session_id in self._store.active_session_ids() if session_id != keep
-                and (state := self._store.get(session_id)) is not None]
+        held = [
+            state
+            for session_id in self._store.active_session_ids()
+            if session_id != keep and (state := self._store.get(session_id)) is not None
+        ]
         excess = len(held) + 1 - self._max_sessions
-        for state in sorted(held, key=lambda s: s.last_updated_at)[:max(0, excess)]:
+        for state in sorted(held, key=lambda s: s.last_updated_at)[: max(0, excess)]:
             self.close_session(state.session_id)
-            logger.info("closed the least recently active session to stay within the cap",
-                        extra={"session_id": state.session_id, "max_sessions": self._max_sessions})
+            logger.info(
+                "closed the least recently active session to stay within the cap",
+                extra={"session_id": state.session_id, "max_sessions": self._max_sessions},
+            )
 
     def close_session(self, session_id: str) -> None:
         """Drop a session and all of its data, and announce it. A second close is a no-op."""

@@ -58,12 +58,14 @@ class KnowledgeIndex:
         for position, fact in enumerate(knowledge):
             if fact.knowledge_status is KnowledgeStatus.ACTIVE:
                 self._active.setdefault(fact.message_turn, []).append(fact)
-            elif (replacement := _replacement(fact, knowledge[position + 1:])) is not None:
+            elif (replacement := _replacement(fact, knowledge[position + 1 :])) is not None:
                 self._replaced.setdefault(fact.message_turn, []).append((fact, replacement))
 
     def for_span(self, span: Span) -> Annotations:
-        return Annotations(facts=tuple(fact for turn in span.turn_indices for fact in self._active.get(turn, ())),
-                           replaced=tuple(pair for turn in span.turn_indices for pair in self._replaced.get(turn, ())))
+        return Annotations(
+            facts=tuple(fact for turn in span.turn_indices for fact in self._active.get(turn, ())),
+            replaced=tuple(pair for turn in span.turn_indices for pair in self._replaced.get(turn, ())),
+        )
 
 
 @dataclass(frozen=True)
@@ -75,9 +77,9 @@ class Front:
     """
 
     message: Message
-    entries: tuple[tuple[Span, str], ...]   # every span with lines of its own, and exactly those lines
-    facts: tuple[KnowledgeEntry, ...]       # the facts those lines carry
-    folded: tuple[tuple[tuple[Span, ...], str], ...] = ()   # each run of folded spans, and the one line it shares
+    entries: tuple[tuple[Span, str], ...]  # every span with lines of its own, and exactly those lines
+    facts: tuple[KnowledgeEntry, ...]  # the facts those lines carry
+    folded: tuple[tuple[tuple[Span, ...], str], ...] = ()  # each run of folded spans, and the one line it shares
 
 
 def span_text(span: Span, annotations: Annotations) -> str:
@@ -89,7 +91,9 @@ def span_text(span: Span, annotations: Annotations) -> str:
     if span.level is DetailLevel.OUT_OF_VIEW:
         raise ValueError("a folded span has no line of its own")
     if span.level is DetailLevel.KEPT:
-        lines = [f"{QUOTE_PREFIX} (turn {turn.turn_index}, {speaker_label(turn)}) {turn.content}" for turn in span.turns]
+        lines = [
+            f"{QUOTE_PREFIX} (turn {turn.turn_index}, {speaker_label(turn)}) {turn.content}" for turn in span.turns
+        ]
     elif span.level is DetailLevel.COMPACTED:
         if span.summary is None:
             raise ValueError(f"span at turn {span.first_turn} is compacted but has no summary")
@@ -104,12 +108,15 @@ def span_text(span: Span, annotations: Annotations) -> str:
 def folded_line(first_turn: int, last_turn: int, spans: int) -> str:
     """The one line standing in for a run of spans folded out of view."""
     exchanges = "exchange" if spans == 1 else "exchanges"
-    return (f"{FOLDED_PREFIX} ({_turns(first_turn, last_turn)}) {spans} earlier {exchanges}, "
-            "folded to stay within the budget.")
+    return (
+        f"{FOLDED_PREFIX} ({_turns(first_turn, last_turn)}) {spans} earlier {exchanges}, "
+        "folded to stay within the budget."
+    )
 
 
 def level_costs(span: Span, annotations: Annotations) -> tuple[int, int | None, int]:
     """Tokens the front would spend on the span kept, compacted and archived; compacted is None without a summary."""
+
     def cost(level: DetailLevel) -> int:
         return count_tokens_cached(span_text(replace(span, level=level), annotations))
 
@@ -129,8 +136,9 @@ def render_front(old: Sequence[Span], knowledge: Sequence[KnowledgeEntry]) -> Fr
     entries: list[tuple[Span, str]] = []
     carried: list[KnowledgeEntry] = []
     folded_runs: list[tuple[tuple[Span, ...], str]] = []
-    for folded, run in groupby(sorted(old, key=lambda span: span.first_turn),
-                               key=lambda span: span.level is DetailLevel.OUT_OF_VIEW):
+    for folded, run in groupby(
+        sorted(old, key=lambda span: span.first_turn), key=lambda span: span.level is DetailLevel.OUT_OF_VIEW
+    ):
         spans = list(run)
         if folded:
             line = folded_line(spans[0].first_turn, spans[-1].turns[-1].turn_index, len(spans))

@@ -8,8 +8,14 @@ import pytest
 
 from llm_gc.proxy import SESSION_HEADER
 from llm_gc.models import Message
-from llm_gc.proxy.anthropic_translation import (StreamOutlineReader, extract_messages, read_reply,
-                                                rewrite_messages, sent_thinking_tokens, thinking_keys)
+from llm_gc.proxy.anthropic_translation import (
+    StreamOutlineReader,
+    extract_messages,
+    read_reply,
+    rewrite_messages,
+    sent_thinking_tokens,
+    thinking_keys,
+)
 from llm_gc.proxy.reply_thinking import ReplyThinking
 from llm_gc.utils import count_tokens
 from tests.proxy.test_proxy_server import API_KEY, UPSTREAM_OK, _body, _is_front, _post, _proxy, _streaming_upstream
@@ -27,7 +33,11 @@ def _events(*events: dict) -> bytes:
 def _thinking_stream(signature: str = SIGNATURE, output_tokens: int = 900, text: str = "Postgres.") -> bytes:
     return _events(
         {"type": "message_start", "message": {"usage": {"input_tokens": 300, "output_tokens": 1}}},
-        {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": "", "signature": ""}},
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "thinking", "thinking": "", "signature": ""},
+        },
         {"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": signature}},
         {"type": "content_block_stop", "index": 0},
         {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
@@ -40,7 +50,7 @@ def _thinking_stream(signature: str = SIGNATURE, output_tokens: int = 900, text:
 def _read(stream: bytes, size: int) -> StreamOutlineReader:
     reader = StreamOutlineReader()
     for start in range(0, len(stream), size):
-        reader.feed(stream[start:start + size])
+        reader.feed(stream[start : start + size])
     return reader
 
 
@@ -103,7 +113,7 @@ class TestSizingAReplysThinking:
         replies = _replies(rate=1.0, capacity=2)
         replies.remember("old", output_tokens=900, model=MODEL)
         replies.remember("newer", output_tokens=900, model=MODEL)
-        replies.tokens(["old"], visible_tokens=0, model=MODEL)     # used again, so it is no longer the oldest
+        replies.tokens(["old"], visible_tokens=0, model=MODEL)  # used again, so it is no longer the oldest
 
         replies.remember("newest", output_tokens=900, model=MODEL)
 
@@ -123,14 +133,24 @@ class TestKnowingAThinkingBlock:
 
     def test_a_redacted_block_is_known_by_its_data(self):
         redacted = [{"type": "redacted_thinking", "data": SIGNATURE}]
-        stream = _events({"type": "content_block_start", "index": 0, "content_block": redacted[0]},
-                         {"type": "message_stop"})
+        stream = _events(
+            {"type": "content_block_start", "index": 0, "content_block": redacted[0]}, {"type": "message_stop"}
+        )
 
         assert _read(stream, size=64).outline().thinking_key == thinking_keys(redacted)[0]
 
     def test_blocks_that_are_not_thinking_have_no_key(self):
-        assert thinking_keys([{"type": "text", "text": SIGNATURE}, {"type": "thinking", "signature": ""},
-                              {"type": ["thinking"], "signature": SIGNATURE}, "text"]) == ()
+        assert (
+            thinking_keys(
+                [
+                    {"type": "text", "text": SIGNATURE},
+                    {"type": "thinking", "signature": ""},
+                    {"type": ["thinking"], "signature": SIGNATURE},
+                    "text",
+                ]
+            )
+            == ()
+        )
         assert thinking_keys("a plain string turn") == ()
 
     def test_distinct_blocks_have_distinct_keys_and_no_key_holds_the_thinking(self):
@@ -159,16 +179,25 @@ class TestReadingAStreamsThinking:
     def test_only_the_first_thinking_block_names_the_reply(self):
         stream = _events(
             {"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": SIGNATURE}},
-            {"type": "content_block_delta", "index": 2,
-             "delta": {"type": "signature_delta", "signature": OTHER_SIGNATURE}},
-            {"type": "message_stop"})
+            {
+                "type": "content_block_delta",
+                "index": 2,
+                "delta": {"type": "signature_delta", "signature": OTHER_SIGNATURE},
+            },
+            {"type": "message_stop"},
+        )
 
         assert _read(stream, size=64).outline().thinking_key == thinking_keys(_sent_back())[0]
 
     def test_text_that_names_the_event_is_not_a_signature(self):
-        stream = _events({"type": "content_block_delta", "index": 0,
-                          "delta": {"type": "text_delta", "text": '"signature_delta" "signature": "EqQB' + "x" * 70_000}},
-                         {"type": "message_stop"})
+        stream = _events(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": '"signature_delta" "signature": "EqQB' + "x" * 70_000},
+            },
+            {"type": "message_stop"},
+        )
 
         for size in (64, 4096):
             assert _read(stream, size).outline().thinking_key is None, size
@@ -182,10 +211,14 @@ class TestATurnCarriesItsReplysThinking:
             asked.append((keys, visible_tokens))
             return 500
 
-        payload = {"messages": [{"role": "user", "content": [{"type": "text", "text": "which database?"}]},
-                                {"role": "assistant", "content": _sent_back()},
-                                {"role": "assistant", "content": "No thinking here."},
-                                {"role": "user", "content": "and the retention?"}]}
+        payload = {
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "which database?"}]},
+                {"role": "assistant", "content": _sent_back()},
+                {"role": "assistant", "content": "No thinking here."},
+                {"role": "user", "content": "and the retention?"},
+            ]
+        }
 
         turns = extract_messages(payload, size_thinking=size)
 
@@ -200,9 +233,15 @@ class TestATurnCarriesItsReplysThinking:
         _post(client, first)
         forwarded = client.get("/stats").json()["tokens_forwarded"]
 
-        later = {**first, "model": next_model, "messages": [*first["messages"],
-                                                            {"role": "assistant", "content": _sent_back()},
-                                                            {"role": "user", "content": "and the retention?"}]}
+        later = {
+            **first,
+            "model": next_model,
+            "messages": [
+                *first["messages"],
+                {"role": "assistant", "content": _sent_back()},
+                {"role": "user", "content": "and the retention?"},
+            ],
+        }
         _post(client, later, headers={SESSION_HEADER: "s"})
 
         reply = service.session_manager.store.get("s").snapshot.young[1]
@@ -218,8 +257,14 @@ class TestATurnCarriesItsReplysThinking:
         _post(client, first)
         forwarded = client.get("/stats").json()["tokens_forwarded"]
 
-        later = {**first, "messages": [*first["messages"], {"role": "assistant", "content": _sent_back()},
-                                       {"role": "user", "content": "and the retention?"}]}
+        later = {
+            **first,
+            "messages": [
+                *first["messages"],
+                {"role": "assistant", "content": _sent_back()},
+                {"role": "user", "content": "and the retention?"},
+            ],
+        }
         _post(client, later, headers={SESSION_HEADER: "s"})
 
         assert service.session_manager.store.get("s").token_rate == 300 / forwarded
@@ -239,13 +284,23 @@ class TestATurnCarriesItsReplysThinking:
 class TestThinkingIsCountedAsSent:
     def test_the_count_and_the_rewrite_agree_on_which_turns_keep_their_thinking(self):
         turns = [Message(role="user", content="recap", turn_index=-1)] + [
-            Message(role="assistant", content="Postgres.", turn_index=index, thinking_tokens=100 * (index + 1),
-                    raw_content=_sent_back(f"Eq{index:04d}{SIGNATURE}")) for index in range(4)]
+            Message(
+                role="assistant",
+                content="Postgres.",
+                turn_index=index,
+                thinking_tokens=100 * (index + 1),
+                raw_content=_sent_back(f"Eq{index:04d}{SIGNATURE}"),
+            )
+            for index in range(4)
+        ]
 
         for strip_before in range(5):
             rendered = rewrite_messages({}, turns, strip_thinking_before=strip_before)["messages"]
-            kept = sum(turn.thinking_tokens for turn, sent in zip(turns, rendered, strict=True)
-                       if isinstance(sent["content"], list) and any(b["type"] == "thinking" for b in sent["content"]))
+            kept = sum(
+                turn.thinking_tokens
+                for turn, sent in zip(turns, rendered, strict=True)
+                if isinstance(sent["content"], list) and any(b["type"] == "thinking" for b in sent["content"])
+            )
             assert sent_thinking_tokens(turns, strip_thinking_before=strip_before) == kept, strip_before
 
     @staticmethod
@@ -256,8 +311,15 @@ class TestThinkingIsCountedAsSent:
 
         def upstream(request: httpx2.Request) -> httpx2.Response:
             text = sum(turn.token_count for turn in extract_messages(json.loads(request.content)))
-            return httpx2.Response(200, json={**UPSTREAM_OK, "content": _sent_back(f"Eq{next(replies):04d}{SIGNATURE}"),
-                                              "usage": {"input_tokens": text, "output_tokens": 400}})
+            return httpx2.Response(
+                200,
+                json={
+                    **UPSTREAM_OK,
+                    "content": _sent_back(f"Eq{next(replies):04d}{SIGNATURE}"),
+                    "usage": {"input_tokens": text, "output_tokens": 400},
+                },
+            )
+
         return upstream
 
     @staticmethod
@@ -313,17 +375,26 @@ class TestAModelSwitch:
         replies = itertools.count()
 
         def upstream(request: httpx2.Request) -> httpx2.Response:
-            return httpx2.Response(200, json={**UPSTREAM_OK, "content": _sent_back(f"Eq{next(replies):04d}{SIGNATURE}")})
+            return httpx2.Response(
+                200, json={**UPSTREAM_OK, "content": _sent_back(f"Eq{next(replies):04d}{SIGNATURE}")}
+            )
 
         client, service, _, _ = _proxy(upstream)
         history: list[dict] = []
         for index, model in enumerate([MODEL, MODEL, "claude-sonnet-5-5"]):
             if model != MODEL:
-                history = [{**turn, "content": [b for b in turn["content"] if b["type"] != "thinking"]}
-                           if turn["role"] == "assistant" else turn for turn in history]
+                history = [
+                    {**turn, "content": [b for b in turn["content"] if b["type"] != "thinking"]}
+                    if turn["role"] == "assistant"
+                    else turn
+                    for turn in history
+                ]
             history.append({"role": "user", "content": f"question {index}: the storage layer and its retention"})
-            reply = client.post("/v1/messages", json={"model": model, "max_tokens": 64, "messages": history},
-                                headers={"x-api-key": API_KEY})
+            reply = client.post(
+                "/v1/messages",
+                json={"model": model, "max_tokens": 64, "messages": history},
+                headers={"x-api-key": API_KEY},
+            )
             history.append({"role": "assistant", "content": reply.json()["content"]})
 
         assert service.session_manager.store.count() == 1, "one conversation, not one per model"
@@ -333,14 +404,22 @@ class TestAModelSwitch:
 class TestWhatASwitchCachesAgain:
     def test_each_request_tells_the_engine_what_a_switch_would_also_cache_again(self):
         client, service, _, _ = _proxy()
-        system = [{"type": "text", "text": "You are careful. " * 50, "cache_control": {"type": "ephemeral"}},
-                  {"type": "text", "text": "Working directory: /repo. " * 40}]
+        system = [
+            {"type": "text", "text": "You are careful. " * 50, "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": "Working directory: /repo. " * 40},
+        ]
         reminder = "<system-reminder>\nContents of CLAUDE.md: use uv, never pip.\n</system-reminder>"
-        history = [{"role": "user", "content": f"{reminder}\n\nwhich database?"}, {"role": "assistant", "content": "Postgres."},
-                   {"role": "user", "content": "and the retention?"}]
+        history = [
+            {"role": "user", "content": f"{reminder}\n\nwhich database?"},
+            {"role": "assistant", "content": "Postgres."},
+            {"role": "user", "content": "and the retention?"},
+        ]
 
-        _post(client, {"model": "m", "max_tokens": 64, "system": system, "messages": history},
-              headers={SESSION_HEADER: "s"})
+        _post(
+            client,
+            {"model": "m", "max_tokens": 64, "system": system, "messages": history},
+            headers={SESSION_HEADER: "s"},
+        )
 
         expected = count_tokens(system[1]["text"]) + count_tokens(reminder)
         assert service.session_manager.store.get("s").rewrite_overhead_tokens == expected

@@ -6,6 +6,7 @@ from llm_gc.engine.gc_status import GCStatus
 from llm_gc.engine.switch_policy import SwitchReason
 from llm_gc.models.message import Message
 
+
 class CutOutcome(BaseModel):
     """Where the turns a cut took ended up, and which turns condensed earlier it moved.
 
@@ -17,12 +18,12 @@ class CutOutcome(BaseModel):
 
     model_config = {"frozen": True}
 
-    kept: list[int] = Field(default_factory=list)        # new turns, quoted word for word
-    compacted: list[int] = Field(default_factory=list)   # new turns, under their span's summary
-    archived: list[int] = Field(default_factory=list)    # new turns, shown by their span's opening line and facts
-    folded: list[int] = Field(default_factory=list)      # new turns, folded out of view
-    lowered: list[int] = Field(default_factory=list)     # turns condensed earlier, now shown with less detail
-    raised: list[int] = Field(default_factory=list)      # turns condensed earlier, now shown with more detail
+    kept: list[int] = Field(default_factory=list)  # new turns, quoted word for word
+    compacted: list[int] = Field(default_factory=list)  # new turns, under their span's summary
+    archived: list[int] = Field(default_factory=list)  # new turns, shown by their span's opening line and facts
+    folded: list[int] = Field(default_factory=list)  # new turns, folded out of view
+    lowered: list[int] = Field(default_factory=list)  # turns condensed earlier, now shown with less detail
+    raised: list[int] = Field(default_factory=list)  # turns condensed earlier, now shown with more detail
 
     @property
     def taken(self) -> list[int]:
@@ -39,10 +40,10 @@ class AbandonedCut(BaseModel):
 
     model_config = {"frozen": True}
 
-    turns: list[int]            # the turns it would have taken out of the verbatim tail
-    outcome: CutOutcome         # where those turns would have ended up
-    tokens_taken: int           # what those turns cost now, word for word
-    context_tokens_after: int   # what the whole context would have been
+    turns: list[int]  # the turns it would have taken out of the verbatim tail
+    outcome: CutOutcome  # where those turns would have ended up
+    tokens_taken: int  # what those turns cost now, word for word
+    context_tokens_after: int  # what the whole context would have been
 
 
 class _PassMeasures(BaseModel):
@@ -52,6 +53,7 @@ class _PassMeasures(BaseModel):
     `PassReport`, which is what the event bus carries, so a measure is declared
     once and the two cannot drift apart.
     """
+
     gc_run_id: str
     status: GCStatus
     failure_reason: Optional[str] = None  # human-readable; None if not bypassed
@@ -112,9 +114,9 @@ class PassReport(_PassMeasures):
     turn indices and tokens; the text stays with the session that owns it.
     """
 
-    model_config = {"frozen": True}   # one object is handed to every subscriber in turn
+    model_config = {"frozen": True}  # one object is handed to every subscriber in turn
 
-    tail_turns: list[int]   # in conversation order
+    tail_turns: list[int]  # in conversation order
     tail_tokens: int = Field(ge=0)
 
 
@@ -124,12 +126,15 @@ class GCResult(_PassMeasures):
     `final_messages` is the conversation itself, so a result never goes on the
     event bus; `report()` does.
     """
+
     final_messages: list[Message]
 
     def report(self) -> PassReport:
         """This result without its messages: every measure, and the shape of the tail."""
         # The front sits before turn 0; everything from turn 0 on is the tail.
         tail = [message for message in self.final_messages if message.turn_index >= 0]
-        return PassReport(**self.model_dump(exclude={"final_messages"}),
-                          tail_turns=[message.turn_index for message in tail],
-                          tail_tokens=sum(message.token_count for message in tail))
+        return PassReport(
+            **self.model_dump(exclude={"final_messages"}),
+            tail_turns=[message.turn_index for message in tail],
+            tail_tokens=sum(message.token_count for message in tail),
+        )

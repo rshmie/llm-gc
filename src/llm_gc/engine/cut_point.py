@@ -56,4 +56,3 @@ def is_safe_cut(turns: Sequence[Message], cut: int) -> bool:
     """Whether cutting the first `cut` turns leaves every kept tool result its call."""
     cut_calls = {i for turn in turns[:cut] for i in tool_use_ids(turn)}
     return not any(set(tool_result_ids(turn)) & cut_calls for turn in turns[cut:])
-

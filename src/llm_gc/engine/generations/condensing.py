@@ -64,8 +64,9 @@ class OpeningWordsIndexWriter:
         return _first_sentence(opener.content) if opener is not None else ""
 
 
-def group_exchanges(turns: Sequence[Message], max_span_tokens: int = DEFAULT_MAX_SPAN_TOKENS
-                    ) -> list[tuple[Message, ...]]:
+def group_exchanges(
+    turns: Sequence[Message], max_span_tokens: int = DEFAULT_MAX_SPAN_TOKENS
+) -> list[tuple[Message, ...]]:
     """Split consecutive turns into spans: one exchange each, divided again when an exchange is too large.
 
     An exchange opens at a turn the user wrote (`opens_exchange`) and runs to the next
@@ -78,8 +79,12 @@ def group_exchanges(turns: Sequence[Message], max_span_tokens: int = DEFAULT_MAX
     size = 0
     for turn in turns:
         opens = opens_exchange(turn)
-        overflows = (bool(groups) and turn.role == "assistant" and size + turn.token_count > max_span_tokens
-                     and any(earlier.role == "assistant" for earlier in groups[-1]))
+        overflows = (
+            bool(groups)
+            and turn.role == "assistant"
+            and size + turn.token_count > max_span_tokens
+            and any(earlier.role == "assistant" for earlier in groups[-1])
+        )
         if not groups or opens or overflows:
             groups.append([])
             size = 0

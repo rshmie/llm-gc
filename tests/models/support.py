@@ -27,7 +27,16 @@ def turn_with_typed_words(index: int, call_id: str, words: str, *, output: str =
     interrupting the round: its result, the mark, then their words, divided as the proxy divides it."""
     result = f"[tool result] {output}"
     mark = len(result) + 1
-    return Message(role="user", content=f"{result}\n{INTERRUPTED}\n{words}", token_count=tokens, turn_index=index,
-                   raw_content=[{"type": "tool_result", "tool_use_id": call_id, "content": output},
-                                {"type": "text", "text": INTERRUPTED}, {"type": "text", "text": words}],
-                   tool_output=((0, len(result)),), client_written=((mark, mark + len(INTERRUPTED)),))
+    return Message(
+        role="user",
+        content=f"{result}\n{INTERRUPTED}\n{words}",
+        token_count=tokens,
+        turn_index=index,
+        raw_content=[
+            {"type": "tool_result", "tool_use_id": call_id, "content": output},
+            {"type": "text", "text": INTERRUPTED},
+            {"type": "text", "text": words},
+        ],
+        tool_output=((0, len(result)),),
+        client_written=((mark, mark + len(INTERRUPTED)),),
+    )

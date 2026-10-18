@@ -44,6 +44,7 @@ class _RevalidatedStaticFiles(StaticFiles):
         response.headers.update(_REVALIDATE)
         return response
 
+
 # Only localhost names are served. A page on another site can make the browser
 # resolve its own hostname to 127.0.0.1 (DNS rebinding) and read the responses as
 # same-origin; checking the Host header defeats that.
@@ -59,46 +60,46 @@ SESSION_TITLE_MAX_CHARS = 72
 
 class SessionSummary(BaseModel):
     session_id: str
-    title: str | None             # its opening words, when the transcript was captured
-    client_session: str | None    # the client's own session it came from, when the client names one
-    agent: str | None             # the client's sub-agent it belongs to; None for a main conversation
+    title: str | None  # its opening words, when the transcript was captured
+    client_session: str | None  # the client's own session it came from, when the client names one
+    agent: str | None  # the client's sub-agent it belongs to; None for a main conversation
     started_at: datetime
-    version: int                  # changes whenever the session's content does
+    version: int  # changes whenever the session's content does
     recorded_turns: int
     cuts: int
     aging_in_flight: bool
     last_activity: datetime
-    newest_reply: int | None = None   # the turn index of the reply being shown, which arrives without a new version
+    newest_reply: int | None = None  # the turn index of the reply being shown, which arrives without a new version
     # The provider's cache for it as the proxy reads it now; None without a proxy. Polled with the overview because
     # it changes with time, not with the conversation.
     cache: CacheReadingState | None = None
 
 
 class Transcript(BaseModel):
-    captured: bool                # False when no transcript was recorded for the session
+    captured: bool  # False when no transcript was recorded for the session
     turns: list[TranscriptTurn]
-    total_tokens: int             # what the client's conversation costs sent whole
-    recorded_tokens: int          # the same, for only the turns the session has recorded -
-                                  # what to compare with the context the model is sent
-    reply: TranscriptTurn | None = None   # the newest reply, shown until the next request records it
+    total_tokens: int  # what the client's conversation costs sent whole
+    recorded_tokens: int  # the same, for only the turns the session has recorded -
+    # what to compare with the context the model is sent
+    reply: TranscriptTurn | None = None  # the newest reply, shown until the next request records it
 
 
 class ManualCutResult(BaseModel):
     status: GCStatus
     tokens_before: int
     tokens_after: int
-    outcome: CutOutcome | None            # set when a cut was made: where its turns ended up
+    outcome: CutOutcome | None  # set when a cut was made: where its turns ended up
     degradations: list[AgingDegradation]
-    abandoned_cut: AbandonedCut | None    # set when the cut would not have shrunk the context
+    abandoned_cut: AbandonedCut | None  # set when the cut would not have shrunk the context
     duration_ms: float
-    request_id: str | None                # what the cut's log lines are marked with, should it have failed
+    request_id: str | None  # what the cut's log lines are marked with, should it have failed
 
 
 class DashboardOverview(BaseModel):
-    sessions: list[SessionSummary]   # most recently active first
+    sessions: list[SessionSummary]  # most recently active first
     config: dict[str, Any]
-    proxy: dict[str, Any] | None     # None when the dashboard is not running beside a proxy
-    pause: Pause | None = None       # set while LLM-GC's own model calls yield to the upstream's rate limit
+    proxy: dict[str, Any] | None  # None when the dashboard is not running beside a proxy
+    pause: Pause | None = None  # set while LLM-GC's own model calls yield to the upstream's rate limit
 
 
 def create_dashboard_app(
@@ -153,20 +154,27 @@ def create_dashboard_app(
     @app.get("/api/overview")
     async def overview() -> DashboardOverview:
         store = gc_service.session_manager.store
-        states = [state for session_id in store.active_session_ids()
-                  if (state := store.get(session_id)) is not None]
-        sessions = [_summarise(state, transcripts, read_cache)
-                    for state in sorted(states, key=lambda state: state.last_updated_at, reverse=True)]
+        states = [state for session_id in store.active_session_ids() if (state := store.get(session_id)) is not None]
+        sessions = [
+            _summarise(state, transcripts, read_cache)
+            for state in sorted(states, key=lambda state: state.last_updated_at, reverse=True)
+        ]
         return DashboardOverview(
             sessions=sessions,
-            config={"context_window": config.context_window, "min_cut_tokens": config.min_cut_tokens,
-                    "last_n_turns_to_keep": config.last_n_turns_to_keep, "keep_threshold": config.keep_threshold,
-                    "archive_threshold": config.archive_threshold, "level_margin": config.level_margin,
-                    "max_recap_tokens": config.max_recap_tokens, "max_recap_ratio": config.max_recap_ratio,
-                    "min_saving_share": config.min_saving_share,
-                    "max_stale_ratio": config.max_stale_ratio,
-                    # Whose turns facts are read from: without a model, only the user's.
-                    "facts_read_from": sorted(gc_service.generational_memory.fact_reader.speakers)},
+            config={
+                "context_window": config.context_window,
+                "min_cut_tokens": config.min_cut_tokens,
+                "last_n_turns_to_keep": config.last_n_turns_to_keep,
+                "keep_threshold": config.keep_threshold,
+                "archive_threshold": config.archive_threshold,
+                "level_margin": config.level_margin,
+                "max_recap_tokens": config.max_recap_tokens,
+                "max_recap_ratio": config.max_recap_ratio,
+                "min_saving_share": config.min_saving_share,
+                "max_stale_ratio": config.max_stale_ratio,
+                # Whose turns facts are read from: without a model, only the user's.
+                "facts_read_from": sorted(gc_service.generational_memory.fact_reader.speakers),
+            },
             proxy=read_proxy_stats() if read_proxy_stats is not None else None,
             pause=gc_service.model_calls.current(),
         )
@@ -174,8 +182,11 @@ def create_dashboard_app(
     @app.get("/api/sessions/{session_id}", response_model=KnowledgeState)
     async def session_knowledge(session_id: str) -> KnowledgeState | JSONResponse:
         cache = read_cache(session_id) if read_cache is not None else None
-        inspection = gc_service.inspect(session_id, cache=cache.state if cache is not None else CacheState.COLD,
-                                        tool_round_open=_round_open(read_tool_round, session_id))
+        inspection = gc_service.inspect(
+            session_id,
+            cache=cache.state if cache is not None else CacheState.COLD,
+            tool_round_open=_round_open(read_tool_round, session_id),
+        )
         if inspection is None:
             return _session_not_found(session_id)
         return project_knowledge_state(inspection, cache)
@@ -193,18 +204,22 @@ def create_dashboard_app(
             return _session_not_found(session_id)
         turns = transcripts.get(session_id) if transcripts is not None else None
         recorded = state.snapshot.recorded_turn_count
-        return Transcript(captured=turns is not None, turns=list(turns or ()),
-                          total_tokens=sum(turn.tokens for turn in turns or ()),
-                          recorded_tokens=sum(turn.tokens for turn in turns or () if turn.turn_index < recorded),
-                          reply=transcripts.reply(session_id) if transcripts is not None else None)
+        return Transcript(
+            captured=turns is not None,
+            turns=list(turns or ()),
+            total_tokens=sum(turn.tokens for turn in turns or ()),
+            recorded_tokens=sum(turn.tokens for turn in turns or () if turn.turn_index < recorded),
+            reply=transcripts.reply(session_id) if transcripts is not None else None,
+        )
 
     @app.get("/api/trace/{client_session}")
     async def session_trace(client_session: str) -> JSONResponse:
         """One client session as its turns, their requests and the subagents each started."""
         trace = read_trace(client_session) if read_trace is not None else None
         if trace is None:
-            return _error_response(404, "TRACE_NOT_FOUND", f"no requests named client session {client_session!r}",
-                                   level=logging.DEBUG)
+            return _error_response(
+                404, "TRACE_NOT_FOUND", f"no requests named client session {client_session!r}", level=logging.DEBUG
+            )
         return JSONResponse(_with_words(trace, transcripts))
 
     @app.post("/api/sessions/{session_id}/gc", response_model=ManualCutResult)
@@ -217,20 +232,30 @@ def create_dashboard_app(
         """
         if request.headers.get(ACTION_HEADER) != "1":
             # The dashboard's own page always sends it, so a refusal is worth seeing.
-            return _error_response(403, "ACTION_HEADER_REQUIRED", f"send {ACTION_HEADER}: 1 to act from the dashboard",
-                                   level=logging.WARNING)
+            return _error_response(
+                403,
+                "ACTION_HEADER_REQUIRED",
+                f"send {ACTION_HEADER}: 1 to act from the dashboard",
+                level=logging.WARNING,
+            )
         if gc_service.session_manager.store.get(session_id) is None:
             return _session_not_found(session_id)
         prepared = await gc_service.gc_age(session_id, ignore_batch_minimum=True)
         # Mid tool round the switch is held back and made by the first request after the round.
-        switched = gc_service.gc_switch(session_id, CacheState.COLD, requested=True,
-                                        tool_round_open=_round_open(read_tool_round, session_id))
+        switched = gc_service.gc_switch(
+            session_id, CacheState.COLD, requested=True, tool_round_open=_round_open(read_tool_round, session_id)
+        )
         result = switched if switched is not None else prepared
-        return ManualCutResult(status=result.status, tokens_before=result.tokens_before,
-                               tokens_after=result.tokens_in_final, outcome=result.outcome,
-                               degradations=result.degradations, abandoned_cut=prepared.abandoned_cut,
-                               duration_ms=prepared.duration_ms + (switched.duration_ms if switched else 0.0),
-                               request_id=current_request_id())
+        return ManualCutResult(
+            status=result.status,
+            tokens_before=result.tokens_before,
+            tokens_after=result.tokens_in_final,
+            outcome=result.outcome,
+            degradations=result.degradations,
+            abandoned_cut=prepared.abandoned_cut,
+            duration_ms=prepared.duration_ms + (switched.duration_ms if switched else 0.0),
+            request_id=current_request_id(),
+        )
 
     return app
 
@@ -239,21 +264,29 @@ def _round_open(read_tool_round: Callable[[str], bool] | None, session_id: str) 
     return read_tool_round(session_id) if read_tool_round is not None else False
 
 
-def _summarise(state: SessionState, transcripts: TranscriptRecorder | None,
-               read_cache: Callable[[str], CacheReading] | None) -> SessionSummary:
+def _summarise(
+    state: SessionState, transcripts: TranscriptRecorder | None, read_cache: Callable[[str], CacheReading] | None
+) -> SessionSummary:
     origin = transcripts.origin(state.session_id) if transcripts is not None else None
     cache = read_cache(state.session_id) if read_cache is not None else None
-    return SessionSummary(session_id=state.session_id,
-                          title=_opening_words(transcripts.get(state.session_id) if transcripts is not None else None),
-                          client_session=origin.session_id if origin is not None else None,
-                          agent=origin.agent_id if origin is not None else None,
-                          started_at=state.created_at,
-                          version=state.snapshot.version,
-                          recorded_turns=state.snapshot.recorded_turn_count, cuts=state.snapshot.cut_count,
-                          aging_in_flight=state.aging_in_flight, last_activity=state.last_updated_at,
-                          newest_reply=_reply_index(transcripts, state.session_id),
-                          cache=CacheReadingState(state=cache.state, uses_cache=cache.uses_cache, idle_s=cache.idle_s,
-                                                  lifetime_s=cache.lifetime_s) if cache is not None else None)
+    return SessionSummary(
+        session_id=state.session_id,
+        title=_opening_words(transcripts.get(state.session_id) if transcripts is not None else None),
+        client_session=origin.session_id if origin is not None else None,
+        agent=origin.agent_id if origin is not None else None,
+        started_at=state.created_at,
+        version=state.snapshot.version,
+        recorded_turns=state.snapshot.recorded_turn_count,
+        cuts=state.snapshot.cut_count,
+        aging_in_flight=state.aging_in_flight,
+        last_activity=state.last_updated_at,
+        newest_reply=_reply_index(transcripts, state.session_id),
+        cache=CacheReadingState(
+            state=cache.state, uses_cache=cache.uses_cache, idle_s=cache.idle_s, lifetime_s=cache.lifetime_s
+        )
+        if cache is not None
+        else None,
+    )
 
 
 def _reply_index(transcripts: TranscriptRecorder | None, session_id: str) -> int | None:
@@ -263,14 +296,20 @@ def _reply_index(transcripts: TranscriptRecorder | None, session_id: str) -> int
 
 def _opening_words(turns: Sequence[TranscriptTurn] | None) -> str | None:
     """How a person recognises a conversation: the first words they wrote in it, on one line and shortened."""
-    first = next((turn.person_text for turn in turns or ()
-                  if turn.role == "user" and not turn.relayed and turn.person_text.strip()), None)
+    first = next(
+        (
+            turn.person_text
+            for turn in turns or ()
+            if turn.role == "user" and not turn.relayed and turn.person_text.strip()
+        ),
+        None,
+    )
     return _one_line(first) if first is not None else None
 
 
 def _one_line(text: str) -> str:
     line = " ".join(text.split())
-    return line if len(line) <= SESSION_TITLE_MAX_CHARS else line[:SESSION_TITLE_MAX_CHARS - 1].rstrip() + "…"
+    return line if len(line) <= SESSION_TITLE_MAX_CHARS else line[: SESSION_TITLE_MAX_CHARS - 1].rstrip() + "…"
 
 
 def _with_words(trace: dict[str, Any], transcripts: TranscriptRecorder | None) -> dict[str, Any]:
@@ -279,6 +318,7 @@ def _with_words(trace: dict[str, Any], transcripts: TranscriptRecorder | None) -
     From the transcripts the dashboard already holds, so only while a conversation is
     live; a closed one's words are gone, and its turns show without them.
     """
+
     def said(conversation_id: str | None, position: int) -> str | None:
         turns = transcripts.get(conversation_id) if transcripts is not None and conversation_id else None
         text = next((turn.person_text for turn in turns or () if turn.turn_index == position - 1), None)
@@ -289,15 +329,25 @@ def _with_words(trace: dict[str, Any], transcripts: TranscriptRecorder | None) -
         turns = transcripts.get(conversation) if transcripts is not None and conversation else None
         return {**node, "words": _opening_words(turns)}
 
-    return {**trace, "subagents_before": [tasked(node) for node in trace["subagents_before"]],
-            "turns": [{**turn, "words": said(turn["conversation_id"], turn["position"]),
-                       "subagents": [tasked(node) for node in turn["subagents"]]} for turn in trace["turns"]]}
+    return {
+        **trace,
+        "subagents_before": [tasked(node) for node in trace["subagents_before"]],
+        "turns": [
+            {
+                **turn,
+                "words": said(turn["conversation_id"], turn["position"]),
+                "subagents": [tasked(node) for node in turn["subagents"]],
+            }
+            for turn in trace["turns"]
+        ],
+    }
 
 
 def _session_not_found(session_id: str) -> JSONResponse:
     # Sessions close when idle, so a dashboard left open will ask for one that has gone, every second.
-    return _error_response(404, "SESSION_NOT_FOUND", f"no live session {session_id!r}; it may have been closed",
-                           level=logging.DEBUG)
+    return _error_response(
+        404, "SESSION_NOT_FOUND", f"no live session {session_id!r}; it may have been closed", level=logging.DEBUG
+    )
 
 
 def _error_response(status: int, code: str, message: str, *, level: int) -> JSONResponse:
@@ -306,5 +356,6 @@ def _error_response(status: int, code: str, message: str, *, level: int) -> JSON
     `code` is stable for a program to act on; `message` is for a person.
     """
     logger.log(level, "dashboard -> %d %s: %s", status, code, message, extra={"status": status, "code": code})
-    return JSONResponse(status_code=status, content={"error": {
-        "code": code, "message": message, "request_id": current_request_id()}})
+    return JSONResponse(
+        status_code=status, content={"error": {"code": code, "message": message, "request_id": current_request_id()}}
+    )

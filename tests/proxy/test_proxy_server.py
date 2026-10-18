@@ -70,8 +70,7 @@ def _engine(**config_overrides):
     return service, service.generational_memory
 
 
-def _proxy(upstream=None, *, gc_service=None, on_reply=None, window_lookup=None, link_subagents=False,
-           **engine_kwargs):
+def _proxy(upstream=None, *, gc_service=None, on_reply=None, window_lookup=None, link_subagents=False, **engine_kwargs):
     """A proxy whose upstream is a scripted handler, with aging run synchronously.
 
     `schedule` is injected to run the post-response work to completion inline.
@@ -90,9 +89,7 @@ def _proxy(upstream=None, *, gc_service=None, on_reply=None, window_lookup=None,
     app = create_app(
         service,
         http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)),
-        schedule=lambda coro: asyncio.get_event_loop().run_until_complete(coro)
-        if False
-        else _run_now(coro),
+        schedule=lambda coro: asyncio.get_event_loop().run_until_complete(coro) if False else _run_now(coro),
         on_reply=on_reply,
         window_lookup=window_lookup,
         link_subagents=link_subagents,
@@ -148,12 +145,19 @@ class TestOtherEndpointsPassThrough:
         client, service, _, seen = _proxy(lambda request: httpx2.Response(200, json={"input_tokens": 42}))
         body = _body(("user", "how many tokens is this?"))
 
-        response = client.post("/v1/messages/count_tokens?beta=true", json=body,
-                               headers={"x-api-key": API_KEY, "anthropic-beta": "token-counting"})
+        response = client.post(
+            "/v1/messages/count_tokens?beta=true",
+            json=body,
+            headers={"x-api-key": API_KEY, "anthropic-beta": "token-counting"},
+        )
 
         assert response.status_code == 200 and response.json() == {"input_tokens": 42}
         [sent] = seen
-        assert (sent.method, sent.url.path, sent.url.params.get("beta")) == ("POST", "/v1/messages/count_tokens", "true")
+        assert (sent.method, sent.url.path, sent.url.params.get("beta")) == (
+            "POST",
+            "/v1/messages/count_tokens",
+            "true",
+        )
         assert json.loads(sent.content) == body, "the body is not rewritten"
         assert (sent.headers["x-api-key"], sent.headers["anthropic-beta"]) == (API_KEY, "token-counting")
         assert service.session_manager.store.count() == 0, "nothing is recorded as a conversation"
@@ -270,7 +274,9 @@ class TestTheClientsHistoryIsReplaced:
         client, _, _, seen = _proxy()
         messages: list[dict] = []
         for index in range(10):
-            messages.append({"role": "user", "content": f"turn {index}: we discussed the storage layer at length today"})
+            messages.append(
+                {"role": "user", "content": f"turn {index}: we discussed the storage layer at length today"}
+            )
             messages.append({"role": "system", "content": f"instruction {index}"})
             _post(client, {"model": "claude-sonnet-5", "max_tokens": 512, "messages": messages})
             messages.append({"role": "assistant", "content": UPSTREAM_OK["content"][0]["text"]})
@@ -291,7 +297,9 @@ class TestTheClientsHistoryIsReplaced:
         messages: list[dict] = []
         for index in range(10):
             text = f"turn {index}: we discussed the storage layer at length today"
-            messages.append({"role": "user", "content": [{"type": "text", "text": reminder}, {"type": "text", "text": text}]})
+            messages.append(
+                {"role": "user", "content": [{"type": "text", "text": reminder}, {"type": "text", "text": text}]}
+            )
             _post(client, {"model": "claude-sonnet-5", "max_tokens": 512, "messages": messages})
             messages.append({"role": "assistant", "content": UPSTREAM_OK["content"][0]["text"]})
 
@@ -299,7 +307,8 @@ class TestTheClientsHistoryIsReplaced:
         front = next(message for message in sent if _is_front(message))
         assert front["content"][0] == {"type": "text", "text": reminder}, "said once, ahead of the recap"
         assert sum(json.dumps(message).count("Project rule") for message in sent) == 1 + sum(
-            1 for message in sent if not _is_front(message) and message["role"] == "user"), "once in the recap, as sent in each recent turn"
+            1 for message in sent if not _is_front(message) and message["role"] == "user"
+        ), "once in the recap, as sent in each recent turn"
         summariser = service.generational_memory.compactor.provider.inner
         assert summariser.calls and not any("Project rule" in str(call.messages) for call in summariser.calls)
 
@@ -332,8 +341,10 @@ class TestTheClientsHistoryIsReplaced:
         for index in range(10):
             _post(client, _body(*[("user", f"turn {i} about the storage layer") for i in range(index + 1)]))
 
-        _post(client, _body(*[("user", f"turn {i} about the storage layer") for i in range(10)],
-                            ("user", "WHICH DATABASE?")))
+        _post(
+            client,
+            _body(*[("user", f"turn {i} about the storage layer") for i in range(10)], ("user", "WHICH DATABASE?")),
+        )
 
         assert _sent(seen)["messages"][-1]["content"] == "WHICH DATABASE?"
 
@@ -371,8 +382,13 @@ class TestFindingTheConversation:
         """A cold session forwarded only the newest turn: after a restart, every
         ongoing conversation reached the model with no history at all."""
         client, _, _, seen = _proxy()
-        history = [("user", "we chose postgres"), ("assistant", "Noted."), ("user", "retention is 90 days"),
-                   ("assistant", "Noted."), ("user", "which database did we choose?")]
+        history = [
+            ("user", "we chose postgres"),
+            ("assistant", "Noted."),
+            ("user", "retention is 90 days"),
+            ("assistant", "Noted."),
+            ("user", "which database did we choose?"),
+        ]
         _post(client, _body(*history))
 
         assert len(_sent(seen)["messages"]) == len(history)
@@ -384,13 +400,27 @@ class TestFindingTheConversation:
         client, service, _, seen = _proxy()
 
         def opening(notes: str) -> dict:
-            return {"role": "user", "content": [{"type": "text", "text": f"<system-reminder>{notes}</system-reminder>"},
-                                                {"type": "text", "text": "we chose postgres"}]}
+            return {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": f"<system-reminder>{notes}</system-reminder>"},
+                    {"type": "text", "text": "we chose postgres"},
+                ],
+            }
 
         later = [{"role": "assistant", "content": "Noted."}, {"role": "user", "content": "and retention?"}]
         _post(client, _body(messages=[opening("date"), *later]))
-        _post(client, _body(messages=[opening("CLAUDE.md, memory, date"), *later,
-                                      {"role": "assistant", "content": "90 days."}, {"role": "user", "content": "thanks"}]))
+        _post(
+            client,
+            _body(
+                messages=[
+                    opening("CLAUDE.md, memory, date"),
+                    *later,
+                    {"role": "assistant", "content": "90 days."},
+                    {"role": "user", "content": "thanks"},
+                ]
+            ),
+        )
 
         assert service.session_manager.store.count() == 1
         assert client.get("/stats").json()["sessions_seeded"] == 1
@@ -430,8 +460,11 @@ class TestFindingTheConversation:
         client, service, _, _ = _proxy()
         headers = {SESSION_HEADER: name}
         _post(client, _body(("user", "a"), ("assistant", "b"), ("user", "c")), headers=headers)
-        _post(client, _body(("user", "a"), ("assistant", "b"), ("user", "c"), ("assistant", "d"), ("user", "e")),
-              headers=headers)
+        _post(
+            client,
+            _body(("user", "a"), ("assistant", "b"), ("user", "c"), ("assistant", "d"), ("user", "e")),
+            headers=headers,
+        )
 
         assert service.session_manager.store.get(name) is None
         # Seeded by the first request and continued by the second, as if no name was sent.
@@ -459,12 +492,17 @@ class TestTheRecordIsTheClientsHistory:
         client, service, _, _ = _proxy()
         h = {SESSION_HEADER: "s"}
         _post(client, _body(("user", "which database?")), headers=h)
-        _post(client, _body(("user", "which database?"), ("assistant", "Postgres, partitioned by day."),
-                            ("user", "why?")), headers=h)
+        _post(
+            client,
+            _body(("user", "which database?"), ("assistant", "Postgres, partitioned by day."), ("user", "why?")),
+            headers=h,
+        )
 
         young = service.session_manager.store.get("s").snapshot.young
-        assert [(m.role, m.content) for m in young] == [("user", "which database?"),
-                                                        ("assistant", "Postgres, partitioned by day.")]
+        assert [(m.role, m.content) for m in young] == [
+            ("user", "which database?"),
+            ("assistant", "Postgres, partitioned by day."),
+        ]
 
     def test_a_failed_request_retried_records_its_history_once(self):
         """Recording on the first attempt would put the history in twice when the
@@ -482,10 +520,19 @@ class TestTheRecordIsTheClientsHistory:
         tool_use = [{"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {"city": "Paris"}}]
         tool_result = [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "18C"}]
         client, service, _, _ = _proxy()
-        client.post("/v1/messages", json={"model": "m", "max_tokens": 10, "messages": [
-            {"role": "user", "content": "weather in paris?"},
-            {"role": "assistant", "content": tool_use},
-            {"role": "user", "content": tool_result}]}, headers={SESSION_HEADER: "s"})
+        client.post(
+            "/v1/messages",
+            json={
+                "model": "m",
+                "max_tokens": 10,
+                "messages": [
+                    {"role": "user", "content": "weather in paris?"},
+                    {"role": "assistant", "content": tool_use},
+                    {"role": "user", "content": tool_result},
+                ],
+            },
+            headers={SESSION_HEADER: "s"},
+        )
 
         assert service.session_manager.store.get("s").snapshot.young[1].raw_content == tool_use
 
@@ -493,10 +540,15 @@ class TestTheRecordIsTheClientsHistory:
         """Nothing aged means nothing to change, so the client's own bytes go out:
         images, tool calls and the provider's prompt cache survive intact."""
         image = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}}
-        payload = {"model": "m", "max_tokens": 10, "messages": [
-            {"role": "user", "content": [{"type": "text", "text": "what is this?"}, image]},
-            {"role": "assistant", "content": "A diagram."},
-            {"role": "user", "content": "explain it"}]}
+        payload = {
+            "model": "m",
+            "max_tokens": 10,
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "what is this?"}, image]},
+                {"role": "assistant", "content": "A diagram."},
+                {"role": "user", "content": "explain it"},
+            ],
+        }
         client, _, _, seen = _proxy()
         raw = json.dumps(payload).encode()
         client.post("/v1/messages", content=raw, headers={"content-type": "application/json", SESSION_HEADER: "s"})
@@ -532,8 +584,9 @@ class TestEachAnswerIsLogged:
 
     @staticmethod
     def _answers(caplog) -> list[logging.LogRecord]:
-        return [record for record in caplog.records
-                if record.name == "llm_gc.proxy.server" and hasattr(record, "status")]
+        return [
+            record for record in caplog.records if record.name == "llm_gc.proxy.server" and hasattr(record, "status")
+        ]
 
     def test_a_success_says_the_model_the_status_and_the_tokens_in_against_out(self, caplog):
         caplog.set_level(logging.INFO, logger="llm_gc.proxy.server")
@@ -623,9 +676,11 @@ class TestARequestCanBeFollowedByItsId:
 
         [record] = client.app.state.metrics.request_log.records()
         warning = next(r for r in caplog.records if r.getMessage() == "could not reach the provider")
-        assert body == {"type": "error",
-                        "error": {"type": "api_error", "message": "llm-gc could not reach the provider: ConnectError"},
-                        "request_id": record.request_id}
+        assert body == {
+            "type": "error",
+            "error": {"type": "api_error", "message": "llm-gc could not reach the provider: ConnectError"},
+            "request_id": record.request_id,
+        }
         assert warning.request_id == record.request_id
 
     def test_a_body_over_the_limit_is_refused_with_the_id_and_a_line_that_names_it(self, caplog, monkeypatch):
@@ -660,8 +715,11 @@ class TestTheAnswerLineSaysHowLongEachSideTook:
     def test_a_streamed_reply_is_timed_to_when_it_began(self, caplog):
         """The line is written before the stream is relayed, so it cannot say when the reply ended."""
         caplog.set_level(logging.INFO, logger="llm_gc.proxy.server")
-        client, _, _, _ = _proxy(lambda request: httpx2.Response(
-            200, content=b"event: message_stop\ndata: {}\n\n", headers={"content-type": "text/event-stream"}))
+        client, _, _, _ = _proxy(
+            lambda request: httpx2.Response(
+                200, content=b"event: message_stop\ndata: {}\n\n", headers={"content-type": "text/event-stream"}
+            )
+        )
         _post(client, _body(("user", "hello"), stream=True))
 
         record = self._answer(caplog)
@@ -669,10 +727,14 @@ class TestTheAnswerLineSaysHowLongEachSideTook:
 
     def test_an_error_line_names_the_upstreams_own_id_for_the_request(self, caplog):
         """The client shows the provider's ID with its error; the line leads from that error back here."""
-        error = {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"},
-                 "request_id": "req_011CSHoEeqs5C35K2UUqR7Fy"}
-        client, _, _, _ = _proxy(lambda request: httpx2.Response(
-            529, json=error, headers={"request-id": "req_011CSHoEeqs5C35K2UUqR7Fy"}))
+        error = {
+            "type": "error",
+            "error": {"type": "overloaded_error", "message": "Overloaded"},
+            "request_id": "req_011CSHoEeqs5C35K2UUqR7Fy",
+        }
+        client, _, _, _ = _proxy(
+            lambda request: httpx2.Response(529, json=error, headers={"request-id": "req_011CSHoEeqs5C35K2UUqR7Fy"})
+        )
         _post(client, _body(("user", "hello")))
 
         record = self._answer(caplog)
@@ -697,9 +759,14 @@ class TestClientSessions:
     def _proxy_seeing_origins(self):
         observed: list[tuple[str, ClientOrigin | None]] = []
         service, _ = _engine()
-        app = create_app(service, http_client=httpx2.AsyncClient(
-            transport=httpx2.MockTransport(lambda request: httpx2.Response(200, json=UPSTREAM_OK))),
-            schedule=_run_now, on_client_history=lambda session_id, messages, origin: observed.append((session_id, origin)))
+        app = create_app(
+            service,
+            http_client=httpx2.AsyncClient(
+                transport=httpx2.MockTransport(lambda request: httpx2.Response(200, json=UPSTREAM_OK))
+            ),
+            schedule=_run_now,
+            on_client_history=lambda session_id, messages, origin: observed.append((session_id, origin)),
+        )
         return TestClient(app), observed
 
     def test_a_sub_agent_is_its_own_conversation_labelled_with_the_client_session(self):
@@ -722,8 +789,11 @@ class TestClientSessions:
         headers = {CLIENT_SESSION_HEADER: CLIENT_SESSION}
 
         _post(client, _body(("user", "the database is postgres"), ("assistant", "noted"), ("user", "next")), headers)
-        _post(client, _body(("user", "This session is being continued: a summary"), ("assistant", "ok"),
-                            ("user", "go on")), headers)
+        _post(
+            client,
+            _body(("user", "This session is being continued: a summary"), ("assistant", "ok"), ("user", "go on")),
+            headers,
+        )
 
         assert len({session_id for session_id, _ in observed}) == 2
 
@@ -738,7 +808,8 @@ class TestClientSessions:
         session_id, _ = observed[0]
         assert started.getMessage() == (
             f"conversation {session_id} started: no conversation in progress continues its 2-turn history "
-            f"(client session {CLIENT_SESSION}, sub-agent a545ab218c80b9b63)")
+            f"(client session {CLIENT_SESSION}, sub-agent a545ab218c80b9b63)"
+        )
 
     def test_a_continuing_request_starts_nothing_and_its_answer_names_the_conversation(self, caplog):
         caplog.set_level(logging.INFO, logger="llm_gc.proxy.server")
@@ -764,9 +835,10 @@ class TestHeaderHygiene:
         client, _, _, seen = _proxy()
         _post(client, _body(("user", "hello")), headers={"content-length": "999"})
 
-        assert "content-length" not in {k.lower() for k in seen[0].headers} or seen[
-            0
-        ].headers.get("content-length") != "999"
+        assert (
+            "content-length" not in {k.lower() for k in seen[0].headers}
+            or seen[0].headers.get("content-length") != "999"
+        )
 
     def test_the_proxys_own_host_header_is_not_forwarded(self):
         client, _, _, seen = _proxy()
@@ -906,9 +978,11 @@ class TestContentBlocks:
             json={
                 "model": "claude-sonnet-5",
                 "max_tokens": 512,
-                "messages": [{"role": "user", "content": [{"type": "text", "text": "which database?"}]},
-                             {"role": "assistant", "content": "Postgres."},
-                             {"role": "user", "content": "why?"}],
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "which database?"}]},
+                    {"role": "assistant", "content": "Postgres."},
+                    {"role": "user", "content": "why?"},
+                ],
             },
             headers={"x-api-key": API_KEY, SESSION_HEADER: "s"},
         )
@@ -1030,20 +1104,27 @@ class TestStreaming:
         client, service, _, _ = _proxy(_streaming_upstream(body), on_reply=lambda *args: shown.append(args))
         opening = [("user", "we need a database"), ("assistant", "Noted.")]
 
-        response = _post(client, _body(*opening, ("user", "which database?"), stream=True), headers={SESSION_HEADER: "s"})
+        response = _post(
+            client, _body(*opening, ("user", "which database?"), stream=True), headers={SESSION_HEADER: "s"}
+        )
 
         assert response.content == body
         [(session_id, answering, text)] = shown
         assert (session_id, answering.turn_index, answering.content, text) == (
-            "s", 2, "which database?", "Postgres, partitioned by day.")
+            "s",
+            2,
+            "which database?",
+            "Postgres, partitioned by day.",
+        )
         assert service.session_manager.store.get("s").snapshot.recorded_turn_count == 2
 
     def test_a_reply_cut_off_or_refused_is_not_shown(self):
         shown = []
         cut_off, _, _, _ = _proxy(_streaming_upstream(_sse("Postg", stop=False)), on_reply=lambda *a: shown.append(a))
         _post(cut_off, _body(("user", "a"), ("assistant", "b"), ("user", "c"), stream=True))
-        refused, _, _, _ = _proxy(lambda request: httpx2.Response(529, json={"type": "error"}),
-                                  on_reply=lambda *a: shown.append(a))
+        refused, _, _, _ = _proxy(
+            lambda request: httpx2.Response(529, json={"type": "error"}), on_reply=lambda *a: shown.append(a)
+        )
         _post(refused, _body(("user", "a"), ("assistant", "b"), ("user", "c")))
 
         assert shown == []
@@ -1051,6 +1132,7 @@ class TestStreaming:
     def test_a_failing_reply_observer_never_reaches_the_client(self):
         def broken(*_):
             raise RuntimeError("dashboard bug")
+
         body = _sse("Postgres.")
         client, _, _, _ = _proxy(_streaming_upstream(body), on_reply=broken)
         answered, _, _, _ = _proxy(on_reply=broken)
@@ -1064,8 +1146,11 @@ class TestStreaming:
         client, service, _, _ = _proxy(_streaming_upstream(_sse("Postgres.")))
         h = {SESSION_HEADER: "s"}
         _post(client, _body(("user", "which database?"), stream=True), headers=h)
-        _post(client, _body(("user", "which database?"), ("assistant", "Postgres."), ("user", "why?"), stream=True),
-              headers=h)
+        _post(
+            client,
+            _body(("user", "which database?"), ("assistant", "Postgres."), ("user", "why?"), stream=True),
+            headers=h,
+        )
 
         assert [m.role for m in service.session_manager.store.get("s").snapshot.young] == ["user", "assistant"]
 
@@ -1105,8 +1190,11 @@ class TestStreamingIsIncremental:
                 await gate.wait()
                 yield rest
 
-            client, _, _, _ = _proxy(lambda request: httpx2.Response(
-                200, content=upstream_body(), headers={"content-type": "text/event-stream"}))
+            client, _, _, _ = _proxy(
+                lambda request: httpx2.Response(
+                    200, content=upstream_body(), headers={"content-type": "text/event-stream"}
+                )
+            )
             sent: list[dict] = []
             first_body = asyncio.Event()
 
@@ -1124,9 +1212,16 @@ class TestStreamingIsIncremental:
                 except StopIteration:
                     await asyncio.Event().wait()  # the client never disconnects
 
-            scope = {"type": "http", "method": "POST", "path": "/v1/messages", "headers": [
-                (b"content-type", b"application/json"), (b"x-api-key", API_KEY.encode())],
-                "query_string": b"", "http_version": "1.1", "scheme": "http", "server": ("t", 80)}
+            scope = {
+                "type": "http",
+                "method": "POST",
+                "path": "/v1/messages",
+                "headers": [(b"content-type", b"application/json"), (b"x-api-key", API_KEY.encode())],
+                "query_string": b"",
+                "http_version": "1.1",
+                "scheme": "http",
+                "server": ("t", 80),
+            }
 
             task = asyncio.create_task(client.app(scope, receive, send))
             await asyncio.wait_for(first_body.wait(), timeout=2)
@@ -1183,13 +1278,17 @@ class TestOneUsersConversationNeverReachesAnother:
             _post(client, _body(*alice), headers={SESSION_HEADER: "alice"})
             alice.append(("assistant", "Postgres, partitioned by day."))
         alice_front = json.dumps(_sent(seen)["messages"][0])
-        assert "condensed by LLM-GC" in alice_front and "patient" in alice_front, \
+        assert "condensed by LLM-GC" in alice_front and "patient" in alice_front, (
             "precondition: Alice's own condensed turns are in her front"
+        )
 
         bob_turns = [("user", "Bob here: help me plan a birthday party"), ("assistant", "Sure.")]
         _post(client, _body(*bob_turns[:1]), headers={SESSION_HEADER: "bob"})
-        _post(client, _body(*bob_turns, ("user", "which database should store the party guest records?")),
-              headers={SESSION_HEADER: "bob"})
+        _post(
+            client,
+            _body(*bob_turns, ("user", "which database should store the party guest records?")),
+            headers={SESSION_HEADER: "bob"},
+        )
 
         forwarded_for_bob = json.dumps(_sent(seen)["messages"])
         assert "patient" not in forwarded_for_bob
@@ -1206,10 +1305,18 @@ def _converse_through(client, seen, turns: int, *, extra_content=None, header="s
     forwarded = []
     for i in range(turns):
         content = extra_content(i) if extra_content else None
-        history.append({"role": "user", "content": content or
-                        f"question {i}: we went over the storage layer, retention, and the rollout plan again"})
-        client.post("/v1/messages", json={"model": "m", "max_tokens": 64, "messages": history},
-                    headers={"x-api-key": API_KEY, SESSION_HEADER: header})
+        history.append(
+            {
+                "role": "user",
+                "content": content
+                or f"question {i}: we went over the storage layer, retention, and the rollout plan again",
+            }
+        )
+        client.post(
+            "/v1/messages",
+            json={"model": "m", "max_tokens": 64, "messages": history},
+            headers={"x-api-key": API_KEY, SESSION_HEADER: header},
+        )
         forwarded.append(json.loads(seen[-1].content)["messages"])
         history.append({"role": "assistant", "content": UPSTREAM_OK["content"]})
     return forwarded
@@ -1244,7 +1351,7 @@ class TestTheCutShape:
 
         extended = 0
         for earlier, later in zip(forwarded, forwarded[1:]):
-            if earlier[0] == later[0]:          # same front: no cut in between
+            if earlier[0] == later[0]:  # same front: no cut in between
                 assert later[: len(earlier)] == earlier
                 extended += 1
         assert extended >= 3, "the test must observe several requests between cuts"
@@ -1253,8 +1360,11 @@ class TestTheCutShape:
         image = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}}
 
         def with_image(i):
-            return [{"type": "text", "text": f"question {i}: what does this diagram show about the rollout?"},
-                    image] if i == 14 else None
+            return (
+                [{"type": "text", "text": f"question {i}: what does this diagram show about the rollout?"}, image]
+                if i == 14
+                else None
+            )
 
         client, _, _, seen = _proxy()
         forwarded = _converse_through(client, seen, 16, extra_content=with_image)
@@ -1276,10 +1386,17 @@ class TestTheCutShape:
         history: list[dict] = []
         statuses = []
         for i in range(30):
-            history.append({"role": "user", "content":
-                            f"question {i}: we went over the storage layer, retention, and the rollout plan again"})
-            response = client.post("/v1/messages", json={"model": "m", "max_tokens": 64, "messages": history},
-                                   headers={"x-api-key": API_KEY})
+            history.append(
+                {
+                    "role": "user",
+                    "content": f"question {i}: we went over the storage layer, retention, and the rollout plan again",
+                }
+            )
+            response = client.post(
+                "/v1/messages",
+                json={"model": "m", "max_tokens": 64, "messages": history},
+                headers={"x-api-key": API_KEY},
+            )
             statuses.append(response.status_code)
             if response.status_code != 200:
                 break
@@ -1288,8 +1405,9 @@ class TestTheCutShape:
         forwarded = [json.loads(request.content)["messages"] for request in seen]
         assert statuses == [200] * 30, f"rejected at requests {[i for i, s in enumerate(statuses) if s != 200]}"
         assert sum(1 for i, m in enumerate(forwarded[1:], 1) if m[0] != forwarded[i - 1][0]) >= 2, "two cuts at least"
-        assert any(_is_front(m[0]) and _thinking_blocks(m) for m in forwarded), \
+        assert any(_is_front(m[0]) and _thinking_blocks(m) for m in forwarded), (
             "replies produced against the current front keep their thinking"
+        )
 
     def test_after_a_rewind_a_new_reply_keeps_its_thinking(self):
         """Editing a turn kept since the last cut used to strip valid thinking from every reply after the edit."""
@@ -1298,17 +1416,22 @@ class TestTheCutShape:
 
         def ask(text: str) -> list[dict]:
             history.append({"role": "user", "content": text})
-            response = client.post("/v1/messages", json={"model": "m", "max_tokens": 64, "messages": history},
-                                   headers={"x-api-key": API_KEY, SESSION_HEADER: "s"})
+            response = client.post(
+                "/v1/messages",
+                json={"model": "m", "max_tokens": 64, "messages": history},
+                headers={"x-api-key": API_KEY, SESSION_HEADER: "s"},
+            )
             assert response.status_code == 200
             history.append({"role": "assistant", "content": response.json()["content"]})
             return json.loads(seen[-1].content)["messages"]
 
         for i in range(30):
-            if _is_front(ask(f"question {i}: we went over the storage layer, retention, and the rollout plan again")[0]):
+            if _is_front(
+                ask(f"question {i}: we went over the storage layer, retention, and the rollout plan again")[0]
+            ):
                 break
         state = service.session_manager.store.get("s")
-        edited_at = state.snapshot.thinking_valid_from - 2       # a turn kept word for word when the cut was made
+        edited_at = state.snapshot.thinking_valid_from - 2  # a turn kept word for word when the cut was made
         # Hold collection still, so no new front strips the reply this test is about.
         service.pause_model_calls(3600, "test")
         state.snapshot = replace(state.snapshot, staged=None)
@@ -1332,28 +1455,48 @@ class TestTheCutShape:
             seen.append(request)
             return _front_binding_provider(request)
 
-        client = TestClient(create_app(service, http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(provider)),
-                                       schedule=pending.append))
+        client = TestClient(
+            create_app(
+                service,
+                http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(provider)),
+                schedule=pending.append,
+            )
+        )
         history: list[dict] = []
         try:
             for i in range(30):
-                history.append({"role": "user", "content":
-                                f"question {i}: we went over the storage layer, retention, and the rollout plan again"})
-                response = client.post("/v1/messages", json={"model": "m", "max_tokens": 64, "messages": history},
-                                       headers={"x-api-key": API_KEY})
+                history.append(
+                    {
+                        "role": "user",
+                        "content": f"question {i}: we went over the storage layer, retention, and the rollout plan again",
+                    }
+                )
+                response = client.post(
+                    "/v1/messages",
+                    json={"model": "m", "max_tokens": 64, "messages": history},
+                    headers={"x-api-key": API_KEY},
+                )
                 assert response.status_code == 200, f"request {i} was rejected"
                 history.append({"role": "assistant", "content": response.json()["content"]})
-                while len(pending) > 1:          # each pass runs one request late
+                while len(pending) > 1:  # each pass runs one request late
                     _run_now(pending.pop(0))
         finally:
             for coro in pending:
                 coro.close()
-        assert service.session_manager.store.get(service.session_manager.store.active_session_ids()[0]).snapshot.cut_count >= 2
+        assert (
+            service.session_manager.store.get(service.session_manager.store.active_session_ids()[0]).snapshot.cut_count
+            >= 2
+        )
 
 
 def _thinking_blocks(messages: list[dict]) -> list[dict]:
-    return [block for message in messages if isinstance(message["content"], list)
-            for block in message["content"] if block.get("type") == "thinking"]
+    return [
+        block
+        for message in messages
+        if isinstance(message["content"], list)
+        for block in message["content"]
+        if block.get("type") == "thinking"
+    ]
 
 
 def _front_binding_provider(request: httpx2.Request) -> httpx2.Response:
@@ -1367,11 +1510,26 @@ def _front_binding_provider(request: httpx2.Request) -> httpx2.Response:
     front = messages[0]["content"] if _is_front(messages[0]) else ""
     binding = hashlib.sha256(front.encode()).hexdigest()[:16]
     if any(block["signature"] != binding for block in _thinking_blocks(messages)):
-        return httpx2.Response(400, json={"type": "error", "error": {
-            "type": "invalid_request_error",
-            "message": "Invalid `signature` in `thinking` block. The block is bound to a different conversation."}})
-    return httpx2.Response(200, json={**UPSTREAM_OK, "content": [
-        {"type": "thinking", "thinking": "", "signature": binding}, {"type": "text", "text": "Postgres."}]})
+        return httpx2.Response(
+            400,
+            json={
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "Invalid `signature` in `thinking` block. The block is bound to a different conversation.",
+                },
+            },
+        )
+    return httpx2.Response(
+        200,
+        json={
+            **UPSTREAM_OK,
+            "content": [
+                {"type": "thinking", "thinking": "", "signature": binding},
+                {"type": "text", "text": "Postgres."},
+            ],
+        },
+    )
 
 
 class TestRequestSize:
@@ -1398,7 +1556,7 @@ class TestIdleSessionsAreClosed:
         service.session_manager = SessionManager(session_timeout_s=0, sweep_interval_s=0.01)
         client, _, _, _ = _proxy(gc_service=service)
 
-        with client:   # entering the client runs the app's lifespan
+        with client:  # entering the client runs the app's lifespan
             _post(client, _body(("user", "hello"), ("assistant", "hi"), ("user", "which database?")))
             assert client.get("/stats").json()["sessions_seeded"] == 1
             deadline = time.monotonic() + 2
@@ -1419,8 +1577,12 @@ class TestTheHistoryObserver:
             seen.append(request)
             return httpx2.Response(200, json=UPSTREAM_OK)
 
-        app = create_app(service, http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)),
-                         schedule=_run_now, on_client_history=observer)
+        app = create_app(
+            service,
+            http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)),
+            schedule=_run_now,
+            on_client_history=observer,
+        )
         return TestClient(app), seen
 
     def test_it_receives_the_whole_conversation_the_client_sent(self):
@@ -1432,7 +1594,10 @@ class TestTheHistoryObserver:
         session_id, messages = observed[-1]
         assert session_id.startswith("s_")
         assert [(m.role, m.content) for m in messages] == [
-            ("user", "the database is postgres"), ("assistant", "noted"), ("user", "and the cache?")]
+            ("user", "the database is postgres"),
+            ("assistant", "noted"),
+            ("user", "and the cache?"),
+        ]
 
     def test_a_failing_observer_never_costs_the_request(self):
         def broken(session_id, messages, origin):
@@ -1449,8 +1614,13 @@ class TestTheHistoryObserver:
 class TestTrafficIsMeasured:
     """What `/stats` reports happened: each request whole, the provider's own usage, grouped as the client ran it."""
 
-    TOOLS = [{"name": "Read", "description": "Reads a file from the local filesystem. " * 20,
-              "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}}}]
+    TOOLS = [
+        {
+            "name": "Read",
+            "description": "Reads a file from the local filesystem. " * 20,
+            "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
+        }
+    ]
 
     @staticmethod
     def _converse(client, turns: int, headers=None, **extra) -> dict:
@@ -1483,12 +1653,17 @@ class TestTrafficIsMeasured:
         def event(payload: dict) -> str:
             return f"event: {payload['type']}\ndata: {json.dumps(payload)}\n\n"
 
-        body = (event({"type": "message_start", "message": {"usage": {"input_tokens": 7,
-                                                                      "cache_read_input_tokens": 4000,
-                                                                      "output_tokens": 1}}})
-                + event({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "ok"}})
-                + event({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 61}})
-                + event({"type": "message_stop"})).encode()
+        body = (
+            event(
+                {
+                    "type": "message_start",
+                    "message": {"usage": {"input_tokens": 7, "cache_read_input_tokens": 4000, "output_tokens": 1}},
+                }
+            )
+            + event({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "ok"}})
+            + event({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 61}})
+            + event({"type": "message_stop"})
+        ).encode()
         client, _, _, _ = _proxy(_streaming_upstream(body))
 
         response = _post(client, _body(("user", "which database?"), stream=True))
@@ -1525,8 +1700,11 @@ class TestEachConversationIsSizedForItsModel:
         client, service, _, _ = _proxy(window_lookup=lookup)
         conversation = [("user", "we need a database"), ("assistant", "Noted."), ("user", "which one?")]
         _post(client, _body(*conversation), headers={CLIENT_SESSION_HEADER: "cc-1"})
-        _post(client, _body(*conversation, ("assistant", "Postgres."), ("user", "and backups?")),
-              headers={CLIENT_SESSION_HEADER: "cc-1"})
+        _post(
+            client,
+            _body(*conversation, ("assistant", "Postgres."), ("user", "and backups?")),
+            headers={CLIENT_SESSION_HEADER: "cc-1"},
+        )
 
         [state_id] = service.session_manager.store.active_session_ids()
         assert service.session_manager.store.get(state_id).context_window == 1_000_000
@@ -1577,8 +1755,14 @@ class TestSubagentsAreRecordedNotCollected:
 
     def test_asked_to_the_proxy_collects_subagents_too(self):
         service, _ = _engine()
-        app = create_app(service, http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(
-            lambda request: httpx2.Response(200, json=UPSTREAM_OK))), schedule=_run_now, collect_subagents=True)
+        app = create_app(
+            service,
+            http_client=httpx2.AsyncClient(
+                transport=httpx2.MockTransport(lambda request: httpx2.Response(200, json=UPSTREAM_OK))
+            ),
+            schedule=_run_now,
+            collect_subagents=True,
+        )
         client = TestClient(app)
         self._converse(client, {CLIENT_SESSION_HEADER: "cc-1", CLIENT_AGENT_HEADER: "agent-a"})
 
@@ -1591,9 +1775,14 @@ class TestEachRequestIsRecorded:
     conversation never continues, a subagent's relayed report. Structure is recorded, never content."""
 
     ASK = "Use two subagents: count the test files, and summarise the README."
-    SPAWN = {**UPSTREAM_OK, "stop_reason": "tool_use", "content": [
-        {"type": "tool_use", "id": "toolu_a", "name": "Agent", "input": {"prompt": "count the test files"}},
-        {"type": "tool_use", "id": "toolu_b", "name": "Agent", "input": {"prompt": "summarise the README"}}]}
+    SPAWN = {
+        **UPSTREAM_OK,
+        "stop_reason": "tool_use",
+        "content": [
+            {"type": "tool_use", "id": "toolu_a", "name": "Agent", "input": {"prompt": "count the test files"}},
+            {"type": "tool_use", "id": "toolu_b", "name": "Agent", "input": {"prompt": "summarise the README"}},
+        ],
+    }
 
     def _upstream(self, request: httpx2.Request) -> httpx2.Response:
         messages = json.loads(request.content)["messages"]
@@ -1602,19 +1791,35 @@ class TestEachRequestIsRecorded:
     def test_a_sessions_requests_are_recorded_and_settled(self):
         client, _, _, _ = _proxy(self._upstream)
         main = {CLIENT_SESSION_HEADER: "cc-1"}
-        started = [{"role": "user", "content": self.ASK},
-                   {"role": "assistant", "content": self.SPAWN["content"]},
-                   {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_a", "content": "started"},
-                                                {"type": "tool_result", "tool_use_id": "toolu_b", "content": "started"}]},
-                   {"role": "assistant", "content": "Both are running."}]
+        started = [
+            {"role": "user", "content": self.ASK},
+            {"role": "assistant", "content": self.SPAWN["content"]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_a", "content": "started"},
+                    {"type": "tool_result", "tool_use_id": "toolu_b", "content": "started"},
+                ],
+            },
+            {"role": "assistant", "content": "Both are running."},
+        ]
 
         _post(client, {"model": "claude-opus-5-5", "max_tokens": 64, "messages": started[:1]}, headers=main)
-        _post(client, _body(("user", "count the test files"), max_tokens=64),
-              headers={**main, CLIENT_AGENT_HEADER: "agent-a"})
+        _post(
+            client,
+            _body(("user", "count the test files"), max_tokens=64),
+            headers={**main, CLIENT_AGENT_HEADER: "agent-a"},
+        )
         _post(client, {"model": "claude-opus-5-5", "max_tokens": 64, "messages": started[:3]}, headers=main)
-        _post(client, {"model": "claude-opus-5-5", "max_tokens": 64,
-                       "messages": [*started, {"role": "user", "content": "Suggest the user's next message."}]},
-              headers=main)
+        _post(
+            client,
+            {
+                "model": "claude-opus-5-5",
+                "max_tokens": 64,
+                "messages": [*started, {"role": "user", "content": "Suggest the user's next message."}],
+            },
+            headers=main,
+        )
         reported = [*started, {"role": "user", "content": "<agent-message>42 test files.</agent-message>"}]
         _post(client, {"model": "claude-opus-5-5", "max_tokens": 64, "messages": reported}, headers=main)
         log = client.app.state.metrics.request_log
@@ -1622,9 +1827,19 @@ class TestEachRequestIsRecorded:
         # one of them on, neither is known to be kept.
         assert (log.records()[3].kept, log.records()[4].kept) == (None, None)
 
-        _post(client, {"model": "claude-opus-5-5", "max_tokens": 64,
-                       "messages": [*reported, {"role": "assistant", "content": "42 test files."},
-                                    {"role": "user", "content": "Thanks."}]}, headers=main)
+        _post(
+            client,
+            {
+                "model": "claude-opus-5-5",
+                "max_tokens": 64,
+                "messages": [
+                    *reported,
+                    {"role": "assistant", "content": "42 test files."},
+                    {"role": "user", "content": "Thanks."},
+                ],
+            },
+            headers=main,
+        )
 
         first, agent, results, side, report, thanks = log.records()
         assert [call.name for call in first.outline.tool_calls] == ["Agent", "Agent"]
@@ -1640,11 +1855,18 @@ class TestEachRequestIsRecorded:
         def event(payload: dict) -> str:
             return f"event: {payload['type']}\ndata: {json.dumps(payload)}\n\n"
 
-        body = (event({"type": "message_start", "message": {"usage": {"input_tokens": 7, "output_tokens": 1}}})
-                + event({"type": "content_block_start", "index": 0,
-                         "content_block": {"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {}}})
-                + event({"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 9}})
-                + event({"type": "message_stop"})).encode()
+        body = (
+            event({"type": "message_start", "message": {"usage": {"input_tokens": 7, "output_tokens": 1}}})
+            + event(
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {}},
+                }
+            )
+            + event({"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 9}})
+            + event({"type": "message_stop"})
+        ).encode()
         client, _, _, _ = _proxy(_streaming_upstream(body))
 
         _post(client, _body(("user", "read the config"), stream=True))
@@ -1672,26 +1894,42 @@ class TestEachSubagentIsLinkedToItsCall:
     def _upstream(self, request: httpx2.Request) -> httpx2.Response:
         if json.loads(request.content)["messages"][-1]["content"] != self.ASK:
             return httpx2.Response(200, json=UPSTREAM_OK)
-        return httpx2.Response(200, json={**UPSTREAM_OK, "stop_reason": "tool_use", "content": [
-            {"type": "tool_use", "id": "toolu_a", "name": "Agent", "input": {"prompt": self.PROMPT_A}},
-            {"type": "tool_use", "id": "toolu_b", "name": "Agent", "input": {"prompt": self.PROMPT_B}}]})
+        return httpx2.Response(
+            200,
+            json={
+                **UPSTREAM_OK,
+                "stop_reason": "tool_use",
+                "content": [
+                    {"type": "tool_use", "id": "toolu_a", "name": "Agent", "input": {"prompt": self.PROMPT_A}},
+                    {"type": "tool_use", "id": "toolu_b", "name": "Agent", "input": {"prompt": self.PROMPT_B}},
+                ],
+            },
+        )
 
     def _run(self, link_subagents: bool):
         client, _, _, _ = _proxy(self._upstream, link_subagents=link_subagents)
         main = {CLIENT_SESSION_HEADER: "cc-1"}
         _post(client, _body(("user", self.ASK)), headers=main)
         for agent, prompt in (("agent-b", self.PROMPT_B), ("agent-a", self.PROMPT_A)):
-            opening = [{"type": "text", "text": "<system-reminder>Repository context.</system-reminder>"},
-                       {"type": "text", "text": prompt}]
-            _post(client, {"model": "claude-sonnet-5", "max_tokens": 64, "messages": [{"role": "user", "content": opening}]},
-                  headers={**main, CLIENT_AGENT_HEADER: agent})
+            opening = [
+                {"type": "text", "text": "<system-reminder>Repository context.</system-reminder>"},
+                {"type": "text", "text": prompt},
+            ]
+            _post(
+                client,
+                {"model": "claude-sonnet-5", "max_tokens": 64, "messages": [{"role": "user", "content": opening}]},
+                headers={**main, CLIENT_AGENT_HEADER: agent},
+            )
         return client.app.state.metrics.request_log.records()
 
     def test_each_subagents_first_request_names_the_call_that_started_it(self):
         spawner, readme, count = self._run(link_subagents=True)
 
         assert (count.spawned_by.request_id, count.spawned_by.call_id, count.spawned_by.tool) == (
-            spawner.request_id, "toolu_a", "Agent")
+            spawner.request_id,
+            "toolu_a",
+            "Agent",
+        )
         assert readme.spawned_by.call_id == "toolu_b"
         assert self.PROMPT_A not in repr((spawner, readme, count))
 
@@ -1710,16 +1948,27 @@ class TestEachSubagentIsLinkedToItsCall:
         def upstream(request: httpx2.Request) -> httpx2.Response:
             if json.loads(request.content)["messages"][-1]["content"] != ask:
                 return httpx2.Response(200, json=UPSTREAM_OK)
-            return httpx2.Response(200, json={**UPSTREAM_OK, "stop_reason": "tool_use", "content": [
-                {"type": "tool_use", "id": "toolu_a", "name": "Agent", "input": {"prompt": prompt}}]})
+            return httpx2.Response(
+                200,
+                json={
+                    **UPSTREAM_OK,
+                    "stop_reason": "tool_use",
+                    "content": [{"type": "tool_use", "id": "toolu_a", "name": "Agent", "input": {"prompt": prompt}}],
+                },
+            )
 
         client, _, _, _ = _proxy(upstream, link_subagents=True)
         main = {CLIENT_SESSION_HEADER: "cc-1"}
         _post(client, _body(("user", ask)), headers=main)
-        opening = [{"type": "text", "text": prompt},
-                   {"type": "text", "text": "<system-reminder>\nRepository context.\n</system-reminder>"}]
-        _post(client, {"model": "claude-sonnet-5", "max_tokens": 64, "messages": [{"role": "user", "content": opening}]},
-              headers={**main, CLIENT_AGENT_HEADER: "agent-a"})
+        opening = [
+            {"type": "text", "text": prompt},
+            {"type": "text", "text": "<system-reminder>\nRepository context.\n</system-reminder>"},
+        ]
+        _post(
+            client,
+            {"model": "claude-sonnet-5", "max_tokens": 64, "messages": [{"role": "user", "content": opening}]},
+            headers={**main, CLIENT_AGENT_HEADER: "agent-a"},
+        )
 
         spawner, task = client.app.state.metrics.request_log.records()
         assert task.spawned_by is not None and task.spawned_by.request_id == spawner.request_id
@@ -1776,8 +2025,12 @@ class TestLlmGcYieldsWhenTheUpstreamPushesBack:
 class TestTheCacheIsWatched:
     """From each answered request, the proxy learns whether its conversation's cache would serve the next one."""
 
-    CACHE_READ = {"input_tokens": 12, "cache_read_input_tokens": 54_000, "cache_creation_input_tokens": 1_700,
-                  "output_tokens": 18}
+    CACHE_READ = {
+        "input_tokens": 12,
+        "cache_read_input_tokens": 54_000,
+        "cache_creation_input_tokens": 1_700,
+        "output_tokens": 18,
+    }
 
     @staticmethod
     def _answered(usage: dict, *, status: int = 200, ttl: str | None = None, took_s: float = 0.0):
@@ -1792,8 +2045,7 @@ class TestTheCacheIsWatched:
         client, service, _, _ = _proxy(upstream)
         watch = client.app.state.metrics.cache_watch = CacheWatch(clock=lambda: clock[0])
         marker = {"type": "ephemeral", **({"ttl": ttl} if ttl is not None else {})}
-        _post(client, _body(("user", "about databases"), ("assistant", "ok"), ("user", "go on"),
-                            cache_control=marker))
+        _post(client, _body(("user", "about databases"), ("assistant", "ok"), ("user", "go on"), cache_control=marker))
         [session_id] = service.session_manager.store.active_session_ids()
         return watch, clock, session_id
 
@@ -1828,8 +2080,15 @@ class TestTheCacheIsWatched:
 class TestAPreparedCutWaitsForTheRightRequest:
     """With the cache warm, a prepared cut waits; a cold cache or the stale bound switches it in."""
 
-    CACHED = {**UPSTREAM_OK, "usage": {"input_tokens": 12, "cache_read_input_tokens": 54_000,
-                                        "cache_creation_input_tokens": 1_700, "output_tokens": 18}}
+    CACHED = {
+        **UPSTREAM_OK,
+        "usage": {
+            "input_tokens": 12,
+            "cache_read_input_tokens": 54_000,
+            "cache_creation_input_tokens": 1_700,
+            "output_tokens": 18,
+        },
+    }
     # No saving repays a thousandfold, so on a warm cache only the bound could switch a cut in. On the
     # 200-token window, eight exchanges stage a cut of about 156 stale tokens: under a bound of the
     # whole window, over one of half of it.
@@ -1844,10 +2103,18 @@ class TestAPreparedCutWaitsForTheRightRequest:
     @staticmethod
     def _ask(client, seen, history: list[dict]) -> list[dict]:
         """One more exchange of the same conversation; returns the messages forwarded for it."""
-        history.append({"role": "user", "content": f"question {len(history) // 2}: we went over the storage layer, "
-                                                   "retention, and the rollout plan again"})
-        client.post("/v1/messages", json={"model": "m", "max_tokens": 64, "messages": history},
-                    headers={"x-api-key": API_KEY, SESSION_HEADER: "s"})
+        history.append(
+            {
+                "role": "user",
+                "content": f"question {len(history) // 2}: we went over the storage layer, "
+                "retention, and the rollout plan again",
+            }
+        )
+        client.post(
+            "/v1/messages",
+            json={"model": "m", "max_tokens": 64, "messages": history},
+            headers={"x-api-key": API_KEY, SESSION_HEADER: "s"},
+        )
         history.append({"role": "assistant", "content": UPSTREAM_OK["content"]})
         return json.loads(seen[-1].content)["messages"]
 
@@ -1865,7 +2132,7 @@ class TestAPreparedCutWaitsForTheRightRequest:
         for _ in range(8):
             self._ask(client, seen, history)
 
-        clock[0] += 3600   # the person steps away; the provider's entry expires
+        clock[0] += 3600  # the person steps away; the provider's entry expires
         forwarded = self._ask(client, seen, history)
 
         assert _is_front(forwarded[0]), "the cold request carries the collection"
@@ -1881,14 +2148,23 @@ class TestAPreparedCutWaitsForTheRightRequest:
         history: list[dict] = []
         for _ in range(8):
             self._ask(client, seen, history)
-        history[-1] = {"role": "assistant", "content": [
-            {"type": "text", "text": "Writing it."},
-            {"type": "tool_use", "id": "toolu_1", "name": "Write", "input": {"path": "TODO.md"}}]}
-        history.append({"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "ok"}]})
+        history[-1] = {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Writing it."},
+                {"type": "tool_use", "id": "toolu_1", "name": "Write", "input": {"path": "TODO.md"}},
+            ],
+        }
+        history.append(
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "ok"}]}
+        )
 
         clock[0] += 3600
-        client.post("/v1/messages", json={"model": "m", "max_tokens": 64, "messages": history},
-                    headers={"x-api-key": API_KEY, SESSION_HEADER: "s"})
+        client.post(
+            "/v1/messages",
+            json={"model": "m", "max_tokens": 64, "messages": history},
+            headers={"x-api-key": API_KEY, SESSION_HEADER: "s"},
+        )
         assert not any(_is_front(message) for message in json.loads(seen[-1].content)["messages"])
         assert service.session_manager.store.get("s").snapshot.staged is not None, "still prepared"
 
@@ -1900,7 +2176,9 @@ class TestAPreparedCutWaitsForTheRightRequest:
     def test_on_a_warm_cache_the_stale_bound_switches_it_in_for_the_models_sake(self):
         client, service, seen, _ = self._client(max_stale_ratio=0.5, **self.PATIENT)
         reasons = []
-        service.event_bus.subscribe(EventType.GC_FINISHED, lambda event: reasons.append(event.data["report"].switch_reason))
+        service.event_bus.subscribe(
+            EventType.GC_FINISHED, lambda event: reasons.append(event.data["report"].switch_reason)
+        )
         history: list[dict] = []
         forwarded = [self._ask(client, seen, history) for _ in range(8)]
 
@@ -1913,8 +2191,13 @@ class TestAPreparedCutWaitsForTheRightRequest:
 class TestARefusedRewriteIsSentAsWritten:
     """Never worse than no GC: a request the provider refuses as LLM-GC rewrote it goes again as the client wrote it."""
 
-    REFUSAL = {"type": "error", "error": {"type": "invalid_request_error",
-                                          "message": "messages.3.content.0: Invalid `signature` in `thinking` block."}}
+    REFUSAL = {
+        "type": "error",
+        "error": {
+            "type": "invalid_request_error",
+            "message": "messages.3.content.0: Invalid `signature` in `thinking` block.",
+        },
+    }
 
     def _converse_until_refused(self, caplog):
         def upstream(request: httpx2.Request) -> httpx2.Response:
@@ -1928,8 +2211,9 @@ class TestARefusedRewriteIsSentAsWritten:
         with caplog.at_level(logging.WARNING, logger="llm_gc.proxy.server"):
             for index in range(10):
                 messages.append({"role": "user", "content": f"turn {index}: we discussed the storage layer today"})
-                statuses.append(_post(client, {"model": "claude-sonnet-5", "max_tokens": 512,
-                                               "messages": messages}).status_code)
+                statuses.append(
+                    _post(client, {"model": "claude-sonnet-5", "max_tokens": 512, "messages": messages}).status_code
+                )
                 messages.append({"role": "assistant", "content": UPSTREAM_OK["content"][0]["text"]})
         return client, seen, statuses
 
@@ -1937,8 +2221,9 @@ class TestARefusedRewriteIsSentAsWritten:
         client, seen, statuses = self._converse_until_refused(caplog)
 
         assert set(statuses) == {200}
-        refused = next(i for i, request in enumerate(seen) if any(
-            _is_front(m) for m in json.loads(request.content)["messages"]))
+        refused = next(
+            i for i, request in enumerate(seen) if any(_is_front(m) for m in json.loads(request.content)["messages"])
+        )
         resent = json.loads(seen[refused + 1].content)["messages"]
         assert not any(_is_front(m) for m in resent), "sent as the client wrote it"
         assert resent[0]["content"].startswith("turn 0:"), "the whole conversation, from its first turn"
@@ -1970,7 +2255,12 @@ class TestARefusedRewriteIsSentAsWritten:
 
 class TestTheNewestRequestIsCountedBothWays:
     def test_llm_gcs_count_and_the_providers_are_kept_for_the_same_request(self):
-        usage = {"input_tokens": 40, "cache_read_input_tokens": 900, "cache_creation_input_tokens": 60, "output_tokens": 7}
+        usage = {
+            "input_tokens": 40,
+            "cache_read_input_tokens": 900,
+            "cache_creation_input_tokens": 60,
+            "output_tokens": 7,
+        }
         client, service, _, _ = _proxy(lambda request: httpx2.Response(200, json={**UPSTREAM_OK, "usage": usage}))
         _post(client, _body(("user", "about databases"), ("assistant", "ok"), ("user", "go on")))
         [session_id] = service.session_manager.store.active_session_ids()
@@ -1983,13 +2273,19 @@ class TestTheNewestRequestIsCountedBothWays:
         assert last["provider_prompt_tokens"] == 40 + 900 + 60
 
     def test_each_reply_tells_the_engine_how_the_models_count_runs_against_llm_gcs(self):
-        usage = {"input_tokens": 40, "cache_read_input_tokens": 900, "cache_creation_input_tokens": 60, "output_tokens": 7}
+        usage = {
+            "input_tokens": 40,
+            "cache_read_input_tokens": 900,
+            "cache_creation_input_tokens": 60,
+            "output_tokens": 7,
+        }
         client, service, _, _ = _proxy(lambda request: httpx2.Response(200, json={**UPSTREAM_OK, "usage": usage}))
         _post(client, _body(("user", "about databases"), ("assistant", "ok"), ("user", "go on")))
         [session_id] = service.session_manager.store.active_session_ids()
 
-        conversation = next(c for c in client.get("/stats").json()["other_conversations"]
-                            if c["conversation_id"] == session_id)
+        conversation = next(
+            c for c in client.get("/stats").json()["other_conversations"] if c["conversation_id"] == session_id
+        )
         last = conversation["traffic"]["last_reply"]
 
         assert service.session_manager.store.get(session_id).token_rate == 1_000 / last["tokens_forwarded"]
@@ -2001,4 +2297,3 @@ class TestTheNewestRequestIsCountedBothWays:
         [session_id] = service.session_manager.store.active_session_ids()
 
         assert service.session_manager.store.get(session_id).token_rate is None
-

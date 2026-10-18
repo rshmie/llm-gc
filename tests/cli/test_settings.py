@@ -87,14 +87,20 @@ def test_an_unknown_key_is_refused_and_named(isolated):
         load_settings(path)
 
 
-@pytest.mark.parametrize(("text", "expected"), [
-    # Appended at the end of the starter file, a line lands in its last section, [engine].
-    ('[engine]\nmodel = "gw-sonnet"\n', "engine.model: unknown setting here: `model` goes under [summary]"),
-    ('model = "gw-sonnet"\n', "model: unknown setting here: `model` goes under [summary]"),
-    ("[summary]\nport = 9100\n", "summary.port: unknown setting here: `port` goes at the top, before any [section]"),
-    ("[engine]\nmin_cut_token = 2000\n", "engine.min_cut_token: unknown setting: did you mean `min_cut_tokens`?"),
-    ("[engine]\nflux_capacitor = 1\n", "engine.flux_capacitor: unknown setting"),
-])
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # Appended at the end of the starter file, a line lands in its last section, [engine].
+        ('[engine]\nmodel = "gw-sonnet"\n', "engine.model: unknown setting here: `model` goes under [summary]"),
+        ('model = "gw-sonnet"\n', "model: unknown setting here: `model` goes under [summary]"),
+        (
+            "[summary]\nport = 9100\n",
+            "summary.port: unknown setting here: `port` goes at the top, before any [section]",
+        ),
+        ("[engine]\nmin_cut_token = 2000\n", "engine.min_cut_token: unknown setting: did you mean `min_cut_tokens`?"),
+        ("[engine]\nflux_capacitor = 1\n", "engine.flux_capacitor: unknown setting"),
+    ],
+)
 def test_an_unknown_key_says_where_it_belongs_or_what_it_resembles(isolated, text, expected):
     path = _write(isolated, "c.toml", text)
     with pytest.raises(ConfigError) as caught:
@@ -167,7 +173,7 @@ def test_an_empty_value_does_not_override_a_lower_layer(isolated, monkeypatch):
     assert settings.port == 9900
 
 
-@pytest.mark.parametrize("line", ["ANTHROPIC_API_KEY = \"k\"", "anthropic_api_key = \"k\""])
+@pytest.mark.parametrize("line", ['ANTHROPIC_API_KEY = "k"', 'anthropic_api_key = "k"'])
 def test_a_credential_in_the_config_file_is_refused_without_echoing_it(isolated, line):
     path = _write(isolated, "c.toml", line + "\n")
     with pytest.raises(ConfigError, match="must not be set in the config file") as caught:
@@ -190,16 +196,18 @@ def test_anthropic_summaries_follow_the_upstream_unless_given_their_own_url(monk
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "tok")
     provider = create_summary_provider(load_settings(upstream="https://gateway.example.com"))
     assert provider._base_url == "https://gateway.example.com"
-    own = create_summary_provider(load_settings(upstream="https://gateway.example.com",
-                                                summary={"base_url": "https://other.example.com"}))
+    own = create_summary_provider(
+        load_settings(upstream="https://gateway.example.com", summary={"base_url": "https://other.example.com"})
+    )
     assert own._base_url == "https://other.example.com"
 
 
 def test_an_openai_summariser_does_not_inherit_the_anthropic_upstream_or_credentials(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "tok-for-claude-code")
-    provider = create_summary_provider(load_settings(upstream="https://gateway.example.com",
-                                                     summary={"provider": "openai"}))
+    provider = create_summary_provider(
+        load_settings(upstream="https://gateway.example.com", summary={"provider": "openai"})
+    )
     assert provider._base_url == "https://api.openai.com"
 
 
@@ -212,7 +220,6 @@ def test_has_summary_credential_follows_the_chosen_provider(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
     assert load_settings().has_summary_credential
     assert not load_settings(summary={"provider": "openai"}).has_summary_credential
-
 
 
 class TestFindConfigFile:

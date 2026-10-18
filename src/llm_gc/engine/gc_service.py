@@ -71,7 +71,7 @@ class _Planned:
     @property
     def placed(self) -> list[tuple[Span, DetailLevel]]:
         """The cut's new spans, each with the level the plan gave it."""
-        return list(zip(self.spans[self.new_from:], self.plan.levels[self.new_from:], strict=True))
+        return list(zip(self.spans[self.new_from :], self.plan.levels[self.new_from :], strict=True))
 
     @property
     def replanned(self) -> list[tuple[Span, DetailLevel]]:
@@ -81,16 +81,16 @@ class _Planned:
     @property
     def condensed_spans(self) -> list[Span]:
         """The cut's new spans that were condensed before this plan: a staged cut's."""
-        return list(self.spans[self.new_from:][: self.drafts_from])
+        return list(self.spans[self.new_from :][: self.drafts_from])
 
     @property
     def cut_turns(self) -> list[Message]:
-        return [turn for span in self.spans[self.new_from:] for turn in span.turns]
+        return [turn for span in self.spans[self.new_from :] for turn in span.turns]
 
     @property
     def compactable_tokens(self) -> int:
         """Tokens of the drafted turns the plan would not keep word for word: what a pass would pay to condense."""
-        return _not_kept_tokens(self.placed[self.drafts_from:])
+        return _not_kept_tokens(self.placed[self.drafts_from :])
 
     @property
     def stale_tokens(self) -> int:
@@ -103,8 +103,9 @@ class _Planned:
         Estimated when the summaries are: a collection checks it before paying for
         them. A session's first cut also pays for the front's own header.
         """
-        new = zip(self.spans[self.new_from:], self.options[self.new_from:], self.plan.levels[self.new_from:],
-                  strict=True)
+        new = zip(
+            self.spans[self.new_from :], self.options[self.new_from :], self.plan.levels[self.new_from :], strict=True
+        )
         saved = sum(sum(turn.token_count for turn in span.turns) - option.cost(level) for span, option, level in new)
         return saved - (0 if front_exists else FRONT_OVERHEAD_TOKENS)
 
@@ -122,8 +123,8 @@ class _Planned:
         return _outcome(self.placed, self.replanned)
 
     def preview(self, min_cut_tokens: int, front_exists: bool) -> CutPreview:
-        new = self.spans[self.new_from:]
-        scores = self.scores[self.new_from:]
+        new = self.spans[self.new_from :]
+        scores = self.scores[self.new_from :]
         return CutPreview(
             turns=tuple(turn.turn_index for turn in self.cut_turns),
             levels={turn.turn_index: level for span, level in self.placed for turn in span.turns},
@@ -153,8 +154,14 @@ class GcService:
     doc/design/session/overview.md for the concurrency model.
     """
 
-    def __init__(self, session_manager: SessionManager, generational_memory: GenerationalMemory,
-                 span_scorer: SpanScorer, event_bus: EventBus, gc_config: GCConfig) -> None:
+    def __init__(
+        self,
+        session_manager: SessionManager,
+        generational_memory: GenerationalMemory,
+        span_scorer: SpanScorer,
+        event_bus: EventBus,
+        gc_config: GCConfig,
+    ) -> None:
         self.session_manager = session_manager
         self.generational_memory = generational_memory
         self.span_scorer = span_scorer
@@ -162,8 +169,9 @@ class GcService:
         self.gc_config = gc_config
         # LLM-GC's own model calls yield to the upstream's rate limit; see `pause_model_calls`.
         self.model_calls = ModelCallPause()
-        self._bands = Bands(keep=gc_config.keep_threshold, archive=gc_config.archive_threshold,
-                            margin=gc_config.level_margin)
+        self._bands = Bands(
+            keep=gc_config.keep_threshold, archive=gc_config.archive_threshold, margin=gc_config.level_margin
+        )
 
     def _assemble(self, snapshot: GenerationSnapshot) -> list[Message]:
         """The context this session sends: the front, then the verbatim tail.
@@ -197,8 +205,9 @@ class GcService:
         state = self.session_manager.get_or_create(session_id)
         return self._assemble(state.snapshot)
 
-    def gc_switch(self, session_id: str, cache: CacheState, *, requested: bool = False,
-                  tool_round_open: bool = False) -> GCResult | None:
+    def gc_switch(
+        self, session_id: str, cache: CacheState, *, requested: bool = False, tool_round_open: bool = False
+    ) -> GCResult | None:
         """Request path: switch the session's staged cut in, if the switch policy says now. Immediate.
 
         `cache` is the provider cache the request being built would meet; `requested` is
@@ -214,7 +223,7 @@ class GcService:
         if state is None:
             return None
         if (staged := state.snapshot.staged) is None:
-            state.switch_requested = False    # the cut it asked for is gone
+            state.switch_requested = False  # the cut it asked for is gone
             return None
         requested = requested or state.switch_requested
         preview = self._switch_preview(state, staged, cache, requested, tool_round_open)
@@ -224,24 +233,37 @@ class GcService:
             return None
         before = state.snapshot
         applied = apply_aging(before, staged.delta)
-        state.snapshot = replace(applied.snapshot, staged=None, thinking_valid_from=None,
-                                 cut_count=applied.snapshot.cut_count + 1)
+        state.snapshot = replace(
+            applied.snapshot, staged=None, thinking_valid_from=None, cut_count=applied.snapshot.cut_count + 1
+        )
         self._announce(session_id, staged.delta, applied)
         result = self._switched_result(before, state.snapshot, staged, preview.decision.reason, start)
         reason = preview.decision.reason.value
-        logger.info("applied a collection in %s (%s): about %s fewer tokens on each request, %s of them earlier "
-                    "thinking", session_id, reason.replace("_", " "), f"{preview.saving_tokens:,}",
-                    f"{preview.thinking_dropped_tokens:,}",
-                    extra={"session_id": session_id, "reason": reason, "saving_tokens": preview.saving_tokens,
-                           "thinking_dropped_tokens": preview.thinking_dropped_tokens,
-                           "young_remaining": len(state.snapshot.young)})
-        self.event_bus.emit(Event(event_type=EventType.GC_FINISHED,
-                                  data={"gc_run_id": result.gc_run_id, "session_id": session_id,
-                                        "report": result.report()}))
+        logger.info(
+            "applied a collection in %s (%s): about %s fewer tokens on each request, %s of them earlier thinking",
+            session_id,
+            reason.replace("_", " "),
+            f"{preview.saving_tokens:,}",
+            f"{preview.thinking_dropped_tokens:,}",
+            extra={
+                "session_id": session_id,
+                "reason": reason,
+                "saving_tokens": preview.saving_tokens,
+                "thinking_dropped_tokens": preview.thinking_dropped_tokens,
+                "young_remaining": len(state.snapshot.young),
+            },
+        )
+        self.event_bus.emit(
+            Event(
+                event_type=EventType.GC_FINISHED,
+                data={"gc_run_id": result.gc_run_id, "session_id": session_id, "report": result.report()},
+            )
+        )
         return result
 
-    def inspect(self, session_id: str, cache: CacheState = CacheState.COLD, *,
-                tool_round_open: bool = False) -> SessionInspection | None:
+    def inspect(
+        self, session_id: str, cache: CacheState = CacheState.COLD, *, tool_round_open: bool = False
+    ) -> SessionInspection | None:
         """A read-only view of one session, or None if there is no such session.
 
         Uses the same rendering as `gc_collect`, the same planning as `gc_age` and
@@ -263,8 +285,15 @@ class GcService:
         preview = planned.preview(self.gc_config.min_cut_tokens, front_exists=bool(snapshot.old))
         if not state.collection_enabled:
             # Nothing will be collected, so nothing is forecast to change.
-            preview = replace(preview, turns=(), spans=(), levels={}, compactable_tokens=0, estimated_saving=0,
-                              span_levels=tuple(span.level for span in snapshot.old))
+            preview = replace(
+                preview,
+                turns=(),
+                spans=(),
+                levels={},
+                compactable_tokens=0,
+                estimated_saving=0,
+                span_levels=tuple(span.level for span in snapshot.old),
+            )
         return SessionInspection(
             session_id=session_id,
             snapshot=snapshot,
@@ -276,8 +305,11 @@ class GcService:
             context_window=state.context_window or self.gc_config.context_window,
             recap_budget=recap_budget,
             collection_enabled=state.collection_enabled,
-            staged=(self._switch_preview(state, snapshot.staged, cache, state.switch_requested, tool_round_open)
-                    if snapshot.staged is not None else None),
+            staged=(
+                self._switch_preview(state, snapshot.staged, cache, state.switch_requested, tool_round_open)
+                if snapshot.staged is not None
+                else None
+            ),
             token_rate=state.token_rate,
             window_in_own_count=own_window,
             thinking_tokens=snapshot.sent_thinking_tokens(),
@@ -329,9 +361,12 @@ class GcService:
         """
         if self.model_calls.pause(retry_after_s, reason, lasting=lasting):
             pause = self.model_calls.current()
-            logger.warning("LLM-GC pauses its own model calls until %s: %s",
-                           f"{pause.until.astimezone():%H:%M:%S}" if pause is not None else "?", reason,
-                           extra={"retry_after_s": retry_after_s})
+            logger.warning(
+                "LLM-GC pauses its own model calls until %s: %s",
+                f"{pause.until.astimezone():%H:%M:%S}" if pause is not None else "?",
+                reason,
+                extra={"retry_after_s": retry_after_s},
+            )
 
     def set_collection_enabled(self, session_id: str, enabled: bool) -> None:
         """Turn collection on or off for one session. Off, it is still recorded and inspected, never collected."""
@@ -418,11 +453,18 @@ class GcService:
         if not state.collection_enabled:
             gc_result = self._unchanged_result(base, gc_run_id, GCStatus.BYPASSED_NOT_COLLECTED, start)
         elif (pause := self.model_calls.current()) is not None:
-            gc_result = self._unchanged_result(base, gc_run_id, GCStatus.BYPASSED_PAUSED, start,
-                                               failure_reason=f"paused until {pause.until.astimezone():%H:%M:%S}: {pause.reason}")
+            gc_result = self._unchanged_result(
+                base,
+                gc_run_id,
+                GCStatus.BYPASSED_PAUSED,
+                start,
+                failure_reason=f"paused until {pause.until.astimezone():%H:%M:%S}: {pause.reason}",
+            )
         elif state.aging_in_flight:
-            logger.debug("aging already in flight; skipping this trigger",
-                         extra={"session_id": session_id, "gc_run_id": gc_run_id})
+            logger.debug(
+                "aging already in flight; skipping this trigger",
+                extra={"session_id": session_id, "gc_run_id": gc_run_id},
+            )
             gc_result = self._unchanged_result(base, gc_run_id, GCStatus.BYPASSED_AGING_IN_FLIGHT, start)
         else:
             state.aging_in_flight = True
@@ -431,19 +473,27 @@ class GcService:
                 # Every path counts what it spent, including a cut abandoned after its summaries were bought.
                 with measure_model_usage() as spent:
                     gc_result = await self._age(state, base, gc_run_id, start, min_cut_tokens)
-                gc_result = gc_result.model_copy(update={"summary_calls": spent.calls,
-                                                         "summary_input_tokens": spent.input_tokens,
-                                                         "summary_output_tokens": spent.output_tokens})
+                gc_result = gc_result.model_copy(
+                    update={
+                        "summary_calls": spent.calls,
+                        "summary_input_tokens": spent.input_tokens,
+                        "summary_output_tokens": spent.output_tokens,
+                    }
+                )
             finally:
                 state.aging_in_flight = False
 
-        self.event_bus.emit(Event(event_type=EventType.GC_FINISHED,
-                                  data={"gc_run_id": gc_run_id, "session_id": session_id,
-                                        "report": gc_result.report()}))
+        self.event_bus.emit(
+            Event(
+                event_type=EventType.GC_FINISHED,
+                data={"gc_run_id": gc_run_id, "session_id": session_id, "report": gc_result.report()},
+            )
+        )
         return gc_result
 
-    async def _age(self, state: SessionState, base: GenerationSnapshot, gc_run_id: str, start: float,
-                   min_cut_tokens: int) -> GCResult:
+    async def _age(
+        self, state: SessionState, base: GenerationSnapshot, gc_run_id: str, start: float, min_cut_tokens: int
+    ) -> GCResult:
         """Prepare a cut against `base`, then stage it onto whatever the snapshot is now.
 
         Plans first with the staged spans and estimated summaries for the turns past them,
@@ -470,8 +520,13 @@ class GcService:
             if (saving := estimated.cut_saving(front_exists=bool(base.old))) <= 0:
                 # Decided before any summary is bought: a cut that cannot pay for itself
                 # would buy summaries only to discard them, on every pass.
-                return self._unchanged_result(base, gc_run_id, GCStatus.BYPASSED_NO_SAVING, start,
-                                              abandoned_cut=self._abandoned(base, estimated, saving))
+                return self._unchanged_result(
+                    base,
+                    gc_run_id,
+                    GCStatus.BYPASSED_NO_SAVING,
+                    start,
+                    abandoned_cut=self._abandoned(base, estimated, saving),
+                )
 
             current_stage = "condense"
             filed, _ = file_knowledge(base.knowledge, estimated.new_facts)
@@ -484,9 +539,10 @@ class GcService:
             unread = [span for span in base.old if span.facts_unread and span not in carried]
             reread, reread_error = await self.generational_memory.read_facts([span.turns for span in unread], on_record)
             if reread_error is not None:
-                logger.info("facts of earlier exchanges could not be read again; they stay marked",
-                            extra={"session_id": session_id, "gc_run_id": gc_run_id,
-                                   "error_type": type(reread_error).__name__})
+                logger.info(
+                    "facts of earlier exchanges could not be read again; they stay marked",
+                    extra={"session_id": session_id, "gc_run_id": gc_run_id, "error_type": type(reread_error).__name__},
+                )
 
             # No await from here to the staging: plan against the snapshot as it is now.
             current_stage = "plan"
@@ -495,29 +551,58 @@ class GcService:
             material = _still_oldest(now_young, [*estimated.condensed_spans, *map(_span_of, condensed)])
             cut_now = sum(len(span.turns) for span in material)
             if not cut_now or len(now_young) - cut_now < keep_last or not is_safe_cut(now_young, cut_now):
-                logger.info("the prepared turns are no longer the session's oldest; not staged",
-                            extra={"session_id": session_id, "gc_run_id": gc_run_id})
-                return self._unchanged_result(current, gc_run_id, GCStatus.DISCARDED_HISTORY_CHANGED, start,
-                                              degradations=degradations)
+                logger.info(
+                    "the prepared turns are no longer the session's oldest; not staged",
+                    extra={"session_id": session_id, "gc_run_id": gc_run_id},
+                )
+                return self._unchanged_result(
+                    current, gc_run_id, GCStatus.DISCARDED_HISTORY_CHANGED, start, degradations=degradations
+                )
             held = {turn.turn_index for span in material for turn in span.turns}
-            facts = [fact for fact in (*estimated.new_facts, *(f for draft in condensed for f in draft.facts))
-                     if fact.message_turn in held]
+            facts = [
+                fact
+                for fact in (*estimated.new_facts, *(f for draft in condensed for f in draft.facts))
+                if fact.message_turn in held
+            ]
             # Spans whose facts were read again, now or by the pass that staged this cut, as the snapshot still
             # holds them; planned as readable, so they can be archived again.
-            read_again = tuple(span for span in (*carried, *(unread if reread_error is None else ()))
-                               if span in current.old)
+            read_again = tuple(
+                span for span in (*carried, *(unread if reread_error is None else ())) if span in current.old
+            )
             read_turns = {turn.turn_index for span in read_again for turn in span.turns}
             staged_facts = current.staged.delta.new_knowledge if current.staged is not None else ()
             late_facts = [fact for fact in (*staged_facts, *reread) if fact.message_turn in read_turns]
-            readable = replace(current, old=tuple(replace(span, facts_unread=False) if span in read_again else span
-                                                   for span in current.old)) if read_again else current
-            planned = self._plan(readable, now_young, cut_now, material, [*facts, *late_facts],
-                                 drafts_from=len(material), recap_budget=recap_budget)
+            readable = (
+                replace(
+                    current,
+                    old=tuple(
+                        replace(span, facts_unread=False) if span in read_again else span for span in current.old
+                    ),
+                )
+                if read_again
+                else current
+            )
+            planned = self._plan(
+                readable,
+                now_young,
+                cut_now,
+                material,
+                [*facts, *late_facts],
+                drafts_from=len(material),
+                recap_budget=recap_budget,
+            )
             if planned.plan.over_budget:
-                degradations.append(self._record_degradation(
-                    session_id, DegradationReason.RECAP_OVER_BUDGET, sorted(held),
-                    LLMGCError(f"the folded front needs {planned.plan.tokens} tokens of a "
-                               f"{recap_budget}-token recap budget")))
+                degradations.append(
+                    self._record_degradation(
+                        session_id,
+                        DegradationReason.RECAP_OVER_BUDGET,
+                        sorted(held),
+                        LLMGCError(
+                            f"the folded front needs {planned.plan.tokens} tokens of a "
+                            f"{recap_budget}-token recap budget"
+                        ),
+                    )
+                )
             delta = replace(planned.delta(), facts_read=read_again)
             # The cut must pay for itself: its new spans, measured on the context
             # they would produce, against the turns they replace - a quote's marker
@@ -527,40 +612,59 @@ class GcService:
             before = self._context_tokens(current)
             saving = before - self._context_tokens(apply_aging(current, replace(delta, level_changes=())).snapshot)
             if saving <= 0:
-                logger.info("cut not staged: it would not shrink the context",
-                            extra={"session_id": session_id, "gc_run_id": gc_run_id})
-                return self._unchanged_result(current, gc_run_id, GCStatus.BYPASSED_NO_SAVING, start,
-                                              degradations=degradations,
-                                              abandoned_cut=self._abandoned(current, planned, saving))
+                logger.info(
+                    "cut not staged: it would not shrink the context",
+                    extra={"session_id": session_id, "gc_run_id": gc_run_id},
+                )
+                return self._unchanged_result(
+                    current,
+                    gc_run_id,
+                    GCStatus.BYPASSED_NO_SAVING,
+                    start,
+                    degradations=degradations,
+                    abandoned_cut=self._abandoned(current, planned, saving),
+                )
             front = self._render_front(apply_aging(current, delta).snapshot)
             # What an earlier preparation of the spans still held fell short of stays with them.
             earlier = current.staged.degradations if current.staged is not None else ()
-            staged = StagedCut(delta=delta, saving_tokens=saving, stale_tokens=planned.stale_tokens,
-                               front_tokens=front.message.token_count if front is not None else 0,
-                               degradations=(*(d for d in earlier if held & set(d.turn_indices)), *degradations))
+            staged = StagedCut(
+                delta=delta,
+                saving_tokens=saving,
+                stale_tokens=planned.stale_tokens,
+                front_tokens=front.message.token_count if front is not None else 0,
+                degradations=(*(d for d in earlier if held & set(d.turn_indices)), *degradations),
+            )
         except Exception as err:
-            logger.exception("gc_age failed",
-                             extra={"session_id": session_id, "gc_run_id": gc_run_id, "stage": current_stage})
+            logger.exception(
+                "gc_age failed", extra={"session_id": session_id, "gc_run_id": gc_run_id, "stage": current_stage}
+            )
             # The result reaches the bus and the dashboard, so as in `_record_degradation` only our own
             # errors' messages, which carry no content, are shown; the log above keeps the rest.
             reason = str(err) if isinstance(err, LLMGCError) else type(err).__name__
-            return self._unchanged_result(base, gc_run_id, GCStatus.BYPASSED_ON_ERROR, start,
-                                          failure_reason=reason, failure_stage=current_stage)
+            return self._unchanged_result(
+                base, gc_run_id, GCStatus.BYPASSED_ON_ERROR, start, failure_reason=reason, failure_stage=current_stage
+            )
 
         if not self.session_manager.is_live(state):
-            logger.info("session closed during aging; result discarded",
-                        extra={"session_id": session_id, "gc_run_id": gc_run_id})
+            logger.info(
+                "session closed during aging; result discarded",
+                extra={"session_id": session_id, "gc_run_id": gc_run_id},
+            )
             return self._unchanged_result(base, gc_run_id, GCStatus.DISCARDED_SESSION_CLOSED, start)
 
         state.snapshot = replace(current, staged=staged, version=current.version + 1)
-        logger.info("prepared a collection in %s: %d older turns condensed, %s tokens of text shorter; not applied "
-                    "yet", session_id, cut_now, f"{saving:,}",
-                    extra={"session_id": session_id, "gc_run_id": gc_run_id, "turns_staged": cut_now,
-                           "saving_tokens": saving})
+        logger.info(
+            "prepared a collection in %s: %d older turns condensed, %s tokens of text shorter; not applied yet",
+            session_id,
+            cut_now,
+            f"{saving:,}",
+            extra={"session_id": session_id, "gc_run_id": gc_run_id, "turns_staged": cut_now, "saving_tokens": saving},
+        )
         return self._unchanged_result(state.snapshot, gc_run_id, GCStatus.STAGED, start, degradations=degradations)
 
-    def _estimate(self, base: GenerationSnapshot, young: Sequence[Message], cut: int,
-                  recap_budget: int) -> tuple[_Planned, list[Condensed]]:
+    def _estimate(
+        self, base: GenerationSnapshot, young: Sequence[Message], cut: int, recap_budget: int
+    ) -> tuple[_Planned, list[Condensed]]:
         """The cut a pass would prepare now, at estimated costs, and the drafts it would pay to condense.
 
         A staged cut's spans come first, as they are; the turns past them up to `cut` are
@@ -569,12 +673,28 @@ class GcService:
         staged = base.staged.delta if base.staged is not None else AgingDelta()
         held = len(staged.departed_turns)
         drafts = self.generational_memory.draft(young[held:cut])
-        planned = self._plan(base, young, max(cut, held), [*staged.new_spans, *map(_span_of, drafts)],
-                             staged.new_knowledge, drafts_from=len(staged.new_spans), recap_budget=recap_budget)
+        planned = self._plan(
+            base,
+            young,
+            max(cut, held),
+            [*staged.new_spans, *map(_span_of, drafts)],
+            staged.new_knowledge,
+            drafts_from=len(staged.new_spans),
+            recap_budget=recap_budget,
+        )
         return planned, drafts
 
-    def _plan(self, base: GenerationSnapshot, young: Sequence[Message], cut: int, new: Sequence[Span],
-              new_facts: Sequence[KnowledgeEntry], *, drafts_from: int, recap_budget: int) -> _Planned:
+    def _plan(
+        self,
+        base: GenerationSnapshot,
+        young: Sequence[Message],
+        cut: int,
+        new: Sequence[Span],
+        new_facts: Sequence[KnowledgeEntry],
+        *,
+        drafts_from: int,
+        recap_budget: int,
+    ) -> _Planned:
         """Score every span against what is being discussed now, and give each its level.
 
         "Now" is what the user said in the tail. `new` are the cut's spans; those from
@@ -595,25 +715,44 @@ class GcService:
             kept, compacted, archived = level_costs(span, annotated.for_span(span))
             position = index - len(base.old)
             is_new = position >= 0
-            if compacted is None and position >= drafts_from and self.generational_memory.worth_summarising(
-                    span.turns):
+            if compacted is None and position >= drafts_from and self.generational_memory.worth_summarising(span.turns):
                 # A summarised span shows its archived line too, so its summary costs on top of that.
                 compacted = archived + int(kept * DEFAULT_COMPACTION_TARGET_RATIO)
-            options.append(LevelOptions(score=score, current=None if is_new else span.level, kept_tokens=kept,
-                                        compacted_tokens=compacted, archived_tokens=archived,
-                                        archivable=not span.facts_unread))
+            options.append(
+                LevelOptions(
+                    score=score,
+                    current=None if is_new else span.level,
+                    kept_tokens=kept,
+                    compacted_tokens=compacted,
+                    archived_tokens=archived,
+                    archivable=not span.facts_unread,
+                )
+            )
 
-        fold = (count_tokens_cached(folded_line(spans[0].first_turn, spans[-1].turns[-1].turn_index, len(spans)))
-                if spans else 0)
+        fold = (
+            count_tokens_cached(folded_line(spans[0].first_turn, spans[-1].turns[-1].turn_index, len(spans)))
+            if spans
+            else 0
+        )
         plan = plan_levels(options, self._bands, recap_budget - FRONT_OVERHEAD_TOKENS, fold)
-        return _Planned(spans=tuple(spans), new_from=len(base.old), drafts_from=drafts_from, scores=tuple(scores),
-                        options=tuple(options), plan=plan, new_facts=tuple(new_facts))
+        return _Planned(
+            spans=tuple(spans),
+            new_from=len(base.old),
+            drafts_from=drafts_from,
+            scores=tuple(scores),
+            options=tuple(options),
+            plan=plan,
+            new_facts=tuple(new_facts),
+        )
 
     def _abandoned(self, base: GenerationSnapshot, planned: _Planned, saving: int) -> AbandonedCut:
         """The cut a pass planned and did not make, and what it would have left the context at."""
-        return AbandonedCut(turns=[turn.turn_index for turn in planned.cut_turns], outcome=planned.outcome(),
-                            tokens_taken=sum(turn.token_count for turn in planned.cut_turns),
-                            context_tokens_after=self._context_tokens(base) - saving)
+        return AbandonedCut(
+            turns=[turn.turn_index for turn in planned.cut_turns],
+            outcome=planned.outcome(),
+            tokens_taken=sum(turn.token_count for turn in planned.cut_turns),
+            context_tokens_after=self._context_tokens(base) - saving,
+        )
 
     def _report_failures(self, session_id: str, condensed: Sequence[Condensed]) -> list[AgingDegradation]:
         """A degradation for each summary that failed, and one for facts that could not be read.
@@ -626,10 +765,15 @@ class GcService:
         for draft in condensed:
             if draft.summary_error is not None:
                 turns = [turn.turn_index for turn in draft.turns]
-                reason = (DegradationReason.COMPACTION_REFUSED if isinstance(draft.summary_error, CompactionRefused)
-                          else DegradationReason.COMPACTION_FAILED)
-                logger.warning("a span was made without its summary",
-                               extra={"session_id": session_id, "turn_indices": turns, "reason": reason.value})
+                reason = (
+                    DegradationReason.COMPACTION_REFUSED
+                    if isinstance(draft.summary_error, CompactionRefused)
+                    else DegradationReason.COMPACTION_FAILED
+                )
+                logger.warning(
+                    "a span was made without its summary",
+                    extra={"session_id": session_id, "turn_indices": turns, "reason": reason.value},
+                )
                 degradations.append(self._record_degradation(session_id, reason, turns, draft.summary_error))
         # One of LLM-GC's own calls was rate-limited: it shares the upstream's limit with the client, so it yields.
         for error in [draft.summary_error for draft in condensed] + [draft.facts_error for draft in condensed]:
@@ -638,18 +782,28 @@ class GcService:
                 break
         # Every call failed in a way retrying cannot fix: calling again each pass would fail the same way.
         if (lasting := _failure_needing_a_person(condensed)) is not None:
-            self.pause_model_calls(MAX_PAUSE.total_seconds(), f"every one of its model calls failed: {lasting}",
-                                   lasting=True)
+            self.pause_model_calls(
+                MAX_PAUSE.total_seconds(), f"every one of its model calls failed: {lasting}", lasting=True
+            )
         unread = [(draft, draft.facts_error) for draft in condensed if draft.facts_error is not None]
         if unread:
             turns = [turn.turn_index for draft, _ in unread for turn in draft.turns]
-            logger.warning("spans were made without their facts", extra={"session_id": session_id, "turn_indices": turns})
-            degradations.append(self._record_degradation(session_id, DegradationReason.ARCHIVE_FAILED, turns,
-                                                         unread[0][1]))
+            logger.warning(
+                "spans were made without their facts", extra={"session_id": session_id, "turn_indices": turns}
+            )
+            degradations.append(
+                self._record_degradation(session_id, DegradationReason.ARCHIVE_FAILED, turns, unread[0][1])
+            )
         return degradations
 
-    def _switch_preview(self, state: SessionState, staged: StagedCut, cache: CacheState,
-                        requested: bool = False, tool_round_open: bool = False) -> SwitchPreview | None:
+    def _switch_preview(
+        self,
+        state: SessionState,
+        staged: StagedCut,
+        cache: CacheState,
+        requested: bool = False,
+        tool_round_open: bool = False,
+    ) -> SwitchPreview | None:
         """The measures the switch policy weighs for the session's staged cut now, and its verdict.
 
         None when it may not be switched in at all: collection is off for the session, or
@@ -669,17 +823,33 @@ class GcService:
         # Measured now, not at staging: every reply since then has added thinking the switch would drop.
         dropped = snapshot.sent_thinking_tokens()
         stale_thinking = snapshot.sent_thinking_tokens(
-            turn for span in staged.delta.new_spans if span.level is not DetailLevel.KEPT for turn in span.turns)
+            turn for span in staged.delta.new_spans if span.level is not DetailLevel.KEPT for turn in span.turns
+        )
         saving, stale = staged.saving_tokens + dropped, staged.stale_tokens + stale_thinking
         bound = self.gc_config.stale_bound(self._window_in_own_count(state))
         share = self.gc_config.min_saving_share
-        decision = decide_switch(saving_tokens=saving, rewritten_tokens=rewritten, stale_tokens=stale,
-                                 stale_bound_tokens=bound, min_saving_share=share, cache=cache, requested=requested,
-                                 tool_round_open=tool_round_open)
-        return SwitchPreview(saving_tokens=saving, rewritten_tokens=rewritten, stale_tokens=stale,
-                             stale_bound_tokens=bound, min_saving_share=share, cache=cache, decision=decision,
-                             thinking_dropped_tokens=dropped, stale_thinking_tokens=stale_thinking,
-                             rewrite_overhead_tokens=overhead)
+        decision = decide_switch(
+            saving_tokens=saving,
+            rewritten_tokens=rewritten,
+            stale_tokens=stale,
+            stale_bound_tokens=bound,
+            min_saving_share=share,
+            cache=cache,
+            requested=requested,
+            tool_round_open=tool_round_open,
+        )
+        return SwitchPreview(
+            saving_tokens=saving,
+            rewritten_tokens=rewritten,
+            stale_tokens=stale,
+            stale_bound_tokens=bound,
+            min_saving_share=share,
+            cache=cache,
+            decision=decision,
+            thinking_dropped_tokens=dropped,
+            stale_thinking_tokens=stale_thinking,
+            rewrite_overhead_tokens=overhead,
+        )
 
     def _window_in_own_count(self, state: SessionState) -> int:
         """The window of the model this session uses, counted as LLM-GC counts: what its recap budget and
@@ -687,8 +857,14 @@ class GcService:
         window = state.context_window or self.gc_config.context_window
         return int(window / state.token_rate) if state.token_rate is not None else window
 
-    def _switched_result(self, before: GenerationSnapshot, after: GenerationSnapshot, staged: StagedCut,
-                         reason: SwitchReason, start: float) -> GCResult:
+    def _switched_result(
+        self,
+        before: GenerationSnapshot,
+        after: GenerationSnapshot,
+        staged: StagedCut,
+        reason: SwitchReason,
+        start: float,
+    ) -> GCResult:
         """The collection a switch made, with what preparing its cut fell short of."""
         delta = staged.delta
 
@@ -700,7 +876,9 @@ class GcService:
 
         final_messages = self._assemble(after)
         return GCResult(
-            final_messages=final_messages, gc_run_id=str(uuid.uuid4()), status=GCStatus.COMPLETED,
+            final_messages=final_messages,
+            gc_run_id=str(uuid.uuid4()),
+            status=GCStatus.COMPLETED,
             tokens_before=self._context_tokens(before),
             tokens_in_final=sum(message.token_count for message in final_messages),
             kept_count=turns_at(DetailLevel.KEPT) + len(after.young),
@@ -720,19 +898,32 @@ class GcService:
         return sum(message.token_count for message in self._assemble(snapshot))
 
     def _unchanged_result(
-        self, snapshot: GenerationSnapshot, gc_run_id: str, status: GCStatus, start: float,
-        failure_reason: str | None = None, failure_stage: str | None = None,
-        degradations: list[AgingDegradation] | None = None, abandoned_cut: AbandonedCut | None = None,
+        self,
+        snapshot: GenerationSnapshot,
+        gc_run_id: str,
+        status: GCStatus,
+        start: float,
+        failure_reason: str | None = None,
+        failure_stage: str | None = None,
+        degradations: list[AgingDegradation] | None = None,
+        abandoned_cut: AbandonedCut | None = None,
     ) -> GCResult:
         messages = self._assemble(snapshot)
         tokens = sum(message.token_count for message in messages)
         return GCResult(
-            final_messages=messages, gc_run_id=gc_run_id, status=status,
-            failure_reason=failure_reason, failure_stage=failure_stage,
-            tokens_before=tokens, tokens_in_final=tokens,
-            kept_count=len(messages), compacted_count=0, archived_count=0,
+            final_messages=messages,
+            gc_run_id=gc_run_id,
+            status=status,
+            failure_reason=failure_reason,
+            failure_stage=failure_stage,
+            tokens_before=tokens,
+            tokens_in_final=tokens,
+            kept_count=len(messages),
+            compacted_count=0,
+            archived_count=0,
             duration_ms=(perf_counter() - start) * 1000,
-            degradations=degradations or [], abandoned_cut=abandoned_cut,
+            degradations=degradations or [],
+            abandoned_cut=abandoned_cut,
         )
 
     def _announce(self, session_id: str, delta: AgingDelta, applied: AppliedAging) -> None:
@@ -746,13 +937,18 @@ class GcService:
         for span in delta.new_spans:
             turns = [turn.turn_index for turn in span.turns]
             if span.level is DetailLevel.COMPACTED and span.summary is not None:
-                self.event_bus.emit(Event(event_type=EventType.MESSAGE_PROMOTED_TO_OLD_GEN, data={
-                    "session_id": session_id,
-                    "source_turn_indices": turns,
-                    "messages_compacted": len(turns),
-                    "tokens_before": sum(turn.token_count for turn in span.turns),
-                    "tokens_after": span.summary.token_count,
-                }))
+                self.event_bus.emit(
+                    Event(
+                        event_type=EventType.MESSAGE_PROMOTED_TO_OLD_GEN,
+                        data={
+                            "session_id": session_id,
+                            "source_turn_indices": turns,
+                            "messages_compacted": len(turns),
+                            "tokens_before": sum(turn.token_count for turn in span.turns),
+                            "tokens_after": span.summary.token_count,
+                        },
+                    )
+                )
             elif span.level in _CONDENSED:
                 filed = sum(1 for entry in applied.filed if entry.message_turn in turns)
                 self._announce_archived(session_id, span, filed, "young")
@@ -761,27 +957,42 @@ class GcService:
                 self._announce_archived(session_id, span, 0, "old")
 
         for entry in applied.filed:
-            self.event_bus.emit(Event(event_type=EventType.KNOWLEDGE_ENTRY_ADDED, data={
-                "session_id": session_id,
-                "message_turn": entry.message_turn,
-                "knowledge_type": entry.knowledge_type.value,
-                "knowledge_status": entry.knowledge_status.value,
-                "speaker": entry.speaker,
-            }))
+            self.event_bus.emit(
+                Event(
+                    event_type=EventType.KNOWLEDGE_ENTRY_ADDED,
+                    data={
+                        "session_id": session_id,
+                        "message_turn": entry.message_turn,
+                        "knowledge_type": entry.knowledge_type.value,
+                        "knowledge_status": entry.knowledge_status.value,
+                        "speaker": entry.speaker,
+                    },
+                )
+            )
         for supersession in applied.supersessions:
-            self.event_bus.emit(Event(event_type=EventType.KNOWLEDGE_ENTRY_SUPERSEDED, data={
-                "session_id": session_id,
-                "message_turn": supersession.new_entry.message_turn,
-                "superseded_turns": [entry.message_turn for entry in supersession.superseded],
-            }))
+            self.event_bus.emit(
+                Event(
+                    event_type=EventType.KNOWLEDGE_ENTRY_SUPERSEDED,
+                    data={
+                        "session_id": session_id,
+                        "message_turn": supersession.new_entry.message_turn,
+                        "superseded_turns": [entry.message_turn for entry in supersession.superseded],
+                    },
+                )
+            )
 
     def _announce_archived(self, session_id: str, span: Span, facts_filed: int, source: str) -> None:
-        self.event_bus.emit(Event(event_type=EventType.MESSAGE_ARCHIVED, data={
-            "session_id": session_id,
-            "source_turn_indices": [turn.turn_index for turn in span.turns],
-            "knowledge_entries_filed": facts_filed,
-            "source_generation": source,
-        }))
+        self.event_bus.emit(
+            Event(
+                event_type=EventType.MESSAGE_ARCHIVED,
+                data={
+                    "session_id": session_id,
+                    "source_turn_indices": [turn.turn_index for turn in span.turns],
+                    "knowledge_entries_filed": facts_filed,
+                    "source_generation": source,
+                },
+            )
+        )
 
     def _record_degradation(
         self, session_id: str, reason: DegradationReason, turn_indices: list[int], err: Exception
@@ -844,9 +1055,14 @@ def _in_order(messages: Sequence[Message]) -> list[Message]:
 
 def _span_of(condensed: Condensed) -> Span:
     """A condensed span's material as a span, at a provisional level until a plan gives it one."""
-    return Span(turns=condensed.turns, level=DetailLevel.KEPT, summary=condensed.summary,
-                summary_text=condensed.summary_text, index_line=condensed.index_line,
-                facts_unread=condensed.facts_error is not None)
+    return Span(
+        turns=condensed.turns,
+        level=DetailLevel.KEPT,
+        summary=condensed.summary,
+        summary_text=condensed.summary_text,
+        index_line=condensed.index_line,
+        facts_unread=condensed.facts_error is not None,
+    )
 
 
 def _still_oldest(young: Sequence[Message], spans: Sequence[Span]) -> list[Span]:
@@ -863,7 +1079,7 @@ def _still_oldest(young: Sequence[Message], spans: Sequence[Span]) -> list[Span]
     for span in spans:
         if span.turns[-1].turn_index < young[0].turn_index:
             continue
-        if tuple(young[position:position + len(span.turns)]) != span.turns:
+        if tuple(young[position : position + len(span.turns)]) != span.turns:
             break
         matched.append(span)
         position += len(span.turns)
@@ -879,13 +1095,23 @@ def _outcome(placed: Sequence[tuple[Span, DetailLevel]], replanned: Sequence[tup
 
     Each older span is paired with its level after the cut; its own `level` is the one before.
     """
+
     def placed_at(level: DetailLevel) -> list[int]:
         return [turn for span, at in placed if at is level for turn in span.turn_indices]
 
     def moved(direction: Callable[[int, int], bool]) -> list[int]:
-        return [turn for span, level in replanned if direction(_RANK[level], _RANK[span.level])
-                for turn in span.turn_indices]
+        return [
+            turn
+            for span, level in replanned
+            if direction(_RANK[level], _RANK[span.level])
+            for turn in span.turn_indices
+        ]
 
-    return CutOutcome(kept=placed_at(DetailLevel.KEPT), compacted=placed_at(DetailLevel.COMPACTED),
-                      archived=placed_at(DetailLevel.ARCHIVED), folded=placed_at(DetailLevel.OUT_OF_VIEW),
-                      lowered=moved(lambda now, was: now < was), raised=moved(lambda now, was: now > was))
+    return CutOutcome(
+        kept=placed_at(DetailLevel.KEPT),
+        compacted=placed_at(DetailLevel.COMPACTED),
+        archived=placed_at(DetailLevel.ARCHIVED),
+        folded=placed_at(DetailLevel.OUT_OF_VIEW),
+        lowered=moved(lambda now, was: now < was),
+        raised=moved(lambda now, was: now > was),
+    )

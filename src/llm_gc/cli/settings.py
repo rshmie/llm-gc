@@ -23,7 +23,16 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 
 import httpx2
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import (
     BaseSettings,
     DotEnvSettingsSource,
@@ -269,8 +278,10 @@ def find_config_file(
             raise ConfigError(f"config file not found: {path} (from {origin})")
         return ConfigLocation(path, origin)
 
-    for path, origin in ((cwd / DEFAULT_CONFIG_FILENAME, "working directory"),
-                         (user_config_path(environ=environ, home=home), "user config")):
+    for path, origin in (
+        (cwd / DEFAULT_CONFIG_FILENAME, "working directory"),
+        (user_config_path(environ=environ, home=home), "user config"),
+    ):
         if path.is_file():
             return ConfigLocation(path, origin)
     return None
@@ -409,10 +420,16 @@ def _describe_unknown_setting(loc: tuple[str, ...]) -> str:
 
 def _setting_sections() -> dict[str, str]:
     """Every setting's key, mapped to the section it belongs in ("" for the top level)."""
-    top = {name: "" for name in ProxySettings.model_fields
-           if name not in ("summary", "engine") and name not in credential_fields()}
-    return {**top, **dict.fromkeys(SummarySettings.model_fields, "summary"),
-            **dict.fromkeys(EngineSettings.model_fields, "engine")}
+    top = {
+        name: ""
+        for name in ProxySettings.model_fields
+        if name not in ("summary", "engine") and name not in credential_fields()
+    }
+    return {
+        **top,
+        **dict.fromkeys(SummarySettings.model_fields, "summary"),
+        **dict.fromkeys(EngineSettings.model_fields, "engine"),
+    }
 
 
 def summary_base_url(settings: ProxySettings) -> str | None:
@@ -446,8 +463,9 @@ def create_summary_provider(settings: ProxySettings) -> LLMProvider:
     )
 
 
-def create_model_window_lookup(settings: ProxySettings, *, http_client: httpx2.AsyncClient | None = None
-                               ) -> WindowLookup | None:
+def create_model_window_lookup(
+    settings: ProxySettings, *, http_client: httpx2.AsyncClient | None = None
+) -> WindowLookup | None:
     """How the proxy asks the upstream for a model's context window: with LLM-GC's own Anthropic
     credential, when it has one. None without one, and every recap is sized for the configured window.
 
@@ -457,8 +475,9 @@ def create_model_window_lookup(settings: ProxySettings, *, http_client: httpx2.A
     api_key, auth_token = _reveal(settings.anthropic_api_key), _reveal(settings.anthropic_auth_token)
     if not (api_key or auth_token):
         return None
-    client = AnthropicClient(api_key=api_key, auth_token=auth_token, base_url=settings.upstream,
-                             http_client=http_client)
+    client = AnthropicClient(
+        api_key=api_key, auth_token=auth_token, base_url=settings.upstream, http_client=http_client
+    )
     return lambda model: client.context_window(model, timeout_s=MODEL_WINDOW_TIMEOUT_S)
 
 

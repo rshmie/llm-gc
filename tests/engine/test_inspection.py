@@ -37,17 +37,29 @@ SUMMARY = LLMResponse(
 
 def _build(**overrides) -> GcService:
     """The real engine graph, scaled so collections happen within a short conversation."""
-    config = GCConfig(**{"context_window": 700, "keep_threshold": 0.55, "archive_threshold": 0.25,
-                         "last_n_turns_to_keep": 3, "min_cut_tokens": 60, **overrides})
-    return build_gc_service(config, summary_provider=FakeProvider(responses=[SUMMARY] * 400),
-                            fact_reader=PatternFactReader())
+    config = GCConfig(
+        **{
+            "context_window": 700,
+            "keep_threshold": 0.55,
+            "archive_threshold": 0.25,
+            "last_n_turns_to_keep": 3,
+            "min_cut_tokens": 60,
+            **overrides,
+        }
+    )
+    return build_gc_service(
+        config, summary_provider=FakeProvider(responses=[SUMMARY] * 400), fact_reader=PatternFactReader()
+    )
 
 
 def _turn(index: int) -> Message:
-    text = (f"the topic{index % 8} is version {index} and we walked through the implications "
-            f"for throughput and retention at some length this morning.")
-    return Message(role="user" if index % 2 == 0 else "assistant", content=text,
-                   token_count=count_tokens(text), turn_index=index)
+    text = (
+        f"the topic{index % 8} is version {index} and we walked through the implications "
+        f"for throughput and retention at some length this morning."
+    )
+    return Message(
+        role="user" if index % 2 == 0 else "assistant", content=text, token_count=count_tokens(text), turn_index=index
+    )
 
 
 def _record(service: GcService, index: int) -> None:
@@ -93,15 +105,19 @@ class TestCoverage:
         assert sorted(turn.turn_index for turn in held) == list(range(80))
         assert all(turn == _turn(turn.turn_index) for turn in held)
         condensed = (DetailLevel.ARCHIVED, DetailLevel.OUT_OF_VIEW)
-        assert any(span.level in condensed and len(span.turns) > 1 for span in snapshot.old), \
+        assert any(span.level in condensed and len(span.turns) > 1 for span in snapshot.old), (
             "over 80 turns on a small budget some span has been archived or folded, and still holds every turn"
+        )
 
     def test_cuts_are_counted_when_committed_not_when_attempted(self):
         service = _build()
         finished = _converse(service, 30)
 
-        committed = sum(1 for event in finished if event.data["report"].status is GCStatus.COMPLETED
-                        and event.data["report"].tokens_saved > 0)
+        committed = sum(
+            1
+            for event in finished
+            if event.data["report"].status is GCStatus.COMPLETED and event.data["report"].tokens_saved > 0
+        )
         assert _snapshot(service).cut_count == committed > 0
         assert len(finished) > committed, "most passes find no batch worth a cut"
 
@@ -162,11 +178,22 @@ class TestLookingAgainReadsNothingAgain:
         async def scenario() -> None:
             for index in range(30):
                 # Words of this test's own: the count cache is shared by the whole run.
-                text = (f"second look {index}: the topic{index % 8} is version {index}, and we walked "
-                        f"through what it means for throughput and retention at some length.")
-                service.gc_record(SESSION, [Message(role="user" if index % 2 == 0 else "assistant", content=text,
-                                                    token_count=count_tokens(text), turn_index=index)],
-                                  [f"second-look-{index}"])
+                text = (
+                    f"second look {index}: the topic{index % 8} is version {index}, and we walked "
+                    f"through what it means for throughput and retention at some length."
+                )
+                service.gc_record(
+                    SESSION,
+                    [
+                        Message(
+                            role="user" if index % 2 == 0 else "assistant",
+                            content=text,
+                            token_count=count_tokens(text),
+                            turn_index=index,
+                        )
+                    ],
+                    [f"second-look-{index}"],
+                )
                 await collect(service, SESSION)
 
         asyncio.run(scenario())
@@ -247,16 +274,33 @@ class TestTheViewIsTheEngine:
         or stored-only, so the facts the front reports must be precisely the ones
         whose text the model receives."""
         service = _build()
-        facts = tuple(KnowledgeEntry(message_turn=i, content=f"value{i}x{i}", topic_label=f"subject{i}",
-                                     knowledge_type=KnowledgeType.DECISION) for i in range(4))
-        archived = Span(turns=(Message(role="user", content="first", token_count=1, turn_index=0),
-                               Message(role="assistant", content="second", token_count=1, turn_index=1)),
-                        level=DetailLevel.ARCHIVED, index_line="first")
-        kept = Span(turns=(Message(role="user", content="third", token_count=1, turn_index=2),
-                           Message(role="assistant", content="fourth", token_count=1, turn_index=3)),
-                    level=DetailLevel.KEPT)
-        service.session_manager.get_or_create(SESSION).snapshot = GenerationSnapshot(old=(archived, kept),
-                                                                                    knowledge=facts)
+        facts = tuple(
+            KnowledgeEntry(
+                message_turn=i,
+                content=f"value{i}x{i}",
+                topic_label=f"subject{i}",
+                knowledge_type=KnowledgeType.DECISION,
+            )
+            for i in range(4)
+        )
+        archived = Span(
+            turns=(
+                Message(role="user", content="first", token_count=1, turn_index=0),
+                Message(role="assistant", content="second", token_count=1, turn_index=1),
+            ),
+            level=DetailLevel.ARCHIVED,
+            index_line="first",
+        )
+        kept = Span(
+            turns=(
+                Message(role="user", content="third", token_count=1, turn_index=2),
+                Message(role="assistant", content="fourth", token_count=1, turn_index=3),
+            ),
+            level=DetailLevel.KEPT,
+        )
+        service.session_manager.get_or_create(SESSION).snapshot = GenerationSnapshot(
+            old=(archived, kept), knowledge=facts
+        )
 
         front = service.inspect(SESSION).front
 

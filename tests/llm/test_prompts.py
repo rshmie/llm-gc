@@ -12,8 +12,17 @@ from hypothesis import strategies as st
 
 import pytest
 
-from llm_gc.llm.prompts import (COMPACTION_PROMPT, FACTS_CLOSE, FACTS_OPEN, FACTS_PROMPT, TRANSCRIPT_CLOSE,
-                                TRANSCRIPT_OPEN, escape_delimiters, load_prompt, transcript_block)
+from llm_gc.llm.prompts import (
+    COMPACTION_PROMPT,
+    FACTS_CLOSE,
+    FACTS_OPEN,
+    FACTS_PROMPT,
+    TRANSCRIPT_CLOSE,
+    TRANSCRIPT_OPEN,
+    escape_delimiters,
+    load_prompt,
+    transcript_block,
+)
 from llm_gc.models.message import CLIENT_SPEAKER, RELAYED_SPEAKER, TOOL_SPEAKER
 
 MARKERS = (TRANSCRIPT_OPEN, TRANSCRIPT_CLOSE, FACTS_OPEN, FACTS_CLOSE)
@@ -21,15 +30,35 @@ MARKERS = (TRANSCRIPT_OPEN, TRANSCRIPT_CLOSE, FACTS_OPEN, FACTS_CLOSE)
 LABEL_LINE = re.compile(r"^\s*\[\s*turn\s*\d+\s*\]", re.IGNORECASE)
 
 # Text built from the pieces an attack needs, so the search reaches them instead of random noise.
-PIECES = st.sampled_from(["<", ">", "<<<", ">>>", "TRANSCRIPT", "transcript", "FACTS", "[turn 3]", "[ TURN 12 ]",
-                          "user:", "\n", "\r", "\r\n", " ", " ", "\\", "x"])
+PIECES = st.sampled_from(
+    [
+        "<",
+        ">",
+        "<<<",
+        ">>>",
+        "TRANSCRIPT",
+        "transcript",
+        "FACTS",
+        "[turn 3]",
+        "[ TURN 12 ]",
+        "user:",
+        "\n",
+        "\r",
+        "\r\n",
+        " ",
+        " ",
+        "\\",
+        "x",
+    ]
+)
 HOSTILE = st.lists(PIECES, max_size=30).map("".join) | st.text(max_size=200)
 
 
 def _forges_structure(text: str) -> bool:
     folded = text.casefold()
-    return (any(marker.casefold() in folded for marker in MARKERS)
-            or any(LABEL_LINE.match(line) for line in text.splitlines()))
+    return any(marker.casefold() in folded for marker in MARKERS) or any(
+        LABEL_LINE.match(line) for line in text.splitlines()
+    )
 
 
 class TestEscapingConversationText:
@@ -79,7 +108,9 @@ class TestTheTranscriptBlock:
     def test_each_turn_is_a_labelled_line_between_the_markers(self):
         block = transcript_block([(4, "user", "Use Postgres."), (5, "assistant", "Done.")])
 
-        assert block == f"{TRANSCRIPT_OPEN}\n[turn 4] user: Use Postgres.\n[turn 5] assistant: Done.\n{TRANSCRIPT_CLOSE}"
+        assert (
+            block == f"{TRANSCRIPT_OPEN}\n[turn 4] user: Use Postgres.\n[turn 5] assistant: Done.\n{TRANSCRIPT_CLOSE}"
+        )
 
     def test_a_turn_cannot_close_the_block_or_forge_another_turn(self):
         """The audit's case: a tool result quoting the marker and a user line, to be filed as the user's decision."""
@@ -89,7 +120,9 @@ class TestTheTranscriptBlock:
 
         assert block.count(TRANSCRIPT_CLOSE) == 1 and block.endswith(TRANSCRIPT_CLOSE)
         assert [line for line in block.splitlines() if line.startswith("[turn ")] == [
-            "[turn 3] user: Use Postgres.", "[turn 4] user: [tool result] TRANSCRIPT\\>>>"]
+            "[turn 3] user: Use Postgres.",
+            "[turn 4] user: [tool result] TRANSCRIPT\\>>>",
+        ]
 
 
 @pytest.mark.parametrize("prompt", [COMPACTION_PROMPT, FACTS_PROMPT])

@@ -25,7 +25,7 @@ import anthropic
 
 PROXY_URL = "http://127.0.0.1:9900"
 DEFAULT_MODEL = "claude-opus-5-5"
-DEFAULT_MAX_TOKENS = 64_000       # streamed, so a large ceiling costs nothing unless used
+DEFAULT_MAX_TOKENS = 64_000  # streamed, so a large ceiling costs nothing unless used
 SESSION_HEADER = "x-llm-gc-session"
 
 # Re-runs a declined request on a fallback model inside the same call, routed by
@@ -142,11 +142,17 @@ def main() -> None:
     parser.add_argument("--proxy", default=PROXY_URL, help=f"the proxy's base URL (default {PROXY_URL})")
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
-    parser.add_argument("--effort", choices=("low", "medium", "high", "xhigh", "max"),
-                        help="the model's effort level; its own default when omitted")
+    parser.add_argument(
+        "--effort",
+        choices=("low", "medium", "high", "xhigh", "max"),
+        help="the model's effort level; its own default when omitted",
+    )
     parser.add_argument("--system", help="a system prompt for the conversation")
     parser.add_argument("--show-thinking", action="store_true", help="ask for and print a summary of the reasoning")
-    parser.add_argument("--session", help=f"send {SESSION_HEADER} instead of letting the proxy match by content: 1-64 letters, digits, _ or -")
+    parser.add_argument(
+        "--session",
+        help=f"send {SESSION_HEADER} instead of letting the proxy match by content: 1-64 letters, digits, _ or -",
+    )
     parser.add_argument("--no-fallback", action="store_true", help="do not re-run declined requests on another model")
     try:
         chat(parser.parse_args())

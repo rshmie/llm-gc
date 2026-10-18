@@ -22,13 +22,16 @@ KEPT, COMPACTED, ARCHIVED, OUT = DetailLevel.KEPT, DetailLevel.COMPACTED, Detail
 
 
 def _span(first: int, level: DetailLevel, opening: str = "We will use postgres.") -> Span:
-    turns = (Message(role="user", content=f"{opening} It handles the ingest load.", token_count=12, turn_index=first),
-             Message(role="assistant", content="Agreed; postgres with two replicas.", token_count=8,
-                     turn_index=first + 1))
-    summary = Message(role="assistant", content="[marker] Postgres was chosen for ingest.", token_count=9,
-                      turn_index=first)
-    return Span(turns=turns, level=level, summary=summary, summary_text="Postgres was chosen for ingest.",
-                index_line=opening)
+    turns = (
+        Message(role="user", content=f"{opening} It handles the ingest load.", token_count=12, turn_index=first),
+        Message(role="assistant", content="Agreed; postgres with two replicas.", token_count=8, turn_index=first + 1),
+    )
+    summary = Message(
+        role="assistant", content="[marker] Postgres was chosen for ingest.", token_count=9, turn_index=first
+    )
+    return Span(
+        turns=turns, level=level, summary=summary, summary_text="Postgres was chosen for ingest.", index_line=opening
+    )
 
 
 def _fact(turn: int, content: str, topic: str = "database") -> KnowledgeEntry:
@@ -46,8 +49,10 @@ class TestLevelsAreNested:
         summarised = span_text(_span(0, COMPACTED), self.annotations)
 
         assert archived == f"{ARCHIVED_PREFIX} (turns 0–1) We will use postgres. · database: postgres"
-        assert summarised == (f"{SUMMARISED_PREFIX} (turns 0–1) We will use postgres. · database: postgres\n"
-                              "Postgres was chosen for ingest.")
+        assert summarised == (
+            f"{SUMMARISED_PREFIX} (turns 0–1) We will use postgres. · database: postgres\n"
+            "Postgres was chosen for ingest."
+        )
 
     def test_a_kept_span_shows_every_word_of_its_turns(self):
         span = _span(0, KEPT)
@@ -57,8 +62,13 @@ class TestLevelsAreNested:
         assert all(turn.content in kept for turn in span.turns)
 
     def test_a_quoted_tool_result_is_named_as_the_tools(self):
-        result = Message(role="user", content="[tool result] 42 passed", token_count=6, turn_index=4,
-                         raw_content=[{"type": "tool_result", "tool_use_id": "t1", "content": "42 passed"}])
+        result = Message(
+            role="user",
+            content="[tool result] 42 passed",
+            token_count=6,
+            turn_index=4,
+            raw_content=[{"type": "tool_result", "tool_use_id": "t1", "content": "42 passed"}],
+        )
         kept = span_text(Span(turns=(result,), level=KEPT), Annotations())
 
         assert kept == f"{QUOTE_PREFIX} (turn 4, tool results) [tool result] 42 passed"

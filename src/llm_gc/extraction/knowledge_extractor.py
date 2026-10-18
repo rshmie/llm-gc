@@ -36,13 +36,63 @@ _TOPIC = r"(?P<topic>\w+(?:[\s-]+\w+){0,3})"
 # or `that` names nothing retrievable later, and its label can never be matched for
 # supersession. Rejecting the match files nothing, and the turn itself is kept in
 # its span.
-_TOPIC_STOPWORDS = frozenset({
-    "a", "an", "the", "this", "that", "these", "those", "it", "its", "they", "them", "their",
-    "we", "our", "ours", "you", "your", "i", "my", "me", "he", "she", "him", "her", "his",
-    "what", "which", "who", "whom", "whose", "where", "when", "why", "how",
-    "there", "here", "something", "anything", "nothing", "everything", "one", "ones",
-    "and", "but", "or", "so", "if", "then", "also", "both", "all", "some", "any",
-})
+_TOPIC_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "this",
+        "that",
+        "these",
+        "those",
+        "it",
+        "its",
+        "they",
+        "them",
+        "their",
+        "we",
+        "our",
+        "ours",
+        "you",
+        "your",
+        "i",
+        "my",
+        "me",
+        "he",
+        "she",
+        "him",
+        "her",
+        "his",
+        "what",
+        "which",
+        "who",
+        "whom",
+        "whose",
+        "where",
+        "when",
+        "why",
+        "how",
+        "there",
+        "here",
+        "something",
+        "anything",
+        "nothing",
+        "everything",
+        "one",
+        "ones",
+        "and",
+        "but",
+        "or",
+        "so",
+        "if",
+        "then",
+        "also",
+        "both",
+        "all",
+        "some",
+        "any",
+    }
+)
 
 # Dropped from the front of a topic, so "for the database" and "the database is"
 # file under one label: supersession compares labels exactly.
@@ -78,7 +128,7 @@ class Reading:
     """What the extractor made of one turn."""
 
     entries: list[KnowledgeEntry]
-    unread: str   # the sentences that yielded nothing, as written; empty when none did
+    unread: str  # the sentences that yielded nothing, as written; empty when none did
 
 
 class KnowledgeExtractor:
@@ -166,7 +216,7 @@ class KnowledgeExtractor:
         if topic_label is None:
             return None
         if match.start("topic") > match.start("content") and _COMPOUND.search(content):
-            topic_label = GENERAL_TOPIC   # the trailing topic names only the last of several things
+            topic_label = GENERAL_TOPIC  # the trailing topic names only the last of several things
 
         return KnowledgeEntry(
             message_turn=message_turn,

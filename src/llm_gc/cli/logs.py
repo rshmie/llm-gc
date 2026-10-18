@@ -22,8 +22,7 @@ _TEXT_TIME_FORMAT = "%H:%M:%S"
 
 # The attributes every record has. Any other attribute came from `extra`, which the JSON format
 # writes out as fields; the text format shows only the message.
-_RECORD_ATTRIBUTES = frozenset(vars(logging.makeLogRecord({}))) | {"message", "asctime", "request_id",
-                                                                   "request_tag"}
+_RECORD_ATTRIBUTES = frozenset(vars(logging.makeLogRecord({}))) | {"message", "asctime", "request_id", "request_tag"}
 
 
 def configure_logging(level: str, log_format: LogFormat) -> None:
@@ -77,8 +76,9 @@ class JsonFormatter(logging.Formatter):
             "request_id": getattr(record, "request_id", None),
         }
         # The `extra` fields follow the line's own, and never replace one.
-        entry.update((key, value) for key, value in vars(record).items()
-                     if key not in _RECORD_ATTRIBUTES and key not in entry)
+        entry.update(
+            (key, value) for key, value in vars(record).items() if key not in _RECORD_ATTRIBUTES and key not in entry
+        )
         if record.exc_info:
             entry["exception"] = self.formatException(record.exc_info)
         # default=str: an `extra` value JSON has no type for, such as an enum, is written as its text

@@ -30,10 +30,18 @@ CONFIG = GCConfig(context_window=200_000, min_cut_tokens=300, last_n_turns_to_ke
 
 
 def _run(summary_provider=None, model_transport=None) -> Run:
-    return asyncio.run(run_conversation(
-        CONVERSATION, config=CONFIG, summary_provider=summary_provider or rehearsal_summaries(),
-        fact_reader=rehearsal_facts(), model_transport=model_transport or rehearsal_model(CONVERSATION),
-        api_key="rehearsal", model="claude-opus-5-5", effort="medium"))
+    return asyncio.run(
+        run_conversation(
+            CONVERSATION,
+            config=CONFIG,
+            summary_provider=summary_provider or rehearsal_summaries(),
+            fact_reader=rehearsal_facts(),
+            model_transport=model_transport or rehearsal_model(CONVERSATION),
+            api_key="rehearsal",
+            model="claude-opus-5-5",
+            effort="medium",
+        )
+    )
 
 
 class TestARehearsedRun:
@@ -48,7 +56,7 @@ class TestARehearsedRun:
 
         _run(model_transport=lambda: httpx2.MockTransport(counting))
 
-        assert len(calls) == 2   # once through LLM-GC, once sent whole
+        assert len(calls) == 2  # once through LLM-GC, once sent whole
         assert all(messages[-1]["content"].startswith("Answer each question") for messages in calls)
 
     def test_it_cuts_and_sends_the_model_less_than_the_whole_conversation(self):
@@ -67,8 +75,9 @@ class TestARehearsedRun:
         assert all(result.without_gc is Verdict.RIGHT for result in results)
 
     def test_a_refused_summary_is_reported_not_hidden(self):
-        truncated = LLMResponse(text="partial", stop_reason=StopReason.TRUNCATED, input_tokens=0, output_tokens=1,
-                                model="m", provider="p")
+        truncated = LLMResponse(
+            text="partial", stop_reason=StopReason.TRUNCATED, input_tokens=0, output_tokens=1, model="m", provider="p"
+        )
         run = _run(summary_provider=FakeProvider(responses=[truncated] * 50))
 
         assert any(degradation.startswith("compaction_refused: ") for degradation in run.degradations)
@@ -79,17 +88,26 @@ class TestOneEngineForARun:
     def test_each_conversation_keeps_its_own_session_and_degradations(self):
         """One engine serves a run so a dashboard can show it; its bus is shared, so a
         conversation's warnings must not leak into another's, already returned, report."""
-        truncated = LLMResponse(text="partial", stop_reason=StopReason.TRUNCATED, input_tokens=0, output_tokens=1,
-                                model="m", provider="p")
+        truncated = LLMResponse(
+            text="partial", stop_reason=StopReason.TRUNCATED, input_tokens=0, output_tokens=1, model="m", provider="p"
+        )
         provider = FakeProvider(responses=[truncated] * 200)
         service = build_gc_service(CONFIG, summary_provider=provider)
         first, second = load_conversations()[:2]
 
         def run(conversation):
-            return asyncio.run(run_conversation(
-                conversation, config=CONFIG, summary_provider=provider, service=service,
-                model_transport=rehearsal_model(conversation), api_key="rehearsal",
-                model="claude-opus-5-5", effort="medium"))
+            return asyncio.run(
+                run_conversation(
+                    conversation,
+                    config=CONFIG,
+                    summary_provider=provider,
+                    service=service,
+                    model_transport=rehearsal_model(conversation),
+                    api_key="rehearsal",
+                    model="claude-opus-5-5",
+                    effort="medium",
+                )
+            )
 
         earlier = run(first)
         before = list(earlier.degradations)
@@ -102,8 +120,10 @@ class TestOneEngineForARun:
 
 class TestTotals:
     def test_right_only_with_gc_is_not_a_loss(self):
-        results = [_result(with_gc=Verdict.RIGHT, without_gc=Verdict.WRONG),
-                   _result(with_gc=Verdict.UNKNOWN, without_gc=Verdict.RIGHT, presence=Presence.ABSENT)]
+        results = [
+            _result(with_gc=Verdict.RIGHT, without_gc=Verdict.WRONG),
+            _result(with_gc=Verdict.UNKNOWN, without_gc=Verdict.RIGHT, presence=Presence.ABSENT),
+        ]
 
         counted = totals(results)
 
@@ -111,8 +131,10 @@ class TestTotals:
         assert counted["right_with_gc"] == counted["right_without_gc"] == 1
 
     def test_present_but_missed_counts_only_answers_that_were_in_the_prompt(self):
-        results = [_result(with_gc=Verdict.WRONG, presence=Presence.CONDENSED),
-                   _result(with_gc=Verdict.UNKNOWN, presence=Presence.ABSENT)]
+        results = [
+            _result(with_gc=Verdict.WRONG, presence=Presence.CONDENSED),
+            _result(with_gc=Verdict.UNKNOWN, presence=Presence.ABSENT),
+        ]
 
         counted = totals(results)
 
@@ -122,7 +144,7 @@ class TestTotals:
 
 def test_a_question_left_unanswered_is_graded_missing():
     run = _run()
-    reply = "\n".join(run.with_gc.text.splitlines()[:-1])   # drop the last numbered line
+    reply = "\n".join(run.with_gc.text.splitlines()[:-1])  # drop the last numbered line
     truncated = Run(**{**run.__dict__, "with_gc": Answer(text=reply, input_tokens=0, stop_reason="max_tokens")})
 
     assert grade_run(truncated)[-1].with_gc is Verdict.MISSING
@@ -136,37 +158,69 @@ def test_a_live_run_without_a_key_refuses_to_start(monkeypatch):
         cli.main()
 
 
-def _result(*, with_gc: Verdict, without_gc: Verdict = Verdict.RIGHT,
-            presence: Presence = Presence.VERBATIM) -> ProbeResult:
-    return ProbeResult(probe="p", presence=presence, with_gc=with_gc, without_gc=without_gc,
-                       answer_with_gc=None, answer_without_gc=None)
+def _result(
+    *, with_gc: Verdict, without_gc: Verdict = Verdict.RIGHT, presence: Presence = Presence.VERBATIM
+) -> ProbeResult:
+    return ProbeResult(
+        probe="p",
+        presence=presence,
+        with_gc=with_gc,
+        without_gc=without_gc,
+        answer_with_gc=None,
+        answer_without_gc=None,
+    )
 
 
 def test_a_run_says_what_it_is_doing_at_each_step():
     """A long conversation plays for minutes; without steps the run looks stuck."""
     steps = []
-    asyncio.run(run_conversation(
-        CONVERSATION, config=CONFIG, summary_provider=rehearsal_summaries(), fact_reader=rehearsal_facts(),
-        model_transport=rehearsal_model(CONVERSATION), api_key="rehearsal", model="claude-opus-5-5",
-        effort="medium", on_step=steps.append))
+    asyncio.run(
+        run_conversation(
+            CONVERSATION,
+            config=CONFIG,
+            summary_provider=rehearsal_summaries(),
+            fact_reader=rehearsal_facts(),
+            model_transport=rehearsal_model(CONVERSATION),
+            api_key="rehearsal",
+            model="claude-opus-5-5",
+            effort="medium",
+            on_step=steps.append,
+        )
+    )
 
     assert steps[0] == f"turn 1/{len(CONVERSATION.turns)} · 0 collections so far"
     assert steps[-2:] == ["asking the questions through LLM-GC", "asking them with the whole conversation"]
-    assert any(not step.endswith(" 0 collections so far") for step in steps if step.startswith("turn")), \
+    assert any(not step.endswith(" 0 collections so far") for step in steps if step.startswith("turn")), (
         "the collection count moves as the conversation plays"
+    )
 
 
 def test_a_failed_conversation_is_reported_and_the_others_still_count(monkeypatch):
     """One provider error used to end the run and discard every conversation already paid for."""
-    rejecting = httpx2.Response(400, json={"type": "error", "error": {"type": "invalid_request_error",
-                                                                      "message": "rejected for the test"}})
+    rejecting = httpx2.Response(
+        400, json={"type": "error", "error": {"type": "invalid_request_error", "message": "rejected for the test"}}
+    )
     real = cli.rehearsal_model
-    monkeypatch.setattr(cli, "rehearsal_model", lambda conversation: (
-        (lambda: httpx2.MockTransport(lambda request: rejecting)) if conversation.id == "clinic-booking"
-        else real(conversation)))
-    args = argparse.Namespace(rehearse=True, model="claude-opus-5-5", effort="medium", min_cut_tokens=300,
-                              keep_last=5, conversation=["ingest-service", "clinic-booking"], dashboard=False,
-                              dashboard_port=0, out=None)
+    monkeypatch.setattr(
+        cli,
+        "rehearsal_model",
+        lambda conversation: (
+            (lambda: httpx2.MockTransport(lambda request: rejecting))
+            if conversation.id == "clinic-booking"
+            else real(conversation)
+        ),
+    )
+    args = argparse.Namespace(
+        rehearse=True,
+        model="claude-opus-5-5",
+        effort="medium",
+        min_cut_tokens=300,
+        keep_last=5,
+        conversation=["ingest-service", "clinic-booking"],
+        dashboard=False,
+        dashboard_port=0,
+        out=None,
+    )
     published = []
 
     asyncio.run(cli.check(args, None, published.append))

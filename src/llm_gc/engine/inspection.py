@@ -35,11 +35,11 @@ class CutPreview:
     context, which only real summaries can show.
     """
 
-    turns: tuple[int, ...]               # the verbatim turns the collection would take, in order
-    spans: tuple[tuple[int, ...], ...]   # those turns, as the spans the collection would make of them
-    levels: Mapping[int, DetailLevel]    # each of those turns: the level its span would be shown at
-    scores: Mapping[int, float]          # each of those turns: its span's score
-    compactable_tokens: int              # tokens of those turns the plan would not keep word for word
+    turns: tuple[int, ...]  # the verbatim turns the collection would take, in order
+    spans: tuple[tuple[int, ...], ...]  # those turns, as the spans the collection would make of them
+    levels: Mapping[int, DetailLevel]  # each of those turns: the level its span would be shown at
+    scores: Mapping[int, float]  # each of those turns: its span's score
+    compactable_tokens: int  # tokens of those turns the plan would not keep word for word
     min_cut_tokens: int
     # What the cut would save at estimated summary sizes: the check a collection makes
     # before paying for any summary. Zero or less, and the collection is skipped.
@@ -62,12 +62,12 @@ class SwitchPreview:
     verdict from the one the request path reaches.
     """
 
-    saving_tokens: int          # what its cut removes from the prompt
-    rewritten_tokens: int       # what the provider would cache again: the front it renders plus the tail now
-    stale_tokens: int           # what its turns the plan condenses add up to
-    stale_bound_tokens: int     # the most stale weight the model may carry
-    min_saving_share: float     # when warm, how many times `rewritten_tokens` the saving must be
-    cache: CacheState           # the state it was decided for
+    saving_tokens: int  # what its cut removes from the prompt
+    rewritten_tokens: int  # what the provider would cache again: the front it renders plus the tail now
+    stale_tokens: int  # what its turns the plan condenses add up to
+    stale_bound_tokens: int  # the most stale weight the model may carry
+    min_saving_share: float  # when warm, how many times `rewritten_tokens` the saving must be
+    cache: CacheState  # the state it was decided for
     decision: SwitchDecision
     # Estimates included in the measures above: the thinking a switch stops sending (in `saving_tokens`),
     # and the thinking of the turns its cut condenses (in `stale_tokens`).
@@ -88,13 +88,13 @@ class SessionInspection:
     next_cut: CutPreview
     aging_in_flight: bool
     last_activity: datetime
-    context_window: int       # the window the recap is sized for, in the model's tokens
-    recap_budget: int         # in LLM-GC's count: the window's share, converted at `token_rate`
+    context_window: int  # the window the recap is sized for, in the model's tokens
+    recap_budget: int  # in LLM-GC's count: the window's share, converted at `token_rate`
     collection_enabled: bool  # False: recorded and shown, never collected, so no collection is forecast
-    staged: SwitchPreview | None = None   # set while a prepared cut waits to be switched in
-    token_rate: float | None = None       # the model's tokens per LLM-GC token; None until a reply measures it
-    window_in_own_count: int = 0          # the window converted at `token_rate`: what the budgets are shares of
-    thinking_tokens: int = 0              # estimated thinking the next request sends on top of `context_tokens`
+    staged: SwitchPreview | None = None  # set while a prepared cut waits to be switched in
+    token_rate: float | None = None  # the model's tokens per LLM-GC token; None until a reply measures it
+    window_in_own_count: int = 0  # the window converted at `token_rate`: what the budgets are shares of
+    thinking_tokens: int = 0  # estimated thinking the next request sends on top of `context_tokens`
 
     @property
     def context(self) -> list[Message]:

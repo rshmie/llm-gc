@@ -18,47 +18,99 @@ URL = "http://127.0.0.1:9900/stats"
 
 
 def _traffic(requests=0, sent=0, forwarded=0, rate=None, **provider) -> dict:
-    usage = {"replies": 0, "input_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
-             "output_tokens": 0, **provider}
-    last = None if rate is None else {"tokens_forwarded": 1_000, "provider_prompt_tokens": round(1_000 * rate),
-                                      "token_rate": rate}
-    return {"requests": requests, "tokens_from_client": sent, "tokens_forwarded": forwarded,
-            "tokens_saved": sent - forwarded, "provider": usage, "collection_cache_write_tokens": 0,
-            "summaries": {"calls": 0, "input_tokens": 0, "output_tokens": 0}, "last_reply": last}
+    usage = {
+        "replies": 0,
+        "input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 0,
+        **provider,
+    }
+    last = (
+        None
+        if rate is None
+        else {"tokens_forwarded": 1_000, "provider_prompt_tokens": round(1_000 * rate), "token_rate": rate}
+    )
+    return {
+        "requests": requests,
+        "tokens_from_client": sent,
+        "tokens_forwarded": forwarded,
+        "tokens_saved": sent - forwarded,
+        "provider": usage,
+        "collection_cache_write_tokens": 0,
+        "summaries": {"calls": 0, "input_tokens": 0, "output_tokens": 0},
+        "last_reply": last,
+    }
 
 
-def _conversation(conversation_id, part, agent=None, window=(1_000_000, True), collections=0, not_sent=0,
-                  **traffic) -> dict:
-    return {"conversation_id": conversation_id, "agent": agent, "model": "claude-opus-5-5",
-            "context_window": {"tokens": window[0], "reported": window[1]},
-            "first_request_at": "2026-10-13T10:56:00+00:00", "last_request_at": "2026-10-13T11:20:00+00:00",
-            "collections": collections, "collections_not_yet_sent": not_sent, "traffic": _traffic(**traffic),
-            "part": part}
+def _conversation(
+    conversation_id, part, agent=None, window=(1_000_000, True), collections=0, not_sent=0, **traffic
+) -> dict:
+    return {
+        "conversation_id": conversation_id,
+        "agent": agent,
+        "model": "claude-opus-5-5",
+        "context_window": {"tokens": window[0], "reported": window[1]},
+        "first_request_at": "2026-10-13T10:56:00+00:00",
+        "last_request_at": "2026-10-13T11:20:00+00:00",
+        "collections": collections,
+        "collections_not_yet_sent": not_sent,
+        "traffic": _traffic(**traffic),
+        "part": part,
+    }
 
 
 def _counters(**overrides) -> dict:
-    base = {"requests": 12, "gc_applied": 11, "gc_bypassed": 1, "tokens_from_client": 21_666,
-            "tokens_forwarded": 4_310, "tokens_saved": 17_356, "history_rewinds": 0, "history_restarts": 1,
-            "sessions_seeded": 0, "rewrites_refused": 0, "ratio": 0.199,
-            "provider_usage": {"replies": 12, "input_tokens": 120, "cache_read_input_tokens": 40_000,
-                               "cache_creation_input_tokens": 6_000, "output_tokens": 2_500},
-            "collection_cache_write_tokens": 0,
-            "summaries": {"calls": 3, "input_tokens": 9_400, "output_tokens": 600},
-            "client_sessions": [], "other_conversations": []}
+    base = {
+        "requests": 12,
+        "gc_applied": 11,
+        "gc_bypassed": 1,
+        "tokens_from_client": 21_666,
+        "tokens_forwarded": 4_310,
+        "tokens_saved": 17_356,
+        "history_rewinds": 0,
+        "history_restarts": 1,
+        "sessions_seeded": 0,
+        "rewrites_refused": 0,
+        "ratio": 0.199,
+        "provider_usage": {
+            "replies": 12,
+            "input_tokens": 120,
+            "cache_read_input_tokens": 40_000,
+            "cache_creation_input_tokens": 6_000,
+            "output_tokens": 2_500,
+        },
+        "collection_cache_write_tokens": 0,
+        "summaries": {"calls": 3, "input_tokens": 9_400, "output_tokens": 600},
+        "client_sessions": [],
+        "other_conversations": [],
+    }
     return {**base, **overrides}
 
 
 def _session() -> dict:
-    return {"client_session": "6d84277c-1f0a-4c2e-9b7d-3a5e8c1d2f40",
-            "first_request_at": "2026-10-13T10:56:00+00:00", "last_request_at": "2026-10-13T11:20:00+00:00",
-            "traffic": _traffic(requests=12, sent=21_666, forwarded=16_708),
-            "outside_conversations": _traffic(requests=1, sent=40, forwarded=40),
-            "conversations": [
-                _conversation("s_new", "main", requests=2, sent=3_668, forwarded=3_668),
-                _conversation("s_agent", "subagent", agent="afc5b6eb3c0e4f6a", window=(200_000, False),
-                              collections=1, not_sent=1, requests=5, sent=4_000, forwarded=4_000),
-                _conversation("s_old", "earlier_main", collections=5, requests=4, sent=13_958, forwarded=9_000),
-            ]}
+    return {
+        "client_session": "6d84277c-1f0a-4c2e-9b7d-3a5e8c1d2f40",
+        "first_request_at": "2026-10-13T10:56:00+00:00",
+        "last_request_at": "2026-10-13T11:20:00+00:00",
+        "traffic": _traffic(requests=12, sent=21_666, forwarded=16_708),
+        "outside_conversations": _traffic(requests=1, sent=40, forwarded=40),
+        "conversations": [
+            _conversation("s_new", "main", requests=2, sent=3_668, forwarded=3_668),
+            _conversation(
+                "s_agent",
+                "subagent",
+                agent="afc5b6eb3c0e4f6a",
+                window=(200_000, False),
+                collections=1,
+                not_sent=1,
+                requests=5,
+                sent=4_000,
+                forwarded=4_000,
+            ),
+            _conversation("s_old", "earlier_main", collections=5, requests=4, sent=13_958, forwarded=9_000),
+        ],
+    }
 
 
 def _transport(handler) -> httpx2.MockTransport:
@@ -69,10 +121,22 @@ def test_the_proxys_real_counters_validate_as_proxy_stats():
     """Pins the contract between what the proxy serves and what the CLI reads: a renamed counter fails here."""
     metrics = ProxyMetrics()
     metrics.requests = 2
-    metrics.traffic.record_request(conversation_id=None, origin=ClientOrigin("cc-1"), model="m", opening="h0",
-                                   tokens_from_client=50, tokens_forwarded=50)
-    metrics.traffic.record_request(conversation_id="s_1", origin=ClientOrigin("cc-1"), model="m", opening="h0",
-                                   tokens_from_client=80, tokens_forwarded=60)
+    metrics.traffic.record_request(
+        conversation_id=None,
+        origin=ClientOrigin("cc-1"),
+        model="m",
+        opening="h0",
+        tokens_from_client=50,
+        tokens_forwarded=50,
+    )
+    metrics.traffic.record_request(
+        conversation_id="s_1",
+        origin=ClientOrigin("cc-1"),
+        model="m",
+        opening="h0",
+        tokens_from_client=80,
+        tokens_forwarded=60,
+    )
 
     stats = ProxyStats.model_validate(metrics.as_dict())
 
@@ -118,9 +182,16 @@ def test_what_the_provider_billed_and_what_llm_gc_spent_are_their_own_lines(no_c
     assert "Reported on 12 replies: 120 input, 40,000 cache read, 6,000 cache write, 2,500 output." in output
     assert "3 calls to summarise and read facts: 9,400 tokens in, 600 out." in output
 
-    quiet = _report(provider_usage={"replies": 0, "input_tokens": 0, "cache_read_input_tokens": 0,
-                                    "cache_creation_input_tokens": 0, "output_tokens": 0},
-                    summaries={"calls": 0, "input_tokens": 0, "output_tokens": 0})
+    quiet = _report(
+        provider_usage={
+            "replies": 0,
+            "input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "output_tokens": 0,
+        },
+        summaries={"calls": 0, "input_tokens": 0, "output_tokens": 0},
+    )
     assert "No reply has reported its usage yet." in quiet and "None yet: nothing has been summarised." in quiet
 
 
@@ -141,8 +212,13 @@ def test_shares_round_as_the_dashboard_does_and_a_saving_never_reads_zero(no_col
     session = _session()
     session["traffic"] = _traffic(requests=12, sent=sent, forwarded=sent - saved)
 
-    output = _report(tokens_from_client=sent, tokens_forwarded=sent - saved, tokens_saved=saved,
-                     ratio=round((sent - saved) / sent, 3), client_sessions=[session])
+    output = _report(
+        tokens_from_client=sent,
+        tokens_forwarded=sent - saved,
+        tokens_saved=saved,
+        ratio=round((sent - saved) / sent, 3),
+        client_sessions=[session],
+    )
 
     assert f"{saved:,}  saved ({shown})" in output
     assert f"saved {saved:,} of 1,000,000 ({shown})" in output
@@ -155,8 +231,9 @@ def test_each_client_session_lists_its_conversations_by_their_part(no_color):
     assert any(row.startswith("Claude Code session 6d84277c") and "12 requests" in row for row in rows)
     labels = [row.split("  ")[0] for row in rows if row.startswith(("Main", "Subagent", "Earlier", "Other"))]
     assert labels == ["Main", "Subagent 1 (afc5b6eb)", "Earlier main", "Other requests"]
-    assert any(row.startswith("Subagent 1") and "1 (1 not yet sent)" in row and row.endswith("200k (assumed)")
-               for row in rows)
+    assert any(
+        row.startswith("Subagent 1") and "1 (1 not yet sent)" in row and row.endswith("200k (assumed)") for row in rows
+    )
     assert any(row.startswith("Main") and row.endswith("1M") for row in rows)
     assert "its saving reaches the model with the conversation's next request" in " ".join(output.split())
 
@@ -175,8 +252,9 @@ def test_rewinds_and_restarts_show_only_once_they_have_happened(no_color):
 
 def test_every_total_ends_in_the_same_column(no_color):
     """Right-aligned, so magnitudes compare at a glance: 1,843,210 against 702,115."""
-    output = _report(tokens_from_client=1_843_210, tokens_forwarded=702_115, tokens_saved=1_141_095,
-                     requests=9, history_rewinds=3)
+    output = _report(
+        tokens_from_client=1_843_210, tokens_forwarded=702_115, tokens_saved=1_141_095, requests=9, history_rewinds=3
+    )
     ends = {match.end(1) for line in output.splitlines() if (match := re.search(r"(\d[\d,]*)  \D", line))}
     assert len(ends) == 1 and "1,843,210" in output and "      9  received" in output
 
@@ -187,8 +265,9 @@ def test_a_valid_answer_is_parsed():
 
 
 def test_extra_counters_a_newer_proxy_adds_are_ignored():
-    stats = fetch_proxy_stats(URL, transport=_transport(
-        lambda request: httpx2.Response(200, json=_counters(a_new_counter=5))))
+    stats = fetch_proxy_stats(
+        URL, transport=_transport(lambda request: httpx2.Response(200, json=_counters(a_new_counter=5)))
+    )
     assert stats.requests == 12
 
 

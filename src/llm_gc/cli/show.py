@@ -11,7 +11,11 @@ from typing import Any
 from pydantic import BaseModel
 
 from llm_gc.cli.settings import (
-    ProxySettings, credential_fields, flatten_settings, summary_base_url, summary_model,
+    ProxySettings,
+    credential_fields,
+    flatten_settings,
+    summary_base_url,
+    summary_model,
 )
 from llm_gc.cli.style import style
 
@@ -41,8 +45,10 @@ def render_settings(settings: ProxySettings, origins: Mapping[str, str], *, sour
     longest = max(len(_assignment(name, value)) for name, value in values.items() if value is not None)
     column = min(longest, _MAX_COMMENT_COLUMN) + 2
 
-    lines = [_comment(f"# LLM-GC settings in effect, from {source or 'the built-in defaults'}."),
-             _comment("# The comment beside each value says where it came from.")]
+    lines = [
+        _comment(f"# LLM-GC settings in effect, from {source or 'the built-in defaults'}."),
+        _comment("# The comment beside each value says where it came from."),
+    ]
     section = ""
     for name in names:
         head, _, key = name.rpartition(".")
@@ -70,8 +76,11 @@ def _render_credentials(settings: ProxySettings, origins: Mapping[str, str]) -> 
     needed = settings.summary_credential_names
     # Another vendor's variable is shown only when set: exported for some other tool, it is
     # worth knowing it is not the one in use.
-    shown = [name for name in sorted(field.upper() for field in credential_fields())
-             if name in needed or getattr(settings, name.lower()) is not None]
+    shown = [
+        name
+        for name in sorted(field.upper() for field in credential_fields())
+        if name in needed or getattr(settings, name.lower()) is not None
+    ]
     width = max(len(name) for name in shown) + 3
     lines = [_comment("# LLM-GC's own key, never shown:")]
     for name in shown:
@@ -89,8 +98,12 @@ def _render_credentials(settings: ProxySettings, origins: Mapping[str, str]) -> 
     elif settings.has_summary_credential:
         lines.append(style(f"# ✓ LLM-GC has its own key for {provider}.", fg="green"))
     else:
-        lines.append(style(f"# ! No key for {provider}, so `llm-gc start` will stop. Put one in .env as "
-                           f"{' or '.join(needed)}.", fg="yellow"))
+        lines.append(
+            style(
+                f"# ! No key for {provider}, so `llm-gc start` will stop. Put one in .env as {' or '.join(needed)}.",
+                fg="yellow",
+            )
+        )
     return lines
 
 
@@ -106,10 +119,14 @@ def _what_applies_instead(name: str, settings: ProxySettings) -> str:
 
 def _default_values() -> dict[str, Any]:
     """Every non-secret setting's built-in default, by dotted name."""
-    defaults = {name: field.get_default(call_default_factory=True)
-                for name, field in ProxySettings.model_fields.items() if name not in credential_fields()}
-    return flatten_settings({name: value.model_dump() if isinstance(value, BaseModel) else value
-                             for name, value in defaults.items()})
+    defaults = {
+        name: field.get_default(call_default_factory=True)
+        for name, field in ProxySettings.model_fields.items()
+        if name not in credential_fields()
+    }
+    return flatten_settings(
+        {name: value.model_dump() if isinstance(value, BaseModel) else value for name, value in defaults.items()}
+    )
 
 
 def _assignment(name: str, value: Any) -> str:

@@ -11,13 +11,15 @@ from llm_gc.llm import FakeProvider, LLMResponse, MeteredProvider, StopReason, m
 from llm_gc.models import Message
 from tests.engine.support import COMPACTED_SCORE, collect, make_service, turn
 
-RESPONSE = LLMResponse(text="a summary", stop_reason=StopReason.COMPLETE, input_tokens=40, output_tokens=7,
-                       model="m", provider="fake")
+RESPONSE = LLMResponse(
+    text="a summary", stop_reason=StopReason.COMPLETE, input_tokens=40, output_tokens=7, model="m", provider="fake"
+)
 
 
 def _call(provider: MeteredProvider):
-    return provider.generate(messages=[Message(role="user", content="summarise", turn_index=0)],
-                             max_output_tokens=50, timeout_s=5.0)
+    return provider.generate(
+        messages=[Message(role="user", content="summarise", turn_index=0)], max_output_tokens=50, timeout_s=5.0
+    )
 
 
 def test_a_call_outside_any_measurement_is_answered_and_counted_nowhere():
@@ -70,9 +72,11 @@ def test_a_call_that_raises_adds_nothing():
 def test_a_collection_reports_what_its_own_model_calls_spent():
     summary = turn(0).token_count
     provider = FakeProvider(responses=[RESPONSE] * 20)
-    service, _, _ = make_service(GCConfig(min_cut_tokens=summary, last_n_turns_to_keep=1),
-                                 compactor=LLMCompactor(event_bus=EventBus(), provider=MeteredProvider(provider)),
-                                 default_score=COMPACTED_SCORE)
+    service, _, _ = make_service(
+        GCConfig(min_cut_tokens=summary, last_n_turns_to_keep=1),
+        compactor=LLMCompactor(event_bus=EventBus(), provider=MeteredProvider(provider)),
+        default_score=COMPACTED_SCORE,
+    )
 
     async def scenario():
         results = []

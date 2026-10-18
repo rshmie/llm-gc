@@ -48,8 +48,9 @@ def create_server(app: Any, port: int, log_level: str) -> uvicorn.Server:
     below DEBUG: the banner already names each address, and two servers print every line twice.
     """
     uvicorn_level = "debug" if log_level == "DEBUG" else "warning"
-    return uvicorn.Server(uvicorn.Config(app, host=BIND_HOST, port=port, log_level=uvicorn_level,
-                                         access_log=False, log_config=None))
+    return uvicorn.Server(
+        uvicorn.Config(app, host=BIND_HOST, port=port, log_level=uvicorn_level, access_log=False, log_config=None)
+    )
 
 
 def serve_proxy(service: GcService, settings: ProxySettings, *, http_client: httpx2.AsyncClient | None = None) -> None:
@@ -62,28 +63,49 @@ def serve_proxy(service: GcService, settings: ProxySettings, *, http_client: htt
     """
     # Transcripts are a second copy of every conversation, so they exist only for the dashboard.
     transcripts = TranscriptRecorder() if settings.dashboard else None
-    proxy_app = create_app(service, upstream_base_url=settings.upstream, http_client=http_client,
-                           on_client_history=transcripts.record if transcripts is not None else None,
-                           on_reply=transcripts.record_reply if transcripts is not None else None,
-                           window_lookup=create_model_window_lookup(settings, http_client=http_client),
-                           collect_subagents=settings.collect_subagents,
-                           link_subagents=settings.dashboard)
+    proxy_app = create_app(
+        service,
+        upstream_base_url=settings.upstream,
+        http_client=http_client,
+        on_client_history=transcripts.record if transcripts is not None else None,
+        on_reply=transcripts.record_reply if transcripts is not None else None,
+        window_lookup=create_model_window_lookup(settings, http_client=http_client),
+        collect_subagents=settings.collect_subagents,
+        link_subagents=settings.dashboard,
+    )
     apps = [(proxy_app, settings.port)]
     if transcripts is not None:
         store = service.session_manager.store
         monitor = ContextHealthMonitor(
-            event_bus=service.event_bus, gc_config=settings.engine,
-            read_generations=lambda session_id: (state.snapshot if session_id is not None
-                                                 and (state := store.get(session_id)) is not None else None))
+            event_bus=service.event_bus,
+            gc_config=settings.engine,
+            read_generations=lambda session_id: (
+                state.snapshot if session_id is not None and (state := store.get(session_id)) is not None else None
+            ),
+        )
         metrics = proxy_app.state.metrics
-        def read_trace(client_session: str) -> dict[str, Any] | None:
-            return build_trace(metrics.request_log.records(), client_session,
-                               summaries=metrics.traffic.session_summaries(client_session))
 
-        apps.append((create_dashboard_app(service, monitor, read_proxy_stats=metrics.as_dict, transcripts=transcripts,
-                                          read_trace=read_trace, read_cache=metrics.cache_watch.reading,
-                                          read_tool_round=metrics.request_log.tool_round_open),
-                     settings.dashboard_port))
+        def read_trace(client_session: str) -> dict[str, Any] | None:
+            return build_trace(
+                metrics.request_log.records(),
+                client_session,
+                summaries=metrics.traffic.session_summaries(client_session),
+            )
+
+        apps.append(
+            (
+                create_dashboard_app(
+                    service,
+                    monitor,
+                    read_proxy_stats=metrics.as_dict,
+                    transcripts=transcripts,
+                    read_trace=read_trace,
+                    read_cache=metrics.cache_watch.reading,
+                    read_tool_round=metrics.request_log.tool_round_open,
+                ),
+                settings.dashboard_port,
+            )
+        )
 
     servers = [create_server(app, port, settings.log_level) for app, port in apps]
 

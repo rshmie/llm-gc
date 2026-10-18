@@ -11,6 +11,7 @@ class NoOpCompactor(BaseCompactor):
     This is useful for testing and as a baseline to compare against more
     sophisticated compaction strategies.
     """
+
     COMPACTION_STRATEGY: CompactionStrategy = CompactionStrategy.NOOP
 
     async def compact(self, messages: list[Message]) -> CompactionResult:
@@ -21,15 +22,25 @@ class NoOpCompactor(BaseCompactor):
         marker = self._format_summary_marker(first_turn, last_turn)
         verbatim_content = " ".join(msg.content for msg in messages)
         full_content = f"{marker} {verbatim_content}"
-        summary_message = Message(role="assistant", content=full_content, token_count=count_tokens(full_content), turn_index=first_turn)
-        self.event_bus.emit(Event(event_type=EventType.MESSAGE_COMPACTED,
-                                  data={
-                                      "compaction_strategy": self.COMPACTION_STRATEGY.value,
-                                      "turn_range_start": first_turn,
-                                      "turn_range_end": last_turn,
-                                      "original_token_count": original_token_count,
-                                      "token_count_after_compaction": summary_message.token_count,
-                                      "messages_in_run": len(messages)
-                                  }))
-        return CompactionResult(summary=summary_message, original_token_count=original_token_count,
-                                compaction_strategy=self.COMPACTION_STRATEGY, summary_text=verbatim_content)
+        summary_message = Message(
+            role="assistant", content=full_content, token_count=count_tokens(full_content), turn_index=first_turn
+        )
+        self.event_bus.emit(
+            Event(
+                event_type=EventType.MESSAGE_COMPACTED,
+                data={
+                    "compaction_strategy": self.COMPACTION_STRATEGY.value,
+                    "turn_range_start": first_turn,
+                    "turn_range_end": last_turn,
+                    "original_token_count": original_token_count,
+                    "token_count_after_compaction": summary_message.token_count,
+                    "messages_in_run": len(messages),
+                },
+            )
+        )
+        return CompactionResult(
+            summary=summary_message,
+            original_token_count=original_token_count,
+            compaction_strategy=self.COMPACTION_STRATEGY,
+            summary_text=verbatim_content,
+        )

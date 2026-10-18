@@ -10,14 +10,14 @@ from llm_gc.engine.generations.front import FRONT_HEADER
 
 class Verdict(StrEnum):
     RIGHT = "right"
-    WRONG = "wrong"          # states a value the conversation did not settle on
-    UNKNOWN = "unknown"      # says the conversation does not say
-    UNCLEAR = "unclear"      # names the current value and a replaced one
-    MISSING = "missing"      # no numbered line for this question
+    WRONG = "wrong"  # states a value the conversation did not settle on
+    UNKNOWN = "unknown"  # says the conversation does not say
+    UNCLEAR = "unclear"  # names the current value and a replaced one
+    MISSING = "missing"  # no numbered line for this question
 
 
 class Presence(StrEnum):
-    VERBATIM = "verbatim"    # in a turn the model was sent word for word
+    VERBATIM = "verbatim"  # in a turn the model was sent word for word
     CONDENSED = "condensed"  # only in the condensed block at the start of the prompt
     ABSENT = "absent"
 
@@ -34,9 +34,11 @@ def question_message(probes: Sequence[Probe]) -> str:
     Asked one at a time, each request could trigger a clean-up before the next.
     """
     lines = [f"{number}. {probe.question}" for number, probe in enumerate(probes, start=1)]
-    return ("Answer each question from our conversation above. Give only the current value in a few "
-            "words, one line per question, numbered to match. If the conversation does not say, "
-            "answer \"unknown\".\n\n" + "\n".join(lines))
+    return (
+        "Answer each question from our conversation above. Give only the current value in a few "
+        "words, one line per question, numbered to match. If the conversation does not say, "
+        'answer "unknown".\n\n' + "\n".join(lines)
+    )
 
 
 def split_answers(reply: str, count: int) -> list[str | None]:
@@ -79,8 +81,7 @@ def presence(probe: Probe, forwarded: Sequence[dict]) -> Presence:
     `forwarded` is that request's `messages`; its last message is the questions
     themselves and is not searched.
     """
-    found_in = [message for message in forwarded[:-1]
-                if any(mentions(_text(message), value) for value in probe.accept)]
+    found_in = [message for message in forwarded[:-1] if any(mentions(_text(message), value) for value in probe.accept)]
     if not found_in:
         return Presence.ABSENT
     if all(_text(message).startswith(FRONT_HEADER) for message in found_in):

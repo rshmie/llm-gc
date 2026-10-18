@@ -7,8 +7,15 @@ from datetime import datetime, timedelta, timezone
 
 from llm_gc.llm import ModelUsage
 from llm_gc.models import ClientOrigin
-from llm_gc.proxy.anthropic_translation import (REFUSAL_REASON_MAX_CHARS, ReplyOutline, StreamOutlineReader, ToolCall,
-                                                fixed_prompt_tokens, read_reply, refusal_reason)
+from llm_gc.proxy.anthropic_translation import (
+    REFUSAL_REASON_MAX_CHARS,
+    ReplyOutline,
+    StreamOutlineReader,
+    ToolCall,
+    fixed_prompt_tokens,
+    read_reply,
+    refusal_reason,
+)
 from llm_gc.proxy.traffic import ProviderUsage, TrafficLedger, token_rate
 from llm_gc.utils import count_tokens
 
@@ -31,8 +38,14 @@ def _ledger(**limits) -> TrafficLedger:
 
 
 def _request(ledger, conversation_id, origin=MAIN, opening="h0", sent=100, forwarded=100):
-    return ledger.record_request(conversation_id=conversation_id, origin=origin, model="claude-opus-5-5",
-                                 opening=opening, tokens_from_client=sent, tokens_forwarded=forwarded)
+    return ledger.record_request(
+        conversation_id=conversation_id,
+        origin=origin,
+        model="claude-opus-5-5",
+        opening=opening,
+        tokens_from_client=sent,
+        tokens_forwarded=forwarded,
+    )
 
 
 def _session(ledger, client_session="cc-1") -> dict:
@@ -90,20 +103,26 @@ class TestWhatTheProviderReported:
     def test_a_replys_usage_is_added_to_its_conversation_session_and_the_total(self):
         ledger = _ledger()
         counted = _request(ledger, "s_1")
-        ledger.record_usage(counted, ProviderUsage(replies=1, input_tokens=5, cache_read_input_tokens=900,
-                                                   cache_creation_input_tokens=40, output_tokens=12))
+        ledger.record_usage(
+            counted,
+            ProviderUsage(
+                replies=1, input_tokens=5, cache_read_input_tokens=900, cache_creation_input_tokens=40, output_tokens=12
+            ),
+        )
 
         assert ledger.total.provider.cache_read_input_tokens == 900
         assert _session(ledger)["traffic"]["provider"]["cache_read_input_tokens"] == 900
         assert _conversation(ledger, "s_1")["traffic"]["provider"]["cache_read_input_tokens"] == 900
 
     def test_the_rate_is_the_providers_whole_prompt_per_token_llm_gc_forwarded(self):
-        usage = ProviderUsage(replies=1, input_tokens=40, cache_read_input_tokens=900, cache_creation_input_tokens=540,
-                              output_tokens=7)
+        usage = ProviderUsage(
+            replies=1, input_tokens=40, cache_read_input_tokens=900, cache_creation_input_tokens=540, output_tokens=7
+        )
         assert token_rate(1_000, usage) == 1.48, "every prompt token counts, cached or not; output does not"
 
-    @pytest.mark.parametrize(("forwarded", "usage"), [(0, ProviderUsage(input_tokens=10)),
-                                                      (1_000, ProviderUsage(output_tokens=10))])
+    @pytest.mark.parametrize(
+        ("forwarded", "usage"), [(0, ProviderUsage(input_tokens=10)), (1_000, ProviderUsage(output_tokens=10))]
+    )
     def test_a_request_with_either_count_at_zero_measures_no_rate(self, forwarded, usage):
         assert token_rate(forwarded, usage) is None
 
@@ -160,8 +179,12 @@ class TestTheWholeRequestIsCounted:
     def test_the_system_prompt_and_tools_count_in_either_form(self):
         tools = [{"name": "Read", "description": "Reads a file from disk.", "input_schema": {"type": "object"}}]
         as_string = fixed_prompt_tokens({"system": "You are Claude Code.", "tools": tools})
-        as_blocks = fixed_prompt_tokens({"system": [{"type": "text", "text": "You are Claude Code.",
-                                                     "cache_control": {"type": "ephemeral"}}], "tools": tools})
+        as_blocks = fixed_prompt_tokens(
+            {
+                "system": [{"type": "text", "text": "You are Claude Code.", "cache_control": {"type": "ephemeral"}}],
+                "tools": tools,
+            }
+        )
 
         assert as_string == as_blocks == count_tokens("You are Claude Code.") + count_tokens(json.dumps(tools))
 
@@ -172,15 +195,29 @@ class TestTheWholeRequestIsCounted:
 
 class TestReadingTheReplysOutline:
     def test_an_unstreamed_replys_usage_stop_reason_and_tool_calls(self):
-        raw = json.dumps({"type": "message", "stop_reason": "tool_use",
-                          "content": [{"type": "text", "text": "Checking."},
-                                      {"type": "tool_use", "id": "toolu_1", "name": "Agent", "input": {"prompt": "x"}}],
-                          "usage": {"input_tokens": 3, "cache_read_input_tokens": 2000,
-                                    "cache_creation_input_tokens": None, "output_tokens": 50}})
+        raw = json.dumps(
+            {
+                "type": "message",
+                "stop_reason": "tool_use",
+                "content": [
+                    {"type": "text", "text": "Checking."},
+                    {"type": "tool_use", "id": "toolu_1", "name": "Agent", "input": {"prompt": "x"}},
+                ],
+                "usage": {
+                    "input_tokens": 3,
+                    "cache_read_input_tokens": 2000,
+                    "cache_creation_input_tokens": None,
+                    "output_tokens": 50,
+                },
+            }
+        )
         assert read_reply(200, raw.encode())[0] == ReplyOutline(
-            status=200, finished=True, stop_reason="tool_use",
+            status=200,
+            finished=True,
+            stop_reason="tool_use",
             usage=ProviderUsage(replies=1, input_tokens=3, cache_read_input_tokens=2000, output_tokens=50),
-            tool_calls=(ToolCall(name="Agent", call_id="toolu_1"),))
+            tool_calls=(ToolCall(name="Agent", call_id="toolu_1"),),
+        )
 
     def test_an_error_body_or_garbage_outlines_only_its_status_and_error_type(self):
         assert read_reply(529, b'{"type": "error", "error": {}}')[0] == ReplyOutline(status=529)
@@ -202,24 +239,48 @@ class TestReadingTheReplysOutline:
     def test_a_stream_split_anywhere_reads_the_same(self):
         """A chunk boundary can fall inside a line; a reader that parsed per chunk would lose events."""
         events = [
-            {"type": "message_start", "message": {"usage": {"input_tokens": 4, "cache_read_input_tokens": 1500,
-                                                            "cache_creation_input_tokens": 60, "output_tokens": 1}}},
-            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta",
-                                                                  "text": 'a "message_delta" in the text'}},
-            {"type": "content_block_start", "index": 1,
-             "content_block": {"type": "tool_use", "id": "toolu_9", "name": "Bash", "input": {}}},
+            {
+                "type": "message_start",
+                "message": {
+                    "usage": {
+                        "input_tokens": 4,
+                        "cache_read_input_tokens": 1500,
+                        "cache_creation_input_tokens": 60,
+                        "output_tokens": 1,
+                    }
+                },
+            },
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": 'a "message_delta" in the text'},
+            },
+            {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {"type": "tool_use", "id": "toolu_9", "name": "Bash", "input": {}},
+            },
             {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 87}},
             {"type": "message_stop"},
         ]
         stream = "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events).encode()
-        expected = ReplyOutline(status=200, finished=True, stop_reason="tool_use",
-                                usage=ProviderUsage(replies=1, input_tokens=4, cache_read_input_tokens=1500,
-                                                    cache_creation_input_tokens=60, output_tokens=87),
-                                tool_calls=(ToolCall(name="Bash", call_id="toolu_9"),))
+        expected = ReplyOutline(
+            status=200,
+            finished=True,
+            stop_reason="tool_use",
+            usage=ProviderUsage(
+                replies=1,
+                input_tokens=4,
+                cache_read_input_tokens=1500,
+                cache_creation_input_tokens=60,
+                output_tokens=87,
+            ),
+            tool_calls=(ToolCall(name="Bash", call_id="toolu_9"),),
+        )
         for size in (1, 7, 64, len(stream)):
             reader = StreamOutlineReader()
             for start in range(0, len(stream), size):
-                reader.feed(stream[start:start + size])
+                reader.feed(stream[start : start + size])
             assert reader.outline() == expected, size
 
     def test_a_stream_cut_short_is_unfinished_and_reports_the_prompt_it_was_billed_for(self):
@@ -227,13 +288,21 @@ class TestReadingTheReplysOutline:
         start = {"type": "message_start", "message": {"usage": {"input_tokens": 900, "output_tokens": 1}}}
         reader.feed(f"data: {json.dumps(start)}\n\n".encode())
 
-        assert reader.outline() == ReplyOutline(status=200, finished=False,
-                                                usage=ProviderUsage(replies=1, input_tokens=900, output_tokens=1))
+        assert reader.outline() == ReplyOutline(
+            status=200, finished=False, usage=ProviderUsage(replies=1, input_tokens=900, output_tokens=1)
+        )
 
     def test_a_tool_name_that_is_not_a_plain_short_string_is_not_kept(self):
-        raw = json.dumps({"type": "message", "stop_reason": "tool_use", "content": [
-            {"type": "tool_use", "id": "toolu_1", "name": "x" * 500, "input": {}},
-            {"type": "tool_use", "id": "toolu_2", "name": "Read\u0007", "input": {}}]})
+        raw = json.dumps(
+            {
+                "type": "message",
+                "stop_reason": "tool_use",
+                "content": [
+                    {"type": "tool_use", "id": "toolu_1", "name": "x" * 500, "input": {}},
+                    {"type": "tool_use", "id": "toolu_2", "name": "Read\u0007", "input": {}},
+                ],
+            }
+        )
         assert read_reply(200, raw.encode())[0].tool_calls == ()
 
 
@@ -246,10 +315,19 @@ class TestReadingASpawnedPrompt:
         pieces = json.dumps(tool_input)
         events = [
             {"type": "message_start", "message": {"usage": {"input_tokens": 4, "output_tokens": 1}}},
-            {"type": "content_block_start", "index": 0,
-             "content_block": {"type": "tool_use", "id": "toolu_a", "name": "Agent", "input": {}}},
-            *({"type": "content_block_delta", "index": 0,
-               "delta": {"type": "input_json_delta", "partial_json": pieces[at:at + 9]}} for at in range(0, len(pieces), 9)),
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "tool_use", "id": "toolu_a", "name": "Agent", "input": {}},
+            },
+            *(
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "input_json_delta", "partial_json": pieces[at : at + 9]},
+                }
+                for at in range(0, len(pieces), 9)
+            ),
             {"type": "content_block_stop", "index": 0},
             {"type": "message_stop"},
         ]
@@ -258,7 +336,7 @@ class TestReadingASpawnedPrompt:
     def _read(self, body: bytes, size: int = 13, read_prompts: bool = True) -> StreamOutlineReader:
         reader = StreamOutlineReader(read_prompts=read_prompts)
         for start in range(0, len(body), size):
-            reader.feed(body[start:start + size])
+            reader.feed(body[start : start + size])
         return reader
 
     def test_a_streamed_input_split_anywhere_gives_its_prompt(self):
@@ -271,18 +349,28 @@ class TestReadingASpawnedPrompt:
     def test_nothing_is_read_unless_asked(self):
         assert self._read(self._stream({"prompt": self.PROMPT}), read_prompts=False).spawn_prompts() == {}
 
-    @pytest.mark.parametrize("tool_input", [
-        {"command": "pytest -q tests/ --maxfail=1"},         # no prompt
-        {"prompt": "short"},                                  # a word, not a task
-        {"prompt": "x" * 40_000},                             # larger than any prompt: let go while it streams
-    ])
+    @pytest.mark.parametrize(
+        "tool_input",
+        [
+            {"command": "pytest -q tests/ --maxfail=1"},  # no prompt
+            {"prompt": "short"},  # a word, not a task
+            {"prompt": "x" * 40_000},  # larger than any prompt: let go while it streams
+        ],
+    )
     def test_an_input_that_is_not_a_subagents_task_gives_none(self, tool_input):
         assert self._read(self._stream(tool_input)).spawn_prompts() == {}
 
     def test_an_unstreamed_reply_gives_its_prompts_apart_from_its_outline(self):
-        raw = json.dumps({"type": "message", "stop_reason": "tool_use", "content": [
-            {"type": "tool_use", "id": "toolu_a", "name": "Task", "input": {"prompt": self.PROMPT}},
-            {"type": "tool_use", "id": "toolu_b", "name": "Read", "input": {"file_path": "/repo/README.md"}}]})
+        raw = json.dumps(
+            {
+                "type": "message",
+                "stop_reason": "tool_use",
+                "content": [
+                    {"type": "tool_use", "id": "toolu_a", "name": "Task", "input": {"prompt": self.PROMPT}},
+                    {"type": "tool_use", "id": "toolu_b", "name": "Read", "input": {"file_path": "/repo/README.md"}},
+                ],
+            }
+        )
 
         outline, prompts = read_reply(200, raw.encode(), read_prompts=True)
 
@@ -294,11 +382,17 @@ class TestTheNewestRequestCountedBothWays:
     def test_each_reply_replaces_the_newest_pair_where_its_request_was_counted(self):
         ledger = _ledger()
         targets = _request(ledger, "c1", forwarded=1_000)
-        TrafficLedger.record_usage(targets, ProviderUsage(replies=1, input_tokens=100, cache_read_input_tokens=1_300,
-                                                          cache_creation_input_tokens=80), tokens_forwarded=1_000)
+        TrafficLedger.record_usage(
+            targets,
+            ProviderUsage(replies=1, input_tokens=100, cache_read_input_tokens=1_300, cache_creation_input_tokens=80),
+            tokens_forwarded=1_000,
+        )
         targets = _request(ledger, "c1", forwarded=1_200)
-        TrafficLedger.record_usage(targets, ProviderUsage(replies=1, input_tokens=20, cache_read_input_tokens=1_700,
-                                                          cache_creation_input_tokens=60), tokens_forwarded=1_200)
+        TrafficLedger.record_usage(
+            targets,
+            ProviderUsage(replies=1, input_tokens=20, cache_read_input_tokens=1_700, cache_creation_input_tokens=60),
+            tokens_forwarded=1_200,
+        )
 
         last = _conversation(ledger, "c1")["traffic"]["last_reply"]
         assert last["tokens_forwarded"] == 1_200
@@ -317,8 +411,15 @@ class TestCollectionsWaitForARequestThatReachesTheModel:
         _request(ledger, "s_1")
         ledger.record_collection("s_1", completed=True, spent=ModelUsage())
 
-        ledger.record_request(conversation_id="s_1", origin=MAIN, model="m", opening="h0", tokens_from_client=100,
-                              tokens_forwarded=100, carries_front=False)
+        ledger.record_request(
+            conversation_id="s_1",
+            origin=MAIN,
+            model="m",
+            opening="h0",
+            tokens_from_client=100,
+            tokens_forwarded=100,
+            carries_front=False,
+        )
 
         assert len(ledger.collections_waiting("s_1")) == 1
 
