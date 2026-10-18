@@ -9,6 +9,7 @@ Start with **[overview.md](overview.md)** — what the problem is, why cleanup d
 | What is this, and why does it exist? | [overview.md](overview.md) |
 | How does one area work, and why is it shaped that way? | the matching doc under [`design/`](design/) |
 | How do I install and use it? | the project [README](../README.md) |
+| What does LLM-GC keep of my conversations, and how do I delete it? | [data.md](data.md) |
 
 ## `design/` — how the system works
 

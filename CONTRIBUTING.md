@@ -60,4 +60,4 @@ Start the subject with what kind of change it is: `fix:`, `feat:`, `refactor:`, 
 
 Keep a formatting-only change in a commit of its own. Its hash is added to `.git-blame-ignore-revs`, which GitHub reads, so `git blame` skips it. To skip it locally too, run `git config blame.ignoreRevsFile .git-blame-ignore-revs`.
 
-A pull request describes the problem, what you changed, and how you checked it. If it changes something a user can see, add a line under `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md).
+A pull request describes the problem, what you changed, and how you checked it. After the first release, a change a user can see also adds a line under `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md). Until then the first release's entry will describe everything.

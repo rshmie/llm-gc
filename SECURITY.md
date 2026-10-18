@@ -17,6 +17,10 @@ The maintainer will acknowledge a report within a week, say whether they conside
 
 LLM-GC is before 1.0. Only the latest release gets security fixes.
 
+## What LLM-GC keeps
+
+[doc/data.md](doc/data.md) says which of your data LLM-GC holds, where, for how long, what leaves your machine, and how to delete it.
+
 ## What counts as a vulnerability
 
 LLM-GC sits between a person's AI client and the model provider, so it sees every conversation and forwards the person's API key. These are the promises it makes, and a way to break one is a vulnerability:
