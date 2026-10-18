@@ -60,15 +60,11 @@ Today's evidence is a 37-question check on scripted conversations and a few live
 ## 4. Ship
 
 - [ ] **Choose a license**: Apache-2.0 includes an explicit patent grant; MIT is the simplest. Then set the `license` field in `pyproject.toml`.
-- [ ] **Format the code base once with `ruff format`** (128 files change today), in a commit with nothing else in it, listed in `.git-blame-ignore-revs` so `git blame` skips it. Then add **pre-commit hooks** for Ruff.
-- [ ] **Finish CI.** Pull requests already run `ruff check`, `mypy` and `pytest` on Python 3.13. Still to add: `ruff format --check` (after the formatting commit), every supported Python version, the benchmark's regression check, and a rule that the checks must pass before a merge.
-- [ ] **Optional extras.** The proxy, dashboard and CLI dependencies (`fastapi`, `uvicorn`, `click`, `pydantic-settings`) move to `llm-gc[proxy]`, so someone using only the library does not install a web server.
+- [ ] **Add the benchmark's regression check to CI**, once the benchmark exists, so a change that loses quality or savings fails a pull request.
+- [ ] **Repository settings:** require the CI checks before a merge (Lint, Type-check, Test (3.13), Test (3.14) and Library-only install), and turn on private vulnerability reporting, which `SECURITY.md` and `CODE_OF_CONDUCT.md` send people to.
 - [ ] **Integration tests:** the proxy tested end to end over HTTP against a stand-in upstream, async tests on `pytest-asyncio`, and coverage reported.
 - [ ] **A Docker image** that starts a working proxy, with its port published to localhost only by default.
 - [ ] **PyPI publishing through trusted publishing**, with no long-lived token.
-- [ ] **Dependency scanning:** Dependabot for the Python dependencies (today it watches only the GitHub Actions), and `pip-audit` in CI.
-- [ ] **Project files:** `SECURITY.md` (with a private channel for reports), `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, and `CHANGELOG.md` in the Keep a Changelog format.
-- [ ] **What data LLM-GC keeps, documented:** which conversation data is held, where, for how long, and how to delete it.
 - [ ] **A README for a first-time reader:** the 30-second demo, installation, a quickstart, and the benchmark's numbers with a link to how they were produced.
 
 ## Known limits of the first release
