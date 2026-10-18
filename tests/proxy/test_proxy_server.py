@@ -24,6 +24,7 @@ from llm_gc.engine.generations.front import FRONT_HEADER
 from llm_gc.events import EventBus, EventType
 from llm_gc.llm import FakeProvider, LLMResponse, StopReason
 from llm_gc.models import ClientOrigin
+from llm_gc.cli.logs import RequestIdFilter
 from llm_gc.proxy import SESSION_HEADER, create_app
 from llm_gc.proxy.anthropic_translation import fixed_prompt_tokens
 from llm_gc.proxy.cache_watch import CacheWatch
@@ -566,6 +567,112 @@ class TestEachAnswerIsLogged:
         _post(client, _body(("user", "hello")))
 
         assert API_KEY not in caplog.text
+
+
+class TestARequestCanBeFollowedByItsId:
+    """One ID per client request, in its log lines, its request records and any error body LLM-GC writes."""
+
+    @staticmethod
+    def _stamping(caplog) -> None:
+        # The application adds this filter to its handler; caplog's handler stands in for it here.
+        caplog.handler.addFilter(RequestIdFilter())
+        caplog.set_level(logging.INFO, logger="llm_gc.proxy.server")
+
+    def test_the_answer_line_and_the_requests_record_name_the_same_request(self, caplog):
+        self._stamping(caplog)
+        client, _, _, _ = _proxy()
+        _post(client, _body(("user", "hello")))
+        _post(client, _body(("user", "hello"), ("assistant", "hi"), ("user", "which database?")))
+
+        answers = [r for r in caplog.records if hasattr(r, "tokens_forwarded")]
+        records = client.app.state.metrics.request_log.records()
+        assert [a.request_id for a in answers] == [r.request_id for r in records]
+        assert len({r.request_id for r in records}) == 2, "each request has its own"
+
+    def test_every_line_a_request_writes_carries_its_id(self, caplog):
+        """The engine's lines too: the filter reads the request, not the logger."""
+        self._stamping(caplog)
+        client, _, _, _ = _proxy()
+        _post(client, _body(("user", "hello"), ("assistant", "hi"), ("user", "which database?")))
+
+        [record] = client.app.state.metrics.request_log.records()
+        started = next(r for r in caplog.records if hasattr(r, "history_turns"))
+        assert started.request_id == record.request_id
+
+    def test_an_unreachable_provider_is_answered_in_the_providers_envelope_with_the_id(self, caplog):
+        self._stamping(caplog)
+
+        def refuse(request):
+            raise httpx2.ConnectError("connection refused", request=request)
+
+        client, _, _, _ = _proxy(refuse)
+        body = _post(client, _body(("user", "hello"))).json()
+
+        [record] = client.app.state.metrics.request_log.records()
+        warning = next(r for r in caplog.records if r.getMessage() == "could not reach the provider")
+        assert body == {"type": "error",
+                        "error": {"type": "api_error", "message": "llm-gc could not reach the provider: ConnectError"},
+                        "request_id": record.request_id}
+        assert warning.request_id == record.request_id
+
+    def test_a_body_over_the_limit_is_refused_with_the_id_and_a_line_that_names_it(self, caplog, monkeypatch):
+        """Nothing else is written for it, so without the line the ID in the client's error would lead nowhere."""
+        self._stamping(caplog)
+        monkeypatch.setattr("llm_gc.proxy.server.MAX_REQUEST_BYTES", 1024)
+        client, _, _, _ = _proxy()
+
+        body = client.post("/v1/messages", content=b"x" * 2048, headers={"content-type": "application/json"}).json()
+
+        [line] = [r for r in caplog.records if getattr(r, "status", None) == 413]
+        assert body["type"] == "error" and body["error"]["type"] == "request_too_large"
+        assert body["request_id"] == line.request_id is not None
+
+
+class TestTheAnswerLineSaysHowLongEachSideTook:
+    @staticmethod
+    def _answer(caplog) -> logging.LogRecord:
+        [record] = [r for r in caplog.records if hasattr(r, "tokens_forwarded")]
+        return record
+
+    def test_llm_gcs_time_and_the_upstreams_are_on_the_line(self, caplog):
+        caplog.set_level(logging.INFO, logger="llm_gc.proxy.server")
+        client, _, _, _ = _proxy()
+        _post(client, _body(("user", "hello")))
+
+        record = self._answer(caplog)
+        assert record.prepared_ms >= 0 and record.upstream_ms >= 0 and record.streamed is False
+        assert " in " in record.getMessage().split("forwarded", 1)[1]
+        assert "; the upstream answered in " in record.getMessage()
+
+    def test_a_streamed_reply_is_timed_to_when_it_began(self, caplog):
+        """The line is written before the stream is relayed, so it cannot say when the reply ended."""
+        caplog.set_level(logging.INFO, logger="llm_gc.proxy.server")
+        client, _, _, _ = _proxy(lambda request: httpx2.Response(
+            200, content=b"event: message_stop\ndata: {}\n\n", headers={"content-type": "text/event-stream"}))
+        _post(client, _body(("user", "hello"), stream=True))
+
+        record = self._answer(caplog)
+        assert record.streamed is True and "the upstream began answering in " in record.getMessage()
+
+    def test_an_error_line_names_the_upstreams_own_id_for_the_request(self, caplog):
+        """The client shows the provider's ID with its error; the line leads from that error back here."""
+        error = {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"},
+                 "request_id": "req_011CSHoEeqs5C35K2UUqR7Fy"}
+        client, _, _, _ = _proxy(lambda request: httpx2.Response(
+            529, json=error, headers={"request-id": "req_011CSHoEeqs5C35K2UUqR7Fy"}))
+        _post(client, _body(("user", "hello")))
+
+        record = self._answer(caplog)
+        assert record.getMessage().startswith("claude-sonnet-5 -> 529 after ")
+        assert record.getMessage().endswith("(upstream request req_011CSHoEeqs5C35K2UUqR7Fy)")
+        assert record.upstream_request_id == "req_011CSHoEeqs5C35K2UUqR7Fy"
+
+    def test_an_upstream_that_names_no_id_leaves_it_out(self, caplog):
+        client, _, _, _ = _proxy(lambda request: httpx2.Response(429, json={"type": "error"}))
+        _post(client, _body(("user", "hello")))
+
+        record = self._answer(caplog)
+        assert "upstream request" not in record.getMessage() and record.upstream_request_id is None
 
 
 CLIENT_SESSION = "c7a78c2f-d25c-44e4-af6f-dba30717fb9b"
@@ -1836,6 +1943,16 @@ class TestARefusedRewriteIsSentAsWritten:
         assert records[records.index(first_refused) + 1].resent_as_written is True
         waiting = client.app.state.metrics.traffic.collections_waiting(first_refused.conversation_id)
         assert waiting and all(reason is not None for reason in waiting), "they wait with their reasons"
+
+    def test_both_attempts_carry_the_clients_one_request_id(self, caplog):
+        """Both were the client's one request, so the Requests tab shows one ID on both rows."""
+        client, _, _ = self._converse_until_refused(caplog)
+
+        records = client.app.state.metrics.request_log.records()
+        refused = next(r for r in records if r.outline is not None and r.outline.status == 400)
+        resent = records[records.index(refused) + 1]
+        assert resent.resent_as_written and resent.request_id == refused.request_id
+        assert len({r.request_id for r in records}) == len(records) - client.app.state.metrics.rewrites_refused
 
 
 class TestTheNewestRequestIsCountedBothWays:

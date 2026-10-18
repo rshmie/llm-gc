@@ -26,6 +26,11 @@
 # request.
 # log_level = "INFO"
 
+# How each log line is written: "text" to read in the terminal, "json" for a program that
+# reads the log. Either way a line written for a request names that request's ID, which the
+# dashboard's Requests tab shows too.
+# log_format = "text"
+
 # Claude Code's subagents each work in a conversation of their own. LLM-GC records and
 # shows them but sends them as written: a subagent usually ends before a collection
 # could pay for itself, and its answer is only as good as what it read. true collects

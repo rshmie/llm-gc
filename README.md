@@ -204,10 +204,10 @@ What this changes, and what it doesn't:
 Send Claude a message. LLM-GC's terminal prints a line for each request it passes on:
 
 ```
-14:02:11 INFO llm_gc.proxy.server: claude-sonnet-5 -> 200: client sent 18,240 tokens, LLM-GC forwarded 18,240 (100%)
+14:02:11 INFO llm_gc.proxy.server [3f2a9c01b7de]: claude-sonnet-5 -> 200: client sent 18,240 tokens, LLM-GC forwarded 18,240 (100%) in 4 ms; the upstream began answering in 1.4 s
 ```
 
-`200` means the upstream answered. Claude Code makes small requests of its own too, so one message can print several lines. A refused request prints a `WARNING` line with its status (such as `401`) and the likely cause.
+`200` means the upstream answered. Claude Code makes small requests of its own too, so one message can print several lines. A refused request prints a `WARNING` line with its status (such as `401`) and the likely cause. The ID in brackets names the request: hover a request on the dashboard's Requests tab to see its ID, and an error LLM-GC returns itself carries it too, so either leads you to the request's lines here.
 
 Open the dashboard at http://127.0.0.1:9901. A conversation appears there from its second message: the first has no history yet for LLM-GC to recognise it by.
 
@@ -528,6 +528,7 @@ A file you asked for in 1 or 2 that doesn't exist is an error, not a silent fall
 | The model it summarises and reads facts with, as that vendor (or a gateway) names it. Checked at startup | `[summary] model` | `--summary-model` | `LLM_GC_SUMMARY__MODEL` | the vendor's own |
 | Where summary calls go, if not the upstream | `[summary] base_url` | | `LLM_GC_SUMMARY__BASE_URL` | the upstream for `anthropic`; the vendor's address otherwise |
 | Log level | `log_level` | `--log-level` | `LLM_GC_LOG_LEVEL` | `INFO` |
+| Log format: `text` to read in the terminal, `json` for a program that reads the log | `log_format` | `--log-format` | `LLM_GC_LOG_FORMAT` | `text` |
 
 **The summary model is LLM-GC's own,** separate from the model your client talks to: For instance, Claude Code can converse with Opus while LLM-GC summarises with Sonnet. A cheaper model lowers LLM-GC's own bill, but its summaries and facts are what the conversation model reads in place of the old turns, so a weaker one can leave the model remembering less well. The saving is also smaller than it looks, because LLM-GC calls its model only when it runs a collection, not on every request. Currently, [decision-survival check](evals/decision_survival/README.md) is measured with the default model that is configured.
 

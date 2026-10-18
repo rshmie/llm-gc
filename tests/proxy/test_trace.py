@@ -33,11 +33,11 @@ class _Session:
         self.log = RequestLog(clock=_Clock())
 
     def send(self, conversation, turns, newest="typed", origin=MAIN, calls=(), status=200, reasons=(), sent=100,
-             forwarded=100):
+             forwarded=100, request_id=None):
         record = self.log.begin(conversation_id=conversation, origin=origin,
                                 hashes=[turns[:end] for end in range(1, len(turns) + 1)], newest=newest, model="m",
                                 tokens_from_client=sent, tokens_forwarded=forwarded, collected=origin.agent_id is None,
-                                switch_reasons=reasons)
+                                switch_reasons=reasons, request_id=request_id)
         self.log.finish(record, ReplyOutline(
             status=status, finished=status == 200, stop_reason="tool_use" if calls else "end_turn",
             usage=ProviderUsage(replies=1, cache_read_input_tokens=sent, cache_creation_input_tokens=sent, output_tokens=10),
@@ -210,3 +210,29 @@ def test_llm_gcs_own_calls_for_the_session_are_carried_with_its_trace():
 
     trace = build_trace(s.log.records(), "cc-1", summaries=ModelUsage(calls=2, input_tokens=10_000, output_tokens=900))
     assert trace["summaries"] == {"calls": 2, "input_tokens": 10_000, "output_tokens": 900}
+
+
+class TestARequestSentTwice:
+    """A request whose rewrite the provider refused is sent again as written: two records, one client request."""
+
+    def test_both_attempts_show_under_its_one_id_and_keep_their_own_kinds(self):
+        s = _Session()
+        s.send("s_1", "abc")
+        s.send("s_1", "abcde", status=400, request_id="3f2a9c01b7de")
+        s.send("s_1", "abcde", request_id="3f2a9c01b7de")
+
+        refused, resent = s.trace()["turns"][-1]["requests"]
+        assert (refused["request_id"], resent["request_id"]) == ("3f2a9c01b7de", "3f2a9c01b7de")
+        assert (refused["kind"], resent["kind"]) == ("turn", "retry")
+
+    def test_a_subagent_shows_under_the_attempt_whose_reply_started_it(self):
+        """Not under the refused attempt too: it had no reply, so it started nothing."""
+        s = _Session()
+        s.send("s_1", "abc")
+        s.send("s_1", "abcde", status=400, request_id="3f2a9c01b7de")
+        s.send("s_1", "abcde", calls=("toolu_0",), request_id="3f2a9c01b7de")
+        task = s.send(None, "P", origin=_agent("a1"))
+        task.spawned_by = SpawnRef("3f2a9c01b7de", "toolu_0", "Agent")
+
+        refused, resent = s.trace()["turns"][-1]["requests"]
+        assert (refused["spawned"], resent["spawned"]) == ([], ["a1"])

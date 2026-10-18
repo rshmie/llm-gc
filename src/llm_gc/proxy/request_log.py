@@ -13,11 +13,11 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
-from uuid import uuid4
 
 from llm_gc.models import ClientOrigin, Message
 from llm_gc.models.message import said_by_user, tool_result_ids
 from llm_gc.proxy.anthropic_translation import ReplyOutline
+from llm_gc.proxy.request_id import new_request_id
 
 # Records kept in all; above this the oldest is dropped. Its counts stay in the ledger's totals.
 MAX_RECORDS = 10_000
@@ -55,10 +55,14 @@ class SpawnRef:
     tool: str
 
 
-@dataclass(slots=True)
+# eq=False: two records are the same only if they are the same forward. Two forwards can agree
+# in every field, and a record is changed as its request settles, so equality by value would be wrong.
+@dataclass(slots=True, eq=False)
 class RequestRecord:
     """One forwarded request: what it carried, and what came back."""
 
+    # The client's request it was forwarded for. A request LLM-GC sends twice, because the
+    # provider refused its rewrite, has two records with the same ID.
     request_id: str
     origin: ClientOrigin | None
     conversation_id: str | None    # None until recognised: a first request, or a side request never continued
@@ -103,15 +107,18 @@ class RequestLog:
 
     def begin(self, *, conversation_id: str | None, origin: ClientOrigin | None, hashes: Sequence[str],
               newest: NewestKind, model: str | None, tokens_from_client: int, tokens_forwarded: int,
-              collected: bool, switch_reasons: Sequence[str | None] = ()) -> RequestRecord:
+              collected: bool, switch_reasons: Sequence[str | None] = (),
+              request_id: str | None = None) -> RequestRecord:
         """Open a record for a request about to be forwarded, and settle the earlier records it answers.
 
         `hashes` are the chain hashes of every message the request carries, in order.
+        `request_id` is the client request's ID; without one, the record gets an ID of its own.
         """
         if conversation_id is not None:
             self._settle(conversation_id, origin, hashes[:-1])
-        record = RequestRecord(request_id=uuid4().hex[:12], origin=origin, conversation_id=conversation_id,
-                               position=len(hashes), newest=newest, newest_hash=hashes[-1], model=model,
+        record = RequestRecord(request_id=request_id if request_id is not None else new_request_id(), origin=origin,
+                               conversation_id=conversation_id, position=len(hashes), newest=newest,
+                               newest_hash=hashes[-1], model=model,
                                forwarded_at=self._clock(), tokens_from_client=tokens_from_client,
                                tokens_forwarded=tokens_forwarded, collected=collected,
                                switch_reasons=tuple(switch_reasons))

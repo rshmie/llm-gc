@@ -33,6 +33,7 @@ from pydantic_settings import (
     TomlConfigSettingsSource,
 )
 
+from llm_gc.cli.logs import LogFormat
 from llm_gc.config import GCConfig
 from llm_gc.config.constants import DEFAULT_DASHBOARD_PORT, DEFAULT_PROXY_CONTEXT_WINDOW
 from llm_gc.exceptions import ConfigError
@@ -159,6 +160,8 @@ class ProxySettings(BaseSettings):
     compactor: Literal["llm", "noop"] = "llm"
     summary: SummarySettings = Field(default_factory=SummarySettings)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    # Text is for the person watching the terminal; JSON is for a program that reads the log.
+    log_format: LogFormat = "text"
     # A subagent's conversation is recorded and shown, never collected, unless this is on.
     collect_subagents: bool = False
     engine: EngineSettings = Field(default_factory=EngineSettings)

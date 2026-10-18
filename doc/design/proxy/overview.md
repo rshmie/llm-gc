@@ -352,9 +352,32 @@ request N ──► forwarded ──► reply streams to the client ──► co
 request N+1 carries the reply in its history ──► recorded; the shown copy is dropped
 ```
 
+### Following one request
+
+Each request the proxy receives gets an ID. Every log line written while handling it carries the ID, and so do its rows on the dashboard's Requests tab and any error body LLM-GC writes itself. A row that looks wrong, or an error a client reports, leads to the request's lines in the log.
+
+```
+client request ──► ID 3f2a9c01b7de, held for as long as the request runs
+   ├─ every log line   14:02:11 INFO llm_gc.proxy.server [3f2a9c01b7de]: claude-sonnet-5 -> 200 in s_0676…: …
+   ├─ Requests tab     hover the request's row: "In the proxy's log as request 3f2a9c01b7de"
+   └─ LLM-GC's errors  {"type": "error", "error": {…}, "request_id": "3f2a9c01b7de"}
+```
+
+The ID is held in a context variable that a middleware sets for the whole of the HTTP request. The engine's lines therefore carry it without the library knowing about requests, and a streamed reply, which is relayed after the route has returned, still has it when the stream drops. Work the request schedules, such as the aging pass after its answer, keeps the ID, because an asyncio task starts with a copy of the context it was created in. A filter on the application's log handler adds the ID to each line; the library sets nothing.
+
+A request LLM-GC sends twice, because the provider refused its rewrite, is still one request of the client's, so both of its records carry the same ID. The trace tells the two attempts apart by record, not by ID.
+
+An error LLM-GC answers itself (a 502 when the upstream cannot be reached, a 413 for a body over the limit) uses the provider's error envelope, with LLM-GC's ID where the provider puts its own: the request never reached the provider, so there is no ID of the provider's to give. An error the upstream answered passes through unchanged, carrying the provider's own ID, and the answer line names that ID, so the error a client shows leads to the line.
+
+Each answer line also says how long LLM-GC took, from having the request's body to forwarding it, and how long the upstream took to answer. For a streamed reply that is how long it took to begin answering, because the line is written before the stream is relayed; the whole reply's time is on the Requests tab.
+
+Logs are text by default, for the person watching the terminal. With `log_format = "json"` each line is one JSON object holding every field the line carries, for a program that reads the log.
+
+*Rejected: an ID per forward* — the refused rewrite and its resend would have two IDs for one client request, and the lines written before the first forward, such as a conversation starting, would belong to neither. *Rejected: setting the ID at the top of each route* — a streamed reply is relayed after the route returns, so a dropped stream would be logged without its ID. *Rejected: returning the ID in a response header* — no client shows one; the error body and the Requests tab are where a person looks. *Rejected: JSON by default* — it would replace the console a person reads while LLM-GC runs. *Accepted cost:* an aging pass's lines carry the ID of the request that scheduled it, which may have finished minutes earlier.
+
 ### Request size
 
-A body larger than the provider's own request limit (32 MB) is refused with a 413 before it is buffered. The provider would reject it anyway, so refusing it costs no user anything; the limit is enforced while reading, because `content-length` may be absent or wrong.
+A body larger than the provider's own request limit (32 MB) is refused with a 413 before it is buffered. The provider would reject it anyway, so refusing it costs no user anything; the limit is enforced while reading, because `content-length` may be absent or wrong. The refusal is logged, since no other line is written for the request, so the ID in the client's error leads somewhere.
 
 ## Known limitations (planned, not yet built)
 

@@ -166,7 +166,7 @@ function requestLine(row, window, depth) {
   const kept = row.tokens_from_client - row.tokens_forwarded;
   return h("div", { class: `wf-row kind-${row.kind}${depth ? " nested" : ""}`, role: "row" },
     h("span", { class: "wf-label", role: "cell" },
-      h("span", { class: "wf-kind", ...hoverTip(label, about) }, label),
+      h("span", { class: "wf-kind", ...hoverTip(label, about, requestIdTip(row)) }, label),
       h("span", { class: "wf-tokens", ...(kept > 0 ? hoverTip("Tokens", `Claude Code sent ${fmt(row.tokens_from_client)}; LLM-GC took out ${fmt(kept)}, so the model got ${fmt(row.tokens_forwarded)}. Both include LLM-GC's estimate of the model's earlier thinking, which a collection stops sending.`) : {}) },
         ` · ${fmt(row.tokens_from_client)}`, kept > 0 ? [" → ", h("span", { class: "good" }, fmt(row.tokens_forwarded))] : null),
       row.tool_calls.length ? h("span", { class: "wf-calls" }, ` · then ${calls(row.tool_calls)}`) : null,
@@ -177,6 +177,12 @@ function requestLine(row, window, depth) {
         row.provider && row.provider.cache_creation_input_tokens ? ` ◆ ${fmt(row.provider.cache_creation_input_tokens)} written to the cache` : " ◆") : null,
       status),
     bar(row.forwarded_at, row.ended_at, window, `kind-${row.kind}`, `${clock(row.forwarded_at)} · ${row.ended_at ? seconds(at(row.ended_at) - at(row.forwarded_at)) : "running"}`));
+}
+
+// The ID this request's lines in the proxy's log carry, so a row that looks wrong can be followed there.
+// A request LLM-GC sent twice, because the provider refused its rewrite, shows the same ID on both rows.
+function requestIdTip(row) {
+  return h("div", { class: "tip-row tip-id" }, "In the proxy's log as request ", h("span", { class: "mono" }, row.request_id));
 }
 
 // Why each collection this request carries was applied then, as the switch policy decided it. A proxy

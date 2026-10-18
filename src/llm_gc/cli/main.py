@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import logging
 import shutil
 import sys
 from collections.abc import Callable
@@ -13,6 +12,7 @@ import click
 from llm_gc import __version__
 from llm_gc.cli.banner import render_addresses, render_check, render_header
 from llm_gc.cli.config_commands import add_config_commands
+from llm_gc.cli.logs import configure_logging
 from llm_gc.cli.options import config_file_option
 from llm_gc.cli.serve import find_busy_port, serve_proxy
 from llm_gc.cli.settings import ENV_FILENAME, ProxySettings, create_summary_provider, find_config_file, load_settings
@@ -65,10 +65,12 @@ def build_cli(*, serve: ServeFn = serve_proxy, make_provider: ProviderFactory = 
     @click.option("--context-window", type=int, help="The proxied model's window; sets the recap budget.")
     @click.option("--log-level", type=click.Choice(_LOG_LEVELS, case_sensitive=False),
                   help="How much LLM-GC logs; info prints a line per request.")
+    @click.option("--log-format", type=click.Choice(["text", "json"]),
+                  help="text for reading in the terminal; json for a program that reads the log.")
     def start(config_path: Path | None, port: int | None, dashboard: bool | None, dashboard_port: int | None,
               upstream: str | None, compactor: str | None, summary_provider: str | None,
               summary_model: str | None, min_cut_tokens: int | None, keep_last: int | None,
-              context_window: int | None, log_level: str | None) -> None:
+              context_window: int | None, log_level: str | None, log_format: str | None) -> None:
         """Start the proxy, and the dashboard with --dashboard.
 
         Every option is also a setting: a flag you leave out takes its value from the
@@ -79,7 +81,7 @@ def build_cli(*, serve: ServeFn = serve_proxy, make_provider: ProviderFactory = 
             settings = load_settings(
                 location.path if location else None,
                 port=port, dashboard=dashboard, dashboard_port=dashboard_port, upstream=upstream,
-                compactor=compactor, log_level=log_level.upper() if log_level else None,
+                compactor=compactor, log_level=log_level.upper() if log_level else None, log_format=log_format,
                 summary={"provider": summary_provider, "model": summary_model},
                 engine={"min_cut_tokens": min_cut_tokens, "last_n_turns_to_keep": keep_last,
                         "context_window": context_window},
@@ -89,9 +91,7 @@ def build_cli(*, serve: ServeFn = serve_proxy, make_provider: ProviderFactory = 
 
         # The application chooses how the library's logs are shown. They name sessions and
         # counts, never conversation content.
-        logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-                            datefmt="%H:%M:%S")
-        logging.getLogger("httpx2").setLevel(logging.WARNING)
+        configure_logging(settings.log_level, settings.log_format)
 
         # Said before the check, so a refusal reads against what was being tried.
         columns = shutil.get_terminal_size().columns if sys.stdout.isatty() else None

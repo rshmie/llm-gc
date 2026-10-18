@@ -28,7 +28,6 @@ Developer tooling, not library code, which is why it lives in `scripts/`.
 
 import argparse
 import json
-import logging
 import sys
 from collections import Counter
 from pathlib import Path
@@ -38,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 import httpx2  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
+from llm_gc.cli.logs import configure_logging  # noqa: E402
 from llm_gc.cli.serve import serve_proxy  # noqa: E402
 from llm_gc.cli.settings import load_settings  # noqa: E402
 from llm_gc.config import GCConfig  # noqa: E402
@@ -322,9 +322,7 @@ def main() -> None:
     args = parser.parse_args()
     # The application chooses how the library's logs are shown: what each request was and
     # why one was passed on untouched. They name sessions and counts, never content.
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-                        datefmt="%H:%M:%S")
-    logging.getLogger("httpx2").setLevel(logging.WARNING)
+    configure_logging("INFO", "text")
 
     if args.serve:
         serve(args)

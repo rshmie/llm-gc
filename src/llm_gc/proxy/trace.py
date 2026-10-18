@@ -39,7 +39,7 @@ def build_trace(records: Sequence[RequestRecord], client_session: str, *,
     main = [r for r in mine if _agent(r) is None]
     mains = list(dict.fromkeys(r.conversation_id for r in main if r.conversation_id is not None))
     kinds = _kinds(mine, _closing(main, mains))
-    starts = [r for r in main if kinds[r.request_id] == "turn"]
+    starts = [r for r in main if kinds[r] == "turn"]
     at = [start.forwarded_at for start in starts]
 
     def by_time(record: RequestRecord) -> int:
@@ -47,6 +47,8 @@ def build_trace(records: Sequence[RequestRecord], client_session: str, *,
 
     # Every request's turn: the main conversation's by time; a subagent's by the request whose reply
     # started it, taken in the order the subagents started, so one a subagent started finds its turn.
+    # Keyed by request ID, which is how a subagent names the request that started it; the records of
+    # one client request are sent together, so they always fall in the same turn.
     turn_of = {r.request_id: by_time(r) for r in main}
     agents: dict[str, list[RequestRecord]] = {}
     for record in mine:
@@ -63,7 +65,10 @@ def build_trace(records: Sequence[RequestRecord], client_session: str, *,
         turn_of.update(dict.fromkeys((r.request_id for r in requests), turn))
 
     def row(record: RequestRecord) -> dict[str, Any]:
-        return _row(record, kinds[record.request_id], spawned.get(record.request_id, []))
+        # Only the record whose reply made the calls started the subagents: a request sent again after
+        # a refusal shares its ID with the refused record, which had no reply.
+        made_calls = record.outline is not None and bool(record.outline.tool_calls)
+        return _row(record, kinds[record], spawned.get(record.request_id, []) if made_calls else [])
 
     nodes = {agent: {"agent": agent, "label": f"Subagent {number}", "conversation_id": requests[-1].conversation_id,
                      "collected": requests[-1].collected, "model": requests[-1].model,
@@ -96,7 +101,7 @@ def _agent(record: RequestRecord) -> str | None:
     return record.origin.agent_id if record.origin is not None else None
 
 
-def _closing(main: Sequence[RequestRecord], mains: Sequence[str]) -> set[str]:
+def _closing(main: Sequence[RequestRecord], mains: Sequence[str]) -> set[RequestRecord]:
     """The last request of each main conversation a newer one replaced, when nothing carried its message on.
 
     After /compact it is the client asking for the summary the new conversation opens
@@ -107,20 +112,20 @@ def _closing(main: Sequence[RequestRecord], mains: Sequence[str]) -> set[str]:
     for conversation in mains[:-1]:
         last = [r for r in main if r.conversation_id == conversation][-1]
         if last.kept is None and last.newest == "typed":
-            closing.add(last.request_id)
+            closing.add(last)
     return closing
 
 
-def _kinds(records: Sequence[RequestRecord], closing: set[str]) -> dict[str, RowKind]:
+def _kinds(records: Sequence[RequestRecord], closing: set[RequestRecord]) -> dict[RequestRecord, RowKind]:
     """What each request was, from its newest message and how its conversation settled it."""
     contested = _contested(records)
-    kinds: dict[str, RowKind] = {}
+    kinds: dict[RequestRecord, RowKind] = {}
     seen: set[tuple[str, str]] = set()
     for record in records:
         if record.conversation_id is not None:
             key = (record.conversation_id, record.newest_hash)
             if key in seen:
-                kinds[record.request_id] = "retry"
+                kinds[record] = "retry"
                 continue
             seen.add(key)
         kind: RowKind
@@ -132,30 +137,30 @@ def _kinds(records: Sequence[RequestRecord], closing: set[str]) -> dict[str, Row
             kind = "task"
         elif record.conversation_id is None:
             kind = "unclaimed"
-        elif record.request_id in closing:
+        elif record in closing:
             kind = "closing"
-        elif record.kept is None and record.request_id in contested:
+        elif record.kept is None and record in contested:
             kind = "pending"
         else:
             kind = "turn"
-        kinds[record.request_id] = kind
+        kinds[record] = kind
     return kinds
 
 
-def _contested(records: Sequence[RequestRecord]) -> set[str]:
+def _contested(records: Sequence[RequestRecord]) -> set[RequestRecord]:
     """Requests whose position a later request of the same conversation filled with another newest message.
 
     Until one of them is carried on, neither is known to be kept, so a typed message there
     is not yet a turn.
     """
-    contested: set[str] = set()
+    contested: set[RequestRecord] = set()
     later: dict[tuple[str, int], set[str]] = {}
     for record in reversed(records):
         if record.conversation_id is None:
             continue
         hashes = later.setdefault((record.conversation_id, record.position), set())
         if hashes - {record.newest_hash}:
-            contested.add(record.request_id)
+            contested.add(record)
         hashes.add(record.newest_hash)
     return contested
 

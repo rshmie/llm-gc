@@ -155,3 +155,27 @@ class TestAnOpenToolRound:
 
     def test_a_conversation_with_no_requests_has_no_round_open(self):
         assert RequestLog().tool_round_open("s_9") is False
+
+
+class TestARecordNamesItsRequest:
+    def test_a_record_takes_the_client_requests_id(self):
+        record = RequestLog(clock=_Clock()).begin(conversation_id=None, origin=MAIN, hashes=_chain("a"),
+                                                  newest="typed", model="m", tokens_from_client=10,
+                                                  tokens_forwarded=10, collected=True, request_id="3f2a9c01b7de")
+
+        assert record.request_id == "3f2a9c01b7de"
+
+    def test_a_record_opened_outside_a_request_gets_an_id_of_its_own(self):
+        log = RequestLog(clock=_Clock())
+
+        assert _begin(log, None, "a").request_id != _begin(log, None, "b").request_id
+
+    def test_two_records_that_agree_in_every_field_are_still_two(self):
+        """A record is one forward, settled as later requests arrive: who it is never depends on its fields."""
+        log = RequestLog(clock=lambda: datetime(2026, 10, 13, 12, 0, tzinfo=timezone.utc))
+        first = log.begin(conversation_id="s_1", origin=MAIN, hashes=_chain("ab"), newest="typed", model="m",
+                          tokens_from_client=10, tokens_forwarded=10, collected=True, request_id="3f2a9c01b7de")
+        second = log.begin(conversation_id="s_1", origin=MAIN, hashes=_chain("ab"), newest="typed", model="m",
+                           tokens_from_client=10, tokens_forwarded=10, collected=True, request_id="3f2a9c01b7de")
+
+        assert first != second and len({first, second}) == 2

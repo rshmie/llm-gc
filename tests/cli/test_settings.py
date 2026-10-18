@@ -116,6 +116,17 @@ def test_an_upstream_that_is_not_an_http_url_is_refused(upstream):
         load_settings(upstream=upstream)
 
 
+def test_logs_are_text_unless_json_is_asked_for(isolated, monkeypatch):
+    assert load_settings().log_format == "text"
+    monkeypatch.setenv("LLM_GC_LOG_FORMAT", "json")
+    assert load_settings().log_format == "json"
+
+
+def test_a_log_format_llm_gc_cannot_write_is_refused():
+    with pytest.raises(ConfigError, match="log_format"):
+        load_settings(log_format="xml")
+
+
 def test_an_upstream_pointing_back_at_the_proxy_is_refused():
     with pytest.raises(ConfigError, match="forwarded back"):
         load_settings(upstream="http://localhost:9900")

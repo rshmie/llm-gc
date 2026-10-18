@@ -16,6 +16,7 @@ See doc/design/proxy/overview.md.
 import asyncio
 import contextlib
 import logging
+import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -60,6 +61,7 @@ from llm_gc.proxy.cache_watch import CacheWatch
 from llm_gc.proxy.model_windows import ModelWindow, ModelWindows, WindowLookup
 from llm_gc.proxy.session_identity import SESSION_HEADER, chain_hashes, client_origin
 from llm_gc.proxy.reply_thinking import ReplyThinking
+from llm_gc.proxy.request_id import RequestIdMiddleware, current_request_id
 from llm_gc.proxy.request_log import RequestLog, RequestRecord, newest_kind
 from llm_gc.proxy.subagent_links import SpawnLinker
 from llm_gc.proxy.traffic import TrafficLedger, token_rate
@@ -84,8 +86,13 @@ MAX_REQUEST_BYTES = 32 * 1024 * 1024
 # dashboard: the copy is held until the stream ends, once per request in flight.
 _REPLY_KEPT_MAX_BYTES = 4 * 1024 * 1024
 
-# A model name longer than this is not a model name; it is not kept or shown.
-_MODEL_NAME_MAX_CHARS = 128
+# A name from outside LLM-GC - the model a request names, the upstream's ID for it - longer than
+# this is not a name. It is not kept or shown.
+_NAME_MAX_CHARS = 128
+
+# The provider's own ID for a request: the one its error bodies carry, and so the one a client shows
+# with an error. The answer line names it, so an error the client reports leads to the line.
+_UPSTREAM_REQUEST_ID_HEADER = "request-id"
 
 # Answers that say the upstream is under pressure: rate limited, or overloaded. LLM-GC's own model
 # calls share it with the client, so they pause rather than add to it.
@@ -215,6 +222,7 @@ def create_app(
                 await app.state.http_client.aclose()
 
     app = FastAPI(title="LLM-GC Proxy", version=APP_VERSION, lifespan=lifespan)
+    app.add_middleware(RequestIdMiddleware)
     app.state.gc_service = gc_service
     app.state.metrics = ProxyMetrics()
     app.state.upstream_base_url = upstream_base_url.rstrip("/")
@@ -283,6 +291,9 @@ async def _handle(app: FastAPI, request: Request) -> Response:
     body = await _read_body(request)
     if body is None:
         return _too_large()
+    # LLM-GC's own time on the request path starts once the body is in: reading it is the
+    # client's upload, which it would make to the provider anyway.
+    received = time.perf_counter()
     headers = forwardable_headers(dict(request.headers))
     target = _target(request)
 
@@ -340,8 +351,10 @@ async def _handle(app: FastAPI, request: Request) -> Response:
         on_outline, _ = _measure_request(app, session_id, origin, payload, client_messages, hashes, client_tokens,
                                          client_tokens, window, collected, sends_thinking=client_sends_thinking,
                                          carries_front=False)
+        sent = time.perf_counter()
         response = await _send(app, body, headers, streaming, target, on_outline=on_outline)
-        _log_answer(response.status_code, payload, client_tokens, client_tokens, session_id)
+        _log_answer(response, payload, client_tokens, client_tokens, session_id,
+                    prepared_s=sent - received, upstream_s=time.perf_counter() - sent, streamed=streaming)
         return response
 
     metrics.gc_applied += 1
@@ -349,6 +362,7 @@ async def _handle(app: FastAPI, request: Request) -> Response:
     forwarded_tokens = forwarded.tokens + fixed_tokens
     on_outline, _ = _measure_request(app, session_id, origin, payload, client_messages, hashes, client_tokens,
                                      forwarded_tokens, window, collected, sends_thinking=forwarded.sends_thinking)
+    sent = time.perf_counter()
     response = await _send(app, forward_body, headers, streaming, target,
                            on_complete=_reply_observer(app, session_id, new_turn, streaming), on_outline=on_outline)
     if response.status_code == _REFUSED_AS_INVALID and forward_body is not body:
@@ -364,7 +378,9 @@ async def _handle(app: FastAPI, request: Request) -> Response:
             record.resent_as_written = True
         response = await _send(app, body, headers, streaming, target,
                                on_complete=_reply_observer(app, session_id, new_turn, streaming), on_outline=on_outline)
-    _log_answer(response.status_code, payload, client_tokens, forwarded_tokens, session_id)
+    # A refused rewrite's round trip counts as the upstream's time: LLM-GC's is how long it took to forward at first.
+    _log_answer(response, payload, client_tokens, forwarded_tokens, session_id,
+                prepared_s=sent - received, upstream_s=time.perf_counter() - sent, streamed=streaming)
 
     # Aging prepares the next request from the conversation recorded so far; it
     # never depends on this reply, which the next request will show us exactly.
@@ -385,33 +401,54 @@ def _log_refused_rewrite(response: Response, payload: dict[str, Any], session_id
                    extra={"session_id": session_id, "status": response.status_code, "reason": reason})
 
 
-def _log_answer(status: int, payload: dict[str, Any], from_client: int, forwarded: int,
-                session_id: str | None) -> None:
+def _log_answer(response: Response, payload: dict[str, Any], from_client: int, forwarded: int,
+                session_id: str | None, *, prepared_s: float, upstream_s: float, streamed: bool) -> None:
     """One line per conversation request, logged once the upstream has answered.
 
     After forwarding rather than before, so the line says whether the request worked: one
     the upstream refused must not read like one that went through. The text carries the
-    counts, because the console format shows only the message; `extra` carries them for a
-    structured handler.
+    counts and times, because the console format shows only the message; `extra` carries
+    them for the JSON format.
+
+    `prepared_s` is LLM-GC's own time on the request path, from reading the body to forwarding
+    it. `upstream_s` runs from then until the upstream answered; for a streamed reply, until it
+    began answering, since the line is written before the stream is relayed.
     """
+    status = response.status_code
     name = _model_name(payload) or "?"
+    upstream_id = _short_printable(response.headers.get(_UPSTREAM_REQUEST_ID_HEADER))
     extra = {"session_id": session_id, "status": status, "model": name,
-             "tokens_from_client": from_client, "tokens_forwarded": forwarded}
+             "tokens_from_client": from_client, "tokens_forwarded": forwarded,
+             "prepared_ms": round(prepared_s * 1000), "upstream_ms": round(upstream_s * 1000),
+             "streamed": streamed, "upstream_request_id": upstream_id}
     # Names the conversation, as the dashboard's picker does; a first turn belongs to none yet.
     where = f" in {session_id}" if session_id is not None else ""
     if status < 400:
         share = f"{forwarded / from_client:.0%}" if from_client else "-"
-        logger.info("%s -> %d%s: client sent %s tokens, LLM-GC forwarded %s (%s)",
-                    name, status, where, f"{from_client:,}", f"{forwarded:,}", share, extra=extra)
+        logger.info("%s -> %d%s: client sent %s tokens, LLM-GC forwarded %s (%s) in %s; the upstream %s in %s",
+                    name, status, where, f"{from_client:,}", f"{forwarded:,}", share, _format_duration(prepared_s),
+                    "began answering" if streamed else "answered", _format_duration(upstream_s), extra=extra)
     else:
-        logger.warning("%s -> %d%s: %s", name, status, where, _ERROR_STATUS_HINTS.get(status, _ERROR_STATUS_HINT),
-                       extra=extra)
+        # The client shows the upstream's own ID with its error; naming it here leads from that error to this line.
+        cited = f" (upstream request {upstream_id})" if upstream_id is not None else ""
+        logger.warning("%s -> %d%s after %s: %s%s", name, status, where, _format_duration(upstream_s),
+                       _ERROR_STATUS_HINTS.get(status, _ERROR_STATUS_HINT), cited, extra=extra)
+
+
+def _format_duration(seconds: float) -> str:
+    if seconds < 0.001:
+        return "<1 ms"
+    return f"{seconds * 1000:.0f} ms" if seconds < 1 else f"{seconds:.1f} s"
 
 
 def _model_name(payload: dict[str, Any]) -> str | None:
     """The model the request names. It comes from the client, so only a short printable string is taken."""
-    model = payload.get("model")
-    return model if isinstance(model, str) and model.isprintable() and len(model) <= _MODEL_NAME_MAX_CHARS else None
+    return _short_printable(payload.get("model"))
+
+
+def _short_printable(value: object) -> str | None:
+    """`value` if it is a short printable string, so it cannot forge or flood a log line; otherwise None."""
+    return value if isinstance(value, str) and value.isprintable() and len(value) <= _NAME_MAX_CHARS else None
 
 
 def _collected(app: FastAPI, origin: ClientOrigin | None) -> bool:
@@ -448,7 +485,8 @@ def _measure_request(app: FastAPI, session_id: str | None, origin: ClientOrigin 
         record = metrics.request_log.begin(conversation_id=session_id, origin=origin, hashes=hashes,
                                            newest=newest_kind(client_messages[-1]), model=model,
                                            tokens_from_client=from_client, tokens_forwarded=forwarded,
-                                           collected=collected, switch_reasons=carried)
+                                           collected=collected, switch_reasons=carried,
+                                           request_id=current_request_id())
         linker: SpawnLinker | None = app.state.spawn_linker
         if linker is not None and origin is not None and origin.agent_id is not None and record.position == 1:
             first = client_messages[0]
@@ -861,13 +899,7 @@ def _unreachable(err: httpx2.RequestError, on_outline: OutlineHandler | None = N
     logger.warning("could not reach the provider", extra={"error_type": type(err).__name__})
     if on_outline is not None:
         on_outline(ReplyOutline(status=502), {})
-    return Response(
-        content=_dump_json_bytes(
-            {"error": {"type": "api_error", "message": f"llm-gc could not reach the provider: {type(err).__name__}"}}
-        ),
-        status_code=502,
-        media_type="application/json",
-    )
+    return _error_response(502, "api_error", f"llm-gc could not reach the provider: {type(err).__name__}")
 
 
 async def _read_body(request: Request) -> bytes | None:
@@ -885,13 +917,24 @@ async def _read_body(request: Request) -> bytes | None:
 
 
 def _too_large() -> Response:
-    return Response(
-        content=_dump_json_bytes({"type": "error", "error": {
-            "type": "request_too_large",
-            "message": f"request body exceeds {MAX_REQUEST_BYTES} bytes, the provider's own limit"}}),
-        status_code=413,
-        media_type="application/json",
-    )
+    # Logged so the request ID in the client's error leads somewhere: no other line is written for it.
+    logger.warning("refused a request body over %s bytes, the provider's own limit; it was not forwarded",
+                   f"{MAX_REQUEST_BYTES:,}", extra={"status": 413})
+    return _error_response(413, "request_too_large",
+                           f"request body exceeds {MAX_REQUEST_BYTES} bytes, the provider's own limit")
+
+
+def _error_response(status: int, error_type: str, message: str) -> Response:
+    """An error LLM-GC answers itself, in the provider's error envelope, which clients already handle.
+
+    `request_id` sits where the provider puts its own, and holds the ID that LLM-GC's log lines
+    and the Requests tab show for this request. The request never reached the provider, so
+    there is no ID of the provider's to put there.
+    """
+    body: dict[str, Any] = {"type": "error", "error": {"type": error_type, "message": message}}
+    if (request_id := current_request_id()) is not None:
+        body["request_id"] = request_id
+    return Response(content=_dump_json_bytes(body), status_code=status, media_type="application/json")
 
 
 def _parse_json(body: bytes) -> dict[str, Any]:
