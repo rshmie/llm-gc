@@ -54,6 +54,7 @@ from llm_gc.proxy.anthropic_translation import (
     reply_text,
     rewrite_messages,
     rewrite_overhead_tokens,
+    sends_attachments,
     sends_thinking,
     sent_thinking_tokens,
 )
@@ -331,7 +332,7 @@ async def _handle(app: FastAPI, request: Request) -> Response:
         + sum(instruction.token_count for instruction in instructions)
         + fixed_tokens
     )
-    client_sends_thinking = sends_thinking(client_messages)
+    client_holds_estimates = _holds_estimates(client_messages)
 
     # Everything LLM-GC does before forwarding sits inside this one guard, so no
     # failure of ours can stop the conversation: the worst case is no GC.
@@ -374,7 +375,7 @@ async def _handle(app: FastAPI, request: Request) -> Response:
             client_tokens,
             window,
             collected,
-            sends_thinking=client_sends_thinking,
+            holds_estimates=client_holds_estimates,
             carries_front=False,
         )
         sent = time.perf_counter()
@@ -405,7 +406,7 @@ async def _handle(app: FastAPI, request: Request) -> Response:
         forwarded_tokens,
         window,
         collected,
-        sends_thinking=forwarded.sends_thinking,
+        holds_estimates=forwarded.holds_estimates,
     )
     sent = time.perf_counter()
     response = await _send(
@@ -434,7 +435,7 @@ async def _handle(app: FastAPI, request: Request) -> Response:
             client_tokens,
             window,
             collected,
-            sends_thinking=client_sends_thinking,
+            holds_estimates=client_holds_estimates,
             carries_front=False,
         )
         if record is not None:
@@ -590,12 +591,12 @@ def _measure_request(
     window: ModelWindow | None,
     collected: bool,
     *,
-    sends_thinking: bool,
+    holds_estimates: bool,
     carries_front: bool = True,
 ) -> tuple[OutlineHandler | None, RequestRecord | None]:
     """Count a request in the ledger and open its record; return what to do with its reply's outline, and the record.
 
-    `sends_thinking`: the forwarded request still contains thinking blocks.
+    `holds_estimates`: the forwarded request holds parts LLM-GC counts only by estimate.
     `carries_front` False: the request goes as the client wrote it, so it carries no collection.
     Never fails the request: a failure here costs the counts, not the answer.
     """
@@ -649,10 +650,12 @@ def _measure_request(
             metrics.traffic.restore_waiting(session_id, carried)
         if outline.usage is not None:
             TrafficLedger.record_usage(counted, outline.usage, forwarded, carried_collection=bool(carried))
-            # Only a request without thinking gives a clean rate: the count of thinking is itself an estimate.
-            rate = token_rate(forwarded, outline.usage) if not sends_thinking else None
+            # Only a request LLM-GC counts exactly gives a clean rate.
+            rate = token_rate(forwarded, outline.usage) if not holds_estimates else None
             if rate is not None:
-                app.state.reply_thinking.observe_rate(model, rate)
+                app.state.reply_thinking.observe_rate(
+                    model, provider_tokens=outline.usage.prompt_tokens, forwarded_tokens=forwarded
+                )
             if session_id is not None:
                 metrics.cache_watch.observe(
                     session_id, started_at=started_at, lifetime_s=lifetime_s, usage=outline.usage
@@ -674,7 +677,7 @@ def _measure_request(
 
 
 def _rate_until_measured(app: FastAPI, session_id: str, model: str | None) -> float | None:
-    """The model's latest rate, for a conversation that has not measured its own yet.
+    """The model's rate, for a conversation that has not measured its own yet.
 
     A conversation's first request carries no thinking, but it arrives before the conversation
     is known, so its rate is kept only for its model.
@@ -837,7 +840,7 @@ async def _apply_gc(
         + instruction_tokens([*history, new_turn])
         + sent_whole
     )
-    whole = _Forwarded(original_body, client_tokens, sends_thinking([*history, new_turn]))
+    whole = _Forwarded(original_body, client_tokens, _holds_estimates([*history, new_turn]))
     if session_id is None:
         return whole
 
@@ -874,7 +877,7 @@ async def _apply_gc(
         + instruction_tokens(forwarded)
         + sent_whole
     )
-    return _Forwarded(_dump_json(body), forwarded_tokens, sends_thinking(forwarded, strip_thinking_before=valid_from))
+    return _Forwarded(_dump_json(body), forwarded_tokens, _holds_estimates(forwarded, strip_thinking_before=valid_from))
 
 
 @dataclass(frozen=True, slots=True)
@@ -883,7 +886,17 @@ class _Forwarded:
 
     body: bytes
     tokens: int  # its conversation's tokens, thinking included
-    sends_thinking: bool  # whether any thinking block is left in it
+    holds_estimates: bool  # whether it holds parts LLM-GC counts only by estimate (see `_holds_estimates`)
+
+
+def _holds_estimates(messages: Sequence[Message], strip_thinking_before: int = 0) -> bool:
+    """Return whether these turns, as forwarded, hold parts LLM-GC counts only by estimate.
+
+    Those parts are thinking, whose size is estimated from the reply that wrote it, and
+    images and documents, which count as a placeholder. The provider bills each at its
+    real size, so a request holding one gives no clean token rate.
+    """
+    return sends_thinking(messages, strip_thinking_before) or sends_attachments(messages)
 
 
 async def _age(app: FastAPI, session_id: str) -> None:

@@ -21,6 +21,8 @@ from llm_gc.utils import count_tokens
 from tests.proxy.test_proxy_server import API_KEY, UPSTREAM_OK, _body, _is_front, _post, _proxy, _streaming_upstream
 
 MODEL = "claude-opus-5-5"
+SCREENSHOT = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}}
+PDF = {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQ="}}
 # Shaped like a real signature: base64 text, long enough to be realistic.
 SIGNATURE = "EqQBCkgIARABGAIiQL" + "q7Kd0Zr9fXw2Tb4" * 40
 OTHER_SIGNATURE = "EqQBCkgIARABGAIiQL" + "M3nVb8Lp1sYc6Qe" * 40
@@ -60,7 +62,7 @@ def _sent_back(signature: str = SIGNATURE, text: str = "Postgres.") -> list:
 
 def _replies(rate: float = 1.5, **kwargs) -> ReplyThinking:
     replies = ReplyThinking(**kwargs)
-    replies.observe_rate(MODEL, rate)
+    replies.observe_rate(MODEL, provider_tokens=round(rate * 1_000), forwarded_tokens=1_000)
     return replies
 
 
@@ -84,7 +86,7 @@ class TestSizingAReplysThinking:
         """Its size must not move from one request to the next as newer rates arrive."""
         replies = _replies(rate=1.5)
         replies.remember("k", output_tokens=900, model=MODEL)
-        replies.observe_rate(MODEL, 3.0)
+        replies.observe_rate(MODEL, provider_tokens=9_000, forwarded_tokens=1_000)
 
         assert replies.tokens(["k"], visible_tokens=40, model=MODEL) == 600 - 40
 
@@ -120,6 +122,30 @@ class TestSizingAReplysThinking:
         assert len(replies) == 2
         assert replies.tokens(["newer"], visible_tokens=0, model=MODEL) == 0
         assert replies.tokens(["old"], visible_tokens=0, model=MODEL) == 900
+
+
+class TestTheModelsRate:
+    def test_each_request_weighs_by_its_size(self):
+        """Live run: an 843-token side request replaced the rate measured on the conversation's
+        55k-token first request, and every reply after it had its thinking converted at 1.55, not 1.48."""
+        replies = ReplyThinking()
+        replies.observe_rate(MODEL, provider_tokens=81_326, forwarded_tokens=54_945)
+        replies.observe_rate(MODEL, provider_tokens=1_304, forwarded_tokens=843)
+
+        assert replies.rate(MODEL) == pytest.approx(1.4812, abs=1e-4)
+
+    def test_each_model_has_its_own(self):
+        replies = _replies(rate=1.5)
+        replies.observe_rate("claude-sonnet-5-5", provider_tokens=1_200, forwarded_tokens=1_000)
+
+        assert replies.rate(MODEL) == 1.5
+        assert replies.rate("claude-sonnet-5-5") == 1.2
+        assert replies.rate("never seen") is None
+
+    @pytest.mark.parametrize("provider_tokens, forwarded_tokens", [(0, 1_000), (1_000, 0)])
+    def test_a_count_of_zero_is_a_caller_bug(self, provider_tokens, forwarded_tokens):
+        with pytest.raises(ValueError):
+            ReplyThinking().observe_rate(MODEL, provider_tokens=provider_tokens, forwarded_tokens=forwarded_tokens)
 
 
 class TestKnowingAThinkingBlock:
@@ -268,6 +294,35 @@ class TestATurnCarriesItsReplysThinking:
         _post(client, later, headers={SESSION_HEADER: "s"})
 
         assert service.session_manager.store.get("s").token_rate == 300 / forwarded
+
+    @pytest.mark.parametrize(
+        "newest, measured",
+        [
+            ({"role": "user", "content": "what is wrong here?"}, True),
+            ({"role": "user", "content": [SCREENSHOT, {"type": "text", "text": "what is wrong here?"}]}, False),
+            ({"role": "user", "content": [PDF, {"type": "text", "text": "what is wrong here?"}]}, False),
+            (
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": [SCREENSHOT]}]},
+                False,
+            ),
+        ],
+        ids=["text", "image", "document", "image in a tool result"],
+    )
+    def test_a_request_with_an_image_or_a_document_measures_no_rate(self, newest, measured):
+        """Live run: the provider billed two screenshots at about 7,600 tokens, which LLM-GC counted as two
+        placeholders. Measured on that request, the rate rose from 1.48 to 1.60, and every reply after it
+        had its thinking converted at 1.60."""
+        usage = {"input_tokens": 5_000, "output_tokens": 20}
+        client, service, _, _ = _proxy(lambda request: httpx2.Response(200, json={**UPSTREAM_OK, "usage": usage}))
+        history = [
+            {"role": "user", "content": "take a screenshot of the dashboard"},
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "screenshot", "input": {}}]},
+        ]
+        _post(client, {"model": MODEL, "max_tokens": 64, "messages": [*history, newest]})
+        [session_id] = service.session_manager.store.active_session_ids()
+
+        assert (client.app.state.reply_thinking.rate(MODEL) is not None) is measured
+        assert (service.session_manager.store.get(session_id).token_rate is not None) is measured
 
     def test_an_unfinished_or_refused_reply_is_not_measured(self):
         cut_short = _thinking_stream().split(b"event: message_stop")[0]

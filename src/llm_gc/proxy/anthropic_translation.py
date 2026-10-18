@@ -794,6 +794,20 @@ def sends_thinking(messages: Iterable[Message], strip_thinking_before: int = 0) 
     )
 
 
+def sends_attachments(messages: Iterable[Message]) -> bool:
+    """Return whether any of these turns carries an image or a document, directly or inside a tool result."""
+    return any(_holds_attachment(message.raw_content) for message in messages)
+
+
+def _holds_attachment(content: object) -> bool:
+    return isinstance(content, list) and any(
+        isinstance(block, dict)
+        and isinstance(kind := block.get("type"), str)
+        and (kind in _ATTACHMENTS or (kind == "tool_result" and _holds_attachment(block.get("content"))))
+        for block in content
+    )
+
+
 def _keeps_thinking(message: Message, strip_thinking_before: int) -> bool:
     # The front has a negative index and no thinking; turns before `strip_thinking_before` lose theirs.
     return not 0 <= message.turn_index < strip_thinking_before

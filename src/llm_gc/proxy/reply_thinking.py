@@ -6,9 +6,15 @@ because the thinking is encrypted. So the size is estimated once, from the reply
 and looked up by key when the turn comes back.
 
 The provider's output count is converted to LLM-GC's count with a rate measured only on
-requests that carried no thinking. If requests with thinking were used, the estimate would
-feed its own rate, and with a model that does not bill old thinking both would grow
-without limit.
+requests LLM-GC counts exactly: no thinking, no images, no documents. If requests with
+thinking were used, the estimate would feed its own rate, and with a model that does not
+bill old thinking both would grow without limit. An image or a document counts as a
+placeholder in LLM-GC's count but at its real size in the provider's, so it would raise
+the rate.
+
+The rate is all those requests' provider tokens over all their LLM-GC tokens, so each
+request weighs by its size. A small side request, such as a title the client asks for,
+has a different mix of text, so it barely moves a rate measured on whole conversations.
 
 This module is provider-neutral: keys are opaque strings made by the provider's
 translation module. It is used only from the event loop, so it needs no lock.
@@ -39,26 +45,31 @@ class ReplyThinking:
         if capacity < 1:
             raise ValueError(f"capacity must be at least 1, got {capacity}")
         self._replies: OrderedDict[str, _Measured] = OrderedDict()
-        self._rates: OrderedDict[str | None, float] = OrderedDict()
+        # Per model: (provider tokens, LLM-GC tokens), summed over the requests that measured it.
+        self._measured: OrderedDict[str | None, tuple[int, int]] = OrderedDict()
         self._capacity = capacity
 
-    def observe_rate(self, model: str | None, token_rate: float) -> None:
-        """Record a model's latest token rate, measured on a request that carried no thinking."""
-        self._rates[model] = token_rate
-        self._rates.move_to_end(model)
-        while len(self._rates) > MODELS_REMEMBERED:
-            self._rates.popitem(last=False)
+    def observe_rate(self, model: str | None, *, provider_tokens: int, forwarded_tokens: int) -> None:
+        """Add one request to its model's rate. Only for a request LLM-GC counts exactly."""
+        if provider_tokens <= 0 or forwarded_tokens <= 0:
+            raise ValueError(f"a rate is measured on two positive counts, not {provider_tokens} and {forwarded_tokens}")
+        provider, forwarded = self._measured.get(model, (0, 0))
+        self._measured[model] = (provider + provider_tokens, forwarded + forwarded_tokens)
+        self._measured.move_to_end(model)
+        while len(self._measured) > MODELS_REMEMBERED:
+            self._measured.popitem(last=False)
 
     def rate(self, model: str | None) -> float | None:
-        """Return the model's latest token rate, or None if none has been measured."""
-        return self._rates.get(model)
+        """Return the model's token rate, or None if no request has measured it."""
+        measured = self._measured.get(model)
+        return measured[0] / measured[1] if measured is not None else None
 
     def remember(self, key: str, *, output_tokens: int, model: str | None) -> None:
         """Store a finished reply's output under the key of its first thinking block.
 
         Skipped if no rate is known for the model yet, because the output cannot be converted.
         """
-        rate = self._rates.get(model)
+        rate = self.rate(model)
         if rate is None:
             return
         self._replies[key] = _Measured(output_tokens, rate, model)
