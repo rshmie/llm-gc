@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from llm_gc.models import ClientOrigin, Message
 from llm_gc.proxy.anthropic_translation import ReplyOutline, ToolCall
 from llm_gc.proxy.request_log import RequestLog, newest_kind
+from tests.models.support import turn_with_typed_words
 
 MAIN = ClientOrigin(session_id="cc-1")
 AGENT = ClientOrigin(session_id="cc-1", agent_id="agent-a")
@@ -123,6 +124,11 @@ def test_a_requests_newest_message_is_named_by_who_wrote_it():
 
     assert [newest_kind(m) for m in (typed, results, report, reply)] == ["typed", "tool_results", "relayed",
                                                                          "assistant"]
+
+
+def test_words_typed_after_interrupting_a_tool_round_are_typed():
+    """The person's turn in the session trace starts there: what follows answers their new words."""
+    assert newest_kind(turn_with_typed_words(6, "t", "Stop, use MySQL.")) == "typed"
 
 
 def test_a_newest_message_the_client_wrote_all_of_is_not_typed():

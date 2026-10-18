@@ -55,13 +55,13 @@ nothing after it can change them.
 
 Each turn starts on a new line with its label, `[turn N] speaker:`. The speaker is
 `user` for the person, `assistant` for the assistant, `subagent report` for another
-agent's findings relayed to the assistant, and `client` for text the user's
-application wrote into the conversation: the instructions a command expands to, a
-local command's output, a notice that a background task finished. A turn written
-partly by the user and partly by their client has one line for each part, under
-the same turn number. `tool results` is what the assistant's tools returned. Tool
-output always opens `[tool result]`, also inside a `user` turn that holds other
-text beside it.
+agent's findings relayed to the assistant, `tool results` for what the assistant's
+tools returned, and `client` for text the user's application wrote into the
+conversation: the instructions a command expands to, a local command's output, a
+notice that a background task finished. A turn written by more than one of them
+has one line for each part, under the same turn number. When the user interrupts
+the assistant's tools, what they type comes in the turn that carries the tools'
+output, on a `user` line of its own.
 
 A turn's own text never ends the transcript or starts another turn: where it contains one of the
 markers, or a line that opens like a label, a backslash is inserted

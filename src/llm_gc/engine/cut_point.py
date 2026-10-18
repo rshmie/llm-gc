@@ -11,7 +11,7 @@ request because of LLM-GC.
 from collections.abc import Sequence
 
 from llm_gc.models import Message
-from llm_gc.models.message import said_by_user, tool_result_ids, tool_use_ids
+from llm_gc.models.message import opens_exchange, tool_result_ids, tool_use_ids
 
 
 def find_cut_point(turns: Sequence[Message], keep_last: int) -> int:
@@ -38,7 +38,7 @@ def find_cut_point(turns: Sequence[Message], keep_last: int) -> int:
 def _span_starts(turns: Sequence[Message]) -> list[bool]:
     """For each cut position, whether a span may begin there.
 
-    Where an exchange opens - a turn the user wrote (`said_by_user`) - and before
+    Where an exchange opens (`opens_exchange`), and before
     an assistant turn in an exchange the assistant has already answered: between the
     tool rounds of a long agentic exchange, where `group_exchanges` divides one too.
     Never between a question and its first answer. After the last turn, always.
@@ -46,7 +46,7 @@ def _span_starts(turns: Sequence[Message]) -> list[bool]:
     starts: list[bool] = []
     answered = False
     for turn in turns:
-        opens = said_by_user(turn)
+        opens = opens_exchange(turn)
         starts.append(opens or (turn.role == "assistant" and answered))
         answered = False if opens else answered or turn.role == "assistant"
     return starts + [True]

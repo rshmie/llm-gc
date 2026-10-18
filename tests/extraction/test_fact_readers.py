@@ -17,7 +17,7 @@ from llm_gc.llm.prompts import FACTS_CLOSE, FACTS_OPEN, FACTS_PROMPT, TRANSCRIPT
 from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.generation_snapshot import file_knowledge
 from llm_gc.models.knowledge_entry import KnowledgeStatus, KnowledgeType
-from tests.models.support import COMMAND, NOTICE, SKILL_RULES, turn_with_client_text
+from tests.models.support import COMMAND, NOTICE, SKILL_RULES, turn_with_client_text, turn_with_typed_words
 
 
 def _said(turn: int, role: str, text: str, tokens: int = 20) -> Message:
@@ -220,6 +220,18 @@ class TestTextTheClientWroteIsNotTheUsers:
 
         assert "[turn 8] client: <task-notification>" in provider.calls[0].messages[0].content
         assert fact.speaker == "assistant"
+
+    def test_words_typed_beside_tool_output_are_shown_alone_and_their_facts_are_the_users(self):
+        """Someone who interrupts to change a decision must have it filed as theirs, or the old one stays current."""
+        typed = turn_with_typed_words(9, "t1", "Stop, use MySQL.", output="DATABASE_URL=postgres://db")
+        provider = FakeProvider(responses=[_answer([{"turn": 9, "topic": "database", "value": "MySQL",
+                                                     "kind": "decision"}])])
+
+        [fact] = _read(provider, [(typed,)])
+
+        content = provider.calls[0].messages[0].content
+        assert "[turn 9] user: Stop, use MySQL." in content and "postgres" not in content
+        assert fact.speaker == "user"
 
     def test_patterns_read_only_the_words_the_person_wrote(self):
         mixed = turn_with_client_text(6, (False, "The database is Postgres."), (True, SKILL_RULES))

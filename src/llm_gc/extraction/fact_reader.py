@@ -67,7 +67,7 @@ class PatternFactReader:
 
 
 def _person_words(turn: Message) -> Message:
-    """The turn with only the words the person wrote, so a pattern never matches text the client wrote."""
-    if not turn.client_written:
+    """The turn with only the words the person wrote, so a pattern never matches text the client or a tool wrote."""
+    if not turn.client_written and not turn.tool_output:
         return turn
-    return turn.model_copy(update={"content": person_text(turn), "client_written": ()})
+    return turn.model_copy(update={"content": person_text(turn), "client_written": (), "tool_output": ()})

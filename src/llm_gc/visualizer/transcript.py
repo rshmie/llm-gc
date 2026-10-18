@@ -35,14 +35,14 @@ class TranscriptTurn:
     tokens: int
     instruction_tokens: int = 0   # the client's instructions inside the turn as it sends them now
     relayed: bool = False         # another agent's report, relayed under the user role
-    parts: list[TurnPart] | None = None   # the text by writer, when the client wrote some of it
+    parts: list[TurnPart] | None = None   # the text by writer, when more than one wrote it
 
     @property
     def person_text(self) -> str:
         """The words the person wrote, without what the client wrote into the turn."""
         if self.parts is None:
             return self.text
-        return "\n\n".join(part.text for part in self.parts if not part.by_client)
+        return "\n\n".join(part.text for part in self.parts if part.writer == "speaker")
 
 
 class TranscriptRecorder:

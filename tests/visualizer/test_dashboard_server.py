@@ -323,10 +323,10 @@ class TestTranscript:
 
         turns = _client(service, monitor, transcripts=recorder).get("/api/sessions/s/transcript").json()["turns"]
 
-        assert turns[0]["parts"] == [{"by_client": False, "text": "Run the audit 🙂"},
-                                     {"by_client": True, "text": SKILL_RULES}]
+        assert turns[0]["parts"] == [{"writer": "speaker", "text": "Run the audit 🙂"},
+                                     {"writer": "client", "text": SKILL_RULES}]
         assert turns[1]["parts"] is None
-        assert turns[2]["parts"] == [{"by_client": True, "text": NOTICE}]
+        assert turns[2]["parts"] == [{"writer": "client", "text": NOTICE}]
 
     def test_instructions_are_sized_as_the_client_sends_them_now(self):
         """The record keeps a turn as first seen; Claude Code rewrites the instructions in

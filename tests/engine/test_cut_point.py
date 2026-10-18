@@ -7,6 +7,7 @@ from hypothesis import strategies as st
 from llm_gc.engine.cut_point import _span_starts, find_cut_point
 from llm_gc.models.message import tool_result_ids, tool_use_ids
 from llm_gc.models import Message
+from tests.models.support import turn_with_typed_words
 
 
 def _text(index: int, role: str) -> Message:
@@ -50,6 +51,13 @@ class TestToolRoundsAreNeverSplit:
     def test_parallel_calls_answered_in_one_turn_stay_together(self):
         turns = [_text(0, "user"), _call(1, "a", "b"), _result(2, "a", "b"), _text(3, "assistant"), _text(4, "user")]
         assert find_cut_point(turns, keep_last=2) == 3
+
+    def test_words_typed_beside_a_tool_result_begin_no_span(self):
+        """After an interrupt, the person's words arrive in the turn carrying the round's results. Theirs, but a
+        span beginning there would part the results from their call, and the reply after them begins none."""
+        turns = [_text(0, "user"), _call(1, "t1"), turn_with_typed_words(2, "t1", "Stop, use MySQL."),
+                 _text(3, "assistant"), _text(4, "user")]
+        assert _span_starts(turns) == [True, False, False, True, True, True]
 
     def test_a_question_stays_with_the_tool_call_that_answers_it(self):
         """Cutting at 1 would separate the question from its first answer, a tool call."""

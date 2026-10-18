@@ -16,7 +16,7 @@ from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.knowledge_entry import KnowledgeType
 from llm_gc.models.message import tool_result_ids, tool_use_ids
 from llm_gc.utils import count_tokens
-from tests.models.support import NOTICE, turn_with_client_text
+from tests.models.support import NOTICE, turn_with_client_text, turn_with_typed_words
 
 
 def _user(index: int, text: str = "a question about the design", tokens: int = 20) -> Message:
@@ -52,6 +52,11 @@ class TestGroupingIntoExchanges:
         """A tool result arrives as a user turn, but it continues the exchange; it does not open one."""
         turns = [_user(0), _assistant(1, calls=("a",)), _results(2, ("a",)), _assistant(3)]
         assert _indices(group_exchanges(turns)) == [[0, 1, 2, 3]]
+
+    def test_words_typed_beside_tool_results_stay_in_the_exchange_that_called_for_them(self):
+        turns = [_user(0), _assistant(1, calls=("a",)), turn_with_typed_words(2, "a", "Stop, use MySQL."),
+                 _assistant(3), _user(4)]
+        assert _indices(group_exchanges(turns)) == [[0, 1, 2, 3], [4]]
 
     def test_a_large_exchange_is_divided_between_tool_rounds(self):
         turns = [_user(0), _assistant(1, tokens=600, calls=("a",)), _results(2, ("a",)),
@@ -100,6 +105,12 @@ class TestTheIndexLine:
     def test_a_tool_result_is_not_what_was_asked(self):
         turns = [_results(0, ("a",)), _assistant(1, "The lookup shows the pool is saturated. Raise it.")]
         assert self.writer.write(turns) == "The lookup shows the pool is saturated."
+
+    def test_words_typed_beside_tool_results_are_what_was_asked_when_the_span_has_no_question(self):
+        """A large exchange divided between tool rounds gives spans that open on the assistant's turn."""
+        turns = [_assistant(0, "Running the suite.", calls=("a",)),
+                 turn_with_typed_words(1, "a", "Stop, use MySQL. It is faster here.", output="42 passed")]
+        assert self.writer.write(turns) == "Stop, use MySQL."
 
     def test_it_is_never_text_the_client_wrote(self):
         """Claude Code writes a local command's caveat before the person's words, in the same turn."""

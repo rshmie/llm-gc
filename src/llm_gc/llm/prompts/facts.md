@@ -20,7 +20,7 @@ Something the conversation settled and may need later, said by either side:
   turned it down.
 
 Tool calls (`[tool call: name] {input}`) and their output (`[tool result] ...`,
-usually in a turn marked `tool results`) are what the assistant did and saw. A
+in a turn marked `tool results`) are what the assistant did and saw. A
 turn marked `subagent report` is another agent's findings, relayed to the
 assistant, and a turn marked `client` is text the user's application wrote, such
 as a notice that a background task finished: the user wrote neither. A value in

@@ -33,6 +33,12 @@ class Message(BaseModel):
     characters, in order. Like a relayed turn, they are conversation, condensed with
     the rest of the turn, but never read as the person's words (`person_text`).
 
+    `tool_output` marks the parts of a turn of tool results that its tools returned,
+    as ranges in the same form. It is set only on such a turn that holds other text
+    too: when a person interrupts a tool round, the client sends what they type in the
+    same turn as the round's results. The person's words are then what neither range
+    covers. Without it, a turn of tool results is all tool output.
+
     `thinking_tokens` is an estimate of the model's hidden thinking inside `raw_content`,
     in the same units as `token_count`. The provider bills it as input whenever the turn
     is sent with its thinking, but it has no readable text. It only counts toward prompt
@@ -46,16 +52,21 @@ class Message(BaseModel):
     instructions: tuple[str, ...] = Field(default=(), exclude=True, repr=False)
     relayed: bool = False
     client_written: tuple[tuple[int, int], ...] = ()
+    tool_output: tuple[tuple[int, int], ...] = ()
     thinking_tokens: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
-    def _check_client_written(self) -> Self:
-        if self.client_written and self.role != "user":
-            raise ValueError("only a user turn holds text the client wrote into it")
+    def _check_ranges(self) -> Self:
+        if (self.client_written or self.tool_output) and self.role != "user":
+            raise ValueError("only a user turn holds text the client or its tools wrote into it")
+        for name, ranges in (("client_written", self.client_written), ("tool_output", self.tool_output)):
+            if list(ranges) != sorted(ranges):
+                raise ValueError(f"{name} ranges are out of order")
+        # Each character has one writer, so the two never overlap.
         previous_end = 0
-        for start, end in self.client_written:
+        for start, end in sorted(self.client_written + self.tool_output):
             if not previous_end <= start < end <= len(self.content):
-                raise ValueError(f"client_written range ({start}, {end}) is out of order or outside the content")
+                raise ValueError(f"range ({start}, {end}) overlaps another or falls outside the content")
             previous_end = end
         return self
 
@@ -82,71 +93,85 @@ CLIENT_SPEAKER = "client"
 TOOL_SPEAKER = "tool results"
 
 
-class TextPart(NamedTuple):
-    """A stretch of a turn's text, and whether the client wrote it rather than the turn's speaker."""
+# Who wrote a part of a turn: its own speaker, the client, or one of the tools whose results it carries.
+Writer = Literal["speaker", "client", "tool"]
 
-    by_client: bool
+
+class TextPart(NamedTuple):
+    """A stretch of a turn's text, and who wrote it."""
+
+    writer: Writer
     text: str
 
 
 def parts_by_writer(message: Message) -> list[TextPart]:
-    """Return the turn's text in order, divided where the client's writing starts and ends.
+    """Return the turn's text in order, divided where the client's or a tool's writing starts and ends.
 
-    A turn the client wrote none of is a single part, its text untouched. Otherwise
+    A turn no range divides is a single part, its speaker's, its text untouched. Otherwise
     each part is stripped of the blank space around it, and an empty one is left out.
     """
-    if not message.client_written:
-        return [TextPart(by_client=False, text=message.content)]
+    if not _divided(message):
+        return [TextPart("speaker", message.content)]
+    marked: list[tuple[int, int, Writer]] = sorted(
+        [(start, end, "client") for start, end in message.client_written]
+        + [(start, end, "tool") for start, end in message.tool_output])
     parts: list[TextPart] = []
     cursor = 0
-    for start, end in message.client_written:
-        parts += [TextPart(False, message.content[cursor:start]), TextPart(True, message.content[start:end])]
+    for start, end, writer in marked:
+        parts += [TextPart("speaker", message.content[cursor:start]), TextPart(writer, message.content[start:end])]
         cursor = end
-    parts.append(TextPart(False, message.content[cursor:]))
-    return [TextPart(part.by_client, stripped) for part in parts if (stripped := part.text.strip())]
+    parts.append(TextPart("speaker", message.content[cursor:]))
+    return [TextPart(part.writer, stripped) for part in parts if (stripped := part.text.strip())]
 
 
 def person_text(message: Message) -> str:
-    """Return the words the turn's speaker wrote: its text without the parts the client wrote."""
-    if not message.client_written:
+    """Return the words the turn's speaker wrote: its text without the parts the client or a tool wrote."""
+    if not _divided(message):
         return message.content
-    return "\n\n".join(part.text for part in parts_by_writer(message) if not part.by_client)
+    return "\n\n".join(part.text for part in parts_by_writer(message) if part.writer == "speaker")
 
 
 def said_by_user(message: Message) -> bool:
     """Whether the turn holds words the person wrote.
 
-    A user turn that is not tool results or a relayed report, and that the client did
-    not write all of. This decides what opens an exchange, what scoring reads as the
-    subject now, and whose facts are the user's. For a turn the client wrote part of,
-    only `person_text` is the person's.
+    A user turn that is not a relayed report, and whose text is not all the client's
+    or its tools'. This decides what scoring reads as the subject now and whose facts
+    are the user's; only `person_text` is the person's. A turn of tool results holds
+    the person's words only where `tool_output` divides it.
     """
-    return (message.role == "user" and not message.relayed and not tool_result_ids(message)
-            and (not message.client_written or bool(person_text(message))))
+    if message.role != "user" or message.relayed or (tool_result_ids(message) and not message.tool_output):
+        return False
+    return bool(person_text(message)) if _divided(message) else True
+
+
+def opens_exchange(message: Message) -> bool:
+    """Whether an exchange opens at the turn: the person wrote it, and it answers no tool call.
+
+    What a person types after interrupting a tool round is theirs, but it arrives in the
+    turn that carries the round's results, and a tool result stays in the span of the
+    call it answers.
+    """
+    return said_by_user(message) and not tool_result_ids(message)
 
 
 def speaker_label(message: Message) -> str:
     """The turn's speaker as a quote or a transcript names it.
 
-    A turn the client wrote all of is the client's. A turn it wrote part of is still the
-    user's: `parts_by_writer` tells the parts apart.
-
-    A turn of tool results is named as one only when it carries no text of its own.
-    When a person interrupts a tool round, Claude Code sends what they type in the same
-    turn as the round's results, and their words must not be read as a tool's. Such a
-    turn keeps the user role, and its tool output still opens `[tool result]`.
+    A turn holding any of the person's words is the user's: `parts_by_writer` tells
+    its parts apart. Otherwise a turn of tool results is the tools', and a turn the
+    client wrote all of is the client's.
     """
     if message.relayed:
         return RELAYED_SPEAKER
-    if tool_result_ids(message) and not _carries_text(message):
+    if said_by_user(message):
+        return message.role
+    if tool_result_ids(message):
         return TOOL_SPEAKER
-    if message.client_written and not person_text(message):
-        return CLIENT_SPEAKER
-    return message.role
+    return CLIENT_SPEAKER if message.client_written else message.role
 
 
-def _carries_text(message: Message) -> bool:
-    return any(block.get("type") == "text" for block in _blocks(message))
+def _divided(message: Message) -> bool:
+    return bool(message.client_written or message.tool_output)
 
 
 def _blocks(message: Message) -> Iterable[dict[str, Any]]:

@@ -4,12 +4,14 @@ import json
 import uuid
 
 import pytest
+from hypothesis import example, given
+from hypothesis import strategies as st
 
 from llm_gc.engine.generations.front import Annotations, span_text
 from llm_gc.exceptions import ConfigError
 from llm_gc.models import Message
 from llm_gc.models.generation_snapshot import DetailLevel, Span
-from llm_gc.models.message import parts_by_writer, person_text
+from llm_gc.models.message import parts_by_writer, person_text, said_by_user
 from llm_gc.proxy.anthropic_translation import (
     DEFAULT_CACHE_LIFETIME_S,
     Instruction,
@@ -25,6 +27,7 @@ from llm_gc.proxy.anthropic_translation import (
     uncached_prefix_tokens,
 )
 from llm_gc.utils import count_tokens
+from tests.models.support import COMMAND, INTERRUPTED, SKILL_RULES, turn_with_typed_words
 
 # The shape Claude Code sends: its environment, then its tools' instructions, as system
 # messages after the user turns they accompany.
@@ -293,7 +296,7 @@ class TestTextClaudeCodeWroteIsMarked:
                            {"type": "text", "text": "<system-reminder>Today is Tuesday.</system-reminder>"}])
 
         assert turn.instructions and person_text(turn) == self.COMMAND
-        assert [part.text for part in parts_by_writer(turn) if part.by_client] == [self.EXPANSION]
+        assert [part.text for part in parts_by_writer(turn) if part.writer == "client"] == [self.EXPANSION]
 
     def test_the_words_typed_after_a_local_command_stay_the_persons(self):
         turn = self._turn([{"type": "text", "text": "<local-command-caveat>Caveat: local.</local-command-caveat>"},
@@ -315,6 +318,93 @@ class TestTextClaudeCodeWroteIsMarked:
         turns = extract_messages({"messages": [{"role": "user", "content": "go"},
                                                {"role": "assistant", "content": f"{self.COMMAND}\n{self.EXPANSION}"}]})
         assert turns[-1].client_written == ()
+
+
+# Block texts as Claude Code sends them beside tool results, and anything else.
+_BLOCK_TEXTS = st.one_of(st.sampled_from([INTERRUPTED, "Tool loaded.", COMMAND, SKILL_RULES, "Stop, use MySQL.", " ",
+                                          "<system-reminder>Today is Tuesday.</system-reminder>",
+                                          "<task-notification>done</task-notification>"]), st.text(max_size=40))
+
+
+class TestATurnOfToolResultsIsDividedByWriter:
+    """A person who interrupts a tool round and types is heard in the turn carrying the round's results.
+
+    Everything else Claude Code puts beside tool results is its own: a skill's instructions,
+    a notice that a tool loaded, the size of an image a tool returned.
+    """
+
+    RESULT = {"type": "tool_result", "tool_use_id": "t1", "content": "42 passed"}
+
+    @staticmethod
+    def _turn(*blocks: dict) -> Message:
+        return extract_messages({"messages": [{"role": "user", "content": "go"}, {"role": "assistant", "content": "ok"},
+                                              {"role": "user", "content": list(blocks)}]})[-1]
+
+    @pytest.mark.parametrize("mark", [INTERRUPTED, "[Request interrupted by user for tool use]", f"{INTERRUPTED} "])
+    def test_words_typed_after_an_interrupt_are_the_persons(self, mark):
+        turn = self._turn(self.RESULT, _text(mark), _text("Stop, use MySQL."))
+
+        assert said_by_user(turn) and person_text(turn) == "Stop, use MySQL."
+        assert [part.writer for part in parts_by_writer(turn)] == ["tool", "client", "speaker"]
+
+    def test_it_is_divided_as_the_engines_tests_build_it(self):
+        expected = turn_with_typed_words(2, "t1", "Stop, use MySQL.", output="42 passed")
+
+        turn = self._turn(self.RESULT, _text(INTERRUPTED), _text("Stop, use MySQL."))
+
+        assert (turn.content, turn.tool_output, turn.client_written) == (
+            expected.content, expected.tool_output, expected.client_written)
+
+    @pytest.mark.parametrize("text", ["Tool loaded.", SKILL_RULES, "[Image: original 1440x2047, displayed at 720x1024]"])
+    def test_any_other_text_beside_tool_results_is_claude_codes(self, text):
+        turn = self._turn(self.RESULT, _text(text))
+
+        assert not said_by_user(turn)
+        assert [part.writer for part in parts_by_writer(turn)] == ["tool", "client"]
+
+    def test_the_mark_inside_a_tools_output_credits_nothing_after_it(self):
+        """A tool can return any text, the mark too; only Claude Code's own block of it counts."""
+        quoted = {"type": "tool_result", "tool_use_id": "t1", "content": INTERRUPTED}
+
+        assert not said_by_user(self._turn(quoted, _text("Tool loaded.")))
+
+    def test_a_command_typed_after_an_interrupt_keeps_its_expansion_apart(self):
+        """The text a command expands to comes in a block of its own, after the command."""
+        turn = self._turn(self.RESULT, _text(INTERRUPTED), _text(COMMAND), _text(SKILL_RULES))
+
+        assert person_text(turn) == COMMAND
+        assert parts_by_writer(turn)[-1] == ("client", SKILL_RULES)
+
+    def test_instructions_are_lifted_from_each_block_and_the_parts_still_line_up(self):
+        reminder = "<system-reminder>Today is Tuesday.</system-reminder>"
+        result = {**self.RESULT, "content": f"42 passed\n{reminder}"}
+
+        turn = self._turn(result, _text(INTERRUPTED), _text(f"Stop, use MySQL.\n\n{reminder}"))
+
+        assert turn.instructions == (reminder, reminder) and "system-reminder" not in turn.content
+        assert parts_by_writer(turn)[0] == ("tool", "[tool result] 42 passed")
+        assert person_text(turn) == "Stop, use MySQL."
+
+    @given(st.lists(st.tuples(st.booleans(), _BLOCK_TEXTS), max_size=6))
+    # A command's expansion runs to the end of the text it is read in: read past the person's words,
+    # it would take in the result after them.
+    @example([(False, INTERRUPTED), (False, COMMAND), (True, "42 passed")])
+    def test_any_blocks_beside_a_result_are_read_without_failing_the_request(self, blocks):
+        """Ranges that overlapped or ran out of order would fail validation, and with it the person's request."""
+        turn = self._turn(self.RESULT, *({"type": "tool_result", "tool_use_id": "t1", "content": text} if is_result
+                                         else _text(text) for is_result, text in blocks))
+
+        assert all(part.text in turn.content for part in parts_by_writer(turn))
+
+    def test_a_turn_whose_other_text_lifts_away_is_all_tool_output(self):
+        turn = self._turn(self.RESULT, _text("<system-reminder>Today is Tuesday.</system-reminder>"))
+
+        assert (turn.tool_output, turn.client_written) == ((), ())
+        assert turn.content == "[tool result] 42 passed" and turn.instructions
+
+
+def _text(text: str) -> dict:
+    return {"type": "text", "text": text}
 
 
 def _marked(ttl: str | None = None) -> dict:

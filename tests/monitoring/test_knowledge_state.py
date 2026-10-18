@@ -15,7 +15,7 @@ from llm_gc.monitoring.knowledge_state import KnowledgeState, TurnFidelity, proj
 from llm_gc.utils import count_tokens
 
 from tests.engine.support import collect
-from tests.models.support import COMMAND, SKILL_RULES, turn_with_client_text
+from tests.models.support import COMMAND, INTERRUPTED, SKILL_RULES, turn_with_client_text, turn_with_typed_words
 
 SESSION = "s"
 
@@ -136,8 +136,22 @@ class TestWhereEachTurnIs:
 
         state = project_knowledge_state(service.inspect(SESSION))
 
-        assert [(p.by_client, p.text) for p in state.turns[0].parts] == [(False, COMMAND), (True, SKILL_RULES)]
+        assert [(p.writer, p.text) for p in state.turns[0].parts] == [("speaker", COMMAND), ("client", SKILL_RULES)]
         assert state.turns[1].parts is None
+
+    def test_words_typed_beside_tool_results_are_shown_apart_from_them(self):
+        turns = [Message(role="user", content="Run the suite.", token_count=3, turn_index=0),
+                 Message(role="assistant", content="", token_count=3, turn_index=1,
+                         raw_content=[{"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}]),
+                 turn_with_typed_words(2, "t1", "Stop, use MySQL.", output="42 passed")]
+        service = _service(min_cut_tokens=100_000)
+        service.gc_record(SESSION, turns, ["h0", "h1", "h2"])
+
+        state = project_knowledge_state(service.inspect(SESSION))
+
+        assert state.turns[2].tool_results
+        assert [(p.writer, p.text) for p in state.turns[2].parts] == [
+            ("tool", "[tool result] 42 passed"), ("client", INTERRUPTED), ("speaker", "Stop, use MySQL.")]
 
 class TestThePassOutcome:
     def test_every_cut_reports_where_its_turns_actually_went(self):

@@ -9,7 +9,7 @@ from llm_gc.llm import FakeProvider, LLMResponse, StopReason
 from llm_gc.llm.prompts import COMPACTION_PROMPT, load_prompt
 from llm_gc.models import Message
 from llm_gc.utils import count_tokens
-from tests.models.support import COMMAND, SKILL_RULES, turn_with_client_text
+from tests.models.support import COMMAND, INTERRUPTED, SKILL_RULES, turn_with_client_text, turn_with_typed_words
 
 # A run long enough that a short summary is a real saving. Token counts are the
 # real tokenizer's, because the refusal guard compares against them.
@@ -203,6 +203,16 @@ class TestWhatItSendsToTheModel:
         _compact(compactor, [*RUN, result])
 
         assert "\n[turn 7] tool results: [tool result] DATABASE_URL=mysql://db" in provider.calls[0].messages[0].content
+
+    def test_words_typed_beside_tool_output_are_the_users_and_the_output_the_tools(self):
+        """After an interrupt the person's words and the round's results arrive as one turn."""
+        typed = turn_with_typed_words(7, "t1", "Stop, use MySQL.", output="DATABASE_URL=postgres://db")
+        compactor, _, provider = _compactor([_response("The user switched to MySQL.")])
+        _compact(compactor, [*RUN, typed])
+
+        lines = [line for line in provider.calls[0].messages[0].content.splitlines() if line.startswith("[turn 7]")]
+        assert lines == ["[turn 7] tool results: [tool result] DATABASE_URL=postgres://db",
+                         f"[turn 7] client: {INTERRUPTED}", "[turn 7] user: Stop, use MySQL."]
 
     def test_the_timeout_is_passed_through(self):
         compactor, _, provider = _compactor([_response("A short summary.")], timeout_s=7.5)

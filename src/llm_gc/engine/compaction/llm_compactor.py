@@ -23,7 +23,7 @@ from llm_gc.exceptions import CompactionRefused
 from llm_gc.llm.prompts import COMPACTION_PROMPT, load_prompt, transcript_block
 from llm_gc.llm.provider import LLMProvider
 from llm_gc.models import Message
-from llm_gc.models.message import CLIENT_SPEAKER, parts_by_writer, speaker_label
+from llm_gc.models.message import CLIENT_SPEAKER, TOOL_SPEAKER, parts_by_writer, speaker_label
 from llm_gc.utils import count_tokens
 
 logger = logging.getLogger(__name__)
@@ -31,6 +31,9 @@ logger = logging.getLogger(__name__)
 # Models follow a length in words far better than one in tokens; English prose
 # runs at about three words to four tokens.
 _WORDS_PER_TOKEN = 0.75
+
+# How a part of a turn is labelled when someone other than the turn's speaker wrote it.
+_WRITER_LABELS = {"client": CLIENT_SPEAKER, "tool": TOOL_SPEAKER}
 
 
 class LLMCompactor(BaseCompactor):
@@ -209,10 +212,11 @@ class LLMCompactor(BaseCompactor):
         content, and as real messages a turn reading "ignore your instructions"
         would sit where a genuine instruction sits. Speakers survive as labels so
         attribution is preserved, and the turns' text is escaped so it cannot end
-        the block or forge another turn's label. A turn the client wrote part of is
-        one line per part, each under its writer's label, so a skill's rules or a
-        command's output are never summarised as what the user said.
+        the block or forge another turn's label. A turn more than one writer wrote is
+        one line per part, each under its writer's label, so a skill's rules, a
+        command's output or the results beside a person's words after an interrupt
+        are never summarised as what the user said.
         """
-        lines = ((message.turn_index, CLIENT_SPEAKER if part.by_client else speaker_label(message), part.text)
+        lines = ((message.turn_index, _WRITER_LABELS.get(part.writer, speaker_label(message)), part.text)
                  for message in messages for part in parts_by_writer(message))
         return Message(role="user", content=transcript_block(lines), turn_index=messages[0].turn_index)

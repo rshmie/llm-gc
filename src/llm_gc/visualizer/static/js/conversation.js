@@ -16,13 +16,15 @@ const avatarText = (role) => role === "user" ? "You" : role === "assistant" ? "A
 const avatar = (role) => h("div", { class: `av ${role === "user" ? "user" : "assistant"}`, "aria-hidden": "true" }, avatarText(role));
 // A turn of tool results is the client reporting what its tools returned, a relayed turn is another
 // agent's report, and a turn Claude Code wrote entirely is its own notice. All come under the user
-// role, and none is the user's words. A turn it wrote only part of is shared: the header names both
-// writers, and each part Claude Code wrote is set apart, so the rest is the user's.
-const byClient = (turn) => Boolean(turn.parts) && turn.parts.every((part) => part.by_client);
+// role, and none is the user's words. A turn the user wrote only part of is shared: the header names
+// both writers, and each part Claude Code or a tool wrote is set apart, so the rest is the user's. A
+// tool round the user interrupted is one: what they typed arrives beside the round's results.
+const byClient = (turn) => Boolean(turn.parts) && turn.parts.every((part) => part.writer !== "speaker");
 const shared = (turn) => Boolean(turn.parts) && !byClient(turn);
-const speakerOf = (turn) => turn.relayed ? "Subagent report" : turn.tool_results ? "Tool results"
-  : byClient(turn) ? "Claude Code" : shared(turn) ? "You and Claude Code" : speakerName(turn.role);
+const speakerOf = (turn) => turn.relayed ? "Subagent report" : shared(turn) ? "You and Claude Code"
+  : turn.tool_results ? "Tool results" : byClient(turn) ? "Claude Code" : speakerName(turn.role);
 const avatarOf = (turn) => turn.relayed ? h("div", { class: "av assistant", "aria-hidden": "true" }, "Agent")
+  : shared(turn) ? avatar(turn.role)
   : turn.tool_results ? h("div", { class: "av user", "aria-hidden": "true" }, "Tool")
   : byClient(turn) ? h("div", { class: "av user", "aria-hidden": "true" }, "CC") : avatar(turn.role);
 const toolTip = () => hoverTip(GLOSSARY.tools[0], GLOSSARY.tools[1]);
@@ -30,8 +32,8 @@ const relayedTip = () => hoverTip(GLOSSARY.relayed[0], GLOSSARY.relayed[1]);
 const clientTip = () => hoverTip(GLOSSARY.client[0], GLOSSARY.client[1]);
 const sharedTip = () => hoverTip(GLOSSARY.shared[0], GLOSSARY.shared[1]);
 // The speaker, explained whenever it is not simply you or the assistant.
-const speakerTip = (turn) => turn.relayed ? relayedTip() : turn.tool_results ? toolTip()
-  : byClient(turn) ? clientTip() : shared(turn) ? sharedTip() : {};
+const speakerTip = (turn) => turn.relayed ? relayedTip() : shared(turn) ? sharedTip()
+  : turn.tool_results ? toolTip() : byClient(turn) ? clientTip() : {};
 const who = (turn) => h("span", { class: "who", ...speakerTip(turn) }, speakerOf(turn));
 // Beside the role the provider receives: who wrote a turn, when the role alone would credit it to the wrong side.
 const writerTag = (turn) => speakerOf(turn) === speakerName(turn.role) ? null
@@ -689,14 +691,17 @@ export function textBlock(text, { faded = false, key = null } = {}) {
   return [body, more];
 }
 
-// A message's words. Where Claude Code wrote part of the message, that part is set apart and named.
+// A message's words. Where Claude Code or a tool wrote part of the message, that part is set apart and named.
+const partNames = { client: () => [GLOSSARY.client[0], clientTip()], tool: () => ["Tool results", toolTip()] };
 function turnText(turn, { faded = false } = {}) {
   const key = `t-${turn.turn_index}`;
   if (!turn.parts || byClient(turn)) return textBlock(turn.text, { faded, key });
-  return turn.parts.map((part, i) => part.by_client
-    ? h("div", { class: "client-part" }, h("div", { class: "client-label" }, h("span", { class: "term", ...clientTip() }, GLOSSARY.client[0])),
-      textBlock(part.text, { faded, key: `${key}-${i}` }))
-    : textBlock(part.text, { faded, key: `${key}-${i}` }));
+  return turn.parts.map((part, i) => {
+    const words = textBlock(part.text, { faded, key: `${key}-${i}` });
+    if (part.writer === "speaker") return words;
+    const [name, tip] = partNames[part.writer]();
+    return h("div", { class: "client-part" }, h("div", { class: "client-label" }, h("span", { class: "term", ...tip }, name)), words);
+  });
 }
 
 export function fidTag(cat) {

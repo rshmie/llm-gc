@@ -123,9 +123,9 @@ class LLMFactReader:
         untrusted as the turns, and are delimited and escaped the same way.
 
         A turn the person wrote is shown as their words alone, without what the client
-        wrote into it: a fact's speaker comes from the turn it names, so the turn must
-        hold only the speaker's words. A value only the client wrote becomes a fact
-        when a later turn settles on it, as a value in tool output does.
+        or a tool wrote into it: a fact's speaker comes from the turn it names, so the
+        turn must hold only the speaker's words. A value only the client or a tool wrote
+        becomes a fact when a later turn settles on it.
         """
         shown = record[-self._on_record_max:]
         facts = "\n".join(escape_delimiters(f"{fact.topic_label}: {fact.content}") for fact in shown) or "(none yet)"

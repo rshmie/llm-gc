@@ -9,7 +9,7 @@ from llm_gc.config.constants import DEFAULT_LEVEL_MARGIN
 from llm_gc.exceptions import ConfigError
 from llm_gc.models import Message
 from llm_gc.scoring import DecisionScorer, DensityScorer, LexicalRelevance, RelevanceType, SpanScorer
-from tests.models.support import SKILL_RULES, turn_with_client_text
+from tests.models.support import SKILL_RULES, turn_with_client_text, turn_with_typed_words
 
 
 def _turn(index: int, text: str, role: str = "user") -> Message:
@@ -41,6 +41,17 @@ def test_now_is_the_words_the_person_wrote_not_what_their_client_added():
     """A skill's rules in the newest turn would make every span about databases look like the subject."""
     relevance = _RecordingRelevance()
     asked = turn_with_client_text(2, (False, "How long is a seat hold?"), (True, SKILL_RULES))
+
+    SpanScorer([DecisionScorer(), DensityScorer()], relevance=relevance).score(
+        [[_turn(0, "Seat holds last seven minutes.")]], [asked], newest_turn=2)
+
+    assert relevance.now == "How long is a seat hold?"
+
+
+def test_now_is_never_the_tool_output_beside_the_words():
+    """After an interrupt, the person's words and the round's results arrive as one turn."""
+    relevance = _RecordingRelevance()
+    asked = turn_with_typed_words(2, "t1", "How long is a seat hold?", output="DATABASE_URL=mysql://db")
 
     SpanScorer([DecisionScorer(), DensityScorer()], relevance=relevance).score(
         [[_turn(0, "Seat holds last seven minutes.")]], [asked], newest_turn=2)

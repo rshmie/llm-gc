@@ -139,7 +139,7 @@ A prompt rewritten anywhere but its start breaks two things the user depends on.
 ## Why this shape
 
 - **Change the prompt only at the front, only at a switch.** The one rewrite the provider's checks accept and caching survives.
-- **Cut only where a span may begin.** Before a user message that opens an exchange, or, inside an exchange the assistant has already answered, between its tool rounds — never between a question and its first answer.
+- **Cut only where a span may begin.** Before a user message that opens an exchange — one the person wrote that carries no tool result — or, inside an exchange the assistant has already answered, between its tool rounds — never between a question and its first answer.
 
   ```
    you  "Which database?"      ┐

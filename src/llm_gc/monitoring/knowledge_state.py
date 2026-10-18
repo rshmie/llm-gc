@@ -17,7 +17,7 @@ from llm_gc.engine.switch_policy import CacheReading, CacheState
 from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.generation_snapshot import DetailLevel, Span
 from llm_gc.models.knowledge_entry import KnowledgeStatus
-from llm_gc.models.message import parts_by_writer, tool_result_ids, tool_use_ids
+from llm_gc.models.message import Writer, parts_by_writer, tool_result_ids, tool_use_ids
 from llm_gc.utils import count_tokens
 
 
@@ -40,22 +40,22 @@ def _fidelity(level: DetailLevel) -> TurnFidelity:
 
 
 class TurnPart(BaseModel):
-    """A stretch of a turn's text, and whether the client wrote it rather than the person."""
+    """A stretch of a turn's text, and who wrote it: the turn's own speaker, the client, or a tool."""
 
-    by_client: bool
+    writer: Writer
     text: str
 
 
 def turn_parts(message: Message) -> list[TurnPart] | None:
-    """The turn's text divided by who wrote it, or None when the client wrote none of it.
+    """The turn's text divided by who wrote it, or None when its speaker wrote all of it.
 
     Sent as text rather than as the message's character ranges: Python counts a
     string's characters one way and JavaScript another, so the same range would cut
     a different stretch in the browser once an emoji came before it.
     """
-    if not message.client_written:
+    if not message.client_written and not message.tool_output:
         return None
-    return [TurnPart(by_client=part.by_client, text=part.text) for part in parts_by_writer(message)]
+    return [TurnPart(writer=part.writer, text=part.text) for part in parts_by_writer(message)]
 
 
 class TurnState(BaseModel):
@@ -70,7 +70,7 @@ class TurnState(BaseModel):
     score: float | None = None             # its span's score now; a tail turn has one only if the next collection takes it
     becomes: TurnFidelity | None = None    # set when the next collection would change how the model receives it
     tool_calls: bool = False               # an assistant turn asking the client to run a tool
-    tool_results: bool = False             # a user turn carrying what the client's tools returned, not words the user wrote
+    tool_results: bool = False             # a user turn carrying what the client's tools returned; `parts` sets apart words the user wrote beside it
     relayed: bool = False                  # a user turn relaying another agent's report, not words the user wrote
     parts: list[TurnPart] | None = None    # the text by writer, when the client wrote some of it
 

@@ -15,6 +15,7 @@ from typing import Any
 
 from llm_gc.exceptions import ConfigError
 from llm_gc.models import Message
+from llm_gc.models.message import Writer
 from llm_gc.proxy.client_written import client_written_ranges
 from llm_gc.proxy.traffic import ProviderUsage
 from llm_gc.utils import count_tokens_cached
@@ -52,6 +53,12 @@ _INSTRUCTION_ROLE = "system"
 # agent's findings, not words the person wrote.
 _RELAYED = re.compile(r"\s*(?:Another Claude session sent a message:\s*)?<agent-message\b")
 
+# A person can speak during a tool round only by interrupting it. Claude Code then sends this
+# mark, as a text block of its own, and what they type after it, in the turn carrying the
+# round's results. Any other text beside tool results is Claude Code's own: a skill's
+# instructions, a notice that a tool loaded, the size of an image a tool returned.
+_INTERRUPTED = re.compile(r"\[Request interrupted by user(?: for tool use)?\]\s*")
+
 # The longest unfinished stream line held while waiting for its end. The events an outline
 # reads are short; a line longer than this is a content delta, which it never reads.
 _STREAM_LINE_MAX_BYTES = 64 * 1024
@@ -86,6 +93,8 @@ _THINKING_LINE_MARKS = (b'"signature_delta"', b'"redacted_thinking"')
 
 # Takes a turn's thinking keys and its visible token count; returns its thinking token count.
 ThinkingSizer = Callable[[Sequence[str], int], int]
+# (start, end) character ranges of a turn's text, in order.
+Ranges = tuple[tuple[int, int], ...]
 
 
 @dataclass(frozen=True)
@@ -135,14 +144,20 @@ def extract_messages(payload: dict[str, Any], size_thinking: ThinkingSizer | Non
         if role not in _ROLES:
             raise ConfigError(f"messages[{index}] has unsupported role {role!r}")
 
-        content, lifted = lift_instructions(_content_as_text(raw.get("content"), index), role)
+        tool_output: Ranges = ()
+        client_written: Ranges = ()
+        if role == "user" and _holds_text_beside_tool_results(raw.get("content")):
+            content, lifted, tool_output, client_written = _divide_by_writer(raw["content"])
+        else:
+            content, lifted = lift_instructions(_content_as_text(raw.get("content"), index), role)
         # The client sends the whole conversation every time, so this text was most likely
         # counted by an earlier request; only a new turn is tokenised.
         token_count = count_tokens_cached(content)
         keys = thinking_keys(raw.get("content")) if size_thinking is not None and role == "assistant" else ()
         relayed = role == "user" and _RELAYED.match(content) is not None
         # Only in a turn the person may have written: tool output can quote the client's elements.
-        typed = role == "user" and not relayed and not _carries_tool_results(raw.get("content"))
+        if role == "user" and not relayed and not _carries_tool_results(raw.get("content")):
+            client_written = client_written_ranges(content)
         messages.append(
             Message(
                 role=role,
@@ -151,7 +166,8 @@ def extract_messages(payload: dict[str, Any], size_thinking: ThinkingSizer | Non
                 thinking_tokens=size_thinking(keys, token_count) if size_thinking is not None and keys else 0,
                 instructions=lifted,
                 relayed=relayed,
-                client_written=client_written_ranges(content) if typed else (),
+                client_written=client_written,
+                tool_output=tool_output,
                 # Its place in the conversation, instructions not counted, so a turn's
                 # index does not depend on where the client puts its instructions.
                 turn_index=len(messages),
@@ -166,6 +182,63 @@ def extract_messages(payload: dict[str, Any], size_thinking: ThinkingSizer | Non
 def _carries_tool_results(content: object) -> bool:
     return isinstance(content, list) and any(
         isinstance(block, dict) and block.get("type") == "tool_result" for block in content)
+
+
+def _holds_text_beside_tool_results(content: object) -> bool:
+    return isinstance(content, list) and _carries_tool_results(content) and any(
+        isinstance(block, dict) and block.get("type") != "tool_result" and _block_as_text(block) is not None
+        for block in content)
+
+
+def _divide_by_writer(blocks: list[Any]) -> tuple[str, tuple[str, ...], Ranges, Ranges]:
+    """A turn of tool results that holds other text: its text, its instructions, and the ranges
+    of it that its tools returned and that the client wrote.
+
+    Each block is read and lifted on its own, so where it lands in the text is known.
+    The text after the interrupt mark is the person's, less what the client-written
+    recogniser finds in it. A turn whose other text lifts away entirely is all tool output.
+    """
+    pieces: list[tuple[str, Writer]] = []
+    instructions: list[str] = []
+    interrupted = False
+    for block in blocks:
+        text = _block_as_text(block)
+        piece, lifted = lift_instructions(text, "user") if text is not None else ("", ())
+        instructions += lifted
+        if not piece.strip():
+            continue
+        if isinstance(block, dict) and block.get("type") == "tool_result":
+            pieces.append((piece, "tool"))
+        elif _INTERRUPTED.fullmatch(piece):
+            pieces.append((piece, "client"))
+            interrupted = True
+        else:
+            pieces.append((piece, "speaker" if interrupted else "client"))
+    content = "\n".join(piece for piece, _ in pieces)
+    if all(writer == "tool" for _, writer in pieces):
+        return content, tuple(instructions), (), ()
+    ranges: dict[Writer, list[tuple[int, int]]] = {"tool": [], "client": [], "speaker": []}
+    offset = 0
+    for piece, writer in pieces:
+        ranges[writer].append((offset, offset + len(piece)))
+        offset += len(piece) + 1
+    # The person's words are read a run of blocks at a time, as in a turn they wrote: the text
+    # a command expands to comes in a block of its own after the command.
+    client = ranges["client"] + [(run_start + start, run_start + end)
+                                 for run_start, run_end in _joined(ranges["speaker"], content)
+                                 for start, end in client_written_ranges(content[run_start:run_end])]
+    return content, tuple(instructions), _joined(ranges["tool"], content), _joined(client, content)
+
+
+def _joined(ranges: list[tuple[int, int]], text: str) -> Ranges:
+    """The ranges in order, each joined to the one before it when only blank space lies between them."""
+    joined: list[tuple[int, int]] = []
+    for start, end in sorted(ranges):
+        if joined and not text[joined[-1][1]:start].strip():
+            joined[-1] = (joined[-1][0], end)
+        else:
+            joined.append((start, end))
+    return tuple(joined)
 
 
 def thinking_keys(content: object) -> tuple[str, ...]:
