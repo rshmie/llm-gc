@@ -1,6 +1,7 @@
 """Reading a request's conversation and writing it back: the client's instructions are never condensed."""
 
 import json
+import uuid
 
 import pytest
 
@@ -17,6 +18,7 @@ from llm_gc.proxy.anthropic_translation import (
     extract_instructions,
     extract_messages,
     fixed_prompt_tokens,
+    instruction_tokens,
     reply_text,
     rewrite_messages,
     rewrite_overhead_tokens,
@@ -394,3 +396,59 @@ class TestWhatACollectionCachesAgain:
         overhead = rewrite_overhead_tokens(payload, extract_messages(payload), extract_instructions(payload))
 
         assert overhead == count_tokens(REMINDER) + count_tokens("# Environment: working directory /tmp/project")
+
+
+def _numbered_request(marker: str, turns: int) -> dict:
+    """A conversation of `turns` plain turns, each saying something no other text does."""
+    return {"model": "m", "max_tokens": 10, "messages": [
+        {"role": "user" if number % 2 == 0 else "assistant", "content": f"{marker} turn {number}"}
+        for number in range(turns)]}
+
+
+class TestCountsAreRemembered:
+    """A client sends its whole conversation on every request. Tokenising all of it each time
+    costs more with every turn, on the event loop, and the proxy's latency would show it.
+
+    The count cache is shared by the whole run, so each test builds its texts from a marker of
+    its own that no other test has counted."""
+
+    def test_a_conversation_that_grew_is_tokenised_only_where_it_is_new(self, tokenised):
+        marker = uuid.uuid4().hex
+        first = extract_messages(_numbered_request(marker, 6))
+        assert len(tokenised) == 6
+        tokenised.clear()
+
+        grown = extract_messages(_numbered_request(marker, 8))
+
+        assert tokenised == [f"{marker} turn 6", f"{marker} turn 7"]
+        assert [turn.token_count for turn in grown[:6]] == [turn.token_count for turn in first]
+
+    def test_text_the_client_sends_a_second_time_in_another_conversation_is_not_tokenised_again(self, tokenised):
+        """A count depends on the text alone, not on which conversation sent it."""
+        marker = uuid.uuid4().hex
+        extract_messages(_numbered_request(marker, 4))
+        tokenised.clear()
+
+        extract_messages(_numbered_request(marker, 4))
+
+        assert tokenised == []
+
+    def test_instructions_and_the_system_prompt_are_tokenised_once_however_many_figures_use_them(self, tokenised):
+        """Every figure of a request counts the same reminders and system prompt: the sizes of
+        the request as sent and as forwarded, what a collection makes the provider cache again,
+        the dashboard. Fixing only the turns would leave these tokenised on every request."""
+        marker = uuid.uuid4().hex
+        reminder = f"<system-reminder>\n{marker} the date is today\n</system-reminder>"
+        payload = {"model": "m", "max_tokens": 10, "system": f"{marker} you are a coding assistant",
+                   "messages": [{"role": "user", "content": f"{marker} question\n{reminder}"},
+                                {"role": "system", "content": f"{marker} environment notes"}]}
+        messages, instructions = extract_messages(payload), extract_instructions(payload)
+
+        for _ in range(3):
+            instruction_tokens(messages)
+            fixed_prompt_tokens(payload)
+            rewrite_overhead_tokens(payload, messages, instructions)
+            sum(instruction.token_count for instruction in instructions)
+
+        assert len(tokenised) == len(set(tokenised))
+        assert tokenised.count(reminder) == 1

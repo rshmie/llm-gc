@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 from llm_gc.models import ClientOrigin, Message
 from llm_gc.monitoring.knowledge_state import TurnPart, turn_parts
-from llm_gc.utils import count_tokens
+from llm_gc.utils import count_tokens, count_tokens_cached
 
 # Sessions whose transcript is kept. Above this, the least recently active is
 # dropped; a transcript is the whole conversation, so the bound is deliberately low.
@@ -65,7 +65,8 @@ class TranscriptRecorder:
         self._transcripts[session_id] = tuple(
             TranscriptTurn(turn_index=message.turn_index, role=message.role, text=message.content,
                            tokens=message.token_count,
-                           instruction_tokens=sum(count_tokens(text) for text in message.instructions),
+                           # Every request records the whole history again, so these were counted before.
+                           instruction_tokens=sum(count_tokens_cached(text) for text in message.instructions),
                            relayed=message.relayed, parts=turn_parts(message))
             for message in messages
         )

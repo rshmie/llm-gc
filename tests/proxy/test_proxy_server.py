@@ -677,6 +677,15 @@ class TestFirstDoNoHarm:
 
         assert json.loads(seen[0].content) == {"model": "x", "max_tokens": 1}
 
+    def test_text_naming_a_tokenizer_special_token_is_still_read(self):
+        """A conversation about tokenizers holds text like `<|endoftext|>`. The tokenizer refused it, the
+        whole request counted as unreadable, and every request of that conversation was forwarded
+        untouched for as long as the text stayed in it."""
+        client, _, _, _ = _proxy()
+        _post(client, _body(("user", "first"), ("assistant", "an answer"), ("user", "what does <|endoftext|> mean?")))
+
+        assert client.get("/stats").json()["gc_bypassed"] == 0
+
     def test_a_gc_failure_does_not_become_a_500(self):
         """A proxy that returns 500 because its optimiser had a bad day is worse
         than no proxy. It must not break an app that worked before it was

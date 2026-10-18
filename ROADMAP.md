@@ -42,7 +42,7 @@ Today's evidence is a 37-question check on scripted conversations and a few live
 - [ ] **Quality by counterfactual replay:** ask the same question against the full context and against LLM-GC's, and compare the answers.
 - [ ] **Grounding failures, read from live replies:** the model asking for something the session already established, or calling it unknown. It is the one live signal that can show quality was lost.
 - [ ] **Classification correctness** against a small labelled set: did LLM-GC keep, compact and archive what a person would have?
-- [ ] **Latency added on the request path** (p50 and p95), and how long a collection takes cold and warm.
+- [ ] **Latency added on the request path** (p50 and p95), and how long a collection takes cold and warm. The request path counts each text once and remembers the count, so what is measured is the design's overhead, not the same conversation being tokenised again on every request. Measure with the dashboard open and closed: it records the history on each request too.
 - [ ] **Tune the draft defaults** against the benchmark, rerunning the decision-survival check after each change: `min_cut_tokens`, `last_n_turns_to_keep`, `keep_threshold`, `archive_threshold`, `max_recap_ratio`, `min_saving_share` and `max_stale_ratio`.
 - [ ] **A post-session report** on the dashboard: what was kept, compacted and archived, which decisions survived, the grounding failures seen, and what the session cost against no LLM-GC. It is the page people share, so it must make sense to someone who did not build LLM-GC.
 

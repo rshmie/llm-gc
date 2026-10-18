@@ -11,14 +11,13 @@ import logging
 import re
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import Any
 
 from llm_gc.exceptions import ConfigError
 from llm_gc.models import Message
 from llm_gc.proxy.client_written import client_written_ranges
 from llm_gc.proxy.traffic import ProviderUsage
-from llm_gc.utils import count_tokens
+from llm_gc.utils import count_tokens_cached
 
 logger = logging.getLogger(__name__)
 
@@ -52,10 +51,6 @@ _INSTRUCTION_ROLE = "system"
 # turn opening with this element, alone or after the one line it writes before it: another
 # agent's findings, not words the person wrote.
 _RELAYED = re.compile(r"\s*(?:Another Claude session sent a message:\s*)?<agent-message\b")
-
-# Distinct system prompts and tool lists whose token counts are remembered: one per client
-# setup in use (a main conversation, each kind of subagent), with room to spare.
-_REPEATED_TEXTS_CACHED = 64
 
 # The longest unfinished stream line held while waiting for its end. The events an outline
 # reads are short; a line longer than this is a content delta, which it never reads.
@@ -107,7 +102,7 @@ class Instruction:
 
     @property
     def token_count(self) -> int:
-        return count_tokens(_content_as_text(self.raw.get("content"), -1))
+        return count_tokens_cached(_content_as_text(self.raw.get("content"), -1))
 
 # Hop-by-hop headers describe our connection to the client, not the request's
 # content. `content-length` in particular would be wrong by however many tokens
@@ -141,7 +136,9 @@ def extract_messages(payload: dict[str, Any], size_thinking: ThinkingSizer | Non
             raise ConfigError(f"messages[{index}] has unsupported role {role!r}")
 
         content, lifted = lift_instructions(_content_as_text(raw.get("content"), index), role)
-        token_count = count_tokens(content)
+        # The client sends the whole conversation every time, so this text was most likely
+        # counted by an earlier request; only a new turn is tokenised.
+        token_count = count_tokens_cached(content)
         keys = thinking_keys(raw.get("content")) if size_thinking is not None and role == "assistant" else ()
         relayed = role == "user" and _RELAYED.match(content) is not None
         # Only in a turn the person may have written: tool output can quote the client's elements.
@@ -207,7 +204,7 @@ def carry_instructions(front: Message, stood_in: Sequence[Message]) -> Message:
 
 def instruction_tokens(messages: Iterable[Message]) -> int:
     """Tokens of the instructions these turns carry: sent whole, with or without GC."""
-    return sum(count_tokens(text) for message in messages for text in message.instructions)
+    return sum(count_tokens_cached(text) for message in messages for text in message.instructions)
 
 
 def lift_instructions(text: str, role: str) -> tuple[str, tuple[str, ...]]:
@@ -247,7 +244,7 @@ def fixed_prompt_tokens(payload: dict[str, Any]) -> int:
         "\n".join(block["text"] for block in system if isinstance(block, dict) and isinstance(block.get("text"), str))
         if isinstance(system, list) else "")
     tools_text = json.dumps(tools, ensure_ascii=False) if isinstance(tools, list) and tools else ""
-    return _count_repeated(system_text) + _count_repeated(tools_text)
+    return count_tokens_cached(system_text) + count_tokens_cached(tools_text)
 
 
 def rewrite_overhead_tokens(payload: dict[str, Any], messages: Sequence[Message],
@@ -259,7 +256,7 @@ def rewrite_overhead_tokens(payload: dict[str, Any], messages: Sequence[Message]
     that the client's cache markers do not cover.
     """
     said_once = dict.fromkeys(text for message in messages for text in message.instructions)
-    return (uncached_prefix_tokens(payload) + sum(count_tokens(text) for text in said_once)
+    return (uncached_prefix_tokens(payload) + sum(count_tokens_cached(text) for text in said_once)
             + sum(instruction.token_count for instruction in instructions))
 
 
@@ -281,14 +278,7 @@ def uncached_prefix_tokens(payload: dict[str, Any]) -> int:
     tools_text = json.dumps(later_tools, ensure_ascii=False) if later_tools else ""
     system_text = "\n".join(block["text"] for block in later_system
                             if isinstance(block, dict) and isinstance(block.get("text"), str))
-    return _count_repeated(tools_text) + _count_repeated(system_text)
-
-
-@lru_cache(maxsize=_REPEATED_TEXTS_CACHED)
-def _count_repeated(text: str) -> int:
-    # Every request of a conversation repeats the same system prompt and tools, often tens of
-    # thousands of tokens; counted once each, not once per request.
-    return count_tokens(text) if text else 0
+    return count_tokens_cached(tools_text) + count_tokens_cached(system_text)
 
 
 def cache_lifetime_s(payload: dict[str, Any]) -> float:
