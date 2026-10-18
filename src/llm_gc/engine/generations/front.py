@@ -16,7 +16,7 @@ from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.message import speaker_label
 from llm_gc.models.generation_snapshot import DetailLevel, Span
 from llm_gc.models.knowledge_entry import GENERAL_TOPIC, KnowledgeStatus
-from llm_gc.utils import count_tokens
+from llm_gc.utils import count_tokens, count_tokens_cached
 
 QUOTE_PREFIX = "[Quoted exactly]"
 SUMMARISED_PREFIX = "[Summarised]"
@@ -111,7 +111,7 @@ def folded_line(first_turn: int, last_turn: int, spans: int) -> str:
 def level_costs(span: Span, annotations: Annotations) -> tuple[int, int | None, int]:
     """Tokens the front would spend on the span kept, compacted and archived; compacted is None without a summary."""
     def cost(level: DetailLevel) -> int:
-        return count_tokens(span_text(replace(span, level=level), annotations))
+        return count_tokens_cached(span_text(replace(span, level=level), annotations))
 
     compacted = cost(DetailLevel.COMPACTED) if span.summary is not None else None
     return cost(DetailLevel.KEPT), compacted, cost(DetailLevel.ARCHIVED)
@@ -148,7 +148,7 @@ def render_front(old: Sequence[Span], knowledge: Sequence[KnowledgeEntry]) -> Fr
         return None
 
     content = f"{FRONT_HEADER}\n\n{CONDENSED_HEADER}\n" + "\n".join(lines)
-    message = Message(role="user", content=content, token_count=count_tokens(content), turn_index=-1)
+    message = Message(role="user", content=content, token_count=count_tokens_cached(content), turn_index=-1)
     return Front(message=message, entries=tuple(entries), facts=tuple(carried), folded=tuple(folded_runs))
 
 

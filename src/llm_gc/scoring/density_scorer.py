@@ -3,7 +3,7 @@ import re
 from llm_gc.config.constants import DENSITY_SCORER_PATTERN
 from llm_gc.models import Message
 from llm_gc.scoring import RelevanceType, BaseScorer, ScorerResult
-from llm_gc.utils.token_counter import count_tokens
+from llm_gc.utils.token_counter import count_tokens_cached
 
 class DensityScorer(BaseScorer):
     """Score messages by information density: signal_count / token_count, normalized.
@@ -19,7 +19,7 @@ class DensityScorer(BaseScorer):
         self.max_density = max_density
 
     def score(self, message: Message, conversation: list[Message]) -> ScorerResult:
-        token_counts = count_tokens(message.content)
+        token_counts = count_tokens_cached(message.content)
         signal_count = len(re.findall(DENSITY_SCORER_PATTERN, message.content))
         density_ratio = 0 if token_counts == 0 else  signal_count / token_counts
         density_score = min(density_ratio / self.max_density, 1.0)

@@ -18,6 +18,7 @@ from llm_gc.llm import FakeProvider, LLMResponse, StopReason
 from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.generation_snapshot import DetailLevel, GenerationSnapshot, Span
 from llm_gc.models.knowledge_entry import KnowledgeType
+from llm_gc.monitoring.knowledge_state import project_knowledge_state
 from llm_gc.utils import count_tokens
 
 from tests.engine.support import collect
@@ -148,6 +149,34 @@ class TestLookingChangesNothing:
 
         asyncio.run(scenario())
         assert heard, "collections after previews still file and announce facts"
+
+
+class TestLookingAgainReadsNothingAgain:
+    """The proxy plans a conversation again after every request, and the dashboard on every
+    change it sees. A plan reads every span the conversation has, so work that depends only on
+    a text - its token count, its importance - must be done once per text, not once per look."""
+
+    def test_a_second_look_at_an_unchanged_session_tokenises_nothing(self, tokenised):
+        service = _build()
+
+        async def scenario() -> None:
+            for index in range(30):
+                # Words of this test's own: the count cache is shared by the whole run.
+                text = (f"second look {index}: the topic{index % 8} is version {index}, and we walked "
+                        f"through what it means for throughput and retention at some length.")
+                service.gc_record(SESSION, [Message(role="user" if index % 2 == 0 else "assistant", content=text,
+                                                    token_count=count_tokens(text), turn_index=index)],
+                                  [f"second-look-{index}"])
+                await collect(service, SESSION)
+
+        asyncio.run(scenario())
+        assert any(span.summary is not None for span in _snapshot(service).old), "spans priced at every level"
+        project_knowledge_state(service.inspect(SESSION), None)
+        tokenised.clear()
+
+        project_knowledge_state(service.inspect(SESSION), None)
+
+        assert tokenised == []
 
 
 class TestTheViewIsTheEngine:

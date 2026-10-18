@@ -24,7 +24,7 @@ from llm_gc.llm.prompts import COMPACTION_PROMPT, load_prompt, transcript_block
 from llm_gc.llm.provider import LLMProvider
 from llm_gc.models import Message
 from llm_gc.models.message import CLIENT_SPEAKER, TOOL_SPEAKER, parts_by_writer, speaker_label
-from llm_gc.utils import count_tokens
+from llm_gc.utils import count_tokens, count_tokens_cached
 
 logger = logging.getLogger(__name__)
 
@@ -193,7 +193,7 @@ class LLMCompactor(BaseCompactor):
         Best case is `summary = marker + target_ratio * run`, which beats the run
         only when `run > marker / (1 - target_ratio)`.
         """
-        marker_tokens = count_tokens(self._format_summary_marker(first_turn, last_turn))
+        marker_tokens = count_tokens_cached(self._format_summary_marker(first_turn, last_turn))
         if self._target_ratio >= 1.0:
             # Degenerate config: no run size is safe, so refuse everything.
             return 10**9

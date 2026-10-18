@@ -6,7 +6,7 @@ A **session** is one continuous conversation's remembered state, keyed by a `ses
 
 ### What a session owns
 
-**Everything a conversation has produced lives on its `SessionState`, and nowhere else.** That is all three generations — verbatim young turns, old-gen spans (each holding its turns, shown at a detail level), and permanent-gen facts — held together as one **snapshot**. The services that do the work (the span scorer, the compactor, the fact reader, and `GenerationalMemory`) hold *how* to do things and no conversation data at all. They are shared across every session, which is safe precisely because they remember no one.
+**Everything a conversation has produced lives on its `SessionState`, and nowhere else.** That is all three generations — verbatim young turns, old-gen spans (each holding its turns, shown at a detail level), and permanent-gen facts — held together as one **snapshot**. The services that do the work (the span scorer, the compactor, the fact reader, and `GenerationalMemory`) hold *how* to do things and no conversation data at all. They are shared across every session, which is safe precisely because they remember no one. The span scorer does remember each span's importance, but by a hash of its text: it holds none of the text, and the answer is the same whichever session asks.
 
 ```
              shared, stateless                       one per conversation

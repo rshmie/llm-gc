@@ -17,7 +17,7 @@ from llm_gc.models import Message
 from llm_gc.models.message import person_text
 from llm_gc.scoring.base_scorer import BaseScorer
 from llm_gc.scoring.relevance_type import RelevanceType
-from llm_gc.utils import count_tokens
+from llm_gc.utils import TextCache, count_tokens_cached
 from llm_gc.utils.text import significant_words, tokenize_words
 
 # Liveness leads: a span that is recent, or that what is being discussed reaches,
@@ -32,6 +32,11 @@ DEFAULT_IMPORTANCE_WEIGHTS: Mapping[RelevanceType, float] = {RelevanceType.DECIS
 # quiet, and leave bounding the front to the budget. At 0.15, the turn-level rate,
 # measured spans were archived about seven turns after they were said.
 DEFAULT_SPAN_RECENCY_DECAY = 0.05
+
+# Spans whose importance one scorer remembers. One entry is a hash and two scores, about 400
+# bytes, so this is about 8 MB. It has to hold every span of the conversations in use at once
+# (a long conversation has a thousand or more); a span dropped is only scored again.
+IMPORTANCE_REMEMBERED = 20_000
 
 
 class Relevance(Protocol):
@@ -99,6 +104,11 @@ class SpanScorer:
     is its own input rather than the end of one flat list, in which a span of
     twenty turns would count as one position.
 
+    Every span is scored again at each pass, but only recency and relevance can have
+    changed: both depend on where the conversation is now. Importance depends on the
+    span's text alone, so it is measured once per text and remembered. An importance
+    scorer must therefore read only the content of the message it is given.
+
     Raises:
         ConfigError: An importance scorer has no weight or a weight has no scorer,
             a weight is negative, or the weights add up to zero.
@@ -115,12 +125,13 @@ class SpanScorer:
         weights = [liveness_weight, *importance_weights.values()]
         if min(weights) < 0 or sum(weights) <= 0:
             raise ConfigError("span weights must be non-negative and add up to more than zero")
-        self.importance = list(importance)
+        self.importance = tuple(importance)     # fixed once importance is remembered by text
         self.relevance = relevance if relevance is not None else LexicalRelevance()
         self.liveness_weight = liveness_weight
         self.importance_weights = dict(importance_weights)
         self.recency_decay = recency_decay
         self._total_weight = sum(weights)
+        self._importance = TextCache(self._measure_importance, IMPORTANCE_REMEMBERED)
 
     @property
     def best_score_however_old(self) -> float:
@@ -154,12 +165,18 @@ class SpanScorer:
 
     def _score_one(self, span: Sequence[Message], text: str, similarity: float, newest_turn: int) -> SpanScore:
         recency = math.exp(-self.recency_decay * max(0, newest_turn - span[-1].turn_index))
-        parts = {RelevanceType.RECENCY: recency, RelevanceType.SIMILARITY: similarity}
-        joined = Message(role=span[0].role, content=text, token_count=count_tokens(text),
-                         turn_index=span[0].turn_index)
-        for scorer in self.importance:
-            parts[scorer.scorer_name] = scorer.score(joined, [joined]).score
+        # A new dict each time: the remembered one is shared by every later pass.
+        parts = {RelevanceType.RECENCY: recency, RelevanceType.SIMILARITY: similarity, **self._importance.get(text)}
         liveness = max(recency, similarity)
         importance = sum(weight * parts[part] for part, weight in self.importance_weights.items())
         return SpanScore(combined=(self.liveness_weight * liveness + importance) / self._total_weight,
                          liveness=liveness, parts=parts)
+
+    def _measure_importance(self, text: str) -> dict[RelevanceType, float]:
+        """Each importance measure of a span's text.
+
+        A span mixes speakers, so its text is given to the scorers as one message whose
+        role and position mean nothing; they read its content.
+        """
+        joined = Message(role="user", content=text, token_count=count_tokens_cached(text))
+        return {scorer.scorer_name: scorer.score(joined, [joined]).score for scorer in self.importance}

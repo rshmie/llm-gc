@@ -18,7 +18,7 @@ from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.generation_snapshot import DetailLevel, Span
 from llm_gc.models.knowledge_entry import KnowledgeStatus
 from llm_gc.models.message import Writer, parts_by_writer, tool_result_ids, tool_use_ids
-from llm_gc.utils import count_tokens
+from llm_gc.utils import count_tokens_cached
 
 
 class TurnFidelity(Enum):
@@ -232,7 +232,7 @@ def _span_states(inspection: SessionInspection) -> list[tuple[Span, SpanState]]:
         folded = span.level is DetailLevel.OUT_OF_VIEW
         states.append((span, SpanState(
             turns=list(span.turn_indices), level=span.level, text=lines[id(span)],
-            tokens=None if folded else count_tokens(lines[id(span)]),
+            tokens=None if folded else count_tokens_cached(lines[id(span)]),
             summary=_summary(span),
             score=score, becomes=level if level is not span.level else None, facts_unread=span.facts_unread)))
     return sorted(states, key=lambda pair: pair[0].first_turn)

@@ -43,7 +43,7 @@ from llm_gc.models.generation_snapshot import (
 )
 from llm_gc.scoring import SpanScorer
 from llm_gc.session import SessionManager, SessionState
-from llm_gc.utils import count_tokens
+from llm_gc.utils import count_tokens, count_tokens_cached
 
 logger = logging.getLogger(__name__)
 
@@ -603,7 +603,8 @@ class GcService:
                                         compacted_tokens=compacted, archived_tokens=archived,
                                         archivable=not span.facts_unread))
 
-        fold = count_tokens(folded_line(spans[0].first_turn, spans[-1].turns[-1].turn_index, len(spans))) if spans else 0
+        fold = (count_tokens_cached(folded_line(spans[0].first_turn, spans[-1].turns[-1].turn_index, len(spans)))
+                if spans else 0)
         plan = plan_levels(options, self._bands, recap_budget - FRONT_OVERHEAD_TOKENS, fold)
         return _Planned(spans=tuple(spans), new_from=len(base.old), drafts_from=drafts_from, scores=tuple(scores),
                         options=tuple(options), plan=plan, new_facts=tuple(new_facts))

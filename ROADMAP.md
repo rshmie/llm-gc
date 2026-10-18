@@ -8,7 +8,7 @@ What is left between today and LLM-GC's first version, in the order it should be
   1. Verify           2. Measure             3. Fix                 4. Ship
   what exists   ──►   the claims      ──►    what blocks     ──►    the package
                                              a release
-  live runs,          benchmark, quality,    event loop,            license, CI,
+  live runs,          benchmark, quality,    quality losses,        license, CI,
   the checks          report, tuning         retries, rerun         PyPI, Docker, docs
                             ▲                     │
                             └──── rerun ──────────┘
@@ -42,14 +42,13 @@ Today's evidence is a 37-question check on scripted conversations and a few live
 - [ ] **Quality by counterfactual replay:** ask the same question against the full context and against LLM-GC's, and compare the answers.
 - [ ] **Grounding failures, read from live replies:** the model asking for something the session already established, or calling it unknown. It is the one live signal that can show quality was lost.
 - [ ] **Classification correctness** against a small labelled set: did LLM-GC keep, compact and archive what a person would have?
-- [ ] **Latency added on the request path** (p50 and p95), and how long a collection takes cold and warm. The request path counts each text once and remembers the count, so what is measured is the design's overhead, not the same conversation being tokenised again on every request. Measure with the dashboard open and closed: it records the history on each request too.
+- [ ] **Latency added on the request path** (p50 and p95), and how long a collection takes cold and warm. Time how long a pass holds the event loop too, with one and four conversations at once: planning runs on the loop, so every other request and stream waits while it plans (about 115 ms at 3,200 turns on a synthetic conversation). If that is the cost, move planning to a worker thread, as [scoring](doc/design/scoring/overview.md) describes. The request path counts each text once and remembers the count, and a pass reads each span's text once, so what is measured is the design's overhead, not the same conversation being tokenised again on every request. Measure with the dashboard open and closed: it records the history on each request too.
 - [ ] **Tune the draft defaults** against the benchmark, rerunning the decision-survival check after each change: `min_cut_tokens`, `last_n_turns_to_keep`, `keep_threshold`, `archive_threshold`, `max_recap_ratio`, `min_saving_share` and `max_stale_ratio`.
 - [ ] **A post-session report** on the dashboard: what was kept, compacted and archived, which decisions survived, the grounding failures seen, and what the session cost against no LLM-GC. It is the page people share, so it must make sense to someone who did not build LLM-GC.
 
-## 3. Fix what blocks a release
+## 3. Fix that are planned
 
 - [ ] **Whatever the benchmark shows losing quality.** If a lost answer traces back to how a span was scored, fix that signal before release. One miss is already known: relevance matches words, so "datastore" never finds "database", and a span the conversation returns to in other words stays at its low level. Embedding relevance behind the existing `Relevance` seam fixes it without training anything.
-- [ ] **Scoring runs on the proxy's event loop**, and is O(n²) in messages per pass. While a pass scores a long conversation, every other request the proxy handles waits. Make it linear, and move it off the loop.
 - [ ] **A collection's summaries run one after another** (132 s cold on one live run). Run them concurrently if the latency measurement confirms they are the cost.
 - [ ] **A retry policy for LLM-GC's own model calls, for one-off failures only:** timeouts, dropped connections and 5xx answers other than 529, with exponential backoff and jitter, a cap on attempts, and `Retry-After` honoured. A rate limit (429) or an overload (529) is not retried: LLM-GC's calls share the client's limit, so it pauses instead (`doc/design/proxy/overview.md`). An overload on one of LLM-GC's own calls should pause it too; today only a client's 529 does.
 - [ ] **The dashboard groups conversations into sessions twice**, in its own script and on the server. Use the server's grouping only, so the two cannot disagree.

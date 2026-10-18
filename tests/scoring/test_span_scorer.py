@@ -8,7 +8,8 @@ from llm_gc.config import GCConfig
 from llm_gc.config.constants import DEFAULT_LEVEL_MARGIN
 from llm_gc.exceptions import ConfigError
 from llm_gc.models import Message
-from llm_gc.scoring import DecisionScorer, DensityScorer, LexicalRelevance, RelevanceType, SpanScorer
+from llm_gc.scoring import (DecisionScorer, DensityScorer, LexicalRelevance, RelevanceType, ScorerResult,
+                            SpanScorer)
 from tests.models.support import SKILL_RULES, turn_with_client_text, turn_with_typed_words
 
 
@@ -61,6 +62,18 @@ def test_now_is_never_the_tool_output_beside_the_words():
 
 def _scorer(*relevance: float) -> SpanScorer:
     return SpanScorer([DecisionScorer(), DensityScorer()], relevance=_FixedRelevance(*relevance))
+
+
+class _CountingDecisionScorer(DecisionScorer):
+    """The decision scorer, recording each text it is asked to read."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.read: list[str] = []
+
+    def score(self, message: Message, conversation: list[Message]) -> ScorerResult:
+        self.read.append(message.content)
+        return super().score(message, conversation)
 
 
 class TestLexicalRelevance:
@@ -128,6 +141,58 @@ class TestLiveness:
                                        _turn(1, "We decided to go with postgres, settled on it.", "assistant")]],
                                      now=[], newest_turn=1)
         assert score.parts[RelevanceType.DECISION] > 0
+
+
+class TestImportanceIsRemembered:
+    """Every pass scores every span again. Only recency and relevance can have changed since the
+    last pass, so importance is measured once per text, and the rest is computed fresh."""
+
+    def test_a_span_scored_again_is_not_read_again(self):
+        decision = _CountingDecisionScorer()
+        scorer = SpanScorer([decision, DensityScorer()], relevance=_FixedRelevance(0.0, 0.0))
+        spans = [[_turn(0, "We decided on Postgres.")], [_turn(1, "Retention is 30 days.")]]
+
+        first = scorer.score(spans, now=[], newest_turn=1)
+        again = scorer.score(spans, now=[], newest_turn=1)
+
+        assert decision.read == ["We decided on Postgres.", "Retention is 30 days."]
+        assert again == first
+
+    def test_recency_and_relevance_are_measured_again_at_each_pass(self):
+        """The remembered importance is merged into each pass's own parts. Were it the dict a pass
+        wrote recency into, a later pass would read the first pass's recency back."""
+        relevance = _FixedRelevance(0.0)
+        scorer = SpanScorer([DecisionScorer(), DensityScorer()], relevance=relevance)
+        span = [[_turn(0, "We decided on Postgres.")]]
+
+        [then] = scorer.score(span, now=[], newest_turn=0)
+        relevance.values = [0.8]
+        [now] = scorer.score(span, now=[], newest_turn=100)
+
+        assert then.parts[RelevanceType.RECENCY] == pytest.approx(1.0)
+        assert now.parts[RelevanceType.RECENCY] < 0.01
+        assert now.parts[RelevanceType.SIMILARITY] == pytest.approx(0.8)
+        assert now.parts[RelevanceType.DECISION] == then.parts[RelevanceType.DECISION]
+
+    def test_a_span_whose_text_changed_is_read_again(self):
+        """Remembered by text, not by position: after a rewind the same turns can say something else."""
+        decision = _CountingDecisionScorer()
+        scorer = SpanScorer([decision, DensityScorer()], relevance=_FixedRelevance(0.0))
+
+        [before] = scorer.score([[_turn(0, "Which database?")]], now=[], newest_turn=0)
+        [after] = scorer.score([[_turn(0, "We decided to go with postgres, settled on it.")]], now=[], newest_turn=0)
+
+        assert len(decision.read) == 2
+        assert after.parts[RelevanceType.DECISION] > before.parts[RelevanceType.DECISION]
+
+    @given(texts=st.lists(st.text(min_size=1, max_size=60), min_size=1, max_size=6), newest=st.integers(0, 50))
+    def test_remembering_never_changes_a_score(self, texts, newest):
+        spans = [[_turn(index, text)] for index, text in enumerate(texts)]
+        warmed = SpanScorer([DecisionScorer(), DensityScorer()])
+        warmed.score(spans, now=[_turn(newest, texts[0])], newest_turn=newest)
+
+        assert (warmed.score(spans, now=[], newest_turn=newest)
+                == SpanScorer([DecisionScorer(), DensityScorer()]).score(spans, now=[], newest_turn=newest))
 
 
 class TestEveryLevelStaysReachable:
