@@ -1,8 +1,18 @@
-# Keeps the commit-pinned actions in .github/workflows current. A release is proposed only after
-# it has been out for two weeks, long enough for a compromised one to be noticed and pulled.
+# Keeps the commit-pinned actions in .github/workflows and the Python dependencies in uv.lock
+# current. A release is proposed only after it has been out for two weeks, long enough for a
+# compromised one to be noticed and pulled. A security update skips that wait: a known
+# vulnerability is the worse risk.
 version: 2
 updates:
   - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+
+  # Reads pyproject.toml and updates uv.lock with it, so `uv sync --locked` in CI keeps passing.
+  - package-ecosystem: uv
     directory: /
     schedule:
       interval: weekly

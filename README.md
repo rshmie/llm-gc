@@ -61,10 +61,12 @@ You need [uv](https://docs.astral.sh/uv/getting-started/installation/) (`brew in
 ```bash
 git clone https://github.com/rshmie/llm-gc.git
 cd llm-gc
-uv sync                      # creates .venv and installs LLM-GC into it
+uv sync --extra proxy        # creates .venv and installs LLM-GC into it, with the web server it runs on
 source .venv/bin/activate    # puts the llm-gc command on this terminal's PATH
 llm-gc --version             # prints its version: the install worked
 ```
+
+`--extra proxy` adds the web server, the dashboard and the settings loader. They are optional so that a program using LLM-GC only as a library does not install them. A plain `uv sync` leaves them out, and `llm-gc` then tells you what is missing.
 
 Every new terminal needs `source .venv/bin/activate`, run in the LLM-GC folder, before `llm-gc` works.
 
@@ -431,6 +433,8 @@ async def on_turn(session_id: str, text: str, role: str, index: int) -> list[Mes
 
 The names `llm_gc` exports are its public API. Anything imported from a subpackage, such as `llm_gc.engine`, is internal and may change in any release.
 
+The library needs only `pydantic`, `tiktoken` and `httpx2`. The proxy, the dashboard and the `llm-gc` command are the `proxy` extra, so a program that imports `llm_gc` does not install a web server.
+
 ## What LLM-GC does and doesn't do
 
 **In scope — built today:**
@@ -572,12 +576,16 @@ Two others were considered and rejected, for different reasons:
 ## Developing LLM-GC
 
 ```bash
-uv sync --extra dev   # adds pytest, ruff, mypy, hypothesis and the Anthropic SDK; a plain `uv sync` removes them
+uv sync --extra dev   # adds the proxy extra, pytest, ruff, mypy, hypothesis, pre-commit, pip-audit and the Anthropic SDK; a plain `uv sync` removes them
 pytest                # the test suite: no network, no key
 ruff check .          # lint
+ruff format --check . # formatting: `ruff format .` fixes it
 mypy                  # type-check the library
+pre-commit install    # run Ruff on each commit
 python -m evals.decision_survival.run --rehearse   # the decision-survival check, offline
 ```
+
+[CONTRIBUTING.md](CONTRIBUTING.md) has the rest: how the code is organised, what a change needs, and how to write the commit message.
 
 ## Documentation
 
@@ -599,6 +607,8 @@ The design docs are the substantive part of this repository. Each one covers how
 - [Failure handling](doc/design/failure-handling.md) *(planned)* — the circuit breaker, and keeping degradation visible
 
 A full index is in [doc/README.md](doc/README.md).
+
+About the project: [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), [SECURITY.md](SECURITY.md) (how to report a vulnerability, privately) and [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

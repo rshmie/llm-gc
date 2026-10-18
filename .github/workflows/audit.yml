@@ -1,0 +1,57 @@
+name: Dependency audit
+
+# Checks the versions in uv.lock against public vulnerability databases. A vulnerability is
+# usually published after the release it affects, so a lockfile that was clean last month can be
+# vulnerable today with no change to the repository. That is why this runs every week as well as
+# when a dependency changes.
+#
+# It does not run on every pull request. A vulnerability published today would then block
+# unrelated work until someone updated the dependency. A pull request that changes the
+# dependencies is the one that could add a vulnerable version, so only those run it.
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  pull_request:
+    paths:
+      - pyproject.toml
+      - uv.lock
+      - .github/workflows/audit.yml
+  push:
+    branches: [main]
+    paths:
+      - pyproject.toml
+      - uv.lock
+      - .github/workflows/audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Audit dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.11.28"
+          python-version: "3.13"
+
+      # pip-audit comes from the dev extra, so its version is pinned by the lockfile and bumped
+      # by Dependabot like every other tool.
+      - name: Install dependencies
+        run: uv sync --locked --extra dev
+
+      # What a user of the proxy installs: the library and the proxy extra, not the test tools.
+      - name: List the locked packages a user installs
+        run: uv export --locked --no-emit-project --extra proxy --no-hashes --format requirements-txt --output-file requirements.txt
+
+      # --no-deps because the list is already complete; pip-audit must audit these exact
+      # versions and not resolve its own.
+      - name: Audit
+        run: uv run --no-sync pip-audit --requirement requirements.txt --no-deps --disable-pip

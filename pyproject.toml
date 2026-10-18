@@ -15,23 +15,22 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Typing :: Typed",
 ]
-# Each floor is the version uv.lock tests; each ceiling is below the next major, which may break us.
+# What the library needs to run in someone else's program. Each floor is the version uv.lock tests;
+# each ceiling is below the next major, which may break us. The web server, the command line and
+# the settings loader are the "proxy" extra below.
 dependencies = [
     "pydantic>=2.13.4,<3",
     "tiktoken>=0.13.0,<1",
-    "fastapi>=0.139.0,<1",
-    "uvicorn>=0.51.0,<1",
-    "httpx2>=2.6.0,<3",
-    "pydantic-settings>=2.15.0,<3",
-    "click>=8.4.2,<9",
+    "httpx2>=2.12.0,<3",
 ]
 
 [project.scripts]
-llm-gc = "llm_gc.cli.main:main"
+llm-gc = "llm_gc.cli.entry:run"
 
 [project.urls]
 Repository = "https://github.com/rshmie/llm-gc"
@@ -46,11 +45,23 @@ pythonpath = ["."]
 line-length = 120
 
 [project.optional-dependencies]
+# Everything the `llm-gc` command needs: the proxy, the dashboard and the settings. Same ranges rule
+# as above. Only the packages under cli/, proxy/, visualizer/ and web/ import these.
+proxy = [
+    "fastapi>=0.139.0,<1",
+    "uvicorn>=0.51.0,<1",
+    "pydantic-settings>=2.15.0,<3",
+    "click>=8.4.2,<9",
+]
+# Only for working on LLM-GC. The tests start the proxy and the dashboard, so dev includes proxy.
 dev = [
+    "llm-gc[proxy]",
     "pytest",
     "ruff",
     "mypy",
     "hypothesis",
+    "pre-commit",
+    "pip-audit",
     "anthropic>=1,<2",
 ]
 

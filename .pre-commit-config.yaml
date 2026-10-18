@@ -1,0 +1,21 @@
+# Runs Ruff on the files in a commit, so what CI checks is fixed before it is pushed.
+# Install once with `uv run pre-commit install`.
+#
+# The hooks run the Ruff that uv.lock pins, through uv, instead of pre-commit's own copy of Ruff.
+# A second copy would have its own version, bumped on its own schedule, and two versions format
+# the same file differently: the hook would pass and CI's `ruff format --check` would fail.
+#
+# mypy and pytest are not hooks. They take long enough to make people skip hooks, and CI runs them.
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-format
+        name: ruff format
+        entry: uv run --no-sync ruff format
+        language: system
+        types: [python]
+      - id: ruff-check
+        name: ruff check
+        entry: uv run --no-sync ruff check
+        language: system
+        types: [python]

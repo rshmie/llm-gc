@@ -18,7 +18,9 @@ concurrency:
 # One job per check, so each one is its own row on a pull request and a lint failure does not
 # hide the test result. The jobs repeat the same setup; Dependabot bumps every copy of a pinned
 # action in one pull request, so the copies cannot drift apart. A required status check refers
-# to a job by its name, so renaming a job means updating that rule too.
+# to a job by its name, so renaming a job, or changing the Python versions in the test matrix,
+# means updating that rule too. The names are: Lint, Type-check, Test (3.13), Test (3.14) and
+# Library-only install.
 jobs:
   lint:
     name: Lint
@@ -47,6 +49,10 @@ jobs:
       - name: Lint
         run: uv run --no-sync ruff check .
 
+      # Only checks: it fails if `ruff format` would change a file, and never changes one itself.
+      - name: Format check
+        run: uv run --no-sync ruff format --check .
+
   types:
     name: Type-check
     runs-on: ubuntu-24.04
@@ -71,6 +77,36 @@ jobs:
     name: Test
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    strategy:
+      # A failure on one Python version must not hide the result on the other.
+      fail-fast: false
+      matrix:
+        # Every Python version that requires-python admits and the tests pass on. Lint and the
+        # type check run on the oldest one only, which is what mypy is configured for.
+        python-version: ["3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.11.28"
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --locked --extra dev
+
+      - name: Test
+        run: uv run --no-sync pytest
+
+  # What `pip install llm-gc` gives someone who does not ask for the `proxy` extra. The tests run
+  # with every package installed, so they cannot see a library module that needs one it does not
+  # declare; this job installs the library alone and checks it from there.
+  library:
+    name: Library-only install
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -81,8 +117,19 @@ jobs:
           version: "0.11.28"
           python-version: "3.13"
 
-      - name: Install dependencies
-        run: uv sync --locked --extra dev
+      # No --extra: only the dependencies every user gets.
+      - name: Install the library alone
+        run: uv sync --locked
 
-      - name: Test
-        run: uv run --no-sync pytest
+      - name: Import the library
+        run: uv run --no-sync python -c "import llm_gc; print(llm_gc.__version__)"
+
+      # Without the web server the command cannot start. It must say so and name the fix, not
+      # fail with a bare ImportError.
+      - name: The command says what to install
+        run: |
+          status=0
+          output=$(uv run --no-sync llm-gc --version 2>&1) || status=$?
+          echo "$output"
+          test "$status" -eq 1
+          grep -qF 'llm-gc[proxy]' <<< "$output"
