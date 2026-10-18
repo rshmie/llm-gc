@@ -9,7 +9,7 @@ What is left between today and LLM-GC's first version, in the order it should be
   what exists   ──►   the claims      ──►    what blocks     ──►    the package
                                              a release
   live runs,          benchmark, quality,    quality losses,        license, CI,
-  the checks          report, tuning         retries, rerun         PyPI, Docker, docs
+  the checks          report, tuning         rerun                  PyPI, Docker, docs
                             ▲                     │
                             └──── rerun ──────────┘
 ```
@@ -50,7 +50,6 @@ Today's evidence is a 37-question check on scripted conversations and a few live
 
 - [ ] **Whatever the benchmark shows losing quality.** If a lost answer traces back to how a span was scored, fix that signal before release. One miss is already known: relevance matches words, so "datastore" never finds "database", and a span the conversation returns to in other words stays at its low level. Embedding relevance behind the existing `Relevance` seam fixes it without training anything.
 - [ ] **A collection's summaries run one after another** (132 s cold on one live run). Run them concurrently if the latency measurement confirms they are the cost.
-- [ ] **A retry policy for LLM-GC's own model calls, for one-off failures only:** timeouts, dropped connections and 5xx answers other than 529, with exponential backoff and jitter, a cap on attempts, and `Retry-After` honoured. A rate limit (429) or an overload (529) is not retried: LLM-GC's calls share the client's limit, so it pauses instead (`doc/design/proxy/overview.md`). An overload on one of LLM-GC's own calls should pause it too; today only a client's 529 does.
 - [ ] **The dashboard groups conversations into sessions twice**, in its own script and on the server. Use the server's grouping only, so the two cannot disagree.
 - [ ] **Small fixes:**
   - [ ] `--context-window`'s help still calls it the proxied model's window. It is the fallback used when the Models API does not know the model.
@@ -81,6 +80,7 @@ Each is accepted for the first release, stated in the docs, and fixed after it.
 - **The proxy speaks only Anthropic's wire format.** Clients that speak OpenAI's cannot use it yet.
 - **Without a model, facts are read by patterns** that catch few phrasings. This affects offline runs only.
 - **A relayed subagent report is not tied to the subagent that wrote it.**
+- **LLM-GC's own model calls are not retried.** A summary that fails once, on a timeout or a dropped connection, is not asked for again: its span is kept whole where it would have been summarised, which costs tokens but no detail, and the failure is shown as a degradation. Facts that could not be read are read again at the next collection. An overload (529) on one of these calls does not pause them yet; only a client's 529 does.
 
 ## After the first version release
 

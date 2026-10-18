@@ -179,6 +179,6 @@ A prompt rewritten anywhere but its start breaks two things the user depends on.
 
 ## Known gaps
 
-- **A span that lost its summary is never summarised later.** Only a provider *failure* is worth retrying; a refusal would be refused again.
+- **A span that lost its summary is never summarised later.** Only a provider *failure* is worth retrying; a refusal would be refused again. LLM-GC's own model calls are not retried yet either ([LLM provider](../llm-provider.md)), so a single timeout is enough to lose one. This is accepted because the span is then kept whole: the loss is tokens, never detail.
 - **Defaults are drafts.** `min_cut_tokens`, `last_n_turns_to_keep`, the level lines, the margin and the recap budget are to be tuned on the decision-survival check and on real conversations.
 - **Non-text content inside the front.** A condensed turn's images and tool calls survive only as the text that described them.
