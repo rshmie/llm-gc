@@ -16,6 +16,7 @@ from typing import Any
 
 from llm_gc.exceptions import ConfigError
 from llm_gc.models import Message
+from llm_gc.proxy.client_written import client_written_ranges
 from llm_gc.proxy.traffic import ProviderUsage
 from llm_gc.utils import count_tokens
 
@@ -142,6 +143,9 @@ def extract_messages(payload: dict[str, Any], size_thinking: ThinkingSizer | Non
         content, lifted = lift_instructions(_content_as_text(raw.get("content"), index), role)
         token_count = count_tokens(content)
         keys = thinking_keys(raw.get("content")) if size_thinking is not None and role == "assistant" else ()
+        relayed = role == "user" and _RELAYED.match(content) is not None
+        # Only in a turn the person may have written: tool output can quote the client's elements.
+        typed = role == "user" and not relayed and not _carries_tool_results(raw.get("content"))
         messages.append(
             Message(
                 role=role,
@@ -149,7 +153,8 @@ def extract_messages(payload: dict[str, Any], size_thinking: ThinkingSizer | Non
                 token_count=token_count,
                 thinking_tokens=size_thinking(keys, token_count) if size_thinking is not None and keys else 0,
                 instructions=lifted,
-                relayed=role == "user" and _RELAYED.match(content) is not None,
+                relayed=relayed,
+                client_written=client_written_ranges(content) if typed else (),
                 # Its place in the conversation, instructions not counted, so a turn's
                 # index does not depend on where the client puts its instructions.
                 turn_index=len(messages),
@@ -159,6 +164,11 @@ def extract_messages(payload: dict[str, Any], size_thinking: ThinkingSizer | Non
     if not messages:
         raise ConfigError("request body has no user or assistant turn")
     return messages
+
+
+def _carries_tool_results(content: object) -> bool:
+    return isinstance(content, list) and any(
+        isinstance(block, dict) and block.get("type") == "tool_result" for block in content)
 
 
 def thinking_keys(content: object) -> tuple[str, ...]:

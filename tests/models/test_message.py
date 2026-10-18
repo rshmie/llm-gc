@@ -1,5 +1,5 @@
 import pytest
-from llm_gc.models.message import Message
+from llm_gc.models.message import Message, TextPart, parts_by_writer, person_text
 from pydantic import ValidationError
 
 def test_invalid_role_raises_error():
@@ -25,3 +25,35 @@ def test_preview_content_with_truncation():
     msg = Message(role="system", content="This is a test message for previewing." * 10, token_count=100)
     assert len(msg.preview(max_length = 50)) == 53
     assert msg.preview().endswith("...")
+
+class TestTextTheClientWrote:
+    """A user turn can hold text the client wrote; the person's words are the rest of it."""
+
+    TEXT = "<command-name>/audit</command-name>\n\nKeep at most 5 rows.\n\nAnd use Postgres."
+    EXPANSION = (37, 57)
+
+    def test_the_turn_reads_in_order_as_the_persons_part_and_the_clients(self):
+        turn = Message(role="user", content=self.TEXT, client_written=(self.EXPANSION,))
+
+        assert parts_by_writer(turn) == [TextPart(False, "<command-name>/audit</command-name>"),
+                                         TextPart(True, "Keep at most 5 rows."), TextPart(False, "And use Postgres.")]
+        assert person_text(turn) == "<command-name>/audit</command-name>\n\nAnd use Postgres."
+
+    def test_a_turn_the_client_wrote_none_of_is_one_part_untouched(self):
+        turn = Message(role="user", content="  Use Postgres.\n")
+
+        assert parts_by_writer(turn) == [TextPart(False, "  Use Postgres.\n")]
+        assert person_text(turn) == "  Use Postgres.\n"
+
+    def test_a_turn_the_client_wrote_all_of_has_no_words_of_the_persons(self):
+        turn = Message(role="user", content="<task-notification>done</task-notification>", client_written=((0, 43),))
+        assert person_text(turn) == ""
+
+    @pytest.mark.parametrize("ranges", [((0, 999),), ((5, 3),), ((10, 20), (15, 30)), ((20, 30), (0, 10))])
+    def test_a_range_outside_the_text_or_out_of_order_is_refused(self, ranges):
+        with pytest.raises(ValidationError):
+            Message(role="user", content=self.TEXT, client_written=ranges)
+
+    def test_only_a_user_turn_can_hold_it(self):
+        with pytest.raises(ValidationError):
+            Message(role="assistant", content=self.TEXT, client_written=(self.EXPANSION,))

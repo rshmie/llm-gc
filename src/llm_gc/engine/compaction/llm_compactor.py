@@ -20,7 +20,7 @@ from llm_gc.engine.compaction.compaction_result import CompactionResult
 from llm_gc.engine.compaction.compaction_strategy import CompactionStrategy
 from llm_gc.events import Event, EventBus, EventType
 from llm_gc.exceptions import CompactionRefused
-from llm_gc.llm.prompts import COMPACTION_PROMPT, TRANSCRIPT_CLOSE, TRANSCRIPT_OPEN, load_prompt
+from llm_gc.llm.prompts import COMPACTION_PROMPT, load_prompt, transcript_block
 from llm_gc.llm.provider import LLMProvider
 from llm_gc.models import Message
 from llm_gc.utils import count_tokens
@@ -207,13 +207,11 @@ class LLMCompactor(BaseCompactor):
         Not passed through as separate messages: every character is untrusted
         content, and as real messages a turn reading "ignore your instructions"
         would sit where a genuine instruction sits. Roles survive as labels so
-        attribution is preserved.
+        attribution is preserved, and the turns' text is escaped so it cannot end
+        the block or forge another turn's label.
         """
-        transcript = "\n".join(
-            f"[turn {message.turn_index}] {message.role}: {message.content}" for message in messages
-        )
         return Message(
             role="user",
-            content=f"{TRANSCRIPT_OPEN}\n{transcript}\n{TRANSCRIPT_CLOSE}",
+            content=transcript_block((message.turn_index, message.role, message.content) for message in messages),
             turn_index=messages[0].turn_index,
         )

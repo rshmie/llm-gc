@@ -8,6 +8,7 @@ from llm_gc.engine.generations.front import Annotations, span_text
 from llm_gc.exceptions import ConfigError
 from llm_gc.models import Message
 from llm_gc.models.generation_snapshot import DetailLevel, Span
+from llm_gc.models.message import parts_by_writer, person_text
 from llm_gc.proxy.anthropic_translation import (
     DEFAULT_CACHE_LIFETIME_S,
     Instruction,
@@ -270,6 +271,48 @@ class TestARelayedReportIsMarked:
                          relayed=True)
         text = span_text(Span(turns=(report,), level=DetailLevel.KEPT), Annotations())
         assert "(turn 4, subagent report)" in text and "(turn 4, user)" not in text
+
+
+class TestTextClaudeCodeWroteIsMarked:
+    """Claude Code merges its own text into the person's turn: a command's expansion, a local command's output."""
+
+    COMMAND = ("<command-message>audit is running…</command-message>\n<command-name>/audit</command-name>\n"
+               "<command-args>verify</command-args>")
+    EXPANSION = "Base directory for this skill: /skills/audit\n\nKeep at most 5 rows."
+
+    @staticmethod
+    def _turn(content) -> Message:
+        return extract_messages({"messages": [{"role": "user", "content": "go"}, {"role": "assistant", "content": "ok"},
+                                              {"role": "user", "content": content}]})[-1]
+
+    def test_a_skill_commands_expansion_is_marked_after_the_instructions_are_lifted(self):
+        """The wire shape: the command, its expansion and a reminder, as separate blocks of one turn."""
+        turn = self._turn([{"type": "text", "text": self.COMMAND}, {"type": "text", "text": self.EXPANSION},
+                           {"type": "text", "text": "<system-reminder>Today is Tuesday.</system-reminder>"}])
+
+        assert turn.instructions and person_text(turn) == self.COMMAND
+        assert [part.text for part in parts_by_writer(turn) if part.by_client] == [self.EXPANSION]
+
+    def test_the_words_typed_after_a_local_command_stay_the_persons(self):
+        turn = self._turn([{"type": "text", "text": "<local-command-caveat>Caveat: local.</local-command-caveat>"},
+                           {"type": "text", "text": "<command-name>/model</command-name>"},
+                           {"type": "text", "text": "<local-command-stdout>Set model to Sonnet</local-command-stdout>"},
+                           {"type": "text", "text": "Now use Postgres."}])
+
+        assert person_text(turn) == "<command-name>/model</command-name>\n\nNow use Postgres."
+
+    def test_tool_output_quoting_the_elements_is_not_marked(self):
+        """Reading a transcript file brings Claude Code's elements back as tool output, which is no one's words."""
+        turn = self._turn([{"type": "tool_result", "tool_use_id": "t1",
+                            "content": f"{self.COMMAND}\n{self.EXPANSION}"}])
+        assert turn.client_written == ()
+
+    def test_a_relayed_report_and_an_assistant_turn_are_not_marked(self):
+        assert self._turn(f'<agent-message from="a1">\n{self.COMMAND}\n{self.EXPANSION}\n</agent-message>'
+                          ).client_written == ()
+        turns = extract_messages({"messages": [{"role": "user", "content": "go"},
+                                               {"role": "assistant", "content": f"{self.COMMAND}\n{self.EXPANSION}"}]})
+        assert turns[-1].client_written == ()
 
 
 def _marked(ttl: str | None = None) -> dict:

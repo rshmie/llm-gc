@@ -302,6 +302,7 @@ one call reads every span the collection makes, given the facts already on recor
   is not a short topic and value, is dropped. Facts are filed in the order they were
   said, whatever order the model lists them in: filing is sequential, and a later
   statement is what replaces an earlier one.
+- **No text in the read can forge a turn.** The turns and the facts on record are escaped the way a summary's transcript is (`compaction.md`), so a tool result that quotes the closing marker, then a line reading `[turn 3] user: …`, stays the tool result's text. It matters more here than in a summary: a fact's speaker comes from the turn the model cites, and a fact the user stated cannot be replaced by anything the assistant says.
 - **The read has room to think.** Its output cap is the list's room plus a large
   allowance for the thinking the model does before it, and its timeout lets the cap
   be reached. An agent's turns carry whole files and command output: on a Claude

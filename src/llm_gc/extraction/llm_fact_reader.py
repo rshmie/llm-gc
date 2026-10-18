@@ -25,7 +25,7 @@ from llm_gc.config.constants import (
     FACT_VALUE_MAX_CHARS,
 )
 from llm_gc.exceptions import LLMResponseError
-from llm_gc.llm.prompts import FACTS_CLOSE, FACTS_OPEN, FACTS_PROMPT, TRANSCRIPT_CLOSE, TRANSCRIPT_OPEN, load_prompt
+from llm_gc.llm.prompts import FACTS_CLOSE, FACTS_OPEN, FACTS_PROMPT, escape_delimiters, load_prompt, transcript_block
 from llm_gc.llm.provider import LLMProvider, LLMResponse
 from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.generation_snapshot import file_knowledge
@@ -120,13 +120,13 @@ class LLMFactReader:
         """The facts on record and the turns, each in its own delimited block of data.
 
         The facts on record were read from the conversation too, so they are as
-        untrusted as the turns and are delimited the same way.
+        untrusted as the turns, and are delimited and escaped the same way.
         """
         shown = record[-self._on_record_max:]
-        facts = "\n".join(f"{fact.topic_label}: {fact.content}" for fact in shown) or "(none yet)"
-        transcript = "\n".join(f"[turn {turn.turn_index}] {speaker_label(turn)}: {turn.content}" for turn in turns)
+        facts = "\n".join(escape_delimiters(f"{fact.topic_label}: {fact.content}") for fact in shown) or "(none yet)"
+        transcript = transcript_block((turn.turn_index, speaker_label(turn), turn.content) for turn in turns)
         return Message(role="user", turn_index=turns[0].turn_index,
-                       content=f"{FACTS_OPEN}\n{facts}\n{FACTS_CLOSE}\n\n{TRANSCRIPT_OPEN}\n{transcript}\n{TRANSCRIPT_CLOSE}")
+                       content=f"{FACTS_OPEN}\n{facts}\n{FACTS_CLOSE}\n\n{transcript}")
 
     def _facts_in(self, response: LLMResponse, turns: dict[int, Message]) -> list[KnowledgeEntry]:
         """The answer's valid facts. Malformed JSON fails the read; a single bad fact is dropped."""
