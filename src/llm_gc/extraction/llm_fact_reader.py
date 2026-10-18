@@ -30,7 +30,7 @@ from llm_gc.llm.provider import LLMProvider, LLMResponse
 from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.generation_snapshot import file_knowledge
 from llm_gc.models.knowledge_entry import KnowledgeStatus, KnowledgeType
-from llm_gc.models.message import said_by_user, speaker_label
+from llm_gc.models.message import person_text, said_by_user, speaker_label
 
 logger = logging.getLogger(__name__)
 
@@ -121,10 +121,17 @@ class LLMFactReader:
 
         The facts on record were read from the conversation too, so they are as
         untrusted as the turns, and are delimited and escaped the same way.
+
+        A turn the person wrote is shown as their words alone, without what the client
+        wrote into it: a fact's speaker comes from the turn it names, so the turn must
+        hold only the speaker's words. A value only the client wrote becomes a fact
+        when a later turn settles on it, as a value in tool output does.
         """
         shown = record[-self._on_record_max:]
         facts = "\n".join(escape_delimiters(f"{fact.topic_label}: {fact.content}") for fact in shown) or "(none yet)"
-        transcript = transcript_block((turn.turn_index, speaker_label(turn), turn.content) for turn in turns)
+        transcript = transcript_block(
+            (turn.turn_index, speaker_label(turn), person_text(turn) if said_by_user(turn) else turn.content)
+            for turn in turns)
         return Message(role="user", turn_index=turns[0].turn_index,
                        content=f"{FACTS_OPEN}\n{facts}\n{FACTS_CLOSE}\n\n{transcript}")
 
@@ -152,8 +159,8 @@ def _entry(fact: _Fact, turns: dict[int, Message]) -> KnowledgeEntry | None:
     """A validated fact, or None when it names a turn it was not given or is not a short topic and value.
 
     Its speaker is taken from the turn, never from the model: the user when the turn
-    is something they wrote, the assistant for its replies, for tool results and for
-    another agent's relayed report.
+    is something they wrote, the assistant for its replies, for tool results, for
+    another agent's relayed report and for a turn the client wrote.
     """
     topic = " ".join(fact.topic.split()).strip(" .:").casefold()
     value = " ".join(fact.value.split()).strip()

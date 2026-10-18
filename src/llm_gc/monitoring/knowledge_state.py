@@ -17,7 +17,7 @@ from llm_gc.engine.switch_policy import CacheReading, CacheState
 from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.generation_snapshot import DetailLevel, Span
 from llm_gc.models.knowledge_entry import KnowledgeStatus
-from llm_gc.models.message import tool_result_ids, tool_use_ids
+from llm_gc.models.message import parts_by_writer, tool_result_ids, tool_use_ids
 from llm_gc.utils import count_tokens
 
 
@@ -39,6 +39,25 @@ def _fidelity(level: DetailLevel) -> TurnFidelity:
     return TurnFidelity(level.value)
 
 
+class TurnPart(BaseModel):
+    """A stretch of a turn's text, and whether the client wrote it rather than the person."""
+
+    by_client: bool
+    text: str
+
+
+def turn_parts(message: Message) -> list[TurnPart] | None:
+    """The turn's text divided by who wrote it, or None when the client wrote none of it.
+
+    Sent as text rather than as the message's character ranges: Python counts a
+    string's characters one way and JavaScript another, so the same range would cut
+    a different stretch in the browser once an emoji came before it.
+    """
+    if not message.client_written:
+        return None
+    return [TurnPart(by_client=part.by_client, text=part.text) for part in parts_by_writer(message)]
+
+
 class TurnState(BaseModel):
     """One recorded turn: its words, how the model receives it now, and what the next collection would do."""
 
@@ -53,6 +72,7 @@ class TurnState(BaseModel):
     tool_calls: bool = False               # an assistant turn asking the client to run a tool
     tool_results: bool = False             # a user turn carrying what the client's tools returned, not words the user wrote
     relayed: bool = False                  # a user turn relaying another agent's report, not words the user wrote
+    parts: list[TurnPart] | None = None    # the text by writer, when the client wrote some of it
 
 
 class SpanState(BaseModel):
@@ -244,7 +264,7 @@ def _turn_state(message: Message, fidelity: TurnFidelity, *, span: int | None = 
     return TurnState(turn_index=message.turn_index, role=message.role, tokens=message.token_count,
                      text=message.content, fidelity=fidelity, span=span, score=score, becomes=becomes,
                      tool_calls=bool(tool_use_ids(message)), tool_results=bool(tool_result_ids(message)),
-                     relayed=message.relayed)
+                     relayed=message.relayed, parts=turn_parts(message))
 
 
 def _fact_states(knowledge: tuple[KnowledgeEntry, ...], inspection: SessionInspection,

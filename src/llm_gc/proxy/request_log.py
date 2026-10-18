@@ -26,7 +26,7 @@ MAX_RECORDS = 10_000
 MAX_PENDING_PER_ORIGIN = 64
 MAX_ORIGINS_WATCHED = 1024
 
-NewestKind = Literal["typed", "tool_results", "relayed", "assistant"]
+NewestKind = Literal["typed", "tool_results", "relayed", "client", "assistant"]
 _OriginKey = tuple[str | None, str | None]
 
 
@@ -35,12 +35,15 @@ def _now() -> datetime:
 
 
 def newest_kind(message: Message) -> NewestKind:
-    """What a request's newest message is: words the person typed, tool output, another agent's report, or neither."""
+    """What a request's newest message is: words the person typed, tool output, another agent's report,
+    text the client wrote on its own, or none of these: the assistant's own turn."""
     if said_by_user(message):
         return "typed"
     if message.relayed:
         return "relayed"
-    return "tool_results" if tool_result_ids(message) else "assistant"
+    if tool_result_ids(message):
+        return "tool_results"
+    return "client" if message.client_written else "assistant"
 
 
 @dataclass(frozen=True, slots=True)

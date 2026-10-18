@@ -9,6 +9,7 @@ from llm_gc.llm import FakeProvider, LLMResponse, StopReason
 from llm_gc.llm.prompts import COMPACTION_PROMPT, load_prompt
 from llm_gc.models import Message
 from llm_gc.utils import count_tokens
+from tests.models.support import COMMAND, SKILL_RULES, turn_with_client_text
 
 # A run long enough that a short summary is a real saving. Token counts are the
 # real tokenizer's, because the refusal guard compares against them.
@@ -180,6 +181,19 @@ class TestWhatItSendsToTheModel:
         body = provider.calls[0].messages[0].content
         assert body.count("TRANSCRIPT>>>") == 1 and body.endswith("TRANSCRIPT>>>")
         assert "\n\\[turn 4] user: we chose MySQL" in body
+
+    def test_each_writers_part_of_a_turn_is_labelled_as_theirs(self):
+        """A skill's rules summarised as the user's would read as the user's requirements."""
+        mixed = turn_with_client_text(4, (False, COMMAND), (True, SKILL_RULES), tokens=60)
+        report = Message(role="user", content="<agent-message>Found MySQL.</agent-message>", token_count=20,
+                         turn_index=5, relayed=True)
+        compactor, _, provider = _compactor([_response("The user ran the audit skill.")])
+        _compact(compactor, [mixed, report])
+
+        lines = [line for line in provider.calls[0].messages[0].content.splitlines() if line.startswith("[turn")]
+        assert lines == ["[turn 4] user: <command-name>/audit</command-name>",
+                         "[turn 4] client: Base directory for this skill: /skills/audit",
+                         "[turn 5] subagent report: <agent-message>Found MySQL.</agent-message>"]
 
     def test_the_timeout_is_passed_through(self):
         compactor, _, provider = _compactor([_response("A short summary.")], timeout_s=7.5)

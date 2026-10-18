@@ -12,7 +12,7 @@ from typing import Literal, Protocol
 
 from llm_gc.extraction.knowledge_extractor import KnowledgeExtractor
 from llm_gc.models import KnowledgeEntry, Message
-from llm_gc.models.message import said_by_user
+from llm_gc.models.message import person_text, said_by_user
 
 
 class FactReader(Protocol):
@@ -63,4 +63,11 @@ class PatternFactReader:
         """See `FactReader.read`. Patterns do not consult the facts on record."""
         return [replace(entry, speaker="user") for span in spans for turn in span
                 if said_by_user(turn)
-                for entry in self.extractor.extract_knowledge(turn, turn.turn_index)]
+                for entry in self.extractor.extract_knowledge(_person_words(turn), turn.turn_index)]
+
+
+def _person_words(turn: Message) -> Message:
+    """The turn with only the words the person wrote, so a pattern never matches text the client wrote."""
+    if not turn.client_written:
+        return turn
+    return turn.model_copy(update={"content": person_text(turn), "client_written": ()})

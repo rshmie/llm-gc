@@ -20,10 +20,11 @@ from typing import Any, Literal
 from llm_gc.llm.metering import ModelUsage
 from llm_gc.proxy.request_log import RequestRecord
 
-RowKind = Literal["turn", "tool_round", "report", "reply", "task", "retry", "replaced", "pending", "unclaimed",
-                  "closing"]
+RowKind = Literal["turn", "tool_round", "report", "notice", "reply", "task", "retry", "replaced", "pending",
+                  "unclaimed", "closing"]
 # What a request was, by its newest message, when that is not a message the person typed.
-_FROM_NEWEST: dict[str, RowKind] = {"tool_results": "tool_round", "relayed": "report", "assistant": "reply"}
+_FROM_NEWEST: dict[str, RowKind] = {"tool_results": "tool_round", "relayed": "report", "client": "notice",
+                                    "assistant": "reply"}
 
 
 def build_trace(records: Sequence[RequestRecord], client_session: str, *,

@@ -121,7 +121,7 @@ A collection never cuts between them either: it cuts only where a span may begin
  └──────────────────── one span ──────────────────────────┘ └── next span ───┘
 ```
 
-A tool result arrives as a user-role message, but it continues the exchange; it does not start a new one. So does a subagent's relayed report: Claude Code adds a background subagent's findings to the main conversation under the user role, and the report joins the exchange that started the subagent. Only a turn the person wrote opens an exchange.
+A tool result arrives as a user-role message, but it continues the exchange; it does not start a new one. So does a subagent's relayed report: Claude Code adds a background subagent's findings to the main conversation under the user role, and the report joins the exchange that started the subagent. So does a turn Claude Code wrote all of, such as the notice that a background task finished. Only a turn the person wrote opens an exchange, including one Claude Code wrote part of, such as a skill command and the instructions it expands to (`proxy/overview.md`).
 
 ```
  user ─ assistant → Agent ×2 ─ (tool result: "started") ─ assistant … ─ report ─ assistant ─ report ─ assistant
@@ -302,6 +302,7 @@ one call reads every span the collection makes, given the facts already on recor
   is not a short topic and value, is dropped. Facts are filed in the order they were
   said, whatever order the model lists them in: filing is sequential, and a later
   statement is what replaces an earlier one.
+- **Only the person's words are read as theirs.** Claude Code can write into the person's message: a skill's instructions, a command's output (`proxy/overview.md`). The reader is shown such a turn as the person's words alone, because a fact's speaker comes from the turn the model cites, never from the model. Shown whole, a skill's "the database is MySQL" would be filed as the person's decision, and nothing the assistant said could replace it. A turn Claude Code wrote all of is shown under the label `client`, and its facts are the assistant's side. *Rejected: showing every part under its writer's label* — the model cites only a turn number, so a fact from Claude Code's part would still be filed as the person's. *Accepted cost:* a value only Claude Code wrote becomes a fact when a later turn settles on it, as a value in tool output does.
 - **No text in the read can forge a turn.** The turns and the facts on record are escaped the way a summary's transcript is (`compaction.md`), so a tool result that quotes the closing marker, then a line reading `[turn 3] user: …`, stays the tool result's text. It matters more here than in a summary: a fact's speaker comes from the turn the model cites, and a fact the user stated cannot be replaced by anything the assistant says.
 - **The read has room to think.** Its output cap is the list's room plus a large
   allowance for the thinking the model does before it, and its timeout lets the cap

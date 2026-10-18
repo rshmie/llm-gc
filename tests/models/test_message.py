@@ -1,5 +1,7 @@
 import pytest
-from llm_gc.models.message import Message, TextPart, parts_by_writer, person_text
+from llm_gc.models.message import (CLIENT_SPEAKER, Message, TextPart, parts_by_writer, person_text, said_by_user,
+                                   speaker_label)
+from tests.models.support import COMMAND, NOTICE, SKILL_RULES, turn_with_client_text
 from pydantic import ValidationError
 
 def test_invalid_role_raises_error():
@@ -57,3 +59,13 @@ class TestTextTheClientWrote:
     def test_only_a_user_turn_can_hold_it(self):
         with pytest.raises(ValidationError):
             Message(role="assistant", content=self.TEXT, client_written=(self.EXPANSION,))
+
+
+class TestWhoATurnWithClientTextBelongsTo:
+    def test_a_turn_the_person_wrote_part_of_is_still_theirs(self):
+        turn = turn_with_client_text(0, (False, COMMAND), (True, SKILL_RULES))
+        assert said_by_user(turn) and speaker_label(turn) == "user"
+
+    def test_a_turn_the_client_wrote_all_of_is_the_clients(self):
+        turn = turn_with_client_text(0, (True, NOTICE))
+        assert not said_by_user(turn) and speaker_label(turn) == CLIENT_SPEAKER

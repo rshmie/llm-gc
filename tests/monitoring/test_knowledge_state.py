@@ -15,6 +15,7 @@ from llm_gc.monitoring.knowledge_state import KnowledgeState, TurnFidelity, proj
 from llm_gc.utils import count_tokens
 
 from tests.engine.support import collect
+from tests.models.support import COMMAND, SKILL_RULES, turn_with_client_text
 
 SESSION = "s"
 
@@ -126,6 +127,17 @@ class TestWhereEachTurnIs:
 
         assert [t.tool_calls for t in state.turns] == [False, True, False]
         assert [t.tool_results for t in state.turns] == [False, False, True]
+
+    def test_a_turn_claude_code_wrote_part_of_is_shown_by_writer(self):
+        turns = [turn_with_client_text(0, (False, COMMAND), (True, SKILL_RULES)),
+                 Message(role="assistant", content="Auditing.", token_count=3, turn_index=1)]
+        service = _service(min_cut_tokens=100_000)
+        service.gc_record(SESSION, turns, ["h0", "h1"])
+
+        state = project_knowledge_state(service.inspect(SESSION))
+
+        assert [(p.by_client, p.text) for p in state.turns[0].parts] == [(False, COMMAND), (True, SKILL_RULES)]
+        assert state.turns[1].parts is None
 
 class TestThePassOutcome:
     def test_every_cut_reports_where_its_turns_actually_went(self):

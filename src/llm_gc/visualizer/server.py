@@ -251,9 +251,9 @@ def _reply_index(transcripts: TranscriptRecorder | None, session_id: str) -> int
 
 
 def _opening_words(turns: Sequence[TranscriptTurn] | None) -> str | None:
-    """How a person recognises a conversation: its first user message, on one line and shortened."""
-    first = next((turn.text for turn in turns or () if turn.role == "user" and not turn.relayed and turn.text.strip()),
-                 None)
+    """How a person recognises a conversation: the first words they wrote in it, on one line and shortened."""
+    first = next((turn.person_text for turn in turns or ()
+                  if turn.role == "user" and not turn.relayed and turn.person_text.strip()), None)
     return _one_line(first) if first is not None else None
 
 
@@ -270,7 +270,7 @@ def _with_words(trace: dict[str, Any], transcripts: TranscriptRecorder | None) -
     """
     def said(conversation_id: str | None, position: int) -> str | None:
         turns = transcripts.get(conversation_id) if transcripts is not None and conversation_id else None
-        text = next((turn.text for turn in turns or () if turn.turn_index == position - 1), None)
+        text = next((turn.person_text for turn in turns or () if turn.turn_index == position - 1), None)
         return _one_line(text) if text and text.strip() else None
 
     def tasked(node: dict[str, Any]) -> dict[str, Any]:

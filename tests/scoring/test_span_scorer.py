@@ -9,6 +9,7 @@ from llm_gc.config.constants import DEFAULT_LEVEL_MARGIN
 from llm_gc.exceptions import ConfigError
 from llm_gc.models import Message
 from llm_gc.scoring import DecisionScorer, DensityScorer, LexicalRelevance, RelevanceType, SpanScorer
+from tests.models.support import SKILL_RULES, turn_with_client_text
 
 
 def _turn(index: int, text: str, role: str = "user") -> Message:
@@ -23,6 +24,28 @@ class _FixedRelevance:
 
     def score(self, spans, now):
         return self.values[: len(spans)]
+
+
+class _RecordingRelevance:
+    """Records what it was asked to match, and finds nothing relevant."""
+
+    def __init__(self) -> None:
+        self.now: str | None = None
+
+    def score(self, spans, now):
+        self.now = now
+        return [0.0] * len(spans)
+
+
+def test_now_is_the_words_the_person_wrote_not_what_their_client_added():
+    """A skill's rules in the newest turn would make every span about databases look like the subject."""
+    relevance = _RecordingRelevance()
+    asked = turn_with_client_text(2, (False, "How long is a seat hold?"), (True, SKILL_RULES))
+
+    SpanScorer([DecisionScorer(), DensityScorer()], relevance=relevance).score(
+        [[_turn(0, "Seat holds last seven minutes.")]], [asked], newest_turn=2)
+
+    assert relevance.now == "How long is a seat hold?"
 
 
 def _scorer(*relevance: float) -> SpanScorer:

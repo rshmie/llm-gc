@@ -125,6 +125,13 @@ def test_a_requests_newest_message_is_named_by_who_wrote_it():
                                                                          "assistant"]
 
 
+def test_a_newest_message_the_client_wrote_all_of_is_not_typed():
+    """A background task finishing sends a request the person did not type."""
+    notice = Message(role="user", content="<task-notification>done</task-notification>", turn_index=6,
+                     client_written=((0, 43),))
+    assert newest_kind(notice) == "client"
+
+
 class TestAnOpenToolRound:
     """Whether a conversation's next request will answer tool calls, from its own records."""
 

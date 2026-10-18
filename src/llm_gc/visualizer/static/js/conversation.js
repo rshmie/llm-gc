@@ -14,15 +14,24 @@ const smooth = () => (reducedMotion() ? "auto" : "smooth");
 export const speakerName = (role) => role === "user" ? "You" : role ? role[0].toUpperCase() + role.slice(1) : "—";
 const avatarText = (role) => role === "user" ? "You" : role === "assistant" ? "AI" : (role || "?").slice(0, 2).toUpperCase();
 const avatar = (role) => h("div", { class: `av ${role === "user" ? "user" : "assistant"}`, "aria-hidden": "true" }, avatarText(role));
-// A turn of tool results is the client reporting what its tools returned, and a relayed turn another
-// agent's report; both come under the user role, and neither is the user's words.
-const speakerOf = (turn) => turn.relayed ? "Subagent report" : turn.tool_results ? "Tool results" : speakerName(turn.role);
+// A turn of tool results is the client reporting what its tools returned, a relayed turn is another
+// agent's report, and a turn Claude Code wrote entirely is its own notice. All come under the user
+// role, and none is the user's words. A turn it wrote only part of is shared: the header names both
+// writers, and each part Claude Code wrote is set apart, so the rest is the user's.
+const byClient = (turn) => Boolean(turn.parts) && turn.parts.every((part) => part.by_client);
+const shared = (turn) => Boolean(turn.parts) && !byClient(turn);
+const speakerOf = (turn) => turn.relayed ? "Subagent report" : turn.tool_results ? "Tool results"
+  : byClient(turn) ? "Claude Code" : shared(turn) ? "You and Claude Code" : speakerName(turn.role);
 const avatarOf = (turn) => turn.relayed ? h("div", { class: "av assistant", "aria-hidden": "true" }, "Agent")
-  : turn.tool_results ? h("div", { class: "av user", "aria-hidden": "true" }, "Tool") : avatar(turn.role);
+  : turn.tool_results ? h("div", { class: "av user", "aria-hidden": "true" }, "Tool")
+  : byClient(turn) ? h("div", { class: "av user", "aria-hidden": "true" }, "CC") : avatar(turn.role);
 const toolTip = () => hoverTip(GLOSSARY.tools[0], GLOSSARY.tools[1]);
 const relayedTip = () => hoverTip(GLOSSARY.relayed[0], GLOSSARY.relayed[1]);
-// The speaker, explained when it is the client reporting tool output or relaying a report; a tag when the assistant calls a tool.
-const who = (turn) => h("span", { class: "who", ...(turn.relayed ? relayedTip() : turn.tool_results ? toolTip() : {}) }, speakerOf(turn));
+const clientTip = () => hoverTip(GLOSSARY.client[0], GLOSSARY.client[1]);
+const sharedTip = () => hoverTip(GLOSSARY.shared[0], GLOSSARY.shared[1]);
+// The speaker, explained whenever it is not simply you or the assistant.
+const who = (turn) => h("span", { class: "who", ...(turn.relayed ? relayedTip() : turn.tool_results ? toolTip()
+  : byClient(turn) ? clientTip() : shared(turn) ? sharedTip() : {}) }, speakerOf(turn));
 const toolTag = (label) => h("span", { class: "tag", ...toolTip() }, label);
 const callsTag = (turn) => turn.tool_calls ? toolTag("calls a tool") : null;
 // Instructions the client puts inside the message: never condensed, so their size stands apart.
@@ -676,6 +685,16 @@ export function textBlock(text, { faded = false, key = null } = {}) {
   return [body, more];
 }
 
+// A message's words. Where Claude Code wrote part of the message, that part is set apart and named.
+function turnText(turn, { faded = false } = {}) {
+  const key = `t-${turn.turn_index}`;
+  if (!turn.parts || byClient(turn)) return textBlock(turn.text, { faded, key });
+  return turn.parts.map((part, i) => part.by_client
+    ? h("div", { class: "client-part" }, h("div", { class: "client-label" }, h("span", { class: "term", ...clientTip() }, GLOSSARY.client[0])),
+      textBlock(part.text, { faded, key: `${key}-${i}` }))
+    : textBlock(part.text, { faded, key: `${key}-${i}` }));
+}
+
 export function fidTag(cat) {
   return h("span", { class: "tag", ...hoverTip(CATS[cat].label, GLOSSARY[cat][1]) }, swatch(cat), CATS[cat].tag);
 }
@@ -717,7 +736,7 @@ export function turnRow(turn) {
         who(turn), callsTag(turn), instructionsTag(turn),
         turn.becomes ? nextTag(turn, turn.turn_index) : null,
         h("span", { class: "tok" }, plural(turn.tokens, "token"))),
-      textBlock(turn.text, { key: `t-${turn.turn_index}` })));
+      turnText(turn)));
 }
 
 // The messages of an exchange as they were said, each still reachable from the map.
@@ -725,7 +744,7 @@ function originals(turns, faded) {
   return turns.map((t) => h("div", { class: "orig", id: `turn-${t.turn_index}` },
     h("div", { class: "msg-head" }, who(t), callsTag(t), instructionsTag(t), h("span", { class: "num" }, `message ${t.turn_index}`),
       h("span", { class: "tok" }, plural(t.tokens, "token"))),
-    textBlock(t.text, { faded, key: `t-${t.turn_index}` })));
+    turnText(t, { faded })));
 }
 
 function originalsToggle(key, turns, open) {
@@ -784,7 +803,7 @@ export function pendingRow(p) {
     h("div", { class: "msg-body" },
       h("div", { class: "msg-head" }, h("span", { class: "who" }, "Newest request"),
         h("span", { class: "muted" }, "not in the conversation yet"), info("newest"), instructionsTag(p)),
-      textBlock(p.text, { key: `t-${p.turn_index}` })));
+      turnText(p)));
 }
 
 // The reply as it reached the client. Shown, never recorded from here: the next request says whether the client kept it.

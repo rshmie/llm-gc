@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from llm_gc.models import KnowledgeEntry, Message
-from llm_gc.models.message import said_by_user, tool_result_ids
+from llm_gc.models.message import person_text, said_by_user, tool_result_ids
 
 # An exchange larger than this is split between tool rounds, so one long agentic
 # exchange becomes several summaries rather than a single call over all of it.
@@ -58,7 +58,9 @@ class OpeningWordsIndexWriter:
     def write(self, turns: Sequence[Message]) -> str:
         """See `IndexWriter.write`."""
         asked = next((turn for turn in turns if _says_something(turn) and said_by_user(turn)), None)
-        opener = asked or next((turn for turn in turns if _says_something(turn)), None)
+        if asked is not None:
+            return _first_sentence(person_text(asked))
+        opener = next((turn for turn in turns if _says_something(turn)), None)
         return _first_sentence(opener.content) if opener is not None else ""
 
 

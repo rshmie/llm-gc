@@ -14,6 +14,7 @@ from typing import Protocol
 
 from llm_gc.exceptions import ConfigError
 from llm_gc.models import Message
+from llm_gc.models.message import person_text
 from llm_gc.scoring.base_scorer import BaseScorer
 from llm_gc.scoring.relevance_type import RelevanceType
 from llm_gc.utils import count_tokens
@@ -137,7 +138,8 @@ class SpanScorer:
         Args:
             spans: Each span's turns, in order.
             now: The turns that say what is being discussed: at a collection, what
-                the user said in the tail; at a recall, the newest message.
+                the user said in the tail; at a recall, the newest message. Only the
+                words the person wrote are read, not what their client added.
             newest_turn: The index of the newest recorded turn, which recency is
                 measured from.
 
@@ -146,7 +148,7 @@ class SpanScorer:
                 does not match the spans.
         """
         texts = ["\n".join(turn.content for turn in span) for span in spans]
-        relevance = self.relevance.score(texts, "\n".join(turn.content for turn in now))
+        relevance = self.relevance.score(texts, "\n".join(person_text(turn) for turn in now))
         return [self._score_one(span, text, similarity, newest_turn)
                 for span, text, similarity in zip(spans, texts, relevance, strict=True)]
 

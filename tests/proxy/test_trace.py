@@ -120,6 +120,16 @@ def test_a_typed_message_whose_place_another_request_took_is_not_a_turn_until_se
     assert _kinds(turn["requests"]) == ["turn", "pending", "report"]
 
 
+def test_a_request_the_client_sent_on_its_own_is_a_notice_within_the_turn():
+    """A background task finishing makes Claude Code send a request: the person typed nothing."""
+    s = _Session()
+    s.send("s_1", "abc")
+    s.send("s_1", "abcdN", newest="client")
+
+    [turn] = s.trace()["turns"]
+    assert _kinds(turn["requests"]) == ["turn", "notice"]
+
+
 def test_a_subagent_started_by_a_subagent_stays_in_the_turn_that_started_the_first():
     s = _Session()
     first = s.send("s_main", "abc", calls=("toolu_0",))

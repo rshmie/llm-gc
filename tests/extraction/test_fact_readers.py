@@ -17,6 +17,7 @@ from llm_gc.llm.prompts import FACTS_CLOSE, FACTS_OPEN, FACTS_PROMPT, TRANSCRIPT
 from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.generation_snapshot import file_knowledge
 from llm_gc.models.knowledge_entry import KnowledgeStatus, KnowledgeType
+from tests.models.support import COMMAND, NOTICE, SKILL_RULES, turn_with_client_text
 
 
 def _said(turn: int, role: str, text: str, tokens: int = 20) -> Message:
@@ -192,3 +193,36 @@ class TestARelayedReportIsTheAssistantsSide:
     def test_patterns_do_not_read_it_as_the_user(self):
         report = self.REPORT.model_copy(update={"content": "<agent-message>The database is MySQL.</agent-message>"})
         assert asyncio.run(PatternFactReader().read([(report,)], [])) == []
+
+
+class TestTextTheClientWroteIsNotTheUsers:
+    """Claude Code writes a skill's rules or a command's output into the person's turn. Read as theirs, a value
+    in it would be filed as their decision, and nothing the assistant says could replace it."""
+
+    MIXED = turn_with_client_text(6, (False, COMMAND), (True, SKILL_RULES), (False, "Use Postgres for ingest."))
+    NOTICE_TURN = turn_with_client_text(8, (True, NOTICE))
+
+    def test_a_turn_the_person_wrote_part_of_is_shown_as_their_words_alone(self):
+        provider = FakeProvider(responses=[_answer([{"turn": 6, "topic": "database", "value": "Postgres",
+                                                     "kind": "decision"}])])
+
+        [fact] = _read(provider, [(self.MIXED,)])
+
+        content = provider.calls[0].messages[0].content
+        assert "MySQL" not in content and "Use Postgres for ingest." in content
+        assert fact.speaker == "user"
+
+    def test_a_turn_the_client_wrote_all_of_is_shown_as_the_clients_and_is_not_the_users(self):
+        provider = FakeProvider(responses=[_answer([{"turn": 8, "topic": "test suite", "value": "passing"}])])
+
+        [fact] = _read(provider, [(self.NOTICE_TURN,)])
+
+        assert "[turn 8] client: <task-notification>" in provider.calls[0].messages[0].content
+        assert fact.speaker == "assistant"
+
+    def test_patterns_read_only_the_words_the_person_wrote(self):
+        mixed = turn_with_client_text(6, (False, "The database is Postgres."), (True, SKILL_RULES))
+
+        facts = asyncio.run(PatternFactReader().read([(mixed, self.NOTICE_TURN)], []))
+
+        assert [(f.topic_label, f.content) for f in facts] == [("database", "Postgres")]

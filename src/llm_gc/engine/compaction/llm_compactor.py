@@ -23,6 +23,7 @@ from llm_gc.exceptions import CompactionRefused
 from llm_gc.llm.prompts import COMPACTION_PROMPT, load_prompt, transcript_block
 from llm_gc.llm.provider import LLMProvider
 from llm_gc.models import Message
+from llm_gc.models.message import CLIENT_SPEAKER, parts_by_writer, speaker_label
 from llm_gc.utils import count_tokens
 
 logger = logging.getLogger(__name__)
@@ -206,12 +207,12 @@ class LLMCompactor(BaseCompactor):
 
         Not passed through as separate messages: every character is untrusted
         content, and as real messages a turn reading "ignore your instructions"
-        would sit where a genuine instruction sits. Roles survive as labels so
+        would sit where a genuine instruction sits. Speakers survive as labels so
         attribution is preserved, and the turns' text is escaped so it cannot end
-        the block or forge another turn's label.
+        the block or forge another turn's label. A turn the client wrote part of is
+        one line per part, each under its writer's label, so a skill's rules or a
+        command's output are never summarised as what the user said.
         """
-        return Message(
-            role="user",
-            content=transcript_block((message.turn_index, message.role, message.content) for message in messages),
-            turn_index=messages[0].turn_index,
-        )
+        lines = ((message.turn_index, CLIENT_SPEAKER if part.by_client else speaker_label(message), part.text)
+                 for message in messages for part in parts_by_writer(message))
+        return Message(role="user", content=transcript_block(lines), turn_index=messages[0].turn_index)

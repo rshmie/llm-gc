@@ -19,6 +19,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from llm_gc.models import ClientOrigin, Message
+from llm_gc.monitoring.knowledge_state import TurnPart, turn_parts
 from llm_gc.utils import count_tokens
 
 # Sessions whose transcript is kept. Above this, the least recently active is
@@ -34,6 +35,14 @@ class TranscriptTurn:
     tokens: int
     instruction_tokens: int = 0   # the client's instructions inside the turn as it sends them now
     relayed: bool = False         # another agent's report, relayed under the user role
+    parts: list[TurnPart] | None = None   # the text by writer, when the client wrote some of it
+
+    @property
+    def person_text(self) -> str:
+        """The words the person wrote, without what the client wrote into the turn."""
+        if self.parts is None:
+            return self.text
+        return "\n\n".join(part.text for part in self.parts if not part.by_client)
 
 
 class TranscriptRecorder:
@@ -57,7 +66,7 @@ class TranscriptRecorder:
             TranscriptTurn(turn_index=message.turn_index, role=message.role, text=message.content,
                            tokens=message.token_count,
                            instruction_tokens=sum(count_tokens(text) for text in message.instructions),
-                           relayed=message.relayed)
+                           relayed=message.relayed, parts=turn_parts(message))
             for message in messages
         )
         if origin is not None:

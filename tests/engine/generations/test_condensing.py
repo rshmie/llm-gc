@@ -16,6 +16,7 @@ from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.knowledge_entry import KnowledgeType
 from llm_gc.models.message import tool_result_ids, tool_use_ids
 from llm_gc.utils import count_tokens
+from tests.models.support import NOTICE, turn_with_client_text
 
 
 def _user(index: int, text: str = "a question about the design", tokens: int = 20) -> Message:
@@ -38,6 +39,11 @@ def _indices(groups) -> list[list[int]]:
 
 
 class TestGroupingIntoExchanges:
+    def test_a_turn_the_client_wrote_all_of_joins_the_exchange_before_it(self):
+        """A background task's notice is not the person asking something new."""
+        turns = [_user(0), _assistant(1), turn_with_client_text(2, (True, NOTICE)), _assistant(3), _user(4)]
+        assert _indices(group_exchanges(turns)) == [[0, 1, 2, 3], [4]]
+
     def test_each_exchange_is_a_span(self):
         turns = [_user(0), _assistant(1), _user(2), _assistant(3)]
         assert _indices(group_exchanges(turns)) == [[0, 1], [2, 3]]
@@ -94,6 +100,12 @@ class TestTheIndexLine:
     def test_a_tool_result_is_not_what_was_asked(self):
         turns = [_results(0, ("a",)), _assistant(1, "The lookup shows the pool is saturated. Raise it.")]
         assert self.writer.write(turns) == "The lookup shows the pool is saturated."
+
+    def test_it_is_never_text_the_client_wrote(self):
+        """Claude Code writes a local command's caveat before the person's words, in the same turn."""
+        turns = [turn_with_client_text(0, (True, "<local-command-caveat>Caveat: local.</local-command-caveat>"),
+                                       (False, "Which runner is faster? Tell me."))]
+        assert self.writer.write(turns) == "Which runner is faster?"
 
     def test_a_long_sentence_is_cut_at_a_word_on_one_line(self):
         text = "We need to decide\nhow the ingest service " + "handles very large batches " * 10

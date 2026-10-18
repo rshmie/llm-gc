@@ -76,8 +76,9 @@ def tool_result_ids(message: Message) -> list[str]:
             if block.get("type") == "tool_result" and "tool_use_id" in block]
 
 
-# How a quote or a transcript names a relayed report's speaker.
+# How a quote or a transcript names a relayed report's speaker, and text the client wrote.
 RELAYED_SPEAKER = "subagent report"
+CLIENT_SPEAKER = "client"
 
 
 class TextPart(NamedTuple):
@@ -112,16 +113,28 @@ def person_text(message: Message) -> str:
 
 
 def said_by_user(message: Message) -> bool:
-    """Whether the turn is words the person wrote: a user turn that is neither tool results nor a relayed report.
+    """Whether the turn holds words the person wrote.
 
-    What opens an exchange, what scoring reads as the subject now, and whose facts are the user's.
+    A user turn that is not tool results or a relayed report, and that the client did
+    not write all of. This decides what opens an exchange, what scoring reads as the
+    subject now, and whose facts are the user's. For a turn the client wrote part of,
+    only `person_text` is the person's.
     """
-    return message.role == "user" and not message.relayed and not tool_result_ids(message)
+    return (message.role == "user" and not message.relayed and not tool_result_ids(message)
+            and (not message.client_written or bool(person_text(message))))
 
 
 def speaker_label(message: Message) -> str:
-    """The turn's speaker as a quote or a transcript names it."""
-    return RELAYED_SPEAKER if message.relayed else message.role
+    """The turn's speaker as a quote or a transcript names it.
+
+    A turn the client wrote all of is the client's. A turn it wrote part of is still the
+    user's: `parts_by_writer` tells the parts apart.
+    """
+    if message.relayed:
+        return RELAYED_SPEAKER
+    if message.client_written and not person_text(message):
+        return CLIENT_SPEAKER
+    return message.role
 
 
 def _blocks(message: Message) -> Iterable[dict[str, Any]]:
