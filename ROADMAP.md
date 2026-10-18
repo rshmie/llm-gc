@@ -8,8 +8,8 @@ What is left between today and LLM-GC's first version, in the order it should be
   1. Verify           2. Measure             3. Fix                 4. Ship
   what exists   ──►   the claims      ──►    what blocks     ──►    the package
                                              a release
-  live runs,          benchmark, quality,    quality losses,        license, CI,
-  the checks          report, tuning         rerun                  PyPI, Docker, docs
+  live runs,          benchmark, quality,    quality losses,        CI, PyPI,
+  the checks          report, tuning         rerun                  Docker, docs
                             ▲                     │
                             └──── rerun ──────────┘
 ```
@@ -59,7 +59,6 @@ Today's evidence is a 37-question check on scripted conversations and a few live
 
 ## 4. Ship
 
-- [ ] **Choose a license**: Apache-2.0 includes an explicit patent grant; MIT is the simplest. Then set the `license` field in `pyproject.toml`.
 - [ ] **Add the benchmark's regression check to CI**, once the benchmark exists, so a change that loses quality or savings fails a pull request.
 - [ ] **Repository settings:** require the CI checks to pass before a merge, and turn on private vulnerability reporting, which `SECURITY.md` points people to.
 - [ ] **Integration tests:** the proxy tested end to end over HTTP against a stand-in upstream, async tests on `pytest-asyncio`, and coverage reported.

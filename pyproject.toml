@@ -1,5 +1,6 @@
 [build-system]
-requires = ["hatchling"]
+# 1.27 is the first hatchling that reads the SPDX `license` and `license-files` fields below.
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
@@ -7,6 +8,8 @@ name = "llm-gc"
 version = "0.1.0"
 description = "Context-aware garbage collection for LLMs with built-in epistemic transparency — see what your model remembers, what it's forgotten, and when to worry."
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.13"
 # Python versions listed here are the ones CI tests, not all that requires-python admits.
 classifiers = [

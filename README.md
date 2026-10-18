@@ -614,4 +614,4 @@ About the project: [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE
 
 ## License
 
-Apache 2.0
+Apache-2.0. See [LICENSE](LICENSE).
