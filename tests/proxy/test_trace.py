@@ -44,6 +44,7 @@ class _Session:
         sent=100,
         forwarded=100,
         request_id=None,
+        rewritten=None,
     ):
         record = self.log.begin(
             conversation_id=conversation,
@@ -55,6 +56,7 @@ class _Session:
             tokens_forwarded=forwarded,
             collected=origin.agent_id is None,
             switch_reasons=reasons,
+            rewritten_tokens=rewritten,
             request_id=request_id,
         )
         self.log.finish(
@@ -206,11 +208,12 @@ def test_a_tools_own_model_call_inside_a_subagent_is_not_taken_for_its_task():
 def test_a_request_that_carried_a_collection_says_so_and_totals_add_the_providers_count():
     s = _Session()
     s.send("s_1", "abc", sent=1000, forwarded=1000)
-    s.send("s_1", "abcde", newest="tool_results", reasons=("repays_rewrite",), sent=1200, forwarded=400)
+    s.send("s_1", "abcde", newest="tool_results", reasons=("repays_rewrite",), sent=1200, forwarded=400, rewritten=350)
 
     [turn] = s.trace()["turns"]
     assert [row["carries_collections"] for row in turn["requests"]] == [0, 1]
     assert [row["switch_reasons"] for row in turn["requests"]] == [[], ["repays_rewrite"]], "and why it was switched in"
+    assert [row["rewritten_tokens"] for row in turn["requests"]] == [None, 350], "and what it expected cached again"
     assert (turn["totals"]["tokens_saved"], turn["totals"]["cache_read_input_tokens"]) == (800, 2200)
 
 

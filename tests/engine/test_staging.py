@@ -319,6 +319,27 @@ def _record_attachments(service, attachments: dict[int, int], *indices):
     return state
 
 
+class TestTheSwitchKeepsWhatItWeighed:
+    def test_the_collection_reports_what_its_switch_expected_to_be_cached_again(self):
+        """Live run: the estimate lived only in the waiting cut's preview, so once the cut was switched in
+        it could not be set against what the provider wrote."""
+        service, _ = _service(**PATIENT)
+        _record_attachments(service, {3: 1_200}, 0, 1, 2, 3)
+        _prepare(service)
+        weighed = service.inspect(SESSION, cache=CacheState.WARM).staged.rewritten_tokens
+
+        result = service.gc_switch(SESSION, CacheState.WARM, requested=True)
+
+        assert result is not None and result.rewritten_tokens == weighed > 1_200
+        assert result.report().rewritten_tokens == weighed, "it reaches the event bus"
+
+    def test_a_pass_that_switched_nothing_in_reports_none(self):
+        service, _ = _service()
+        _record(service, 0, 1, 2, 3)
+
+        assert _prepare(service).rewritten_tokens is None
+
+
 class TestAttachmentsAreWeighed:
     """The front carries a taken turn's screenshot only as its placeholder. Left out, a live collection's
     saving missed about 7,600 tokens of two screenshots."""

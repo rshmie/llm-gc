@@ -16,7 +16,7 @@ from llm_gc.proxy.anthropic_translation import (
     read_reply,
     refusal_reason,
 )
-from llm_gc.proxy.traffic import ProviderUsage, TrafficLedger, token_rate
+from llm_gc.proxy.traffic import CarriedCollection, ProviderUsage, TrafficLedger, token_rate
 from llm_gc.utils import count_tokens
 
 MAIN = ClientOrigin(session_id="cc-1")
@@ -430,9 +430,9 @@ class TestCollectionsWaitForARequestThatReachesTheModel:
         _request(ledger, "s_1")
         assert ledger.collections_waiting("s_1") == (), "the request carrying it is on its way"
 
-        ledger.restore_waiting("s_1", ("cache_cold",))
+        ledger.restore_waiting("s_1", (CarriedCollection("cache_cold", 4_100),))
 
-        assert ledger.collections_waiting("s_1") == ("cache_cold",)
+        assert ledger.collections_waiting("s_1") == (CarriedCollection("cache_cold", 4_100),)
 
     def test_what_a_refused_request_gives_back_stays_ahead_of_a_collection_made_meanwhile(self):
         ledger = _ledger()
@@ -444,16 +444,20 @@ class TestCollectionsWaitForARequestThatReachesTheModel:
 
         ledger.restore_waiting("s_1", carried)
 
-        assert ledger.collections_waiting("s_1") == ("cache_cold", "requested"), "oldest first"
+        assert [c.switch_reason for c in ledger.collections_waiting("s_1")] == ["cache_cold", "requested"], (
+            "oldest first"
+        )
         assert _conversation(ledger, "s_1")["collections_not_yet_sent"] == 2
 
     def test_what_is_waiting_is_a_copy_the_next_request_cannot_empty(self):
         """The proxy reads what a request carries before the ledger counts it, which clears the waiting list."""
         ledger = _ledger()
         _request(ledger, "s_1")
-        ledger.record_collection("s_1", completed=True, spent=ModelUsage(), switch_reason="repays_rewrite")
+        ledger.record_collection(
+            "s_1", completed=True, spent=ModelUsage(), switch_reason="repays_rewrite", rewritten_tokens=18_400
+        )
 
         carried = ledger.collections_waiting("s_1")
         _request(ledger, "s_1")
 
-        assert carried == ("repays_rewrite",)
+        assert carried == (CarriedCollection("repays_rewrite", 18_400),)

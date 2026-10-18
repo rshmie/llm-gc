@@ -30,6 +30,7 @@ from llm_gc.proxy.anthropic_translation import fixed_prompt_tokens
 from llm_gc.proxy.cache_watch import CacheWatch
 from llm_gc.proxy.session_identity import CLIENT_AGENT_HEADER, CLIENT_SESSION_HEADER
 from llm_gc.session import SessionManager
+from llm_gc.utils import count_tokens
 
 API_KEY = "sk-ant-super-secret"
 
@@ -2250,7 +2251,15 @@ class TestARefusedRewriteIsSentAsWritten:
         assert first_refused.outline.error_type == "invalid_request_error"
         assert records[records.index(first_refused) + 1].resent_as_written is True
         waiting = client.app.state.metrics.traffic.collections_waiting(first_refused.conversation_id)
-        assert waiting and all(reason is not None for reason in waiting), "they wait with their reasons"
+        assert waiting and all(c.switch_reason is not None for c in waiting), "they wait with their reasons"
+        assert all(c.rewritten_tokens for c in waiting), "and with what they expected the provider to cache again"
+
+    def test_a_request_sent_as_written_records_no_re_cache_estimate(self, caplog):
+        client, _, _ = self._converse_until_refused(caplog)
+
+        records = client.app.state.metrics.request_log.records()
+        refused = next(r for r in records if r.outline is not None and r.outline.status == 400)
+        assert refused.rewritten_tokens is None and records[records.index(refused) + 1].rewritten_tokens is None
 
     def test_both_attempts_carry_the_clients_one_request_id(self, caplog):
         """Both were the client's one request, so the Requests tab shows one ID on both rows."""
@@ -2307,3 +2316,27 @@ class TestTheNewestRequestIsCountedBothWays:
         [session_id] = service.session_manager.store.active_session_ids()
 
         assert service.session_manager.store.get(session_id).token_rate is None
+
+
+class TestTheReCacheEstimate:
+    def test_the_request_carrying_a_collection_records_what_its_switch_expected_cached_again(self):
+        """What a switch makes the provider cache again is everything the request forwards after its cached
+        start, less its own new turn. With no system prompt and no cache markers, that is the whole of what
+        was forwarded but the new turn; the live run sets the same figure against the provider's write."""
+        client, _, _, _ = _proxy()
+        history: list[dict] = []
+        new_turns: list[int] = []
+        for index in range(10):
+            history.append(
+                {"role": "user", "content": f"question {index}: the storage layer, its retention and rollout"}
+            )
+            new_turns.append(count_tokens(history[-1]["content"]))
+            reply = _post(client, {"model": "m", "max_tokens": 64, "messages": history})
+            history.append({"role": "assistant", "content": reply.json()["content"]})
+
+        records = client.app.state.metrics.request_log.records()
+        carrying = [(record, new) for record, new in zip(records, new_turns, strict=True) if record.carries_collections]
+        assert carrying, "the conversation was collected"
+        assert all(record.rewritten_tokens is None for record in records if not record.carries_collections)
+        for record, new_turn in carrying:
+            assert record.rewritten_tokens == record.tokens_forwarded - new_turn, record.position

@@ -167,7 +167,7 @@ function requestLine(row, window, depth) {
   return h("div", { class: `wf-row kind-${row.kind}${depth ? " nested" : ""}`, role: "row" },
     h("span", { class: "wf-label", role: "cell" },
       h("span", { class: "wf-kind", ...hoverTip(label, about, requestIdTip(row)) }, label),
-      h("span", { class: "wf-tokens", ...(kept > 0 ? hoverTip("Tokens", `Claude Code sent ${fmt(row.tokens_from_client)}; LLM-GC took out ${fmt(kept)}, so the model got ${fmt(row.tokens_forwarded)}. Both include LLM-GC's estimate of the model's earlier thinking, which a collection stops sending.`) : {}) },
+      h("span", { class: "wf-tokens", ...(kept > 0 ? hoverTip("Tokens", `Claude Code sent ${fmt(row.tokens_from_client)}; LLM-GC took out ${fmt(kept)}, so the model got ${fmt(row.tokens_forwarded)}. Both include LLM-GC's estimate of the model's earlier thinking and each image at the size the provider gave for it; a collection stops sending the thinking, and the images of the messages it takes.`) : {}) },
         ` · ${fmt(row.tokens_from_client)}`, kept > 0 ? [" → ", h("span", { class: "good" }, fmt(row.tokens_forwarded))] : null),
       row.tool_calls.length ? h("span", { class: "wf-calls" }, ` · then ${calls(row.tool_calls)}`) : null,
       row.resent_as_written ? h("span", { class: "st warn", ...hoverTip("Sent as written",
@@ -196,10 +196,15 @@ function reasonNote(row) {
   return reasons.length ? ` Applied because ${reasons.map((reason) => SWITCH_REASON[reason]).join("; and another because ")}.` : "";
 }
 
-// What a collection's request wrote to the cache, for the ◆'s explanation.
+// What a collection's request wrote to the cache, for the ◆'s explanation, beside what LLM-GC expected it to write.
 function rewriteNote(row) {
-  if (!row.provider || !row.provider.cache_creation_input_tokens) return "";
-  return ` The recap changed, so the provider cached everything after the system prompt again: ${fmt(row.provider.cache_creation_input_tokens)} tokens written.`;
+  const usage = row.provider;
+  if (!usage || !usage.cache_creation_input_tokens) return "";
+  const written = ` The recap changed, so the provider cached everything after the system prompt again: ${fmt(usage.cache_creation_input_tokens)} tokens written.`;
+  if (row.rewritten_tokens == null || !row.tokens_forwarded) return written;
+  // This request's own rate between the two counts, so the comparison does not depend on any other request.
+  const rate = (usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens) / row.tokens_forwarded;
+  return `${written} LLM-GC expected ${fmt(row.rewritten_tokens)} of its own tokens to be cached again, about ${fmt(Math.round(row.rewritten_tokens * rate))} by the provider's count at this request's rate, besides the new message.`;
 }
 
 function subagentLines(agent, window, actions) {

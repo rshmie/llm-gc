@@ -137,6 +137,14 @@ class Traffic:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class CarriedCollection:
+    """A collection switched in since its conversation's newest request: the next request carries it."""
+
+    switch_reason: str | None  # as the engine's `SwitchReason` names it
+    rewritten_tokens: int | None = None  # what the switch expected the provider to cache again, in LLM-GC's count
+
+
 @dataclass(slots=True)
 class ConversationTraffic:
     """One conversation's measured traffic."""
@@ -150,9 +158,9 @@ class ConversationTraffic:
     last_request_at: datetime
     traffic: Traffic = field(default_factory=Traffic)
     collections: int = 0
-    # Why each collection made since its newest request was switched in, oldest first, as the
-    # engine's `SwitchReason` names it. Their saving reaches the model only with the next request.
-    waiting: list[str | None] = field(default_factory=list)
+    # Each collection made since its newest request, oldest first, with why it was switched in.
+    # Their saving reaches the model only with the next request.
+    waiting: list[CarriedCollection] = field(default_factory=list)
 
     @property
     def collections_not_yet_sent(self) -> int:
@@ -281,22 +289,31 @@ class TrafficLedger:
         client = self._client_sessions.get(client_session)
         return client.traffic.summaries if client is not None else None
 
-    def collections_waiting(self, conversation_id: str) -> tuple[str | None, ...]:
-        """Why each collection made since the conversation's newest request was switched in: the next request carries them."""
+    def collections_waiting(self, conversation_id: str) -> tuple[CarriedCollection, ...]:
+        """The collections made since the conversation's newest request: the next request carries them."""
         conversation = self._conversations.get(conversation_id)
         return tuple(conversation.waiting) if conversation is not None else ()
 
-    def restore_waiting(self, conversation_id: str, reasons: Sequence[str | None]) -> None:
+    def restore_waiting(self, conversation_id: str, carried: Sequence[CarriedCollection]) -> None:
         """Collections a refused request was to carry: they still wait for a request that reaches the model."""
         conversation = self._conversations.get(conversation_id)
         if conversation is not None:
             # Made before any collection that arrived meanwhile, so they stay first.
-            conversation.waiting[:0] = reasons
+            conversation.waiting[:0] = carried
 
     def record_collection(
-        self, conversation_id: str, *, completed: bool, spent: ModelUsage, switch_reason: str | None = None
+        self,
+        conversation_id: str,
+        *,
+        completed: bool,
+        spent: ModelUsage,
+        switch_reason: str | None = None,
+        rewritten_tokens: int | None = None,
     ) -> None:
-        """Count a collection's own model calls, and the collection itself, with why it was switched in, when one was made."""
+        """Count a collection's own model calls, and the collection itself, with why it was switched in, when one was made.
+
+        `rewritten_tokens` is what the switch expected the provider to cache again, in LLM-GC's count.
+        """
         self.total.summaries.add(spent)
         conversation = self._conversations.get(conversation_id)
         if conversation is None:
@@ -306,7 +323,7 @@ class TrafficLedger:
             client.traffic.summaries.add(spent)
         if completed:
             conversation.collections += 1
-            conversation.waiting.append(switch_reason)
+            conversation.waiting.append(CarriedCollection(switch_reason, rewritten_tokens))
 
     def as_dict(self) -> dict[str, Any]:
         """Every count, grouped by client session, the most recently active first."""

@@ -77,6 +77,9 @@ class RequestRecord:
     # Why each collection made since its conversation's previous request was switched in: this one
     # carries them. As the engine's `SwitchReason` names it.
     switch_reasons: tuple[str | None, ...] = ()
+    # What those collections expected the provider to cache again with this request, in LLM-GC's
+    # count, before its own new turn. None when it carries none.
+    rewritten_tokens: int | None = None
     # True once a later request of its conversation carries its newest message, False once one
     # replaces it; None until then.
     kept: bool | None = None
@@ -123,6 +126,7 @@ class RequestLog:
         tokens_forwarded: int,
         collected: bool,
         switch_reasons: Sequence[str | None] = (),
+        rewritten_tokens: int | None = None,
         request_id: str | None = None,
     ) -> RequestRecord:
         """Open a record for a request about to be forwarded, and settle the earlier records it answers.
@@ -145,6 +149,7 @@ class RequestLog:
             tokens_forwarded=tokens_forwarded,
             collected=collected,
             switch_reasons=tuple(switch_reasons),
+            rewritten_tokens=rewritten_tokens,
         )
         self._records.append(record)
         self._watch(origin, record)

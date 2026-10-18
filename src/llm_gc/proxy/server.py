@@ -68,7 +68,7 @@ from llm_gc.proxy.token_rates import TokenRates
 from llm_gc.web.request_id import RequestIdMiddleware, current_request_id
 from llm_gc.proxy.request_log import RequestLog, RequestRecord, newest_kind
 from llm_gc.proxy.subagent_links import SpawnLinker
-from llm_gc.proxy.traffic import TrafficLedger, token_rate
+from llm_gc.proxy.traffic import CarriedCollection, TrafficLedger, token_rate
 
 logger = logging.getLogger(__name__)
 
@@ -632,7 +632,8 @@ def _measure_request(
             tokens_from_client=from_client,
             tokens_forwarded=forwarded,
             collected=collected,
-            switch_reasons=carried,
+            switch_reasons=tuple(collection.switch_reason for collection in carried),
+            rewritten_tokens=_rewritten_tokens(carried),
             request_id=current_request_id(),
         )
         linker: SpawnLinker | None = app.state.spawn_linker
@@ -652,7 +653,7 @@ def _measure_request(
             )
         if carried and outline.status != 200 and session_id is not None:
             # A refused request reached no model, so the collections it carried still wait for one that does.
-            record.switch_reasons = ()
+            record.switch_reasons, record.rewritten_tokens = (), None
             metrics.traffic.restore_waiting(session_id, carried)
         if outline.usage is not None:
             TrafficLedger.record_usage(counted, outline.usage, forwarded, carried_collection=bool(carried))
@@ -729,7 +730,17 @@ def _count_collection(app: FastAPI, event: Event) -> None:
             output_tokens=result.summary_output_tokens,
         ),
         switch_reason=result.switch_reason.value if result.switch_reason is not None else None,
+        rewritten_tokens=result.rewritten_tokens,
     )
+
+
+def _rewritten_tokens(carried: Sequence[CarriedCollection]) -> int | None:
+    """What the collections a request carries expected the provider to cache again, or None without one.
+
+    A request carries two only when a refused request left one waiting. The newer one's front is
+    the one sent, so its estimate is the one the provider's write is compared with.
+    """
+    return carried[-1].rewritten_tokens if carried else None
 
 
 def _record_client_history(

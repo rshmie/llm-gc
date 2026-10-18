@@ -105,6 +105,12 @@ class _PassMeasures(BaseModel):
     """Set only when a cut was switched in: the images and documents of the turns it took,
     which the front carries only as placeholders. Saved on top of `tokens_saved`."""
 
+    rewritten_tokens: Optional[int] = Field(default=None, ge=0)
+    """Set only when a cut was switched in: what the switch policy expected the provider to cache
+    again, in LLM-GC's count - the front, the tail's text and images, and what the client sends
+    after its last cache marker. The request that carries the collection should write about this
+    much at the token rate, plus its own new turn."""
+
     @property
     def tokens_saved(self) -> int:
         return self.tokens_before - self.tokens_in_final

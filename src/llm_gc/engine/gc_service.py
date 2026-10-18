@@ -237,7 +237,7 @@ class GcService:
             applied.snapshot, staged=None, thinking_valid_from=None, cut_count=applied.snapshot.cut_count + 1
         )
         self._announce(session_id, staged.delta, applied)
-        result = self._switched_result(before, state.snapshot, staged, preview.decision.reason, start)
+        result = self._switched_result(before, state.snapshot, staged, preview, start)
         reason = preview.decision.reason.value
         logger.info(
             "applied a collection in %s (%s): about %s fewer tokens on each request, %s of them earlier thinking",
@@ -870,10 +870,10 @@ class GcService:
         before: GenerationSnapshot,
         after: GenerationSnapshot,
         staged: StagedCut,
-        reason: SwitchReason,
+        preview: SwitchPreview,
         start: float,
     ) -> GCResult:
-        """The collection a switch made, with what preparing its cut fell short of."""
+        """The collection a switch made, with what preparing its cut fell short of and what the switch weighed."""
         delta = staged.delta
 
         def turns_at(*levels: DetailLevel) -> int:
@@ -898,11 +898,12 @@ class GcService:
             duration_ms=(perf_counter() - start) * 1000,
             degradations=list(staged.degradations),
             outcome=_outcome([(span, span.level) for span in delta.new_spans], delta.level_changes),
-            switch_reason=reason,
+            switch_reason=preview.decision.reason,
             thinking_dropped_tokens=before.sent_thinking_tokens(),
             attachments_dropped_tokens=before.sent_attachment_tokens(
                 turn for turn in before.young if turn.turn_index in delta.departed_turns
             ),
+            rewritten_tokens=preview.rewritten_tokens,
         )
 
     def _context_tokens(self, snapshot: GenerationSnapshot) -> int:
