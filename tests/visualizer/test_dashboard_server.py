@@ -1,4 +1,4 @@
-"""The dashboard over live sessions: read-only, per session, and honest about absence."""
+"""The dashboard over live sessions: per session, honest about absence, and acting only when asked to."""
 
 import asyncio
 import logging
@@ -72,6 +72,20 @@ def _client(service: GcService, monitor: ContextHealthMonitor, **kwargs) -> Test
     return TestClient(create_dashboard_app(service, monitor, **kwargs), base_url="http://127.0.0.1")
 
 
+# What the dashboard's own page sends with every action.
+ACTING = {"x-llm-gc-dashboard": "1"}
+
+
+def _actions(app) -> list[tuple[str, str]]:
+    """The method and path of every route that changes something, sorted."""
+    return sorted(
+        (method, route.path)
+        for route in app.routes
+        if isinstance(route, APIRoute)
+        for method in route.methods - {"GET"}
+    )
+
+
 class TestThePage:
     def test_serves_the_dashboard(self):
         response = _client(*_engine()).get("/")
@@ -90,10 +104,24 @@ class TestThePage:
         for path in ("/", "/static/js/main.js", "/static/css/dashboard.css"):
             assert client.get(path).headers["cache-control"] == "no-cache", path
 
-    def test_its_one_action_is_the_manual_cut(self):
-        app = create_dashboard_app(*_engine())
-        writes = [route.path for route in app.routes if isinstance(route, APIRoute) and route.methods - {"GET"}]
-        assert writes == ["/api/sessions/{session_id}/gc"]
+    def test_its_actions_are_the_manual_cut_and_deleting_a_conversation(self):
+        assert _actions(create_dashboard_app(*_engine())) == [
+            ("DELETE", "/api/sessions/{session_id}"),
+            ("POST", "/api/sessions/{session_id}/gc"),
+        ]
+
+    def test_every_action_is_refused_without_the_action_header(self):
+        """Walks every route that is not a read, so an action added later cannot forget the guard."""
+        service, monitor = _engine()
+        _converse(service, "s", 4)
+        app = create_dashboard_app(service, monitor)
+        before = service.session_manager.store.get("s")
+
+        for method, path in _actions(app):
+            response = TestClient(app, base_url="http://127.0.0.1").request(method, path.format(session_id="s"))
+            assert response.status_code == 403, (method, path)
+
+        assert service.session_manager.store.get("s") is before, "nothing ran"
 
     def test_it_answers_only_to_localhost_names(self):
         """A page on another site can point its own hostname at 127.0.0.1 and read
@@ -287,6 +315,77 @@ class TestRunGcNow:
         assert applied.request_id == result["request_id"]
 
 
+class TestDeletingAConversation:
+    def test_it_forgets_that_conversation_and_no_other(self):
+        service, monitor = _engine()
+        _converse(service, "gone", 6)
+        _converse(service, "kept", 6)
+        client = _client(service, monitor)
+
+        response = client.delete("/api/sessions/gone", headers=ACTING)
+
+        assert response.status_code == 204 and response.content == b""
+        store = service.session_manager.store
+        assert store.get("gone") is None and store.get("kept") is not None
+        assert client.get("/api/sessions/gone").status_code == 404
+        assert [session["session_id"] for session in client.get("/api/overview").json()["sessions"]] == ["kept"]
+
+    def test_it_takes_the_dashboards_copy_of_what_was_said_with_it(self):
+        service, monitor = _engine()
+        transcripts = TranscriptRecorder()
+        _converse(service, "s", 6)
+        words = Message(role="user", content="the database is Postgres", token_count=5, turn_index=0)
+        transcripts.record("s", [words], ClientOrigin(session_id="c7a78c2f"))
+        transcripts.record_reply("s", words, "Noted, Postgres it is.")
+
+        _client(service, monitor, transcripts=transcripts).delete("/api/sessions/s", headers=ACTING)
+
+        assert transcripts.get("s") is None
+        assert transcripts.reply("s") is None
+        assert transcripts.origin("s") is None
+
+    def test_an_unknown_conversation_is_reported_not_created(self):
+        service, monitor = _engine()
+        client = _client(service, monitor)
+
+        response = client.delete("/api/sessions/gone", headers=ACTING)
+
+        assert response.status_code == 404
+        assert response.json()["error"]["code"] == "SESSION_NOT_FOUND"
+        assert service.session_manager.store.get("gone") is None
+
+    def test_a_second_delete_finds_nothing_left(self):
+        service, monitor = _engine()
+        _converse(service, "s", 6)
+        client = _client(service, monitor)
+
+        statuses = [client.delete("/api/sessions/s", headers=ACTING).status_code for _ in range(2)]
+
+        assert statuses == [204, 404]
+
+    def test_a_conversation_the_client_sends_again_starts_from_nothing(self):
+        """Delete forgets; it does not forbid. The client still has the conversation, and the next request
+        builds it again from the client's history, as after a restart."""
+        service, monitor = _engine()
+        _converse(service, "s", 6)
+        assert service.session_manager.store.get("s").snapshot.recorded_turn_count == 6
+        _client(service, monitor).delete("/api/sessions/s", headers=ACTING)
+
+        reopened = service.session_manager.get_or_create("s")
+
+        assert reopened.snapshot.recorded_turn_count == 0
+
+    def test_it_logs_which_conversation_was_deleted(self, caplog):
+        service, monitor = _engine()
+        _converse(service, "s", 6)
+        caplog.set_level(logging.INFO)
+
+        _client(service, monitor).delete("/api/sessions/s", headers=ACTING)
+
+        [line] = [record for record in caplog.records if record.getMessage().startswith("deleted a conversation")]
+        assert line.levelno == logging.INFO and line.session_id == "s"
+
+
 class TestErrors:
     """Each error the dashboard answers carries an ID, and is logged under the same one."""
 
@@ -296,6 +395,7 @@ class TestErrors:
             ("GET", "/api/sessions/gone", 404, logging.DEBUG),
             ("GET", "/api/trace/cc-gone", 404, logging.DEBUG),
             ("POST", "/api/sessions/s/gc", 403, logging.WARNING),
+            ("DELETE", "/api/sessions/s", 403, logging.WARNING),
         ],
     )
     def test_its_body_names_the_request_its_log_line_was_written_in(self, caplog, method, path, status, level):

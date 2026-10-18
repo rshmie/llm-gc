@@ -350,7 +350,7 @@ Once the engine has switched a session to a cut, the forwarded conversation is t
 
 ### Idle sessions
 
-A session holds its conversation's content, so the proxy runs the session idle sweeper for as long as it serves: a session untouched for 30 minutes is closed and its data dropped. A client that returns later is seeded afresh from its own history, at the cost of one uncompressed request.
+A session holds its conversation's content, so the proxy runs the session idle sweeper for as long as it serves: a session untouched for a day is closed and its data dropped. A client that returns later is seeded afresh from its own history, at the cost of one uncompressed request.
 
 ### The dashboard
 

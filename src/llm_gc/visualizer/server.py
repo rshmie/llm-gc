@@ -2,8 +2,8 @@
 
 Each value is produced by an engine, monitor, proxy or transcript component and
 only displayed here, so a wrong number is wrong in the component that produced it.
-Its one action is the developer's manual cut. It shows conversation content, so it
-is opt-in and must only ever listen on localhost; see
+Its two actions are the developer's manual cut and deleting a conversation. It shows
+conversation content, so it is opt-in and must only ever listen on localhost; see
 doc/design/visibility/overview.md.
 """
 
@@ -50,7 +50,7 @@ class _RevalidatedStaticFiles(StaticFiles):
 # same-origin; checking the Host header defeats that.
 LOCAL_HOSTS = ["127.0.0.1", "localhost"]
 
-# Required on the one route that acts. A page on another site cannot send a custom
+# Required on every route that acts. A page on another site cannot send a custom
 # header without a CORS preflight, which this server never grants.
 ACTION_HEADER = "x-llm-gc-dashboard"
 
@@ -230,14 +230,8 @@ def create_dashboard_app(
         the collection when one was switched in, and the pass otherwise, the same way an
         automatic one is reported.
         """
-        if request.headers.get(ACTION_HEADER) != "1":
-            # The dashboard's own page always sends it, so a refusal is worth seeing.
-            return _error_response(
-                403,
-                "ACTION_HEADER_REQUIRED",
-                f"send {ACTION_HEADER}: 1 to act from the dashboard",
-                level=logging.WARNING,
-            )
+        if (refusal := _refuse_without_action_header(request)) is not None:
+            return refusal
         if gc_service.session_manager.store.get(session_id) is None:
             return _session_not_found(session_id)
         prepared = await gc_service.gc_age(session_id, ignore_batch_minimum=True)
@@ -257,7 +251,38 @@ def create_dashboard_app(
             request_id=current_request_id(),
         )
 
+    @app.delete("/api/sessions/{session_id}")
+    async def delete_session(session_id: str, request: Request) -> Response:
+        """Forget a conversation: its turns, summaries and facts, and the dashboard's copy of what was said.
+
+        This is the same close the idle sweeper makes, asked for now. It does not stop the
+        client: the client still has the conversation, and if it sends another request the
+        conversation is built again from it. So it is for conversations that are over.
+        """
+        if (refusal := _refuse_without_action_header(request)) is not None:
+            return refusal
+        if gc_service.session_manager.store.get(session_id) is None:
+            return _session_not_found(session_id)
+        # Synchronous, with no await before or after: the session is gone, and the close has been
+        # announced to everything holding a copy, before the next request can look for it.
+        gc_service.session_manager.close_session(session_id)
+        logger.info("deleted a conversation at the developer's request", extra={"session_id": session_id})
+        return Response(status_code=204)
+
     return app
+
+
+def _refuse_without_action_header(request: Request) -> JSONResponse | None:
+    """The refusal to send back when a request to an acting route lacks the header, else None."""
+    if request.headers.get(ACTION_HEADER) == "1":
+        return None
+    # The dashboard's own page always sends it, so a refusal is worth seeing.
+    return _error_response(
+        403,
+        "ACTION_HEADER_REQUIRED",
+        f"send {ACTION_HEADER}: 1 to act from the dashboard",
+        level=logging.WARNING,
+    )
 
 
 def _round_open(read_tool_round: Callable[[str], bool] | None, session_id: str) -> bool:

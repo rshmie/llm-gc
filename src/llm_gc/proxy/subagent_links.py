@@ -3,8 +3,10 @@
 A subagent's first message holds the prompt the spawning call gave it, inside the context
 the client adds around it. Either side can reach the proxy first - the reply that made the
 call, or the subagent's first request - so each waits for the other, briefly. The prompt
-and the opening are conversation content: held in memory only until matched, never logged,
-and only while something will show the link.
+and the opening are conversation content: held in memory until matched, never logged, and
+only while something will show the link. An entry past the window is cleared when a later
+request of the same client session arrives, so one that is never matched can stay until then,
+or until the process stops.
 """
 
 from collections import OrderedDict

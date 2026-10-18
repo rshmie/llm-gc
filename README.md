@@ -608,6 +608,8 @@ The design docs are the substantive part of this repository. Each one covers how
 
 A full index is in [doc/README.md](doc/README.md).
 
+What LLM-GC keeps of your conversations, and how to delete it: [doc/data.md](doc/data.md).
+
 About the project: [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), [SECURITY.md](SECURITY.md) (how to report a vulnerability, privately) and [CHANGELOG.md](CHANGELOG.md).
 
 ## License
