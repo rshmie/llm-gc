@@ -99,6 +99,12 @@ _THINKING_LINE_MARKS = (b'"signature_delta"', b'"redacted_thinking"')
 
 # Takes a turn's thinking keys and its visible token count; returns its thinking token count.
 ThinkingSizer = Callable[[Sequence[str], int], int]
+# Takes an attachment's key and block; returns its size in LLM-GC's count, or None while unsized.
+AttachmentSizer = Callable[[str, dict[str, Any]], int | None]
+# How much of an attachment's data its key reads from each end. A client sends every image again
+# with every request, so hashing whole images would put megabytes on the request path each time.
+# Two images that agree in length and at both ends have the same dimensions, so the same size.
+_ATTACHMENT_KEY_CHARS = 4_096
 # (start, end) character ranges of a turn's text, in order.
 Ranges = tuple[tuple[int, int], ...]
 
@@ -140,12 +146,15 @@ _HOP_BY_HOP = frozenset(
 )
 
 
-def extract_messages(payload: dict[str, Any], size_thinking: ThinkingSizer | None = None) -> list[Message]:
+def extract_messages(
+    payload: dict[str, Any], size_thinking: ThinkingSizer | None = None, size_attachment: AttachmentSizer | None = None
+) -> list[Message]:
     """Read the conversation out of a Messages API request body.
 
     Populates `token_count` and `turn_index`, which every downstream component
     scores on. If `size_thinking` is given, it sets `thinking_tokens` on assistant
-    turns that contain thinking blocks.
+    turns that contain thinking blocks; if `size_attachment` is given, it sets
+    `attachment_tokens` on turns that carry images or documents.
 
     Raises:
         ConfigError: The body is not a conversation we can process. Raised rather
@@ -171,6 +180,9 @@ def extract_messages(payload: dict[str, Any], size_thinking: ThinkingSizer | Non
         # counted by an earlier request; only a new turn is tokenised.
         token_count = count_tokens_cached(content)
         keys = thinking_keys(raw.get("content")) if size_thinking is not None and role == "assistant" else ()
+        attachment_tokens, unsized = (
+            _size_attachments(raw.get("content"), size_attachment) if size_attachment is not None else (0, 0)
+        )
         relayed = role == "user" and _RELAYED.match(content) is not None
         # Only in a turn the person may have written: tool output can quote the client's elements.
         if role == "user" and not relayed and not _carries_tool_results(raw.get("content")):
@@ -181,6 +193,8 @@ def extract_messages(payload: dict[str, Any], size_thinking: ThinkingSizer | Non
                 content=content,
                 token_count=token_count,
                 thinking_tokens=size_thinking(keys, token_count) if size_thinking is not None and keys else 0,
+                attachment_tokens=attachment_tokens,
+                unsized_attachments=unsized,
                 instructions=lifted,
                 relayed=relayed,
                 client_written=client_written,
@@ -285,6 +299,46 @@ def thinking_key(opening: object) -> str | None:
     if not isinstance(opening, str) or not opening:
         return None
     return hashlib.blake2b(opening[:_THINKING_KEY_CHARS].encode(), digest_size=16).hexdigest()
+
+
+def attachment_blocks(content: object) -> list[dict[str, Any]]:
+    """Return a turn's images and documents, in order, including those inside its tool results."""
+    if not isinstance(content, list):
+        return []
+    found: list[dict[str, Any]] = []
+    for block in content:
+        if not isinstance(block, dict) or not isinstance(kind := block.get("type"), str):
+            continue
+        if kind in _ATTACHMENTS:
+            found.append(block)
+        elif kind == "tool_result":
+            found.extend(attachment_blocks(block.get("content")))
+    return found
+
+
+def attachment_key(block: dict[str, Any]) -> str:
+    """Return the key an attachment is known by: a hash of its kind, its data's length and both its ends."""
+    source = block.get("source")
+    data = source.get("data") if isinstance(source, dict) else None
+    if isinstance(source, dict) and isinstance(data, str):
+        head = f"{block.get('type')}|{source.get('type')}|{source.get('media_type')}|{len(data)}|"
+        sample = data[:_ATTACHMENT_KEY_CHARS] + data[-_ATTACHMENT_KEY_CHARS:]
+    else:
+        # Given by URL or file: the reference is short, and is the attachment's identity.
+        head, sample = f"{block.get('type')}|", json.dumps(source, sort_keys=True, ensure_ascii=False)
+    return hashlib.blake2b((head + sample).encode(), digest_size=16).hexdigest()
+
+
+def _size_attachments(content: object, size: AttachmentSizer) -> tuple[int, int]:
+    """A turn's sized attachments in LLM-GC's count, beyond the placeholders its text holds, and how many are unsized."""
+    total = unsized = 0
+    for block in attachment_blocks(content):
+        tokens = size(attachment_key(block), block)
+        if tokens is None:
+            unsized += 1
+        else:
+            total += max(0, tokens - count_tokens_cached(_ATTACHMENTS[block["type"]]))
+    return total, unsized
 
 
 def carry_instructions(front: Message, stood_in: Sequence[Message]) -> Message:
@@ -796,16 +850,7 @@ def sends_thinking(messages: Iterable[Message], strip_thinking_before: int = 0) 
 
 def sends_attachments(messages: Iterable[Message]) -> bool:
     """Return whether any of these turns carries an image or a document, directly or inside a tool result."""
-    return any(_holds_attachment(message.raw_content) for message in messages)
-
-
-def _holds_attachment(content: object) -> bool:
-    return isinstance(content, list) and any(
-        isinstance(block, dict)
-        and isinstance(kind := block.get("type"), str)
-        and (kind in _ATTACHMENTS or (kind == "tool_result" and _holds_attachment(block.get("content"))))
-        for block in content
-    )
+    return any(attachment_blocks(message.raw_content) for message in messages)
 
 
 def _keeps_thinking(message: Message, strip_thinking_before: int) -> bool:

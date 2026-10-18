@@ -129,6 +129,10 @@ class GenerationSnapshot:
             turn.thinking_tokens for turn in (self.young if turns is None else turns) if turn.turn_index >= start
         )
 
+    def sent_attachment_tokens(self, turns: Iterable[Message] | None = None) -> int:
+        """Attachment tokens sent with the young turns, or with the given turns: a young turn is sent as written."""
+        return sum(turn.attachment_tokens for turn in (self.young if turns is None else turns))
+
     @property
     def tip(self) -> str | None:
         """The chain hash of the last recorded turn, or None before any."""

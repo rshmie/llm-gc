@@ -8,7 +8,7 @@ from typing import Any
 import httpx2
 import uvicorn
 
-from llm_gc.cli.settings import ProxySettings, create_model_window_lookup
+from llm_gc.cli.settings import ProxySettings, create_attachment_counter, create_model_window_lookup
 from llm_gc.engine import GcService
 from llm_gc.monitoring import ContextHealthMonitor
 from llm_gc.proxy import create_app
@@ -70,6 +70,7 @@ def serve_proxy(service: GcService, settings: ProxySettings, *, http_client: htt
         on_client_history=transcripts.record if transcripts is not None else None,
         on_reply=transcripts.record_reply if transcripts is not None else None,
         window_lookup=create_model_window_lookup(settings, http_client=http_client),
+        attachment_counter=create_attachment_counter(settings, http_client=http_client),
         collect_subagents=settings.collect_subagents,
         link_subagents=settings.dashboard,
     )

@@ -8,6 +8,7 @@ import { $, agoTs, compact, countEl, fill, fmt, h, meterBar, plural, ranges, red
 import { LIST_ORDER_KEY, collecting, countCats, credentialRefusal, factsByTurn, has, instructionTokens, keepLast, marked, newestReply, pendingTurns, preview, query, recapLimit, state, trafficOf, turnMatches, ui, writtenTokens } from "./state.js";
 import { hideTooltip, hint, info, showTooltip, tipAction, tipQuote, hoverTip } from "./tooltip.js";
 import { offerReturn, showTab } from "./shell.js";
+import { openReference } from "./guide.js";
 import { openCard, showWhy, whyText } from "./engine.js";
 
 const smooth = () => (reducedMotion() ? "auto" : "smooth");
@@ -45,6 +46,16 @@ function instructionsTag(turn) {
   const tokens = instructionTokens(turn.turn_index);
   return tokens ? h("span", { class: "tag", ...hoverTip(GLOSSARY.instructions[0], GLOSSARY.instructions[1]) },
     `+ client instructions · ${plural(tokens, "token")}`) : null;
+}
+// Images and documents: sized by the provider, so their size stands apart from the words; sent only while recent.
+function imagesTag(turn) {
+  const tokens = turn.attachment_tokens ?? 0;
+  const unsized = turn.unsized_attachments ?? 0;
+  if (!tokens && !unsized) return null;
+  const sent = turn.fidelity === "verbatim";
+  const words = [tokens ? `+ images · ${plural(tokens, "token")}${sent ? "" : ", no longer sent"}` : null,
+    unsized ? `${plural(unsized, "image")} not sized` : null].filter(Boolean).join(" · ");
+  return h("span", { class: "tag", ...hoverTip(GLOSSARY.images[0], GLOSSARY.images[1]) }, words);
 }
 const changing = (k) => k.turns.filter((t) => t.becomes).length;
 const capitalised = (text) => text[0].toUpperCase() + text.slice(1);
@@ -146,6 +157,10 @@ function worries(k, counts, facts) {
   if (latestShortfall > (hidden.shortfalls ?? 0)) items.push(sumLine("warn",
     [h("b", {}, `${plural(shortfalls.length, "part")} of a collection fell short.`), " Each says what the model gets instead; nothing is lost."],
     ["See why", toEngine("notmoved")], ["shortfalls", latestShortfall]));
+  const unsized = k.turns.filter((t) => t.fidelity === "verbatim").reduce((n, t) => n + (t.unsized_attachments ?? 0), 0);
+  if (unsized) items.push(sumLine("",
+    [`${plural(unsized, "image")} in recent messages ${unsized === 1 ? "counts" : "count"} as a placeholder: the provider gave no size, so LLM-GC's counts here are low by ${unsized === 1 ? "its" : "their"} size.`],
+    ["Why", () => openReference("term-images")]));
   if (fill_ && fill_.share >= WINDOW_WARN) items.push(sumLine("warn", [h("b", {}, `The prompt fills ${Math.round(fill_.share * 100)}% of the model's window.`), ` ${fill_.how}`]));
   if (staged && staged.stale_tokens >= STALE_NOTE * staged.stale_bound_tokens && !staged.switches) items.push(sumLine("",
     [`The model still gets ${plural(staged.stale_tokens, "stale token")}, ${Math.round((100 * staged.stale_tokens) / staged.stale_bound_tokens)}% of their limit. At the limit, LLM-GC applies the prepared collection.`],
@@ -189,9 +204,9 @@ export function renderSummary(k) {
 
 // The token figures, each named for whose count it is: LLM-GC's own tokenizer is an estimate, the provider's is what it bills.
 function tokenLines(k) {
-  // Both sides include the model's earlier thinking: without LLM-GC, every reply's would be sent.
-  const written = writtenTokens(k) + (k.written_thinking_tokens ?? 0);
-  const less = written - k.context_tokens - (k.thinking_tokens ?? 0);
+  // Both sides include the model's earlier thinking and every image: without LLM-GC, all of it would be sent.
+  const written = writtenTokens(k) + (k.written_thinking_tokens ?? 0) + (k.written_attachment_tokens ?? 0);
+  const less = written - k.context_tokens - (k.thinking_tokens ?? 0) - (k.attachment_tokens ?? 0);
   const c = trafficOf(state.selected);
   const t = c && c.traffic;
   const last = t && t.last_reply;
@@ -207,6 +222,7 @@ function tokenLines(k) {
   return [
     h("p", { class: "sum-tokens" }, "Next request ", h("b", {}, `≈ ${fmt(k.context_tokens)}`), " tokens of conversation", info("size"),
       k.thinking_tokens ? [" + ", h("b", {}, `≈ ${fmt(k.thinking_tokens)}`), " of the model's earlier thinking", info("thinking")] : null,
+      k.attachment_tokens ? [" + ", h("b", {}, fmt(k.attachment_tokens)), " of images", info("images")] : null,
       ` · ${saving}`,
       last ? null : windowMeter),
     last ? h("p", { class: "sum-tokens" }, "Last request ",
@@ -214,7 +230,7 @@ function tokenLines(k) {
         `${compact(last.usage.cache_read_input_tokens)} read from its cache, ${compact(last.usage.cache_creation_input_tokens)} written to it and ${compact(last.usage.input_tokens)} sent plainly, the system prompt and tools included.`),
       " tokens by the provider's count", windowMeter,
       ratio ? [" · ", hint(`${ratio.toFixed(2)}× LLM-GC's count`, "Two counts of one request",
-        `LLM-GC counted it at ${fmt(last.tokens_forwarded)} with its own tokenizer, its estimate of the model's earlier thinking included.${k.token_rate ? ` LLM-GC sizes the recap's budget and the stale limit at ${k.token_rate.toFixed(2)}×, measured on its latest request that carried no thinking.` : ""}`)] : null) : null,
+        `LLM-GC counted it at ${fmt(last.tokens_forwarded)} with its own tokenizer, its estimate of the model's earlier thinking and its images included.${k.token_rate ? ` LLM-GC sizes the recap's budget and the stale limit at ${k.token_rate.toFixed(2)}×, measured on its latest request that carried no thinking, image or document.` : ""}`)] : null) : null,
     h("p", { class: "sum-tokens secondary" },
       lastCollection ? [`Last collection ${agoTs(lastCollection.gc_completed_at)}${lastCollection.outcome ? `: ${describeOutcome(lastCollection.outcome)}` : ""} · `,
         h("button", { class: "link-btn", type: "button", onclick: toEngine("moves") }, "What moved →")] : "No collection yet",
@@ -403,14 +419,17 @@ export function renderMap(k) {
   const sum = (list) => list.reduce((n, x) => n + width(x), 0);
   const saved = writtenTokens(k) - k.context_tokens;
   const thinkingSaved = Math.max(0, (k.written_thinking_tokens ?? 0) - (k.thinking_tokens ?? 0));
+  const imagesSaved = Math.max(0, (k.written_attachment_tokens ?? 0) - (k.attachment_tokens ?? 0));
+  const besides = [thinkingSaved ? `≈${fmt(thinkingSaved)} tokens of the model's earlier thinking (an estimate)` : null,
+    imagesSaved ? `${fmt(imagesSaved)} tokens of images` : null].filter(Boolean);
   const condW = sum(cond);
   const blockW = condW && saved > 0 ? (condW * k.front_tokens) / (k.front_tokens + saved) : condW;
   const recent = k.context_tokens - k.front_tokens;
   const pendTok = pend.reduce((n, x) => n + (x.tok ?? 0), 0);
   const parts = {
     block: [blockW, `The recap · ${plural(k.front_tokens, "token")}`, "Stands in for the collected messages above it.", cond],
-    saved: [condW - blockW, `Saved · ${plural(Math.max(0, saved), "token")}`, thinkingSaved
-      ? `What collections took out of every request, besides ≈${fmt(thinkingSaved)} tokens of the model's earlier thinking (an estimate).`
+    saved: [condW - blockW, `Saved · ${plural(Math.max(0, saved), "token")}`, besides.length
+      ? `What collections took out of every request, besides ${besides.join(" and ")}.`
       : "What collections took out of every request.", cond],
     recent: [sum(verb), `Recent messages · ${plural(recent, "token")}`, "Not collected yet: each sent as its own message, as written.", verb],
     pending: [sum(pend), `Newest request · ${plural(pendTok, "token")}`, "Its own message, sent on top of the recorded ones; not in the conversation yet.", pend],
@@ -742,7 +761,7 @@ export function turnRow(turn) {
     avatarOf(turn),
     h("div", { class: "msg-body" },
       h("div", { class: "msg-head" },
-        who(turn), callsTag(turn), instructionsTag(turn),
+        who(turn), callsTag(turn), instructionsTag(turn), imagesTag(turn),
         turn.becomes ? nextTag(turn, turn.turn_index) : null,
         h("span", { class: "tok" }, plural(turn.tokens, "token"))),
       turnText(turn)));
@@ -751,7 +770,7 @@ export function turnRow(turn) {
 // The messages of an exchange as they were said, each still reachable from the map.
 function originals(turns, faded) {
   return turns.map((t) => h("div", { class: "orig", id: `turn-${t.turn_index}` },
-    h("div", { class: "msg-head" }, who(t), callsTag(t), instructionsTag(t), h("span", { class: "num" }, `message ${t.turn_index}`),
+    h("div", { class: "msg-head" }, who(t), callsTag(t), instructionsTag(t), imagesTag(t), h("span", { class: "num" }, `message ${t.turn_index}`),
       h("span", { class: "tok" }, plural(t.tokens, "token"))),
     turnText(t, { faded })));
 }

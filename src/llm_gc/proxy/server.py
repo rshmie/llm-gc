@@ -38,6 +38,7 @@ from llm_gc.models import ClientOrigin, Message
 from llm_gc.models.message import tool_result_ids
 from llm_gc.models.generation_snapshot import GenerationSnapshot
 from llm_gc.proxy.anthropic_translation import (
+    AttachmentSizer,
     Instruction,
     carry_instructions,
     extract_instructions,
@@ -58,10 +59,12 @@ from llm_gc.proxy.anthropic_translation import (
     sends_thinking,
     sent_thinking_tokens,
 )
+from llm_gc.proxy.attachment_sizes import AttachmentCounter, AttachmentSizes
 from llm_gc.proxy.cache_watch import CacheWatch
 from llm_gc.proxy.model_windows import ModelWindow, ModelWindows, WindowLookup
 from llm_gc.proxy.session_identity import chain_hashes, client_origin, named_session
 from llm_gc.proxy.reply_thinking import ReplyThinking
+from llm_gc.proxy.token_rates import TokenRates
 from llm_gc.web.request_id import RequestIdMiddleware, current_request_id
 from llm_gc.proxy.request_log import RequestLog, RequestRecord, newest_kind
 from llm_gc.proxy.subagent_links import SpawnLinker
@@ -182,6 +185,7 @@ def create_app(
     on_client_history: Callable[[str, list[Message], ClientOrigin | None], None] | None = None,
     on_reply: Callable[[str, Message, str], None] | None = None,
     window_lookup: WindowLookup | None = None,
+    attachment_counter: AttachmentCounter | None = None,
     collect_subagents: bool = False,
     link_subagents: bool = False,
 ) -> FastAPI:
@@ -207,6 +211,8 @@ def create_app(
         window_lookup: Asks the upstream for a model's context window, with LLM-GC's
             own credential. Without it, every conversation's recap is sized for the
             configured window.
+        attachment_counter: Counts an image's or a document's tokens on a model, with
+            LLM-GC's own credential. Without it, every attachment counts as its placeholder.
         collect_subagents: Collect the conversations a client marks as a subagent's.
             Off, they are recorded, shown and forwarded as sent, never collected.
         link_subagents: Link each subagent's first request to the tool call that
@@ -245,7 +251,9 @@ def create_app(
     app.state.model_windows = ModelWindows(gc_service.gc_config.context_window, window_lookup, app.state.schedule)
     app.state.collect_subagents = collect_subagents
     app.state.spawn_linker = SpawnLinker() if link_subagents else None
-    app.state.reply_thinking = ReplyThinking()
+    app.state.token_rates = TokenRates()
+    app.state.reply_thinking = ReplyThinking(app.state.token_rates)
+    app.state.attachment_sizes = AttachmentSizes(attachment_counter, app.state.schedule)
     gc_service.event_bus.subscribe(EventType.GC_FINISHED, lambda event: _count_collection(app, event))
 
     @app.get("/health")
@@ -310,7 +318,9 @@ async def _handle(app: FastAPI, request: Request) -> Response:
 
     try:
         payload = _parse_json(body)
-        client_messages = extract_messages(payload, size_thinking=_thinking_sizer(app, payload))
+        client_messages = extract_messages(
+            payload, size_thinking=_thinking_sizer(app, payload), size_attachment=_attachment_sizer(app, payload)
+        )
         instructions = extract_instructions(payload)
     except (ConfigError, ValueError) as err:
         # The provider is the authority on its own API and may accept something we
@@ -323,14 +333,10 @@ async def _handle(app: FastAPI, request: Request) -> Response:
     streaming = payload.get("stream") is True
     history, new_turn = client_messages[:-1], client_messages[-1]
     # The system prompt, the tools and the instructions count on both sides of the ratio:
-    # they are sent, whole, either way. Thinking counts too, because the provider bills it as input.
+    # they are sent, whole, either way.
     fixed_tokens = fixed_prompt_tokens(payload)
     client_tokens = (
-        sum(message.token_count for message in client_messages)
-        + sent_thinking_tokens(client_messages)
-        + instruction_tokens(client_messages)
-        + sum(instruction.token_count for instruction in instructions)
-        + fixed_tokens
+        _turn_tokens(client_messages) + sum(instruction.token_count for instruction in instructions) + fixed_tokens
     )
     client_holds_estimates = _holds_estimates(client_messages)
 
@@ -653,7 +659,7 @@ def _measure_request(
             # Only a request LLM-GC counts exactly gives a clean rate.
             rate = token_rate(forwarded, outline.usage) if not holds_estimates else None
             if rate is not None:
-                app.state.reply_thinking.observe_rate(
+                app.state.token_rates.observe(
                     model, provider_tokens=outline.usage.prompt_tokens, forwarded_tokens=forwarded
                 )
             if session_id is not None:
@@ -683,7 +689,7 @@ def _rate_until_measured(app: FastAPI, session_id: str, model: str | None) -> fl
     is known, so its rate is kept only for its model.
     """
     state = app.state.gc_service.session_manager.store.get(session_id)
-    return app.state.reply_thinking.rate(model) if state is not None and state.token_rate is None else None
+    return app.state.token_rates.rate(model) if state is not None and state.token_rate is None else None
 
 
 def _thinking_sizer(app: FastAPI, payload: dict[str, Any]) -> ThinkingSizer:
@@ -691,6 +697,23 @@ def _thinking_sizer(app: FastAPI, payload: dict[str, Any]) -> ThinkingSizer:
     reply_thinking: ReplyThinking = app.state.reply_thinking
     model = _model_name(payload)
     return lambda keys, visible_tokens: reply_thinking.tokens(keys, visible_tokens, model)
+
+
+def _attachment_sizer(app: FastAPI, payload: dict[str, Any]) -> AttachmentSizer:
+    """Return a function that sizes an attachment in LLM-GC's count, for the model this request names.
+
+    The provider's size is converted at the model's rate as the turn is read. The rate is
+    weighted over every request that measured it, so it barely moves between requests.
+    """
+    sizes: AttachmentSizes = app.state.attachment_sizes
+    model = _model_name(payload)
+    rate = app.state.token_rates.rate(model)
+
+    def size(key: str, block: dict[str, Any]) -> int | None:
+        tokens = sizes.size(model, key, block)  # asked first, so an unknown one is counted even without a rate
+        return round(tokens / rate) if tokens is not None and rate is not None else None
+
+    return size
 
 
 def _count_collection(app: FastAPI, event: Event) -> None:
@@ -833,13 +856,7 @@ async def _apply_gc(
     client's instructions are never condensed: each goes back in place.
     """
     sent_whole = sum(instruction.token_count for instruction in instructions)
-    client_tokens = (
-        sum(message.token_count for message in history)
-        + new_turn.token_count
-        + sent_thinking_tokens([*history, new_turn])
-        + instruction_tokens([*history, new_turn])
-        + sent_whole
-    )
+    client_tokens = _turn_tokens([*history, new_turn]) + sent_whole
     whole = _Forwarded(original_body, client_tokens, _holds_estimates([*history, new_turn]))
     if session_id is None:
         return whole
@@ -871,12 +888,7 @@ async def _apply_gc(
         for message in collected
     ] + [new_turn]
     body = rewrite_messages(payload, forwarded, strip_thinking_before=valid_from, instructions=instructions)
-    forwarded_tokens = (
-        sum(message.token_count for message in forwarded)
-        + sent_thinking_tokens(forwarded, strip_thinking_before=valid_from)
-        + instruction_tokens(forwarded)
-        + sent_whole
-    )
+    forwarded_tokens = _turn_tokens(forwarded, strip_thinking_before=valid_from) + sent_whole
     return _Forwarded(_dump_json(body), forwarded_tokens, _holds_estimates(forwarded, strip_thinking_before=valid_from))
 
 
@@ -885,8 +897,21 @@ class _Forwarded:
     """The request body LLM-GC forwards, as `_apply_gc` built it."""
 
     body: bytes
-    tokens: int  # its conversation's tokens, thinking included
+    tokens: int  # its conversation's tokens, thinking and attachments included
     holds_estimates: bool  # whether it holds parts LLM-GC counts only by estimate (see `_holds_estimates`)
+
+
+def _turn_tokens(messages: Sequence[Message], strip_thinking_before: int = 0) -> int:
+    """What these turns cost as they are forwarded, in LLM-GC's count.
+
+    Their text and the instructions in them, the thinking they still carry, and their
+    attachments: the provider bills all of it as input.
+    """
+    return (
+        sum(message.token_count + message.attachment_tokens for message in messages)
+        + sent_thinking_tokens(messages, strip_thinking_before)
+        + instruction_tokens(messages)
+    )
 
 
 def _holds_estimates(messages: Sequence[Message], strip_thinking_before: int = 0) -> bool:

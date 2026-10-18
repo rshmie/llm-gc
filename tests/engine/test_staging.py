@@ -15,7 +15,7 @@ from llm_gc.events import EventBus, EventType
 from llm_gc.extraction import PatternFactReader
 from llm_gc.models import Message
 from llm_gc.session import SessionManager
-from tests.engine.support import COMPACTED_SCORE, ScriptedSpanScorer, make_service, turn
+from tests.engine.support import COMPACTED_SCORE, KEPT_SCORE, ScriptedSpanScorer, make_service, turn
 
 SESSION = "s"
 # A warm cache with these never switches on its own: no saving repays a thousandfold, and the bound is the window.
@@ -307,6 +307,73 @@ class TestAnOpenToolRound:
 
         assert service.gc_switch(SESSION, CacheState.WARM) is None, "waits for payback, as any warm cut"
         assert state.switch_requested is False
+
+
+def _record_attachments(service, attachments: dict[int, int], *indices):
+    """Record turns, giving the ones named in `attachments` that many tokens of images."""
+    state = service.session_manager.get_or_create(SESSION)
+    for index in indices:
+        state.snapshot = state.snapshot.with_turn(
+            turn(index).model_copy(update={"attachment_tokens": attachments.get(index, 0)})
+        )
+    return state
+
+
+class TestAttachmentsAreWeighed:
+    """The front carries a taken turn's screenshot only as its placeholder. Left out, a live collection's
+    saving missed about 7,600 tokens of two screenshots."""
+
+    def test_a_taken_turns_images_are_saved_and_the_tails_are_cached_again(self):
+        service, _ = _service(**PATIENT)
+        state = _record_attachments(service, {1: 2_500, 3: 1_200}, 0, 1, 2, 3)
+        _prepare(service)
+        staged = state.snapshot.staged
+
+        preview = service.inspect(SESSION, cache=CacheState.WARM).staged
+
+        tail = [t for t in state.snapshot.young if t.turn_index not in staged.delta.departed_turns]
+        assert [t.turn_index for t in tail] == [3]
+        assert preview.attachments_dropped_tokens == 2_500
+        assert preview.saving_tokens == staged.saving_tokens + 2_500
+        assert preview.rewritten_attachment_tokens == 1_200
+        assert preview.rewritten_tokens == staged.front_tokens + sum(t.token_count for t in tail) + 1_200
+
+    def test_a_taken_turns_images_are_stale_even_when_its_exchange_is_quoted(self):
+        """A quoted exchange keeps its words in the recap, but not its images."""
+        service, _, _ = make_service(
+            GCConfig(min_cut_tokens=0, last_n_messages_to_keep=1, **PATIENT),
+            scores={0: KEPT_SCORE},
+            default_score=COMPACTED_SCORE,
+        )
+        state = _record_attachments(service, {0: 2_500, 1: 1_000}, 0, 1, 2, 3)
+        _prepare(service)
+
+        preview = service.inspect(SESSION, cache=CacheState.WARM).staged
+
+        assert preview.stale_tokens == state.snapshot.staged.stale_tokens + 2_500 + 1_000
+
+    def test_a_screenshot_can_make_a_waiting_cut_repay_its_rewrite(self):
+        reasons = {}
+        for size in (0, 50_000):
+            service, _ = _service(min_saving_share=10.0, max_stale_ratio=1.0)
+            _record_attachments(service, {1: size}, 0, 1, 2, 3)
+            _prepare(service)
+            reasons[size] = service.inspect(SESSION, cache=CacheState.WARM).staged.decision.reason
+
+        assert reasons[0] is SwitchReason.WAITING_FOR_PAYBACK
+        assert reasons[50_000] is SwitchReason.REPAYS_REWRITE
+
+    def test_the_collection_reports_the_images_it_dropped_and_a_recent_ones_are_still_sent(self):
+        service, _ = _service()
+        _record_attachments(service, {1: 2_500, 3: 1_200}, 0, 1, 2, 3)
+        _prepare(service)
+        assert service.inspect(SESSION).attachment_tokens == 3_700
+
+        result = service.gc_switch(SESSION, CacheState.COLD)
+
+        assert result.attachments_dropped_tokens == 2_500
+        assert result.report().attachments_dropped_tokens == 2_500, "it reaches the event bus"
+        assert service.inspect(SESSION).attachment_tokens == 1_200, "a recent message is sent as written"
 
 
 def _record_thinking(service, thinking: dict[int, int], *indices):

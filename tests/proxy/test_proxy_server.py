@@ -70,7 +70,16 @@ def _engine(**config_overrides):
     return service, service.generational_memory
 
 
-def _proxy(upstream=None, *, gc_service=None, on_reply=None, window_lookup=None, link_subagents=False, **engine_kwargs):
+def _proxy(
+    upstream=None,
+    *,
+    gc_service=None,
+    on_reply=None,
+    window_lookup=None,
+    attachment_counter=None,
+    link_subagents=False,
+    **engine_kwargs,
+):
     """A proxy whose upstream is a scripted handler, with aging run synchronously.
 
     `schedule` is injected to run the post-response work to completion inline.
@@ -92,6 +101,7 @@ def _proxy(upstream=None, *, gc_service=None, on_reply=None, window_lookup=None,
         schedule=lambda coro: asyncio.get_event_loop().run_until_complete(coro) if False else _run_now(coro),
         on_reply=on_reply,
         window_lookup=window_lookup,
+        attachment_counter=attachment_counter,
         link_subagents=link_subagents,
     )
     app.state.seen = seen

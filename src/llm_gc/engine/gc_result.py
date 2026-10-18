@@ -101,6 +101,10 @@ class _PassMeasures(BaseModel):
     """Set only when a cut was switched in: the model's earlier thinking it stopped sending.
     An estimate, saved on top of `tokens_saved`, which counts text."""
 
+    attachments_dropped_tokens: int = Field(default=0, ge=0)
+    """Set only when a cut was switched in: the images and documents of the turns it took,
+    which the front carries only as placeholders. Saved on top of `tokens_saved`."""
+
     @property
     def tokens_saved(self) -> int:
         return self.tokens_before - self.tokens_in_final

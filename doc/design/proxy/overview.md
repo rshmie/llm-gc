@@ -282,9 +282,33 @@ So LLM-GC measures each reply's thinking once, as the reply passes through, and 
 - **Bounded.** 20,000 replies are remembered, and the one sent back least recently goes first, so a conversation in progress keeps its own. A turn whose reply was let go counts as carrying none.
 - **Provider-neutral past the translation.** Only the Anthropic translation knows which blocks are thinking and how to key them; the engine sees one number per turn. A provider whose replies send no thinking back never makes a key, and its turns carry none.
 
-*Rejected: the provider's token-counting endpoint* — exact, but one more call per reply against the rate limit the client's own requests share, and a gateway may not offer it. *Rejected: reading the size from how much the next request grew* — the noise in one step is as large as the thinking. *Rejected: reading the size from the signature's length* — the signature's format is the provider's own, undocumented and free to change. *Rejected: labelling the counts as text only* — honest, but they could not be set against the provider's, and the switch policy would keep undercounting what a switch saves.
+*Rejected: the provider's token-counting endpoint* — one more call for every reply, when the reply's own usage already holds the number, and a gateway may not offer it. *Rejected: reading the size from how much the next request grew* — the noise in one step is as large as the thinking. *Rejected: reading the size from the signature's length* — the signature's format is the provider's own, undocumented and free to change. *Rejected: labelling the counts as text only* — honest, but they could not be set against the provider's, and the switch policy would keep undercounting what a switch saves.
 
 *Accepted costs:* the size is an estimate, and the dashboard shows it apart from the text, labelled as one. Replies from before LLM-GC started, or before a restart, carry none. A model that discards earlier thinking on its own, as older models do, is overcounted; that shows as the provider's count falling behind LLM-GC's over a conversation.
+
+### Images and documents
+
+LLM-GC's text reads an image or a document as a placeholder, `[image]` or `[document]`, and that is what is scored, summarised and quoted. The provider bills the attachment itself: a screenshot costs a recent model a few thousand tokens. Counted as a placeholder, four screenshots in one live conversation left about 13,000 of the provider's tokens out of LLM-GC's count, and the provider ÷ LLM-GC ratio stepped at each.
+
+So the first time an attachment appears, the proxy asks the provider's token-counting endpoint what it costs the model the request names, with LLM-GC's own credential, in the background. It counts one message with the attachment and one without, because the endpoint may add tokens of its own to every message, and keeps the difference. The size is kept per model, because a newer model can cost an image more than an older one, and converted to LLM-GC's count at the model's rate when a turn holding it is read. It counts in what each request sends and forwards: a turn sent as written carries it, and a collected turn does not, since the front quotes only the placeholder. The engine weighs it in a switch's saving, what it writes again and its stale weight ([when to collect](../generational-memory/when-to-collect.md)), and the dashboard shows it apart from the text ([visibility](../visibility/overview.md)).
+
+```
+ request N    a turn brings a screenshot ──► counted as its placeholder
+                                             and, once, in the background:
+                                             count([image, "."]) − count(["."]) ──► (model, key) → 3,700
+
+ request N+1  the turn is history ─────────► + 3,700 ÷ the model's rate, while the turn is sent as written
+
+ collection   the turn is taken ───────────► the front quotes "[image]"; the image is no longer sent
+```
+
+- **Known by its ends.** The key hashes the attachment's kind, its data's length and the first and last few thousand characters of its data. A client sends every image again with every request, so hashing whole images would put megabytes on the request path each time. Two images that agree in length and at both ends have the same dimensions, so the same size.
+- **Never on the request path.** At most eight counts are asked at once; beyond that, an attachment is asked about on a later request. The endpoint is free, and its rate limit is apart from the one the client's requests share.
+- **Bounded.** 4,096 sizes are remembered, failures included, and the one sent back least recently goes first.
+
+*Rejected: reading the size from how much the prompt grew on the request that brought it* — it fails on the request that carries a collection, which is a new user turn, where a person pastes a screenshot, and a conversation's first request has nothing to compare against. *Rejected: working the size out from the image's dimensions* — the provider's formula changes between model generations, and it would be kept by hand. *Rejected: adding the size to the turn's text count* — the compactor sizes a summary from that count, and would ask for a summary of a few hundred words of text as long as a screenshot.
+
+*Accepted costs:* the request that brings an attachment counts it as its placeholder. An attachment given by URL or file, which the endpoint does not count, an upstream without the endpoint, and a proxy without a credential of its own leave it unsized, as does a count that failed, which is not asked again.
 
 ### Each conversation's window
 

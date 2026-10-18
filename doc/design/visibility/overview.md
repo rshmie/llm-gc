@@ -274,13 +274,14 @@ The project's promise is to show what the model remembers, what it has forgotten
  8 by their opening line and facts  ! 21 messages' facts couldn't        of view, and no collection
  6 of 7 facts told to it              be read                              fell short.
  ─────────────────────────────────────────────────────────────────────────────────────────────
- Next request ≈ 3,207 tokens of conversation + ≈ 1,840 of the model's earlier thinking · 71% less than as written
+ Next request ≈ 3,207 tokens of conversation + ≈ 1,840 of the model's earlier thinking + 3,712 of images · 71% less than as written
  Last request 55,712 tokens by the provider's count · 28% of the model's window · 1.48× LLM-GC's count
  Last collection 3 min ago · What moved →  · So far 16 requests, 29% saved
 ```
 
 - **Each count names what it counts**, in the level words above, and the numbers come beneath the words, each named for whose count it is: LLM-GC's own tokenizer is an estimate, the provider's is what it bills.
 - **The model's earlier thinking is shown apart from the text.** It has no text, so its size is LLM-GC's estimate from each reply's usage ([the proxy](../proxy/overview.md#the-models-hidden-thinking)), a rougher kind of figure than a tokenizer's count. Wherever it is part of a number, it is said beside it: the next request's thinking, the share saved against the conversation as written, a prepared collection's saving and stale weight, and the thinking each collection stopped sending. *Rejected: folding it into the text figures* — one number would then mix a count with an estimate, and a reader could not tell how much of it to trust.
+- **Images and documents are shown apart too**, at the size the provider gave for each ([the proxy](../proxy/overview.md#images-and-documents)), in the same places as the thinking, and on each message that carries one, with "no longer sent" once a collection has taken it. An image the provider could not size counts as its placeholder; while one is in the recent messages, "Should you worry?" says LLM-GC's counts are low by its size, without alarm, since nothing the model receives is affected. *Rejected: folding images into each message's size* — the size of a message is what its words cost, which is what a summary is measured against; a screenshot would make a one-line message look like a page.
 - **"Should you worry?" holds every warning**, in one place, each linking to its evidence: messages out of view, facts the model can't see, a collection that fell short, a window more than 80% full, and a rate-limit pause. Stale weight near its bound is mentioned without alarm. A warning can be dismissed and returns only when there is more of what it warns about.
 - **The all-clear is said only when it is true**, never because the warnings were dismissed: then it says that nothing is new since.
 

@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 PROVIDER_NAME = "anthropic"
 ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 MESSAGES_PATH = "/v1/messages"
+COUNT_TOKENS_PATH = "/v1/messages/count_tokens"
 MODELS_PATH = "/v1/models"
 
 # Anthropic pins breaking changes behind this header rather than a URL version, so it
@@ -222,6 +223,45 @@ class AnthropicClient:
             raise self._as_error(http_response)
         try:
             tokens = http_response.json().get("max_input_tokens")
+        except (ValueError, AttributeError):
+            return None
+        return tokens if isinstance(tokens, int) and tokens > 0 else None
+
+    async def count_tokens(self, model: str, content: list[dict[str, Any]], *, timeout_s: float) -> int | None:
+        """How many input tokens one user message of these content blocks costs on `model`, or None.
+
+        The provider's own count, from its token-counting endpoint: free, and rate-limited apart
+        from message creation. It may include tokens the provider adds to every request and may
+        differ from what a request is billed by a little, so a caller sizing one block subtracts
+        the count of a message without it. None for a model the upstream does not know by that
+        name, or an answer without the field.
+
+        Raises:
+            LLMTimeoutError, LLMConnectionError, and the errors a failing status maps to,
+            as for `generate`. A block the endpoint cannot count, such as an image given by
+            URL, is refused with a 400.
+        """
+        try:
+            http_response = await self._http_client.post(
+                f"{self._base_url}{COUNT_TOKENS_PATH}",
+                headers={
+                    **self._auth_headers,
+                    "anthropic-version": ANTHROPIC_API_VERSION,
+                    "content-type": "application/json",
+                },
+                json={"model": model, "messages": [{"role": "user", "content": content}]},
+                timeout=timeout_s,
+            )
+        except httpx2.TimeoutException as err:
+            raise LLMTimeoutError(f"anthropic did not respond within {timeout_s}s", provider=self.name) from err
+        except httpx2.RequestError as err:
+            raise LLMConnectionError(f"could not reach anthropic: {type(err).__name__}", provider=self.name) from err
+        if http_response.status_code == 404:
+            return None
+        if http_response.status_code != 200:
+            raise self._as_error(http_response)
+        try:
+            tokens = http_response.json().get("input_tokens")
         except (ValueError, AttributeError):
             return None
         return tokens if isinstance(tokens, int) and tokens > 0 else None

@@ -225,8 +225,13 @@ function renderPreparing(k) {
       wouldDo(k, taking, "What it would do now", [`Counts toward the ${fmt(k.next_cut.min_cut_tokens)}-token minimum`, "Does not count"])));
 }
 
-// A collection's figures count text; the model's earlier thinking it stopped sending is an estimate, said apart.
-const droppedThinking = (p) => p.thinking_dropped_tokens ? `, and ≈${fmt(p.thinking_dropped_tokens)} of earlier thinking dropped` : "";
+// A collection's figures count text. What it stopped sending besides is said apart: the model's earlier
+// thinking, an estimate, and the images of the messages it took, which the recap mentions only by name.
+const droppedBeyondText = (p) => {
+  const parts = [p.thinking_dropped_tokens ? `≈${fmt(p.thinking_dropped_tokens)} of earlier thinking` : null,
+    p.attachments_dropped_tokens ? `${fmt(p.attachments_dropped_tokens)} of images` : null].filter(Boolean);
+  return parts.length ? `, and ${parts.join(" and ")} dropped` : "";
+};
 
 function renderStaged(k) {
   const s = k.staged;
@@ -263,13 +268,16 @@ function renderStaged(k) {
             meterOf("next-repays", s.saving_tokens, needed, "Tokens applying it saves, against the tokens it must save"),
             h("p", {}, `Applying it makes the provider cache ${fmt(s.rewritten_tokens)} tokens again. On a warm cache, it must save at least ${fmt(s.min_saving_share)}× that.`,
               s.rewrite_overhead_tokens ? ` Of those, ${fmt(s.rewrite_overhead_tokens)} come after the recap and are never condensed: your client's instructions, and the part of its system prompt and tools its cache markers don't cover.` : "",
-              s.thinking_dropped_tokens ? ` The saving includes ≈${fmt(s.thinking_dropped_tokens)} tokens of the model's earlier thinking, an estimate: applying it stops sending all of it.` : "")),
+              s.thinking_dropped_tokens ? ` The saving includes ≈${fmt(s.thinking_dropped_tokens)} tokens of the model's earlier thinking, an estimate: applying it stops sending all of it.` : "",
+              s.attachments_dropped_tokens ? ` It includes ${fmt(s.attachments_dropped_tokens)} tokens of images in the messages it condenses, which the recap mentions only by name.` : "",
+              s.rewritten_attachment_tokens ? ` The tokens cached again include ${fmt(s.rewritten_attachment_tokens)} of images in the recent messages.` : "")),
           checkItem(overdue ? "good" : "wait", overdue ? "✓" : "…", "Stale tokens at their limit",
             h("span", { class: "num" }, countEl("next-stale", s.stale_tokens), ` of ${fmt(s.stale_bound_tokens)} tokens, by LLM-GC's count`),
             meterOf("next-stale", s.stale_tokens, s.stale_bound_tokens, "Stale tokens, against their limit"),
             h("p", {}, "Older messages the model still gets word for word, which this collection would condense. At the ",
               boundFrom(k) ? hint("limit", "Where the limit comes from", boundFrom(k)) : "limit", ", LLM-GC applies it, even if the provider must cache the prompt again.",
-              s.stale_thinking_tokens ? ` Includes ≈${fmt(s.stale_thinking_tokens)} tokens of those messages' thinking, an estimate.` : "")))),
+              s.stale_thinking_tokens ? ` Includes ≈${fmt(s.stale_thinking_tokens)} tokens of those messages' thinking, an estimate.` : "",
+              s.attachments_dropped_tokens ? ` Includes ${fmt(s.attachments_dropped_tokens)} tokens of their images, stale even where the recap quotes their words.` : "")))),
       wouldDo(k, taking, "What applying it would do", ["Condensed", "Sent as they are"],
         unprepared ? h("p", { class: "note" }, `${plural(unprepared, "message")} below ${unprepared === 1 ? "is" : "are"} not prepared yet. The next check condenses ${unprepared === 1 ? "it" : "them"} first.`) : null)));
 }
@@ -421,7 +429,7 @@ export function renderHistory() {
       const replaced = facts.filter((f) => f.status === "superseded" && taken.has(f.superseded_by_turn));
       return h("li", {},
         h("div", { class: "event-head" }, h("b", {}, "Collection"),
-          h("span", { class: "when" }, `${agoTs(p.gc_completed_at)} · ${fmt(p.tokens_before)} → ${fmt(p.tokens_before - p.tokens_saved)} tokens${droppedThinking(p)}`)),
+          h("span", { class: "when" }, `${agoTs(p.gc_completed_at)} · ${fmt(p.tokens_before)} → ${fmt(p.tokens_before - p.tokens_saved)} tokens${droppedBeyondText(p)}`)),
         h("div", { class: "event-lines" },
           OUTCOME_LINES.filter(([key]) => o[key].length).map(([key, label, colour]) => h("div", {},
             h("span", { class: "k" }, colour ? swatch(colour) : null, label), h("span", {}, messageLinks(o[key])))),
@@ -621,7 +629,8 @@ export function renderChecks() {
           cut && p.outcome ? h("div", { class: "muted", style: "font-weight:400;font-size:12.5px" }, describeOutcome(p.outcome)) : null,
           p.degradations.length ? h("div", { style: "font-weight:400" }, h("span", { class: "st warn" }, "⚠ "), plural(p.degradations.length, "move"), " didn't happen") : null),
         h("td", { class: "num", style: "white-space:nowrap" }, cut ? [`${fmt(p.tokens_before)} → ${fmt(p.tokens_before - p.tokens_saved)}`,
-            p.thinking_dropped_tokens ? h("div", { class: "muted", style: "font-size:12px" }, `≈${fmt(p.thinking_dropped_tokens)} of earlier thinking dropped`) : null]
+            p.thinking_dropped_tokens ? h("div", { class: "muted", style: "font-size:12px" }, `≈${fmt(p.thinking_dropped_tokens)} of earlier thinking dropped`) : null,
+            p.attachments_dropped_tokens ? h("div", { class: "muted", style: "font-size:12px" }, `${fmt(p.attachments_dropped_tokens)} of images dropped`) : null]
           : p.abandoned_cut ? [fmt(p.tokens_before), h("div", { class: "muted", style: "font-size:12px" }, `would have been ${fmt(p.abandoned_cut.context_tokens_after)}`)]
           : span(fmt(oldest.tokens_before), fmt(p.tokens_before))),
         h("td", { class: "num", style: "white-space:nowrap" }, `${took} ms`));
@@ -674,7 +683,7 @@ export function renderGenerations(k) {
   const levels = ["kept", "compacted", "archived", "out_of_view"].filter((level) => at(level).length);
   fill("generations", h("div", { class: "gen-flow" },
     box("young", "Young generation", "recent: each sent as written", plural(young.length, "message"),
-      `${plural(young.reduce((n, t) => n + t.tokens, 0), "token")} · the newest ${keepLast()} messages always stay`,
+      `${plural(young.reduce((n, t) => n + t.tokens, 0), "token")}${k.attachment_tokens ? ` + ${fmt(k.attachment_tokens)} of images` : ""} · the newest ${keepLast()} messages always stay`,
       links("messages", young.map((t) => t.turn_index))),
     arrow(`collection${k.cuts ? ` ×${fmt(k.cuts)}` : ""}`, "in exchanges, each by its score"),
     box("old", "Old generation", "the recap: every exchange at its level", plural(k.spans.length, "exchange"),

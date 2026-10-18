@@ -17,6 +17,7 @@ from llm_gc.proxy.anthropic_translation import (
     thinking_keys,
 )
 from llm_gc.proxy.reply_thinking import ReplyThinking
+from llm_gc.proxy.token_rates import TokenRates
 from llm_gc.utils import count_tokens
 from tests.proxy.test_proxy_server import API_KEY, UPSTREAM_OK, _body, _is_front, _post, _proxy, _streaming_upstream
 
@@ -60,10 +61,14 @@ def _sent_back(signature: str = SIGNATURE, text: str = "Postgres.") -> list:
     return [{"type": "thinking", "thinking": "", "signature": signature}, {"type": "text", "text": text}]
 
 
+def _rates(rate: float = 1.5) -> TokenRates:
+    rates = TokenRates()
+    rates.observe(MODEL, provider_tokens=round(rate * 1_000), forwarded_tokens=1_000)
+    return rates
+
+
 def _replies(rate: float = 1.5, **kwargs) -> ReplyThinking:
-    replies = ReplyThinking(**kwargs)
-    replies.observe_rate(MODEL, provider_tokens=round(rate * 1_000), forwarded_tokens=1_000)
-    return replies
+    return ReplyThinking(_rates(rate), **kwargs)
 
 
 class TestSizingAReplysThinking:
@@ -77,16 +82,17 @@ class TestSizingAReplysThinking:
         assert _replies().tokens(["unknown"], visible_tokens=40, model=MODEL) == 0
 
     def test_a_reply_is_not_kept_before_its_model_has_a_rate(self):
-        replies = ReplyThinking()
+        replies = ReplyThinking(TokenRates())
         replies.remember("k", output_tokens=900, model=MODEL)
 
         assert len(replies) == 0
 
     def test_the_rate_is_fixed_when_the_reply_is_stored(self):
         """Its size must not move from one request to the next as newer rates arrive."""
-        replies = _replies(rate=1.5)
+        rates = _rates(1.5)
+        replies = ReplyThinking(rates)
         replies.remember("k", output_tokens=900, model=MODEL)
-        replies.observe_rate(MODEL, provider_tokens=9_000, forwarded_tokens=1_000)
+        rates.observe(MODEL, provider_tokens=9_000, forwarded_tokens=1_000)
 
         assert replies.tokens(["k"], visible_tokens=40, model=MODEL) == 600 - 40
 
@@ -122,30 +128,6 @@ class TestSizingAReplysThinking:
         assert len(replies) == 2
         assert replies.tokens(["newer"], visible_tokens=0, model=MODEL) == 0
         assert replies.tokens(["old"], visible_tokens=0, model=MODEL) == 900
-
-
-class TestTheModelsRate:
-    def test_each_request_weighs_by_its_size(self):
-        """Live run: an 843-token side request replaced the rate measured on the conversation's
-        55k-token first request, and every reply after it had its thinking converted at 1.55, not 1.48."""
-        replies = ReplyThinking()
-        replies.observe_rate(MODEL, provider_tokens=81_326, forwarded_tokens=54_945)
-        replies.observe_rate(MODEL, provider_tokens=1_304, forwarded_tokens=843)
-
-        assert replies.rate(MODEL) == pytest.approx(1.4812, abs=1e-4)
-
-    def test_each_model_has_its_own(self):
-        replies = _replies(rate=1.5)
-        replies.observe_rate("claude-sonnet-5-5", provider_tokens=1_200, forwarded_tokens=1_000)
-
-        assert replies.rate(MODEL) == 1.5
-        assert replies.rate("claude-sonnet-5-5") == 1.2
-        assert replies.rate("never seen") is None
-
-    @pytest.mark.parametrize("provider_tokens, forwarded_tokens", [(0, 1_000), (1_000, 0)])
-    def test_a_count_of_zero_is_a_caller_bug(self, provider_tokens, forwarded_tokens):
-        with pytest.raises(ValueError):
-            ReplyThinking().observe_rate(MODEL, provider_tokens=provider_tokens, forwarded_tokens=forwarded_tokens)
 
 
 class TestKnowingAThinkingBlock:
@@ -321,7 +303,7 @@ class TestATurnCarriesItsReplysThinking:
         _post(client, {"model": MODEL, "max_tokens": 64, "messages": [*history, newest]})
         [session_id] = service.session_manager.store.active_session_ids()
 
-        assert (client.app.state.reply_thinking.rate(MODEL) is not None) is measured
+        assert (client.app.state.token_rates.rate(MODEL) is not None) is measured
         assert (service.session_manager.store.get(session_id).token_rate is not None) is measured
 
     def test_an_unfinished_or_refused_reply_is_not_measured(self):

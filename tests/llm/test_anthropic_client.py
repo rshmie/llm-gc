@@ -499,3 +499,50 @@ class TestContextWindow:
 
         with pytest.raises(LLMAuthError):
             asyncio.run(_client(handler).context_window("claude-opus-5-5", timeout_s=5.0))
+
+
+class TestCountTokens:
+    """The token-counting endpoint, asked with LLM-GC's own credential, for one user message of given blocks."""
+
+    SCREENSHOT = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}}
+
+    def test_one_user_message_of_the_blocks_is_counted_on_the_named_model(self):
+        seen: list[httpx2.Request] = []
+
+        def handler(request: httpx2.Request) -> httpx2.Response:
+            seen.append(request)
+            return httpx2.Response(200, json={"input_tokens": 3_712})
+
+        tokens = asyncio.run(_client(handler).count_tokens("claude-opus-5-5", [self.SCREENSHOT], timeout_s=5.0))
+
+        assert tokens == 3_712
+        assert seen[0].method == "POST" and seen[0].url.path == "/v1/messages/count_tokens"
+        assert json.loads(seen[0].content) == {
+            "model": "claude-opus-5-5",
+            "messages": [{"role": "user", "content": [self.SCREENSHOT]}],
+        }
+        assert seen[0].headers["x-api-key"] == "sk-test"
+        assert seen[0].headers["anthropic-version"] == ANTHROPIC_API_VERSION
+
+    @pytest.mark.parametrize(
+        "response",
+        [
+            httpx2.Response(404, json={"type": "error", "error": {"type": "not_found_error"}}),
+            httpx2.Response(200, json={"tokens": 12}),
+            httpx2.Response(200, json={"input_tokens": 0}),
+        ],
+        ids=["unknown model", "no field", "zero"],
+    )
+    def test_no_count_is_none(self, response):
+        assert (
+            asyncio.run(_client(lambda request: response).count_tokens("m", [self.SCREENSHOT], timeout_s=5.0)) is None
+        )
+
+    def test_a_block_the_endpoint_refuses_raises(self):
+        """An image given by URL: the endpoint counts only images sent in the request."""
+        handler = lambda request: httpx2.Response(  # noqa: E731
+            400, json={"type": "error", "error": {"type": "invalid_request_error", "message": "url sources"}}
+        )
+
+        with pytest.raises(LLMResponseError):
+            asyncio.run(_client(handler).count_tokens("claude-opus-5-5", [self.SCREENSHOT], timeout_s=5.0))

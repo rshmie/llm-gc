@@ -313,6 +313,7 @@ class GcService:
             token_rate=state.token_rate,
             window_in_own_count=own_window,
             thinking_tokens=snapshot.sent_thinking_tokens(),
+            attachment_tokens=snapshot.sent_attachment_tokens(),
         )
 
     def use_context_window(self, session_id: str, context_window: int) -> None:
@@ -816,16 +817,21 @@ class GcService:
         tail = [turn for turn in snapshot.young if turn.turn_index not in staged.delta.departed_turns]
         if len(tail) < self.gc_config.last_n_messages_to_keep:
             return None
-        # After a switch no turn sends its thinking, so only text is cached again, with whatever the
-        # caller sends after the prompt's last cached point and never condenses.
+        departed = [turn for turn in snapshot.young if turn.turn_index in staged.delta.departed_turns]
+        # After a switch no turn sends its thinking, so only text and attachments are cached again, with
+        # whatever the caller sends after the prompt's last cached point and never condenses.
         overhead = state.rewrite_overhead_tokens
-        rewritten = staged.front_tokens + sum(turn.token_count for turn in tail) + overhead
+        tail_attachments = snapshot.sent_attachment_tokens(tail)
+        rewritten = staged.front_tokens + sum(turn.token_count for turn in tail) + tail_attachments + overhead
+        # The front carries a taken turn's attachments only as placeholders, so a switch stops sending them all.
+        dropped_attachments = snapshot.sent_attachment_tokens(departed)
         # Measured now, not at staging: every reply since then has added thinking the switch would drop.
         dropped = snapshot.sent_thinking_tokens()
         stale_thinking = snapshot.sent_thinking_tokens(
             turn for span in staged.delta.new_spans if span.level is not DetailLevel.KEPT for turn in span.turns
         )
-        saving, stale = staged.saving_tokens + dropped, staged.stale_tokens + stale_thinking
+        saving = staged.saving_tokens + dropped + dropped_attachments
+        stale = staged.stale_tokens + stale_thinking + dropped_attachments
         bound = self.gc_config.stale_bound(self._window_in_own_count(state))
         share = self.gc_config.min_saving_share
         decision = decide_switch(
@@ -849,6 +855,8 @@ class GcService:
             thinking_dropped_tokens=dropped,
             stale_thinking_tokens=stale_thinking,
             rewrite_overhead_tokens=overhead,
+            attachments_dropped_tokens=dropped_attachments,
+            rewritten_attachment_tokens=tail_attachments,
         )
 
     def _window_in_own_count(self, state: SessionState) -> int:
@@ -892,6 +900,9 @@ class GcService:
             outcome=_outcome([(span, span.level) for span in delta.new_spans], delta.level_changes),
             switch_reason=reason,
             thinking_dropped_tokens=before.sent_thinking_tokens(),
+            attachments_dropped_tokens=before.sent_attachment_tokens(
+                turn for turn in before.young if turn.turn_index in delta.departed_turns
+            ),
         )
 
     def _context_tokens(self, snapshot: GenerationSnapshot) -> int:

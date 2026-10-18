@@ -49,6 +49,7 @@ from llm_gc.exceptions import ConfigError
 from llm_gc.llm import AnthropicClient
 from llm_gc.llm.factory import DEFAULT_MODELS, PROVIDER_NAMES, create_provider
 from llm_gc.llm.provider import LLMProvider
+from llm_gc.proxy.attachment_sizes import AttachmentCounter
 from llm_gc.proxy.model_windows import WindowLookup
 from llm_gc.proxy.server import ANTHROPIC_UPSTREAM, DEFAULT_PROXY_PORT
 
@@ -75,6 +76,8 @@ _CREDENTIAL_FIELDS: dict[str, tuple[str, str | None]] = {
 }
 # How long the upstream has to report a model's window. Asked off the request path, once per model.
 MODEL_WINDOW_TIMEOUT_S = 10.0
+# How long the upstream has to count an image's or a document's tokens. Asked off the request path.
+ATTACHMENT_COUNT_TIMEOUT_S = 10.0
 # Hosts that reach this machine: an upstream on one of them, at our own port, is a loop.
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
@@ -479,6 +482,21 @@ def create_model_window_lookup(
         api_key=api_key, auth_token=auth_token, base_url=settings.upstream, http_client=http_client
     )
     return lambda model: client.context_window(model, timeout_s=MODEL_WINDOW_TIMEOUT_S)
+
+
+def create_attachment_counter(
+    settings: ProxySettings, *, http_client: httpx2.AsyncClient | None = None
+) -> AttachmentCounter | None:
+    """How the proxy asks the upstream what an image or a document costs a model: with LLM-GC's own
+    Anthropic credential, when it has one. None without one, and every attachment counts as its placeholder.
+    """
+    api_key, auth_token = _reveal(settings.anthropic_api_key), _reveal(settings.anthropic_auth_token)
+    if not (api_key or auth_token):
+        return None
+    client = AnthropicClient(
+        api_key=api_key, auth_token=auth_token, base_url=settings.upstream, http_client=http_client
+    )
+    return lambda model, content: client.count_tokens(model, content, timeout_s=ATTACHMENT_COUNT_TIMEOUT_S)
 
 
 def _reveal(secret: SecretStr | None) -> str | None:

@@ -6,6 +6,7 @@ from dataclasses import replace
 from llm_gc.config import GCConfig
 from llm_gc.engine import GCResult, GCStatus, build_gc_service
 from llm_gc.engine.gc_service import GcService
+from llm_gc.engine.switch_policy import CacheState
 from llm_gc.extraction import PatternFactReader
 from llm_gc.llm import FakeProvider, LLMResponse, StopReason
 from llm_gc.models import KnowledgeEntry, Message
@@ -424,3 +425,31 @@ class TestTheModelsEarlierThinking:
 
         assert staged is not None and staged.thinking_dropped_tokens == 5 * 50
         assert 0 < staged.stale_thinking_tokens < staged.thinking_dropped_tokens
+
+
+class TestImages:
+    """Images and documents, sized by the provider, shown apart from the text as the thinking is."""
+
+    def test_images_are_shown_apart_while_sent_and_written_whether_or_not_collected(self):
+        service = _service()
+        for index in range(10):
+            turn = _turn(index)
+            service.gc_record(
+                SESSION,
+                [
+                    turn.model_copy(
+                        update={"attachment_tokens": 1_000 * (index in (0, 9)), "unsized_attachments": int(index == 5)}
+                    )
+                ],
+                [f"h{index}"],
+            )
+        asyncio.run(service.gc_age(SESSION, ignore_batch_minimum=True))
+        service.gc_switch(SESSION, CacheState.COLD)
+
+        state = project_knowledge_state(service.inspect(SESSION))
+        by_index = {turn.turn_index: turn for turn in state.turns}
+
+        assert state.written_attachment_tokens == 2_000, "every message's images, collected or not"
+        assert state.attachment_tokens == 1_000, "only the recent message still sends its image"
+        assert by_index[0].attachment_tokens == by_index[9].attachment_tokens == 1_000
+        assert by_index[5].unsized_attachments == 1

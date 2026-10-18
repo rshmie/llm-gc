@@ -75,6 +75,10 @@ class SwitchPreview:
     stale_thinking_tokens: int = 0
     # Included in `rewritten_tokens`: what is cached again besides the front and the tail, such as instructions.
     rewrite_overhead_tokens: int = 0
+    # The images and documents of the turns its cut takes, which the front carries only as placeholders
+    # (in `saving_tokens` and in `stale_tokens`), and those of the tail, cached again (in `rewritten_tokens`).
+    attachments_dropped_tokens: int = 0
+    rewritten_attachment_tokens: int = 0
 
 
 @dataclass(frozen=True)
@@ -95,6 +99,7 @@ class SessionInspection:
     token_rate: float | None = None  # the model's tokens per LLM-GC token; None until a reply measures it
     window_in_own_count: int = 0  # the window converted at `token_rate`: what the budgets are shares of
     thinking_tokens: int = 0  # estimated thinking the next request sends on top of `context_tokens`
+    attachment_tokens: int = 0  # images and documents the next request sends on top of `context_tokens`
 
     @property
     def context(self) -> list[Message]:

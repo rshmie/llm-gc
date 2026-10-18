@@ -61,6 +61,7 @@ class GCBreakdownSignal(BaseModel):
     tokens_before: int  # gc_result.tokens_before - raw size going into the last pass
     tokens_saved: int  # gc_result.tokens_saved - copied, not recomputed
     thinking_dropped_tokens: int = 0  # estimated earlier thinking a collection stopped sending, on top of tokens_saved
+    attachments_dropped_tokens: int = 0  # images and documents a collection stopped sending, on top of tokens_saved
     gc_run_id: str
     gc_status: GCStatus
     gc_completed_at: float  # the GC_FINISHED event's own timestamp, not this snapshot's build time

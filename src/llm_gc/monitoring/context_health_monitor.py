@@ -223,6 +223,7 @@ class ContextHealthMonitor:
             tokens_before=report.tokens_before,
             tokens_saved=report.tokens_saved,
             thinking_dropped_tokens=report.thinking_dropped_tokens,
+            attachments_dropped_tokens=report.attachments_dropped_tokens,
             gc_run_id=report.gc_run_id,
             gc_status=report.status,
             gc_completed_at=gc_completed_at,

@@ -73,6 +73,8 @@ class TurnState(BaseModel):
     tool_results: bool = False  # a user turn carrying what the client's tools returned; `parts` sets apart words the user wrote beside it
     relayed: bool = False  # a user turn relaying another agent's report, not words the user wrote
     parts: list[TurnPart] | None = None  # the text by writer, when the client wrote some of it
+    attachment_tokens: int = 0  # its images and documents, on top of `tokens`, while it is sent as written
+    unsized_attachments: int = 0  # of those, how many count as their placeholder alone
 
 
 class SpanState(BaseModel):
@@ -127,6 +129,10 @@ class StagedCutState(BaseModel):
     stale_thinking_tokens: int = 0
     # Included in `rewritten_tokens`: what is cached again besides the recap and recent messages.
     rewrite_overhead_tokens: int = 0
+    # Images and documents: of the messages it condenses (in `saving_tokens` and `stale_tokens`),
+    # and of the recent messages, cached again (in `rewritten_tokens`).
+    attachments_dropped_tokens: int = 0
+    rewritten_attachment_tokens: int = 0
 
 
 class CacheReadingState(BaseModel):
@@ -150,6 +156,9 @@ class KnowledgeState(BaseModel):
     # and carried by the conversation as written, which is what it would send without LLM-GC.
     thinking_tokens: int = 0
     written_thinking_tokens: int = 0
+    # Images and documents, sized by the provider: the same two figures as for thinking.
+    attachment_tokens: int = 0
+    written_attachment_tokens: int = 0
     front_text: str | None  # the front exactly as the model receives it
     front_tokens: int
     spans: list[SpanState]  # oldest first
@@ -186,6 +195,11 @@ def project_knowledge_state(inspection: SessionInspection, cache: CacheReading |
             sum(turn.thinking_tokens for turn in snapshot.young)
             + sum(turn.thinking_tokens for span in snapshot.old for turn in span.turns)
         ),
+        attachment_tokens=inspection.attachment_tokens,
+        written_attachment_tokens=(
+            snapshot.sent_attachment_tokens()
+            + sum(turn.attachment_tokens for span in snapshot.old for turn in span.turns)
+        ),
         front_text=inspection.front.message.content if inspection.front is not None else None,
         front_tokens=inspection.front.message.token_count if inspection.front is not None else 0,
         spans=[state for _, state in spans],
@@ -218,6 +232,8 @@ def project_knowledge_state(inspection: SessionInspection, cache: CacheReading |
             thinking_dropped_tokens=staged.thinking_dropped_tokens,
             stale_thinking_tokens=staged.stale_thinking_tokens,
             rewrite_overhead_tokens=staged.rewrite_overhead_tokens,
+            attachments_dropped_tokens=staged.attachments_dropped_tokens,
+            rewritten_attachment_tokens=staged.rewritten_attachment_tokens,
         )
         if staged is not None
         else None,
@@ -312,6 +328,8 @@ def _turn_state(
         tool_results=bool(tool_result_ids(message)),
         relayed=message.relayed,
         parts=turn_parts(message),
+        attachment_tokens=message.attachment_tokens,
+        unsized_attachments=message.unsized_attachments,
     )
 
 

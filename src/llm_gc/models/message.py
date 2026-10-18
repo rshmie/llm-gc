@@ -43,6 +43,13 @@ class Message(BaseModel):
     in the same units as `token_count`. The provider bills it as input whenever the turn
     is sent with its thinking, but it has no readable text. It only counts toward prompt
     cost; scoring and summarising ignore it. It is 0 when unknown.
+
+    `attachment_tokens` is the size of the images and documents in `raw_content`, in the
+    same units, beyond the placeholder `content` reads them as. The provider bills it
+    whenever the turn is sent as written; a collected turn no longer carries it. It only
+    counts toward prompt cost, like `thinking_tokens`, and is 0 when unknown.
+    `unsized_attachments` is how many of them have no known size, so count as their
+    placeholder alone.
     """
 
     role: Literal["user", "assistant", "system"]
@@ -55,6 +62,8 @@ class Message(BaseModel):
     client_written: tuple[tuple[int, int], ...] = ()
     tool_output: tuple[tuple[int, int], ...] = ()
     thinking_tokens: int = Field(default=0, ge=0)
+    attachment_tokens: int = Field(default=0, ge=0)
+    unsized_attachments: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def _check_ranges(self) -> Self:
