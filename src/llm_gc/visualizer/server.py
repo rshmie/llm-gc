@@ -7,6 +7,7 @@ is opt-in and must only ever listen on localhost; see
 doc/design/visibility/overview.md.
 """
 
+import logging
 from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
@@ -26,6 +27,9 @@ from llm_gc.monitoring import ContextHealth, ContextHealthMonitor
 from llm_gc.monitoring.knowledge_state import CacheReadingState, KnowledgeState, project_knowledge_state
 from llm_gc.session import SessionState
 from llm_gc.visualizer.transcript import TranscriptRecorder, TranscriptTurn
+from llm_gc.web.request_id import RequestIdMiddleware, current_request_id
+
+logger = logging.getLogger(__name__)
 
 _STATIC_DIR = Path(__file__).parent / "static"
 # Without it the browser guesses a cache lifetime and keeps running an old dashboard
@@ -86,6 +90,7 @@ class ManualCutResult(BaseModel):
     degradations: list[AgingDegradation]
     abandoned_cut: AbandonedCut | None    # set when the cut would not have shrunk the context
     duration_ms: float
+    request_id: str | None                # what the cut's log lines are marked with, should it have failed
 
 
 class DashboardOverview(BaseModel):
@@ -130,6 +135,7 @@ def create_dashboard_app(
     """
     app = FastAPI(title="LLM-GC Dashboard", version=APP_VERSION)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts or LOCAL_HOSTS)
+    app.add_middleware(RequestIdMiddleware)
     config = gc_service.gc_config
 
     @app.get("/", include_in_schema=False)
@@ -194,8 +200,8 @@ def create_dashboard_app(
         """One client session as its turns, their requests and the subagents each started."""
         trace = read_trace(client_session) if read_trace is not None else None
         if trace is None:
-            return JSONResponse(status_code=404, content={"error": {
-                "code": "TRACE_NOT_FOUND", "message": f"no requests named client session {client_session!r}"}})
+            return _error_response(404, "TRACE_NOT_FOUND", f"no requests named client session {client_session!r}",
+                                   level=logging.DEBUG)
         return JSONResponse(_with_words(trace, transcripts))
 
     @app.post("/api/sessions/{session_id}/gc", response_model=ManualCutResult)
@@ -207,8 +213,9 @@ def create_dashboard_app(
         automatic one is reported.
         """
         if request.headers.get(ACTION_HEADER) != "1":
-            return JSONResponse(status_code=403, content={"error": {
-                "code": "ACTION_HEADER_REQUIRED", "message": f"send {ACTION_HEADER}: 1 to act from the dashboard"}})
+            # The dashboard's own page always sends it, so a refusal is worth seeing.
+            return _error_response(403, "ACTION_HEADER_REQUIRED", f"send {ACTION_HEADER}: 1 to act from the dashboard",
+                                   level=logging.WARNING)
         if gc_service.session_manager.store.get(session_id) is None:
             return _session_not_found(session_id)
         prepared = await gc_service.gc_age(session_id, ignore_batch_minimum=True)
@@ -219,7 +226,8 @@ def create_dashboard_app(
         return ManualCutResult(status=result.status, tokens_before=result.tokens_before,
                                tokens_after=result.tokens_in_final, outcome=result.outcome,
                                degradations=result.degradations, abandoned_cut=prepared.abandoned_cut,
-                               duration_ms=prepared.duration_ms + (switched.duration_ms if switched else 0.0))
+                               duration_ms=prepared.duration_ms + (switched.duration_ms if switched else 0.0),
+                               request_id=current_request_id())
 
     return app
 
@@ -284,6 +292,16 @@ def _with_words(trace: dict[str, Any], transcripts: TranscriptRecorder | None) -
 
 
 def _session_not_found(session_id: str) -> JSONResponse:
-    # Sessions close when idle, so a dashboard left open will ask for one that has gone.
-    return JSONResponse(status_code=404, content={"error": {
-        "code": "SESSION_NOT_FOUND", "message": f"no live session {session_id!r}; it may have been closed"}})
+    # Sessions close when idle, so a dashboard left open will ask for one that has gone, every second.
+    return _error_response(404, "SESSION_NOT_FOUND", f"no live session {session_id!r}; it may have been closed",
+                           level=logging.DEBUG)
+
+
+def _error_response(status: int, code: str, message: str, *, level: int) -> JSONResponse:
+    """An error the dashboard answers, logged at `level` so the request ID in its body leads to a line.
+
+    `code` is stable for a program to act on; `message` is for a person.
+    """
+    logger.log(level, "dashboard -> %d %s: %s", status, code, message, extra={"status": status, "code": code})
+    return JSONResponse(status_code=status, content={"error": {
+        "code": code, "message": message, "request_id": current_request_id()}})

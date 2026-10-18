@@ -165,6 +165,8 @@ Four more words are plainer on screen than in the code, and each one's explanati
 
 **It shows conversation content, so it is opt-in and localhost-only.** The proxy and the dashboard have different exposure: the proxy is an API meant, one day, to be reached behind authentication; the dashboard shows every conversation the process holds. Separate listeners keep the two from being exposed together. Two further guards close the browser-side routes to localhost: requests whose `Host` is not a localhost name are refused, so a hostile page cannot rebind its own domain to 127.0.0.1 and read the dashboard as same-origin; and Run GC now requires a custom header, which another site's page cannot send without a preflight the server never grants.
 
+**Its errors name the request they answer.** Each request the dashboard serves gets an ID, as each proxied request does ([proxy overview](../proxy/overview.md)), and every error it answers carries it: `{"error": {"code", "message", "request_id"}}`, where `code` is stable for the page to act on and `message` is for a person. Each error is logged under its ID: a refused action as a warning, since the dashboard's own page always sends the header; a conversation or trace that has gone only at debug level, because a page left open asks for it again every second. Run GC now reports its ID too, and when a collection fails the page names it, so "the error is in the proxy's log" says which lines. *Rejected: the provider's error envelope, as the proxy answers in* — only the dashboard's own page reads these, so there is no client to match. *Accepted cost:* at the default log level a closed conversation's 404 leads to no line; its message already says what happened.
+
 ---
 
 ## Why this shape

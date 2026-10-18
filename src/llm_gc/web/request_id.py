@@ -1,9 +1,9 @@
-"""The ID of the HTTP request being handled. Application code.
+"""The ID of the HTTP request being handled, by the proxy or by the dashboard. Application code.
 
-Each request the proxy receives gets one ID, held for as long as the request runs. The
-log lines written while handling it, its rows on the dashboard's Requests tab and any
-error body LLM-GC writes itself all carry the same ID, so a row that looks wrong can be
-followed to its log lines.
+Each request gets one ID, held for as long as the request runs. The log lines written
+while handling it and any error body LLM-GC writes itself carry the same ID, and so do
+a proxied request's rows on the dashboard's Requests tab, so a row or an error that
+looks wrong can be followed to its log lines.
 
 The ID is held in a `ContextVar` rather than passed down as an argument: the engine's
 log lines are written deep inside the library, which knows nothing about HTTP requests.

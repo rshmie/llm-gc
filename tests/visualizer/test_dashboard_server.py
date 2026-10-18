@@ -1,11 +1,14 @@
 """The dashboard over live sessions: read-only, per session, and honest about absence."""
 
 import asyncio
+import logging
 from pathlib import Path
 
+import pytest
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
+from llm_gc.cli.logs import RequestIdFilter
 from llm_gc.config import GCConfig
 from llm_gc.engine import build_gc_service
 from llm_gc.engine.gc_service import GcService
@@ -247,6 +250,51 @@ class TestRunGcNow:
         response = _client(service, monitor).post("/api/sessions/gone/gc", headers={"x-llm-gc-dashboard": "1"})
         assert response.status_code == 404
         assert service.session_manager.store.get("gone") is None
+
+    def test_its_result_names_the_request_the_engines_lines_were_written_in(self, caplog):
+        """A failed cut tells the developer to read the log; the ID says which lines."""
+        service, monitor = _engine()
+        service.gc_config.min_cut_tokens = 100_000
+        _converse(service, "s", 20)
+        caplog.handler.addFilter(RequestIdFilter())
+        caplog.set_level(logging.INFO)
+
+        result = _client(service, monitor).post("/api/sessions/s/gc", headers={"x-llm-gc-dashboard": "1"}).json()
+
+        [applied] = [record for record in caplog.records if record.getMessage().startswith("applied a collection")]
+        assert result["request_id"] is not None
+        assert applied.request_id == result["request_id"]
+
+
+class TestErrors:
+    """Each error the dashboard answers carries an ID, and is logged under the same one."""
+
+    @pytest.mark.parametrize(("method", "path", "status", "level"), [
+        ("GET", "/api/sessions/gone", 404, logging.DEBUG),
+        ("GET", "/api/trace/cc-gone", 404, logging.DEBUG),
+        ("POST", "/api/sessions/s/gc", 403, logging.WARNING),
+    ])
+    def test_its_body_names_the_request_its_log_line_was_written_in(self, caplog, method, path, status, level):
+        service, monitor = _engine()
+        client = _client(service, monitor, read_trace=lambda client_session: None)
+        caplog.handler.addFilter(RequestIdFilter())
+        caplog.set_level(logging.DEBUG)
+
+        response = client.request(method, path)
+
+        [line] = [record for record in caplog.records if record.name == "llm_gc.visualizer.server"]
+        error = response.json()["error"]
+        assert response.status_code == status and line.levelno == level
+        assert error["request_id"] is not None and error["request_id"] == line.request_id
+        assert error["code"] in line.getMessage()
+
+    def test_each_request_has_an_id_of_its_own(self):
+        service, monitor = _engine()
+        client = _client(service, monitor)
+
+        first, second = (client.get("/api/sessions/gone").json()["error"]["request_id"] for _ in range(2))
+
+        assert first != second
 
 
 class TestTranscript:

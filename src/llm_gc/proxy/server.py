@@ -61,7 +61,7 @@ from llm_gc.proxy.cache_watch import CacheWatch
 from llm_gc.proxy.model_windows import ModelWindow, ModelWindows, WindowLookup
 from llm_gc.proxy.session_identity import SESSION_HEADER, chain_hashes, client_origin
 from llm_gc.proxy.reply_thinking import ReplyThinking
-from llm_gc.proxy.request_id import RequestIdMiddleware, current_request_id
+from llm_gc.web.request_id import RequestIdMiddleware, current_request_id
 from llm_gc.proxy.request_log import RequestLog, RequestRecord, newest_kind
 from llm_gc.proxy.subagent_links import SpawnLinker
 from llm_gc.proxy.traffic import TrafficLedger, token_rate

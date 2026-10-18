@@ -17,7 +17,7 @@ from typing import Literal
 from llm_gc.models import ClientOrigin, Message
 from llm_gc.models.message import said_by_user, tool_result_ids
 from llm_gc.proxy.anthropic_translation import ReplyOutline
-from llm_gc.proxy.request_id import new_request_id
+from llm_gc.web.request_id import new_request_id
 
 # Records kept in all; above this the oldest is dropped. Its counts stay in the ledger's totals.
 MAX_RECORDS = 10_000

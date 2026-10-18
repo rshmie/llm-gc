@@ -37,6 +37,21 @@ def find_busy_port(ports: Iterable[int]) -> int | None:
     return None
 
 
+def create_server(app: Any, port: int, log_level: str) -> uvicorn.Server:
+    """A uvicorn server for `app` on `BIND_HOST`, writing its log lines through the application's handler.
+
+    `log_config=None` stops uvicorn from installing a handler of its own, so its warnings and
+    errors, a route's traceback among them, are written in the format the settings chose,
+    JSON included. No access log: the dashboard polls, and a line per poll buried the proxy's
+    own lines, which already record each request. uvicorn's access logger is shared by the
+    process, so it cannot be kept for the proxy alone. Its startup lines are dropped too,
+    below DEBUG: the banner already names each address, and two servers print every line twice.
+    """
+    uvicorn_level = "debug" if log_level == "DEBUG" else "warning"
+    return uvicorn.Server(uvicorn.Config(app, host=BIND_HOST, port=port, log_level=uvicorn_level,
+                                         access_log=False, log_config=None))
+
+
 def serve_proxy(service: GcService, settings: ProxySettings, *, http_client: httpx2.AsyncClient | None = None) -> None:
     """Serve until interrupted: the proxy always, the dashboard when the settings ask for it.
 
@@ -70,14 +85,7 @@ def serve_proxy(service: GcService, settings: ProxySettings, *, http_client: htt
                                           read_tool_round=metrics.request_log.tool_round_open),
                      settings.dashboard_port))
 
-    # No access log: the dashboard polls, and a line per poll buried the proxy's own lines,
-    # which already record each request. uvicorn's access logger is shared by the process,
-    # so it cannot be kept for the proxy alone. Its startup lines are dropped too, below
-    # DEBUG: the banner already names each address, and two servers print every line twice.
-    uvicorn_level = "debug" if settings.log_level == "DEBUG" else "warning"
-    servers = [uvicorn.Server(uvicorn.Config(app, host=BIND_HOST, port=port, log_level=uvicorn_level,
-                                             access_log=False))
-               for app, port in apps]
+    servers = [create_server(app, port, settings.log_level) for app, port in apps]
 
     async def run_all() -> None:
         # One event loop for both, so the dashboard reads sessions from the loop that writes them.

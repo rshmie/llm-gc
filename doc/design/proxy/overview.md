@@ -371,7 +371,9 @@ An error LLM-GC answers itself (a 502 when the upstream cannot be reached, a 413
 
 Each answer line also says how long LLM-GC took, from having the request's body to forwarding it, and how long the upstream took to answer. For a streamed reply that is how long it took to begin answering, because the line is written before the stream is relayed; the whole reply's time is on the Requests tab.
 
-Logs are text by default, for the person watching the terminal. With `log_format = "json"` each line is one JSON object holding every field the line carries, for a program that reads the log.
+The dashboard gives its own requests IDs the same way, so its errors and a manual collection lead to their lines too ([visibility overview](../visibility/overview.md)). The ID sits in a small package both servers share, so the dashboard, which is built to run without a proxy, does not import one.
+
+Logs are text by default, for the person watching the terminal. With `log_format = "json"` each line is one JSON object holding every field the line carries, for a program that reads the log. The web server's own warnings and errors, a route's traceback among them, go through the same handler, so they are in the chosen format too.
 
 *Rejected: an ID per forward* — the refused rewrite and its resend would have two IDs for one client request, and the lines written before the first forward, such as a conversation starting, would belong to neither. *Rejected: setting the ID at the top of each route* — a streamed reply is relayed after the route returns, so a dropped stream would be logged without its ID. *Rejected: returning the ID in a response header* — no client shows one; the error body and the Requests tab are where a person looks. *Rejected: JSON by default* — it would replace the console a person reads while LLM-GC runs. *Accepted cost:* an aging pass's lines carry the ID of the request that scheduled it, which may have finished minutes earlier.
 

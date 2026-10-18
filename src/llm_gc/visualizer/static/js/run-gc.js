@@ -48,7 +48,7 @@ export function explainResult(r, before) {
     ? { tone: "muted", title: "! LLM-GC can't call its model, so it has stopped condensing", body: [FAILING_TEXT, pauseEnds()] }
     : { tone: "muted", title: "⏸ Paused by a rate limit", body: [PAUSED_TEXT, pauseEnds()] };
   if (r.status === "bypassed_not_collected") return { tone: "muted", title: "– Not collected", body: [NOT_COLLECTED_TEXT] };
-  if (r.status === "bypassed_on_error") return { tone: "critical", title: "✕ The collection failed, and nothing changed", body: ["The conversation is exactly as it was. The error is in the proxy's log."] };
+  if (r.status === "bypassed_on_error") return { tone: "critical", title: "✕ The collection failed, and nothing changed", body: [`The conversation is exactly as it was. The error is in the proxy's log${r.request_id ? `, on the lines marked ${r.request_id}` : ""}.`] };
   return { tone: "muted", title: STATUS[r.status]?.text || r.status, body: [] };
 }
 

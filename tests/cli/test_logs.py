@@ -8,7 +8,7 @@ from collections.abc import Callable
 from enum import Enum
 
 from llm_gc.cli.logs import JsonFormatter, RequestIdFilter, TextFormatter
-from llm_gc.proxy.request_id import REQUEST_ID_CHARS, RequestIdMiddleware
+from llm_gc.web.request_id import REQUEST_ID_CHARS, RequestIdMiddleware
 
 
 def _record(message: str = "claude -> 200", *, extra: dict | None = None,

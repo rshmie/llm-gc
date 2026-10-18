@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 
-from llm_gc.proxy.request_id import REQUEST_ID_CHARS, RequestIdMiddleware, current_request_id
+from llm_gc.web.request_id import REQUEST_ID_CHARS, RequestIdMiddleware, current_request_id
 
 
 def _app() -> FastAPI:

@@ -10,7 +10,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from llm_gc.proxy.request_id import current_request_id
+from llm_gc.web.request_id import current_request_id
 
 LogFormat = Literal["text", "json"]
 
