@@ -10,7 +10,7 @@ The events bus is that stream: the single cross-cutting channel through which ev
 
 A single in-process publish/subscribe `EventBus` carries every observability event:
 
-- **Producers** (the GC service, which runs every collection, and the compactors) publish a typed `Event` as a side effect of doing their work. Emitting is fire-and-forget — a producer never waits on a consumer.
+- **Producers** (the GC service, which runs every collection, the compactors, and the session manager, which closes sessions) publish a typed `Event` as a side effect of doing their work. Emitting is fire-and-forget — a producer never waits on a consumer.
 - An `Event` carries an `EventType` (which channel), a `data` payload, and a timestamp.
 - **Consumers** subscribe a callback to the `EventType`s they care about; the bus invokes each matching subscriber when an event is emitted.
 - The bus knows nothing about any specific consumer. The dashboard, logger, and benchmarks are interchangeable — adding, removing, or disabling one touches no producer.
@@ -21,10 +21,11 @@ The defining discipline: a component's **event surface is decided at design time
 
 ```
   PRODUCERS                    BUS                   SUBSCRIBERS
- ┌──────────────┐  emit, fire  ┌──────────┐         ┌────────────────────────┐
- │ GcService    │ ───────────► │ EventBus │ ──────► │ Health Monitor         │
- │ compactors   │  and forget  └──────────┘         │ the proxy's ledger     │
- └──────────────┘                                   │ logger        (planned)│
+ ┌────────────────┐ emit, fire ┌──────────┐         ┌────────────────────────┐
+ │ GcService      │ ─────────► │ EventBus │ ──────► │ Health Monitor         │
+ │ compactors     │ and forget └──────────┘         │ the proxy's ledger     │
+ │ SessionManager │                                 │ dashboard transcripts  │
+ └────────────────┘                                 │ logger        (planned)│
                                                     │ benchmarks    (planned)│
                                                     └───────────┬────────────┘
                                                                 ▼
@@ -40,8 +41,11 @@ The defining discipline: a component's **event surface is decided at design time
 | `knowledge_entry_superseded` | GcService | a newer fact replaced older ones on the same topic | yes |
 | `aging_degraded` | GcService | part of a collection fell short: a summary refused or failed, facts not read, a recap over its budget | yes |
 | `message_compacted` | each compactor | every summary call, whether or not its summary was used | no |
+| `session_closed` | SessionManager | a session closed, idle too long or past the session cap, once its data is gone | no |
 
 The GcService emits only **after a collection commits**, and every event names its session, so an event always describes a change that happened, to one conversation. A pass discarded because its session closed announces nothing but its `gc_finished`, and a fact that was not filed, such as one that only restates the value in force, is not announced. `gc_finished` carries the pass's report: every measure of its result, including the calls and tokens its own model calls spent, with the recent turns it kept given as turn numbers and a token count. The proxy subscribes to it to count those calls, and each collection, against the conversation.
+
+The session manager announces `session_closed` once a closed session's data is gone, and only for a session it held. It carries only the session's id. A component that keeps its own copy of a session's data, such as the dashboard's transcripts, drops that copy when it hears it.
 
 ### What a payload carries
 

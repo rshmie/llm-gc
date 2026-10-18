@@ -26,7 +26,9 @@ def build_gc_service(config: GCConfig, *, summary_provider: LLMProvider | None,
             facts. None wires `NoOpCompactor`, whose "summary" is the turns
             themselves and never shorter, so spans are kept or archived but never
             compacted, and facts are read by patterns from the user's own turns.
-        session_manager: Where sessions live; a fresh one when omitted.
+        session_manager: Where sessions live. When omitted, a fresh one that announces
+            each close on the service's bus. One passed in announces on the bus it was
+            given, if any.
         fact_reader: Overrides how facts are read, for a run that must make no
             model call for them, such as an offline rehearsal.
     """
@@ -36,7 +38,7 @@ def build_gc_service(config: GCConfig, *, summary_provider: LLMProvider | None,
     compactor: BaseCompactor = (NoOpCompactor(event_bus=bus) if summary_provider is None
                                 else LLMCompactor(event_bus=bus, provider=summary_provider))
     return GcService(
-        session_manager=session_manager if session_manager is not None else SessionManager(),
+        session_manager=session_manager if session_manager is not None else SessionManager(event_bus=bus),
         generational_memory=GenerationalMemory(fact_reader=fact_reader if fact_reader is not None
                                                else PatternFactReader() if summary_provider is None
                                                else LLMFactReader(summary_provider), compactor=compactor),

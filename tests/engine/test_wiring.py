@@ -5,6 +5,7 @@ import re
 from llm_gc.config import GCConfig
 from llm_gc.engine import build_gc_service
 from llm_gc.engine.compaction import LLMCompactor, NoOpCompactor
+from llm_gc.events import EventType
 from llm_gc.extraction import LLMFactReader, PatternFactReader
 from llm_gc.llm import FakeProvider, LLMResponse, MeteredProvider, StopReason
 from llm_gc.llm.prompts import FACTS_PROMPT, load_prompt
@@ -175,3 +176,15 @@ def test_two_services_share_no_state():
 
     assert first.event_bus is not second.event_bus
     assert first.session_manager is not second.session_manager
+
+
+def test_the_engines_sessions_announce_their_closes_on_its_own_bus():
+    """The dashboard and the monitor listen on the service's bus; a close announced anywhere else reaches neither."""
+    service = build_gc_service(GCConfig(), summary_provider=None)
+    heard: list[str] = []
+    service.event_bus.subscribe(EventType.SESSION_CLOSED, lambda event: heard.append(event.data["session_id"]))
+
+    service.session_manager.get_or_create("s1")
+    service.session_manager.close_session("s1")
+
+    assert heard == ["s1"]

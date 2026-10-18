@@ -23,6 +23,7 @@ from llm_gc.config.constants import APP_VERSION
 from llm_gc.engine import AbandonedCut, AgingDegradation, CutOutcome, GcService, GCStatus
 from llm_gc.engine.pause import Pause
 from llm_gc.engine.switch_policy import CacheReading, CacheState
+from llm_gc.events import EventType
 from llm_gc.monitoring import ContextHealth, ContextHealthMonitor
 from llm_gc.monitoring.knowledge_state import CacheReadingState, KnowledgeState, project_knowledge_state
 from llm_gc.session import SessionState
@@ -117,8 +118,9 @@ def create_dashboard_app(
         monitor: Subscribed to the same bus as `gc_service`.
         read_proxy_stats: The proxy's counters, passed as a function so the
             dashboard does not depend on the proxy package.
-        transcripts: What each client last sent, fed by the proxy. Without it the
-            dashboard still shows what the model receives, but not what was said.
+        transcripts: What each client last sent, fed by the proxy, and dropped when
+            its session closes. Without it the dashboard still shows what the model
+            receives, but not what was said.
         read_trace: A client session's trace from the proxy's request log, passed as
             a function for the same reason as `read_proxy_stats`.
         read_cache: A conversation's prompt cache as the proxy reads it, for the verdict
@@ -137,6 +139,9 @@ def create_dashboard_app(
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts or LOCAL_HOSTS)
     app.add_middleware(RequestIdMiddleware)
     config = gc_service.gc_config
+    if transcripts is not None:
+        forget = transcripts.forget
+        gc_service.event_bus.subscribe(EventType.SESSION_CLOSED, lambda event: forget(event.data["session_id"]))
 
     @app.get("/", include_in_schema=False)
     async def serve_page() -> FileResponse:
@@ -185,8 +190,6 @@ def create_dashboard_app(
     async def session_transcript(session_id: str) -> Transcript | JSONResponse:
         state = gc_service.session_manager.store.get(session_id)
         if state is None:
-            if transcripts is not None:
-                transcripts.forget(session_id)   # its session closed; so does its copy
             return _session_not_found(session_id)
         turns = transcripts.get(session_id) if transcripts is not None else None
         recorded = state.snapshot.recorded_turn_count

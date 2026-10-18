@@ -19,3 +19,6 @@ class EventType(Enum):
    # span is still made, so nothing is lost; the front is larger, or thinner, than the
    # plan wanted. Emitted separately from GC_FINISHED
    AGING_DEGRADED = "aging_degraded"
+   # Fires once per session closed - idle too long, or past the session cap - after its
+   # data is gone. Anything holding its own copy of a session's data drops it here.
+   SESSION_CLOSED = "session_closed"

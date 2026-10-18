@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
+from llm_gc.events import Event, EventBus, EventType
 from llm_gc.models import Message
 from llm_gc.session import SessionManager
 
@@ -62,6 +63,43 @@ class TestCloseSession:
 
     def test_closing_an_unknown_session_is_harmless(self):
         SessionManager().close_session("never-opened")
+
+
+class TestACloseIsAnnounced:
+    """Anything keeping its own copy of a session's data learns of the close from the bus."""
+
+    def _manager(self, **kwargs) -> tuple[SessionManager, list[tuple[str, bool]]]:
+        """A manager on a bus, and each close it announced: the session, and whether it was still held."""
+        bus = EventBus()
+        manager = SessionManager(event_bus=bus, **kwargs)
+        heard: list[tuple[str, bool]] = []
+
+        def note(event: Event) -> None:
+            session_id = event.data["session_id"]
+            heard.append((session_id, manager.store.get(session_id) is not None))
+
+        bus.subscribe(EventType.SESSION_CLOSED, note)
+        return manager, heard
+
+    def test_a_close_is_announced_once_after_the_session_is_gone(self):
+        manager, heard = self._manager()
+        manager.get_or_create("s1")
+        manager.close_session("s1")
+        manager.close_session("s1")
+        assert heard == [("s1", False)]
+
+    def test_closing_a_session_never_opened_announces_nothing(self):
+        manager, heard = self._manager()
+        manager.close_session("never-opened")
+        assert heard == []
+
+    def test_an_idle_close_and_a_close_past_the_cap_are_both_announced(self):
+        manager, heard = self._manager(session_timeout_s=1800, max_sessions=1)
+        manager.get_or_create("first")
+        manager.get_or_create("second")
+        manager.store.get("second").last_updated_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        manager.sweep_once()
+        assert heard == [("first", False), ("second", False)]
 
 
 class TestIdleSweeper:

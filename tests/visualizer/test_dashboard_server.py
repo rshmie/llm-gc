@@ -404,13 +404,32 @@ class TestTranscript:
         recorder.forget("s")
         assert recorder.origin("s") is None
 
-    def test_a_closed_sessions_copy_is_dropped(self):
+    def test_a_closed_sessions_copy_is_dropped_when_it_closes_not_when_it_is_next_read(self):
+        """The copy used to go only on a read of the closed session, so one nobody opened again stayed in memory."""
         service, monitor = _engine()
         recorder = TranscriptRecorder()
-        recorder.record("gone", [Message(role="user", content="secret", turn_index=0)])
+        client = _client(service, monitor, transcripts=recorder)
+        service.session_manager.get_or_create("gone")
+        asking = Message(role="user", content="secret", turn_index=0)
+        recorder.record("gone", [asking], ClientOrigin(session_id="c7a78c2f"))
+        recorder.record_reply("gone", asking, "an answer")
 
-        assert _client(service, monitor, transcripts=recorder).get("/api/sessions/gone/transcript").status_code == 404
-        assert recorder.get("gone") is None
+        service.session_manager.close_session("gone")
+
+        assert (recorder.get("gone"), recorder.reply("gone"), recorder.origin("gone")) == (None, None, None)
+        assert client.get("/api/sessions/gone/transcript").status_code == 404
+
+    def test_closing_one_session_keeps_every_other_sessions_copy(self):
+        service, monitor = _engine()
+        recorder = TranscriptRecorder()
+        _client(service, monitor, transcripts=recorder)
+        for session_id in ("gone", "kept"):
+            service.session_manager.get_or_create(session_id)
+            recorder.record(session_id, [Message(role="user", content=session_id, turn_index=0)])
+
+        service.session_manager.close_session("gone")
+
+        assert recorder.get("gone") is None and recorder.get("kept") is not None
 
 
 def test_the_page_sets_children_only_through_its_helper():

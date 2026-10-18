@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 
 from llm_gc.config.constants import DEFAULT_MAX_SESSIONS, DEFAULT_SESSION_SWEEP_INTERVAL_S, DEFAULT_SESSION_TIMEOUT_S
+from llm_gc.events import Event, EventBus, EventType
 from llm_gc.models.generation_snapshot import GenerationSnapshot
 from llm_gc.session.session_state import SessionState
 from llm_gc.session.session_store import SessionStore
@@ -17,6 +18,9 @@ class SessionManager:
     There is no per-session lock. Session data lives in an immutable snapshot that
     writers replace in one synchronous step, so a reader can never see a partial
     update and never has to wait for a writer. See doc/design/session/overview.md.
+
+    Each close is announced on `event_bus` as `SESSION_CLOSED`, so a component that
+    keeps its own copy of a session's data can drop it with the session.
     """
 
     def __init__(
@@ -25,6 +29,7 @@ class SessionManager:
         session_timeout_s: float = DEFAULT_SESSION_TIMEOUT_S,
         sweep_interval_s: float = DEFAULT_SESSION_SWEEP_INTERVAL_S,
         max_sessions: int = DEFAULT_MAX_SESSIONS,
+        event_bus: EventBus | None = None,
     ) -> None:
         if max_sessions < 1:
             raise ValueError(f"max_sessions must be at least 1, got {max_sessions}")
@@ -32,6 +37,7 @@ class SessionManager:
         self._session_timeout_s = session_timeout_s
         self._sweep_interval_s = sweep_interval_s
         self._max_sessions = max_sessions
+        self._event_bus = event_bus
         # Chain hash of each session's last recorded turn -> session id, so a
         # request can be matched to the conversation it continues by content.
         self._sessions_by_tip: dict[str, str] = {}
@@ -110,11 +116,14 @@ class SessionManager:
                         extra={"session_id": state.session_id, "max_sessions": self._max_sessions})
 
     def close_session(self, session_id: str) -> None:
-        """Drop a session and all of its data. A second close is a no-op."""
-        self._store.remove(session_id)
+        """Drop a session and all of its data, and announce it. A second close is a no-op."""
+        closed = self._store.remove(session_id)
         stale = self._tip_of.pop(session_id, None)
         if stale is not None and self._sessions_by_tip.get(stale) == session_id:
             del self._sessions_by_tip[stale]
+        # Announced once the session is gone, so a listener never finds it still held.
+        if closed is not None and self._event_bus is not None:
+            self._event_bus.emit(Event(event_type=EventType.SESSION_CLOSED, data={"session_id": session_id}))
 
     def sweep_once(self, now: datetime | None = None) -> list[str]:
         """Close every session idle longer than `session_timeout_s`; return their ids.
