@@ -10,7 +10,7 @@ LLM-GC sits between your app and the provider and manages the conversation the w
 
 ![The dashboard for one of the decision-survival check's scripted conversations: what the model remembers, what it has forgotten, and whether you should worry](doc/images/dashboard-summary.png)
 
-> **Status: work in progress.** What is left before the first release is in [ROADMAP.md](ROADMAP.md).
+> **Status: work in progress.** What is left before the first version is in [ROADMAP.md](ROADMAP.md).
 
 To run it with Claude Code, follow [Get started](#get-started): five steps, about ten minutes.
 
@@ -387,6 +387,8 @@ async def on_turn(session_id: str, text: str, role: str, index: int) -> list[Mes
     await service.gc_update(session_id, turn)     # record the turn, then run a pass
     return await service.gc_collect(session_id)   # what to send: the recap, then recent turns
 ```
+
+This is the same engine the proxy runs, and the example above runs in the test suite with a stand-in for the model. Real conversations have so far gone through the proxy only.
 
 The names `llm_gc` exports are its public API. Anything imported from a subpackage, such as `llm_gc.engine`, is internal and may change in any release.
 
