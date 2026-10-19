@@ -49,7 +49,7 @@ The session manager announces `session_closed` once a closed session's data is g
 
 ### What a payload carries
 
-**Turn numbers, counts, ids and named values, never words.** A payload may say which turns moved, how many tokens a summary saved, what kind of fact was filed and who stated it. It never carries a string the user, the assistant, or a model reading them wrote: no turn text, no summary, and no fact's value or topic. A topic is a few words taken from the conversation ("the wedding venue"), so it is the conversation too.
+**Turn numbers, counts, ids and named values, never words.** A payload may say which turns moved, how many tokens a summary saved, what kind of fact was filed and who stated it. It never carries a string the user, the assistant, or a model reading them wrote: no turn text, no summary, and no fact's value or topic. A topic is a few words taken from the conversation ("the wedding venue"), so it is the conversation too. This is held by a test, not by review: a conversation whose words are in every turn, reply, summary and fact runs through the proxy until every kind of event a collection emits has fired, including a fact replaced and a collection falling short, and no event may hold those words.
 
 A consumer that needs the words reads them from the session, which owns them. The event tells it which turns changed; the dashboard, for one, shows turns and facts from the session's state, not from events. This is the claim-check pattern: the message carries a reference, and the content stays with its owner.
 

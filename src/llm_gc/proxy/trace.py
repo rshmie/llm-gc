@@ -21,7 +21,18 @@ from llm_gc.llm.metering import ModelUsage
 from llm_gc.proxy.request_log import RequestRecord
 
 RowKind = Literal[
-    "turn", "tool_round", "report", "notice", "reply", "task", "retry", "replaced", "pending", "unclaimed", "closing"
+    "turn",
+    "tool_round",
+    "report",
+    "notice",
+    "reply",
+    "task",
+    "retry",
+    "interrupted",
+    "replaced",
+    "pending",
+    "unclaimed",
+    "closing",
 ]
 # What a request was, by its newest message, when that is not a message the person typed.
 _FROM_NEWEST: dict[str, RowKind] = {
@@ -158,7 +169,7 @@ def _kinds(records: Sequence[RequestRecord], closing: set[RequestRecord]) -> dic
             seen.add(key)
         kind: RowKind
         if record.kept is False:
-            kind = "replaced"
+            kind = "interrupted" if _interrupted(record) else "replaced"
         elif record.newest != "typed":
             kind = _FROM_NEWEST[record.newest]
         elif _agent(record) is not None and (record.conversation_id is not None or record.spawned_by is not None):
@@ -173,6 +184,17 @@ def _kinds(records: Sequence[RequestRecord], closing: set[RequestRecord]) -> dic
             kind = "turn"
         kinds[record] = kind
     return kinds
+
+
+def _interrupted(record: RequestRecord) -> bool:
+    """Whether a replaced request was the conversation's own tool round, its reply stopped by the person.
+
+    When the person interrupts a reply to tool results and types, Claude Code sends the
+    same results again in their place, with its mark of the interruption and the person's
+    words, so the request it abandoned is replaced. No side request carries tool results
+    as its newest message, and a reply that reached its end was not interrupted.
+    """
+    return record.newest == "tool_results" and (record.outline is None or not record.outline.finished)
 
 
 def _contested(records: Sequence[RequestRecord]) -> set[RequestRecord]:

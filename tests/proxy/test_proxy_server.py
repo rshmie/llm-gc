@@ -21,7 +21,8 @@ from llm_gc.config import GCConfig
 from llm_gc.engine.switch_policy import CacheState, SwitchReason
 from llm_gc.engine import build_gc_service
 from llm_gc.engine.generations.front import FRONT_HEADER
-from llm_gc.events import EventBus, EventType
+from llm_gc.events import Event, EventBus, EventType
+from llm_gc.extraction import PatternFactReader
 from llm_gc.llm import FakeProvider, LLMResponse, StopReason
 from llm_gc.models import ClientOrigin
 from llm_gc.cli.logs import RequestIdFilter
@@ -588,6 +589,77 @@ class TestItNeverLeaksCredentials:
         state = service.session_manager.store.get("s")
         assert state is not None
         assert API_KEY not in repr(state)
+
+
+class TestEventsCarryNoConversationText:
+    """Events are a public contract a subscriber may log or export, so they name turns and counts,
+    never what was said. Checked against everything a collection touches: the person's words, the
+    replies, the summaries written of them and the facts read from them."""
+
+    # In every turn, every reply, every summary and every fact; the value changes halfway.
+    WORDS = "kumquat-orbit"
+    FILLER = " We went over the storage layer, retention and the migration order again."
+
+    def _converse(self, *, window: int, filler: int):
+        summary = SUMMARY.model_copy(update={"text": f"They set the codename to {self.WORDS}-4417 and kept it."})
+        summariser = FakeProvider(responses=[summary] * 200)
+        service = build_gc_service(
+            GCConfig(
+                context_window=window,
+                keep_threshold=0.55,
+                archive_threshold=0.25,
+                last_n_messages_to_keep=2,
+                min_cut_tokens=30,
+            ),
+            summary_provider=summariser,
+            fact_reader=PatternFactReader(),
+        )
+        heard: list[Event] = []
+        for event_type in EventType:
+            service.event_bus.subscribe(event_type, heard.append)
+        reply = f"Noted: the codename is {self.WORDS}-4417, and the rollout waits for it."
+        client, _, _, _ = _proxy(
+            lambda request: httpx2.Response(200, json={**UPSTREAM_OK, "content": [{"type": "text", "text": reply}]}),
+            gc_service=service,
+        )
+        history: list[dict] = []
+        for i in range(10):
+            value = f"{self.WORDS}-4417" if i < 5 else f"{self.WORDS}-5523"
+            history.append(
+                {"role": "user", "content": f"The codename is {value}. Question {i}." + self.FILLER * filler}
+            )
+            _post(client, {"model": "m", "max_tokens": 64, "messages": history}, headers={SESSION_HEADER: "s"})
+            history.append({"role": "assistant", "content": reply})
+        asked = " ".join(message.content for call in summariser.calls for message in call.messages)
+        return heard, asked
+
+    @pytest.mark.parametrize(
+        ("window", "filler", "kinds"),
+        [
+            # Room for spans to be summarised and archived, and for a fact to be replaced.
+            (
+                600,
+                3,
+                {
+                    EventType.GC_FINISHED,
+                    EventType.MESSAGE_COMPACTED,
+                    EventType.MESSAGE_PROMOTED_TO_OLD_GEN,
+                    EventType.MESSAGE_ARCHIVED,
+                    EventType.KNOWLEDGE_ENTRY_ADDED,
+                    EventType.KNOWLEDGE_ENTRY_SUPERSEDED,
+                },
+            ),
+            # Too small a window: collections fall short and say why.
+            (200, 0, {EventType.GC_FINISHED, EventType.AGING_DEGRADED}),
+        ],
+    )
+    def test_no_event_holds_the_conversations_words(self, window, filler, kinds):
+        heard, asked = self._converse(window=window, filler=filler)
+
+        # Without these the last check would pass on a run that announced nothing, or saw no words.
+        assert kinds <= {event.event_type for event in heard}
+        assert self.WORDS in asked, "the summariser was given the words"
+        assert [event.event_type.value for event in heard if self.WORDS in event.model_dump_json()] == []
 
 
 class TestEachAnswerIsLogged:

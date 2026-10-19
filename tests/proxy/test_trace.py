@@ -45,6 +45,7 @@ class _Session:
         forwarded=100,
         request_id=None,
         rewritten=None,
+        cut_short=False,
     ):
         record = self.log.begin(
             conversation_id=conversation,
@@ -63,7 +64,7 @@ class _Session:
             record,
             ReplyOutline(
                 status=status,
-                finished=status == 200,
+                finished=status == 200 and not cut_short,
                 stop_reason="tool_use" if calls else "end_turn",
                 usage=ProviderUsage(
                     replies=1, cache_read_input_tokens=sent, cache_creation_input_tokens=sent, output_tokens=10
@@ -113,6 +114,33 @@ def test_a_live_runs_requests_become_turns_and_the_subagents_each_turn_started()
     assert _kinds(first_turn["subagents"][0]["requests"]) == ["task", "tool_round"]
     assert first_turn["totals"]["requests"] == 8, "the turn costs its own requests and its subagents'"
     assert _kinds(second_turn["requests"]) == ["turn"] and second_turn["subagents"] == []
+
+
+def test_a_tool_round_the_person_interrupted_is_shown_in_its_turn_not_as_a_side_request():
+    """Live run: the person pressed Esc during a reply to tool results and typed. Claude Code sent
+    the results again in the same place, with its mark and their words, which replaced the request."""
+    s = _Session()
+    s.send("s_1", "a", calls=("toolu_0",))
+    s.send("s_1", "abc", newest="tool_results", cut_short=True)  # the reply stopped by Esc
+    s.send("s_1", "abC")  # the same results, Claude Code's mark and the person's words
+    s.send("s_1", "abCde")  # carried on, which settles the stopped request as replaced
+
+    first_turn, second_turn, _ = s.trace()["turns"]
+    assert _kinds(first_turn["requests"]) == ["turn", "interrupted"]
+    assert _kinds(second_turn["requests"]) == ["turn"]
+
+
+def test_a_replaced_request_is_interrupted_only_if_it_answered_tool_results_and_was_cut_short():
+    """A side request is never the conversation's own tool round, and a reply that reached its end
+    was not interrupted, whatever replaced it later."""
+    s = _Session()
+    s.send("s_1", "a")
+    s.send("s_1", "abX", cut_short=True)  # a suggestion the client stopped waiting for
+    s.send("s_1", "abY", newest="tool_results")  # a tool round later rewritten, its reply whole
+    s.send("s_1", "abZ")
+    s.send("s_1", "abZde")
+
+    assert _kinds(s.trace()["turns"][0]["requests"]) == ["turn", "replaced", "replaced"]
 
 
 def test_a_retry_is_shown_as_one_and_does_not_start_a_turn():

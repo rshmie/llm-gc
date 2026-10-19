@@ -162,7 +162,7 @@ function requestLine(row, window, depth) {
       ` ✕ ${row.status} refused as LLM-GC rewrote it`)
     : failed ? h("span", { class: "st critical" }, ` ✕ ${row.status} ${STATUS_WORDS[row.status] || "refused"}`)
     : row.ended_at === null ? h("span", { class: "secondary" }, " … running")
-    : !row.finished ? h("span", { class: "st warn", ...hoverTip("Cut short", "The reply did not reach its end: the client stopped reading, or the connection dropped.") }, " cut short") : null;
+    : !row.finished && row.kind !== "interrupted" ? h("span", { class: "st warn", ...hoverTip("Cut short", "The reply did not reach its end: the client stopped reading, or the connection dropped.") }, " cut short") : null;
   const kept = row.tokens_from_client - row.tokens_forwarded;
   return h("div", { class: `wf-row kind-${row.kind}${depth ? " nested" : ""}`, role: "row" },
     h("span", { class: "wf-label", role: "cell" },

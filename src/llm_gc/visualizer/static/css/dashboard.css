@@ -792,7 +792,7 @@ button.bar-chip:hover { color: var(--ink); }
 .wf-bar.kind-turn { background: var(--fid-verbatim); }
 .wf-bar.kind-tool_round, .wf-bar.kind-task { background: var(--fid-kept); }
 .wf-bar.kind-report, .wf-bar.kind-notice { background: var(--fid-compacted); }
-.wf-bar.kind-retry, .wf-bar.kind-pending, .wf-bar.kind-reply, .wf-bar.kind-closing { background: var(--fid-archived); }
+.wf-bar.kind-retry, .wf-bar.kind-interrupted, .wf-bar.kind-pending, .wf-bar.kind-reply, .wf-bar.kind-closing { background: var(--fid-archived); }
 .wf-bar.kind-replaced, .wf-bar.kind-unclaimed { background: var(--written); }
 .wf-bar.agent { background: repeating-linear-gradient(135deg, var(--fid-compacted) 0 6px, var(--fid-kept) 6px 12px); }
 .wf-bar.running { box-shadow: 0 0 0 2px var(--accent-wash); }

@@ -132,6 +132,7 @@ export const TRACE_KINDS = {
   reply: ["Continuation", "A request whose newest message is the assistant's own: a continued or prefilled reply."],
   task: ["Task", "A subagent's first request: the task the spawning call gave it, inside the context Claude Code adds."],
   retry: ["Retry", "The same request again: the one before it failed or was abandoned. It does not begin a new turn."],
+  interrupted: ["Interrupted", "You stopped the reply to these tool results. Claude Code then sent your next message in their place, with the same results and its note that you interrupted, so this reply never reached the conversation. It was sent and billed all the same."],
   replaced: ["Side request", "A request the conversation never continued, such as Claude Code asking for a suggested next message. It costs tokens; nothing in it reaches the conversation."],
   pending: ["Pending", "A message whose place another request took. Until the conversation carries one of them on, neither is known to be kept."],
   unclaimed: ["Not part of a conversation", "A request no conversation has continued: a title, a quota check, or a conversation's first message that nothing has followed yet."],

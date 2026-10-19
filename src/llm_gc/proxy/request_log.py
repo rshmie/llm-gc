@@ -5,7 +5,7 @@ belongs to, what kind its newest message is, the tokens it carried and the reply
 outline. Its newest message is identified by the conversation's chain hash through
 it, so a later request of the same conversation settles whether it was kept - the
 conversation carried on from it - or replaced: a side request, a regenerated reply,
-an abandoned branch.
+a reply the person interrupted, an abandoned branch.
 """
 
 from collections import OrderedDict, deque
