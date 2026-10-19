@@ -369,6 +369,7 @@ Point the client at LLM-GC and change nothing else. The client's own credential 
 
 ```python
 import anthropic
+
 client = anthropic.Anthropic(base_url="http://127.0.0.1:9900")
 ```
 
@@ -379,13 +380,16 @@ client = anthropic.Anthropic(base_url="http://127.0.0.1:9900")
 ```python
 from llm_gc import AnthropicClient, GCConfig, Message, build_gc_service
 
-service = build_gc_service(GCConfig(context_window=200_000),
-                           summary_provider=AnthropicClient(api_key="sk-ant-..."))
+service = build_gc_service(
+    GCConfig(context_window=200_000),
+    summary_provider=AnthropicClient(api_key="sk-ant-..."),
+)
+
 
 async def on_turn(session_id: str, text: str, role: str, index: int) -> list[Message]:
-    turn = Message(role=role, content=text, turn_index=index)   # index: 0, 1, 2, ... in order
-    await service.gc_update(session_id, turn)     # record the turn, then run a pass
-    return await service.gc_collect(session_id)   # what to send: the recap, then recent turns
+    turn = Message(role=role, content=text, turn_index=index)  # index: 0, 1, 2, ... in order
+    await service.gc_update(session_id, turn)  # record the turn, then run a pass
+    return await service.gc_collect(session_id)  # what to send: the recap, then recent turns
 ```
 
 This is the same engine the proxy runs, and the example above runs in the test suite with a stand-in for the model. Real conversations have so far gone through the proxy only.
@@ -482,7 +486,7 @@ Savings will be judged against **cached-token pricing**, not raw token counts: r
 
 ### The problem
 
-Two things go wrong in a long conversation, and only one of them is about money.
+Two things go wrong in a long conversation, and only one of them is about cost.
 
 **Context loss.** The decision from turn 5 is still technically present at turn 50, as one short message inside 100K tokens of less relevant material. Liu et al. (2023), [*Lost in the Middle*](https://arxiv.org/abs/2307.03172), showed that information buried in the middle of a long context is recalled less reliably than information at either end, so a decision can be *in* the window and still not be used. The naive fix makes it worse: in an early profiling of 7 of the author's own Claude Code sessions, a sliding window that kept the last 10 turns lost **7.6 of 8 early decisions**.
 

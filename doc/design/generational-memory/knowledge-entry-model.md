@@ -38,13 +38,13 @@ All are stored identically. The `KnowledgeType` enum differentiates their semant
 ```python
 @dataclass(frozen=True)
 class KnowledgeEntry:
-    message_turn: int              # which turn this was read from
-    content: str                  # the knowledge itself (includes reasoning if relevant)
-    topic_label: str              # grouping key for contradiction detection
-    knowledge_type: KnowledgeType # FACT, DECISION, or PREFERENCE
+    message_turn: int  # which turn this was read from
+    content: str  # the knowledge itself (includes reasoning if relevant)
+    topic_label: str  # grouping key for contradiction detection
+    knowledge_type: KnowledgeType  # FACT, DECISION, or PREFERENCE
     knowledge_status: KnowledgeStatus = KnowledgeStatus.ACTIVE
     created_at: datetime = field(default_factory=datetime.now)
-    speaker: Literal["user", "assistant"] | None = None   # who stated it
+    speaker: Literal["user", "assistant"] | None = None  # who stated it
 ```
 
 ### Why `frozen=True`?

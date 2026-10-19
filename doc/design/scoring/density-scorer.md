@@ -93,10 +93,10 @@ The contrast is exactly what we want — the first keeps its detail longer, the 
 
 ```python
 signals = {
-    "signal_count": 6,          # Number of regex pattern matches
-    "token_counts": 12,         # Total tokens in the message
-    "density_ratio": 0.5,       # signal_count / token_counts
-    "density_score": 1.0        # Final normalized score
+    "signal_count": 6,  # Number of regex pattern matches
+    "token_counts": 12,  # Total tokens in the message
+    "density_ratio": 0.5,  # signal_count / token_counts
+    "density_score": 1.0,  # Final normalized score
 }
 ```
 

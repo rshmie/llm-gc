@@ -114,8 +114,8 @@ Importance alone tops out at 0.4, under the keep line (0.7): stating a decision 
 
 ```python
 signals = {
-    "decision_signal_count": 3,    # Number of decision phrases matched
-    "decision_score": 1.0          # Final normalized score
+    "decision_signal_count": 3,  # Number of decision phrases matched
+    "decision_score": 1.0,  # Final normalized score
 }
 ```
 

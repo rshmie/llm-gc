@@ -45,6 +45,11 @@ pythonpath = ["."]
 [tool.ruff]
 line-length = 120
 
+[tool.ruff.lint]
+# The rules are named here, not left to Ruff's defaults, so a Ruff upgrade never changes what the
+# project enforces. These four groups are the defaults Ruff had before 0.16; adopt more on purpose.
+select = ["E4", "E7", "E9", "F"]
+
 [project.optional-dependencies]
 # Everything the `llm-gc` command needs: the proxy, the dashboard and the settings. Same ranges rule
 # as above. Only the packages under cli/, proxy/, visualizer/ and web/ import these.
