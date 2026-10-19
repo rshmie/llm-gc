@@ -47,7 +47,7 @@ Most passes find too little to collect and change nothing. Once enough older tur
 
 1. **Group.** The turns that have aged out of the newest messages become **spans**, one per exchange: a user's message and everything up to their next one.
 2. **Score.** Every span, new and old, is scored by how much it matters *now*: recent, or about what the user is discussing, lifted by the decisions and specifics it states.
-3. **Plan.** Each span gets a **detail level** from its score: quoted whole, summarised, or archived to its opening line and facts.
+3. **Plan.** Each span gets a **detail level** from its score, within a limit on the recap's size: quoted whole, summarised, or archived to its opening line and facts.
 4. **Condense.** Each new span is summarised, one model call each, and further calls read the facts its turns settled and file them under the topic they change.
 
 The model then receives one **recap** of every span at its level, followed by the newest messages exactly as sent:
@@ -525,7 +525,7 @@ A runtime garbage collector is **sound**: an object is either reachable from the
 Relevance is not decidable. The root set for a conversation is the *next question*, and it hasn't been asked yet. A turn that looks dead at turn 10 can be the most important thing in the conversation at turn 12. Every relevance decision is a bet against a future that doesn't exist yet. Three things follow:
 
 - **Cleanup cannot be silent.** A system that makes unverifiable decisions about what the model sees, and hides them from the person handed the answer, has replaced one opaque actor with two. Transparency is the only honest way to ship an operation that can't be proven correct.
-- **Removal has to be recoverable.** Nothing is deleted: every span keeps its original turns, so a span the conversation returns to is shown in more detail again, and its decisions survive as facts whatever its level. A wrong bet costs fidelity for a while, not knowledge.
+- **Removal has to be recoverable.** Nothing is deleted: every span keeps its original turns, so when the conversation returns to a span, a later collection shows it in more detail again. Its decisions are kept as facts, which the recap lists beside every summarised or archived span. A wrong bet costs fidelity for a while, not knowledge.
 - **Conservatism is calibration, not timidity.** Keeping an unneeded turn costs a bounded number of tokens. Removing a needed one costs an unpredictable amount and stays invisible until it surfaces as a wrong answer.
 
 The full reasoning, and the principles the project holds itself to, are in the [overview](doc/overview.md).
