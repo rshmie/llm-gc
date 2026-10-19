@@ -26,7 +26,6 @@ Decide these before building, because a published number cannot be quietly redef
 
 Then build:
 
-- [ ] **Rerun the decision-survival check** on a clean commit of the current code ([how to run it](evals/decision_survival/README.md)).
 - [ ] **A benchmark harness** that runs conversations through the proxy with and without LLM-GC (`--compactor noop` is the baseline) and records each run.
 - [ ] **Savings counted as the provider bills**, including what LLM-GC's own summary and fact calls cost. A smaller prompt can cost more when its start changes, and LLM-GC's own calls can cost more than the cache reads they save.
 - [ ] **Quality by counterfactual replay:** ask the same question against the full conversation and against LLM-GC's version, and compare the answers.
@@ -73,7 +72,7 @@ Then build:
 
 **Learned models.** Each is trained and judged on data the benchmark produces, so none can start before it, and each replaces today's method only if it beats it there:
 
-- **Our own summary and fact model**, only if no open model passes the decision-survival check.
+- **Our own summary and fact model with no cost**, only if no open model passes the decision-survival check.
 - **A learned relevance scorer.** Today 40% of a span's score comes from counting decision phrases and specifics with patterns. It needs a labelled set of what a person would keep, condense and archive.
 - **A hallucination-risk predictor, evaluated first.** It ships only if it can be grounded in real, labelled grounding failures. Otherwise the separate signals stay, and the negative result is written up.
 - **A summary-quality evaluator** that scores each summary directly.

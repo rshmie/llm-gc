@@ -8,11 +8,23 @@ LLM-GC sits between your app and the provider and manages the conversation the w
 
 **And it never does this silently:** a live dashboard shows, for every turn, exactly what the model still receives, so you can see when its grounding has gone.
 
-To run it with Claude Code, follow [Get started](#get-started): five steps, about ten minutes.
+![The dashboard for one of the decision-survival check's scripted conversations: what the model remembers, what it has forgotten, and whether you should worry](doc/images/dashboard-summary.png)
 
 > **Status: work in progress.** What is left before the first release is in [ROADMAP.md](ROADMAP.md).
 
-**Contents:** [How it works](#how-it-works) · [What the dashboard shows](#what-the-dashboard-shows) · [Get started](#get-started) · [Other ways to run it](#other-ways-to-run-it) · [Configuration](#configuration) · [Results so far](#results-so-far) · [Why it is built this way](#why-it-is-built-this-way) · [Developing](#developing-llm-gc) · [Documentation](#documentation)
+To run it with Claude Code, follow [Get started](#get-started): five steps, about ten minutes.
+
+**Contents**
+
+- [How it works](#how-it-works)
+- [What the dashboard shows](#what-the-dashboard-shows)
+- [Get started](#get-started)
+- [Other ways to run it](#other-ways-to-run-it)
+- [Configuration](#configuration)
+- [Results so far](#results-so-far)
+- [Why it is built this way](#why-it-is-built-this-way)
+- [Developing LLM-GC](#developing-llm-gc)
+- [Documentation](#documentation)
 
 ## How it works
 
@@ -63,6 +75,8 @@ Context is held in three generations, as in a generational garbage collector:
 | **Old** | Older exchanges as spans, each keeping its original turns and shown at a detail level | Java's tenured generation |
 | **Permanent** | Facts read from every span, and what later replaced them; never discarded | Java's permanent generation |
 
+![The Engine tab's three generations for a scripted conversation: 8 recent messages sent as written, 11 exchanges in the recap, and 11 current facts](doc/images/dashboard-generations.png)
+
 Every span in the old generation is shown at one of four levels, and each level shows everything the one below it shows:
 
 ```
@@ -85,6 +99,8 @@ A model has no reliable sense of when its grounding has gone weak, so it cannot 
 - **Conversation** opens with three answers: what the model remembers, what it has forgotten, and whether you should worry. Below them: every fact the model is told, with who stated it, the message it came from, how it reaches the model and what replaced it; a map of the whole conversation by how much of each message the model has; and every exchange beside exactly what the model reads for it.
 - **Requests** traces a Claude Code session turn by turn, with what each request cost by the provider's own count.
 - **Engine** shows LLM-GC at work: the three generations, how each exchange scores against the level lines, every check and collection, anything a collection could not do and what the model got instead, and what the next collection is waiting for.
+
+![Every fact the model is told, split by who stated it, with a decision the user later replaced: Elasticsearch, then OpenSearch](doc/images/dashboard-facts.png)
 
 Hover any ⓘ for a short meaning, and click it, or **?**, for the full explanation. **Run GC now** makes a collection for the selected conversation at once.
 
@@ -523,6 +539,10 @@ The check runs its own engine and proxy in-process, so neither needs `llm-gc sta
 - [Roadmap](ROADMAP.md): what is left before the first release.
 
 About the project: [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), [SECURITY.md](SECURITY.md) (how to report a vulnerability, privately) and [CHANGELOG.md](CHANGELOG.md).
+
+## AI Assistance
+
+This project is developed with assistance from AI coding tools such as [Claude Code](https://claude.com/claude-code). AI-generated changes are reviewed, verified and tested before every commit. Every design decision is recorded with the alternatives that were rejected, in [`doc/design/`](doc/design/).
 
 ## License
 

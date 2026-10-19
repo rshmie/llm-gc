@@ -53,6 +53,7 @@ LLM-GC is a library (`llm_gc`) and an application built on it.
 - **No conversation text and no credentials in logs or events.** Conversation text is the user's data. Log counts, ids and names.
 - **Plain comments.** A comment or docstring is a full sentence that says what the code does and why. Longer reasoning belongs in the design doc.
 - **Names and constants.** Functions are named verb-first, and a number or string with a meaning is a named constant with a comment.
+- **You understand every line.** AI coding tools are welcome. What they write must be tested and verified, and you must be able to understand it and justify every decision behind it.
 
 ## Commit messages and pull requests
 
