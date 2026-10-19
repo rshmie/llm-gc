@@ -61,12 +61,12 @@ You need [uv](https://docs.astral.sh/uv/getting-started/installation/) (`brew in
 ```bash
 git clone https://github.com/rshmie/llm-gc.git
 cd llm-gc
-uv sync --extra proxy        # creates .venv and installs LLM-GC into it, with the web server it runs on
-source .venv/bin/activate    # puts the llm-gc command on this terminal's PATH
-llm-gc --version             # prints its version: the install worked
+uv sync --extra proxy --no-dev   # creates .venv and installs LLM-GC into it, with the web server it runs on
+source .venv/bin/activate        # puts the llm-gc command on this terminal's PATH
+llm-gc --version                 # prints its version: the install worked
 ```
 
-`--extra proxy` adds the web server, the dashboard and the settings loader. They are optional so that a program using LLM-GC only as a library does not install them. A plain `uv sync` leaves them out, and `llm-gc` then tells you what is missing.
+`--extra proxy` adds the web server, the dashboard and the settings loader. They are optional so that a program using LLM-GC only as a library does not install them; without them, `llm-gc` tells you what is missing. `--no-dev` leaves out the tools for working on LLM-GC itself.
 
 Every new terminal needs `source .venv/bin/activate`, run in the LLM-GC folder, before `llm-gc` works.
 
@@ -576,7 +576,7 @@ Two others were considered and rejected, for different reasons:
 ## Developing LLM-GC
 
 ```bash
-uv sync --extra dev   # adds the proxy extra, pytest, ruff, mypy, hypothesis, pre-commit, pip-audit and the Anthropic SDK; a plain `uv sync` removes them
+uv sync               # LLM-GC with the proxy extra, plus pytest, ruff, mypy, hypothesis, pre-commit, pip-audit and the Anthropic SDK
 pytest                # the test suite: no network, no key
 ruff check .          # lint
 ruff format --check . # formatting: `ruff format .` fixes it

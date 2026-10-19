@@ -42,14 +42,14 @@ jobs:
           version: "0.11.28"
           python-version: "3.13"
 
-      # pip-audit comes from the dev extra, so its version is pinned by the lockfile and bumped
+      # pip-audit comes from the dev group, so its version is pinned by the lockfile and bumped
       # by Dependabot like every other tool.
       - name: Install dependencies
-        run: uv sync --locked --extra dev
+        run: uv sync --locked
 
       # What a user of the proxy installs: the library and the proxy extra, not the test tools.
       - name: List the locked packages a user installs
-        run: uv export --locked --no-emit-project --extra proxy --no-hashes --format requirements-txt --output-file requirements.txt
+        run: uv export --locked --no-emit-project --extra proxy --no-dev --no-hashes --format requirements-txt --output-file requirements.txt
 
       # --no-deps because the list is already complete; pip-audit must audit these exact
       # versions and not resolve its own.

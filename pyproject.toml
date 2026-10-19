@@ -54,7 +54,11 @@ proxy = [
     "pydantic-settings>=2.15.0,<3",
     "click>=8.4.2,<9",
 ]
-# Only for working on LLM-GC. The tests start the proxy and the dashboard, so dev includes proxy.
+
+[dependency-groups]
+# Only for working on LLM-GC. A group, not an extra: `uv sync` and `uv run` install it unless given
+# --no-dev, and it is never published, so `pip install llm-gc[...]` cannot pull it in. The tests start
+# the proxy and the dashboard, so dev includes proxy.
 dev = [
     "llm-gc[proxy]",
     "pytest",

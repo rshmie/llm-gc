@@ -694,19 +694,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-dev = [
-    { name = "anthropic" },
-    { name = "click" },
-    { name = "fastapi" },
-    { name = "hypothesis" },
-    { name = "mypy" },
-    { name = "pip-audit" },
-    { name = "pre-commit" },
-    { name = "pydantic-settings" },
-    { name = "pytest" },
-    { name = "ruff" },
-    { name = "uvicorn" },
-]
 proxy = [
     { name = "click" },
     { name = "fastapi" },
@@ -714,25 +701,41 @@ proxy = [
     { name = "uvicorn" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "anthropic" },
+    { name = "hypothesis" },
+    { name = "llm-gc", extra = ["proxy"] },
+    { name = "mypy" },
+    { name = "pip-audit" },
+    { name = "pre-commit" },
+    { name = "pytest" },
+    { name = "ruff" },
+]
+
 [package.metadata]
 requires-dist = [
-    { name = "anthropic", marker = "extra == 'dev'", specifier = ">=1,<2" },
     { name = "click", marker = "extra == 'proxy'", specifier = ">=8.4.2,<9" },
     { name = "fastapi", marker = "extra == 'proxy'", specifier = ">=0.139.0,<1" },
     { name = "httpx2", specifier = ">=2.12.0,<3" },
-    { name = "hypothesis", marker = "extra == 'dev'" },
-    { name = "llm-gc", extras = ["proxy"], marker = "extra == 'dev'" },
-    { name = "mypy", marker = "extra == 'dev'" },
-    { name = "pip-audit", marker = "extra == 'dev'" },
-    { name = "pre-commit", marker = "extra == 'dev'" },
     { name = "pydantic", specifier = ">=2.13.4,<3" },
     { name = "pydantic-settings", marker = "extra == 'proxy'", specifier = ">=2.15.0,<3" },
-    { name = "pytest", marker = "extra == 'dev'" },
-    { name = "ruff", marker = "extra == 'dev'" },
     { name = "tiktoken", specifier = ">=0.13.0,<1" },
     { name = "uvicorn", marker = "extra == 'proxy'", specifier = ">=0.51.0,<1" },
 ]
-provides-extras = ["proxy", "dev"]
+provides-extras = ["proxy"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "anthropic", specifier = ">=1,<2" },
+    { name = "hypothesis" },
+    { name = "llm-gc", extras = ["proxy"] },
+    { name = "mypy" },
+    { name = "pip-audit" },
+    { name = "pre-commit" },
+    { name = "pytest" },
+    { name = "ruff" },
+]
 
 [[package]]
 name = "markdown-it-py"

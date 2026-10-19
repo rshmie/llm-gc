@@ -15,7 +15,7 @@ You need [uv](https://docs.astral.sh/uv/getting-started/installation/). It insta
 ```bash
 git clone https://github.com/rshmie/llm-gc.git
 cd llm-gc
-uv sync --extra dev        # LLM-GC, the proxy extra and the development tools
+uv sync                    # LLM-GC, the proxy extra and the development tools
 source .venv/bin/activate
 pre-commit install         # runs Ruff on each commit
 ```
