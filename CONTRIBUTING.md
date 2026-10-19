@@ -57,7 +57,7 @@ LLM-GC is a library (`llm_gc`) and an application built on it.
 
 ## Commit messages and pull requests
 
-Start the subject with what kind of change it is: `fix:`, `feat:`, `refactor:`, `docs:`, `ci:` or `style:`, then say in plain words what is different afterwards. The body is a short paragraph on why the change was needed, then a list of the behaviours that changed. Do not list files. The diff already does.
+Start the subject with what kind of change it is: `fix:`, `feat:`, `refactor:`, `docs:`, `ci:` or `style:` [commit-convention](https://www.conventionalcommits.org/en/v1.0.0/), then say in plain words what is different afterwards. The body is a short paragraph on why the change was needed, then a list of the behaviours that changed. Do not list files. The diff already does.
 
 Keep a formatting-only change in a commit of its own. Its hash is added to `.git-blame-ignore-revs`, which GitHub reads, so `git blame` skips it. To skip it locally too, run `git config blame.ignoreRevsFile .git-blame-ignore-revs`.
 
