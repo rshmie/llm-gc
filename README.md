@@ -583,7 +583,10 @@ ruff format --check . # formatting: `ruff format .` fixes it
 mypy                  # type-check the library
 pre-commit install    # run Ruff on each commit
 python -m evals.decision_survival.run --rehearse   # the decision-survival check, offline
+python -m evals.decision_survival.run              # the same check, live: needs ANTHROPIC_API_KEY, about five minutes
 ```
+
+The check runs its own engine and proxy in-process, so neither needs `llm-gc start`; its [README](evals/decision_survival/README.md) says what each way costs and how to read the numbers.
 
 [CONTRIBUTING.md](CONTRIBUTING.md) has the rest: how the code is organised, what a change needs, and how to write the commit message.
 

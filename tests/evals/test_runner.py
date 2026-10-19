@@ -59,6 +59,20 @@ class TestARehearsedRun:
         assert len(calls) == 2  # once through LLM-GC, once sent whole
         assert all(messages[-1]["content"].startswith("Answer each question") for messages in calls)
 
+    def test_both_arms_ask_the_same_upstream_whatever_the_shell_points_at(self, monkeypatch):
+        """Pointed at an LLM-GC proxy, the control arm would be condensed too, and compare LLM-GC with itself."""
+        monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:9900")
+        hosts = []
+        answer = rehearsal_answer(CONVERSATION)
+
+        def recording(request: httpx2.Request) -> httpx2.Response:
+            hosts.append(request.url.host)
+            return answer(request)
+
+        _run(model_transport=lambda: httpx2.MockTransport(recording))
+
+        assert hosts == ["api.anthropic.com", "api.anthropic.com"]
+
     def test_it_cuts_and_sends_the_model_less_than_the_whole_conversation(self):
         run = _run()
 

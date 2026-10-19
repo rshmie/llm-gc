@@ -24,6 +24,7 @@ from llm_gc.events import Event, EventType
 from llm_gc.llm import FakeProvider, LLMProvider, LLMResponse, StopReason
 from llm_gc.models import Message
 from llm_gc.proxy import SESSION_HEADER, create_app
+from llm_gc.proxy.server import ANTHROPIC_UPSTREAM
 from llm_gc.utils import count_tokens
 
 # Room for the model's thinking as well as one short line per question.
@@ -95,6 +96,7 @@ async def run_conversation(
     upstream_client = httpx2.AsyncClient(transport=upstream)
     app = create_app(
         service,
+        upstream_base_url=ANTHROPIC_UPSTREAM,
         http_client=upstream_client,
         schedule=lambda work: aging.append(_start(work)),
         on_client_history=on_client_history,
@@ -105,7 +107,13 @@ async def run_conversation(
         default_headers={SESSION_HEADER: conversation.id},
         http_client=DefaultAsyncHttpxClient(transport=httpx2.ASGITransport(app=app)),
     )
-    direct = AsyncAnthropic(api_key=api_key, http_client=DefaultAsyncHttpxClient(transport=model_transport()))
+    # Named, not left to the SDK: it would follow ANTHROPIC_BASE_URL from the shell, and pointed at an
+    # LLM-GC proxy the control would be condensed too, comparing LLM-GC with itself.
+    direct = AsyncAnthropic(
+        api_key=api_key,
+        base_url=ANTHROPIC_UPSTREAM,
+        http_client=DefaultAsyncHttpxClient(transport=model_transport()),
+    )
 
     turns = [_message(turn.role, turn.text) for turn in conversation.turns]
     try:

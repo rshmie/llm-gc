@@ -81,16 +81,29 @@ And each probe records **where its answer was in the prompt LLM-GC sent**: `verb
 
 ## Running it
 
+There are two ways to run it: offline, which checks the path at no cost, and live, whose numbers are the only ones that count as evidence. Neither needs `llm-gc start`. The check builds its own engine and its own proxy inside its process, so a proxy you already have running is never touched.
+
+**Offline (a rehearsal): no key, no network, no cost.**
+
 ```
-python -m evals.decision_survival.run --rehearse    # offline: no key, no cost
-ANTHROPIC_API_KEY=... python -m evals.decision_survival.run
+uv run python -m evals.decision_survival.run --rehearse
 ```
 
 `--rehearse` replaces every model with an offline stand-in: summaries that state nothing, and a "model" that answers right exactly when the answer is in what it was sent. It checks the whole path and shows what survives *without* summaries. It says nothing about a real model, and its numbers are never evidence.
 
-A live run asks the questions with `claude-sonnet-5-5` at effort `medium` (change them with `--model`, `--effort`; keep them fixed across runs you compare), and summarises with LLM-GC's own compactor model. The engine settings that tuning changes are flags, `--min-cut-tokens` (300) and `--keep-last` (5), so two runs differ only in what is being tuned. A full run takes about five minutes; its cost is mostly the long conversations, each about 50,000 tokens when sent whole, plus the summary calls at their collections.
+**Live: an Anthropic API key, about five minutes.**
 
-Add `--dashboard` to watch the run on its own dashboard, at http://127.0.0.1:9911, separate from the proxy's. Each conversation is a session; the page stays open after the report, so you can see where each question's answer ended up: kept, compacted, archived, or out of view.
+```
+export ANTHROPIC_API_KEY=...    # in your own terminal; never paste a key anywhere else
+uv run python -m evals.decision_survival.run
+```
+
+- **Every call goes straight to Anthropic's API with that key**: the questions through LLM-GC, the same questions with the whole conversation, and LLM-GC's own summary and fact calls. `ANTHROPIC_BASE_URL` is ignored, so a shell pointed at a running LLM-GC proxy or at a gateway changes nothing. It also means the key must be one Anthropic's API accepts; a gateway's own token is refused.
+- **Commit first.** The results file records the commit it measured, marked `-dirty` when uncommitted changes were part of it, and only a run of a clean commit should be cited.
+- The questions are asked with `claude-sonnet-5-5` at effort `medium` (change them with `--model` and `--effort`, and keep them the same across runs you compare), and LLM-GC summarises with its own compactor model. The engine settings that tuning changes are flags, `--min-cut-tokens` (300) and `--keep-last` (5), so two runs differ only in what is being tuned.
+- Its cost is mostly the long conversations, each about 50,000 tokens when sent whole, plus the summary calls at their collections.
+
+**Either way, `--dashboard` lets you watch the run** on its own dashboard at http://127.0.0.1:9911, separate from the proxy's. Each conversation is a session; the page stays open after the report until Ctrl-C, so you can see where each question's answer ended up: kept, compacted, archived, or out of view.
 
 Every run writes a results file to `runs/` (not committed): settings, the commit measured (marked `-dirty` when uncommitted changes were part of it), each verdict and its answer, both replies, and the prompt LLM-GC sent.
 
