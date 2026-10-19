@@ -7,6 +7,7 @@ Start with **[overview.md](overview.md)** — what the problem is, why cleanup d
 | Question | Doc |
 |---|---|
 | What is this, and why does it exist? | [overview.md](overview.md) |
+| What does a word mean? | [glossary.md](glossary.md) |
 | How does one area work, and why is it shaped that way? | the matching doc under [`design/`](design/) |
 | How do I install and use it? | the project [README](../README.md) |
 | What does LLM-GC keep of my conversations, and how do I delete it? | [data.md](data.md) |

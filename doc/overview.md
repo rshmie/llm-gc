@@ -2,11 +2,11 @@
 
 In a long conversation with an LLM, every request resends the whole history. By turn 50, the decision made at turn 5 ("we'll use Postgres") is one short message under tens of thousands of tokens of old tool output and settled debate. The model may no longer use it reliably, nothing tells you so, and you pay to resend all of it on every call.
 
-LLM-GC sits between an application and the model provider and manages that history the way a garbage collector manages memory. Recent turns are sent exactly as written. Older exchanges are condensed — quoted whole, summarised, or archived to a one-line record with their facts — by how much each matters to what is being discussed now. Nothing is deleted: a condensed exchange is shown in more detail again when the conversation returns to it, and every decision is filed with whatever later replaced it. **And none of it is silent:** the developer can see, for every turn, what the model still receives.
+LLM-GC sits between an application and the model provider and manages that history the way a garbage collector manages memory. Recent turns are sent exactly as written. Older exchanges are condensed — quoted whole, summarised, or archived to a one-line record with their facts — by how much each matters to what is being discussed now. Nothing is deleted: when the conversation returns to a condensed exchange, a later collection shows it in more detail again, and every decision is filed with whatever later replaced it. **And none of it is silent:** the developer can see, for every turn, what the model still receives.
 
 Fewer tokens are a byproduct. The design optimizes for what the model keeps, not for how much is removed.
 
-This document is the conceptual entry point: the mental model the rest of the docs assume. For installation, usage and measured results, see the project [README](../README.md).
+This document is the conceptual entry point: the mental model the rest of the docs assume. Its main terms are defined, one line each, in the [glossary](glossary.md). For installation, usage and measured results, see the project [README](../README.md).
 
 ---
 
@@ -18,7 +18,7 @@ In a long conversation the context window fills with material that no longer ser
 2. **Nobody can see it happening.** The model answers in the same confident tone whether its context is clean or mostly noise. Nothing says "the ground under this answer has gone"; the first signal is usually a wrong answer.
 3. **Every request pays for all of it.** The stale material is resent, and billed, on every call.
 
-Existing approaches each address part of this. Larger context windows push the problem further out. A provider's own compaction makes what is sent smaller. Model routing makes each request cheaper. All are real and useful; none puts the cleanup policy in the developer's hands, and none shows the developer what has happened to the context.
+Existing approaches each address part of this. Larger context windows push the problem further out. A provider's own compaction makes what is sent smaller. Model routing makes each request cheaper. All are real and useful. Some let the developer choose when cleanup runs or what it keeps, but none shows, turn by turn, what the model still has of each part of the conversation.
 
 LLM-GC is built for that missing part: a layer of context management between the application and the provider that the developer can control and inspect.
 
@@ -28,7 +28,7 @@ LLM-GC is built for that missing part: a layer of context management between the
 
 The motivation is **epistemic transparency**. A model has no reliable sense of what it does and does not know, so it cannot be relied on to say when its grounding has gone weak. A person can make that judgement — whether to trust an answer, restate a decision, or start afresh — but only with the data to make it from.
 
-So visibility is not a feature added to a context manager. The condensing serves it as much as it saves tokens: a context that is managed deliberately is one that can be described honestly. The savings come for free.
+So visibility is not a feature added to a context manager. The condensing serves it as much as it saves tokens: a context that is managed deliberately is one that can be described honestly. Savings follow, but not for free. Changing the start of the prompt makes the provider cache it again, which is why a collection is switched in only when that is cheap or needed. LLM-GC's own model calls are spent earlier, while the collection is prepared, whether or not it is ever switched in. A saving is real only once both are counted.
 
 That gives the developer three commitments:
 
@@ -60,7 +60,7 @@ The same conversation at turn 50, without and with LLM-GC:
    t45 t46 t47 t48 t49 t50   ← exactly as the client sent them
 ```
 
-Each entry in the recap is one exchange — a **span** — shown at the detail level its score earns. Recent, or under discussion now: quoted exactly. Gone quiet: summarised, or archived to its opening line and facts. Levels are chosen again at every collection, so if the user returns to the log investigation, it is shown in full again, from its own words. The dashboard shows the developer the same picture, turn by turn.
+Each entry in the recap is one exchange — a **span** — shown at the detail level its score earns. Recent, or under discussion now: quoted exactly. Gone quiet: summarised, or archived to its opening line and facts. Levels are chosen again at every collection, so once the user returns to the log investigation, a later collection shows it in more detail again, from its own words. The dashboard shows the developer the same picture, turn by turn.
 
 ---
 
@@ -74,7 +74,7 @@ Relevance is not decidable. The root set for a conversation is the *next questio
 
 Three consequences follow, and they run through the whole design:
 
-**Cleanup cannot be silent.** A system that makes unsound, unverifiable decisions about what the model is allowed to see — and hides those decisions from the person who will be handed the resulting answer — has replaced one opaque actor with two. Transparency here is a feature chosen as one of the honest way to ship an operation that cannot be proven correct.
+**Cleanup cannot be silent.** A system that makes unsound, unverifiable decisions about what the model is allowed to see — and hides those decisions from the person who will be handed the resulting answer — has replaced one opaque actor with two. Transparency is the honest way to ship an operation that cannot be proven correct.
 
 **Condensing has to be recoverable, not final.** Because a bet can be wrong, nothing is deleted. A turn leaving the young generation lands in a span that keeps it whole, shown with less detail while the conversation is elsewhere and with more when it returns, and the decisions inside it survive as extracted facts. A wrong bet then costs fidelity for a while rather than knowledge.
 
@@ -92,7 +92,7 @@ These are the invariants the project commits to. They guide every architectural 
 
 2. **Conservative by default.** The system condenses what has gone quiet and keeps detail for what is being discussed, and nothing it condenses is deleted. The asymmetry is intentional: a span shown in more detail than needed costs a few extra tokens; one condensed too far risks a wrong answer. The first cost is small and bounded; the second is unpredictable.
 
-3. **Never make things worse.** If the system fails, times out, or encounters an unexpected condition, the application must still work as if the system were not present. The user experience is never degraded below the baseline of "no LLM-GC at all."
+3. **Never make things worse.** If the system fails, times out, or encounters an unexpected condition, the application must still work as if the system were not present. The user experience is never degraded below the baseline of "no LLM-GC at all." The one exception is LLM-GC not running: a client pointed at a stopped proxy has nothing to connect to.
 
 4. **The human exercises judgment; the system provides data.** This is the *epistemic transparency* commitment from the previous section, expressed as an operating rule. Given that AI models cannot reliably tell the user when their grounding is weak, LLM-GC's job is not to make that judgment for the user. It is to surface what is happening to the context — span scores, detail levels, what the model still sees and what it no longer does — so the human can decide when to trust the output.
 
@@ -110,7 +110,9 @@ The system has five major parts. This section gives the conceptual map; each par
  │ client │ ────────► │ PROXY                                │ ────────► │ provider │
  │        │ ◄──────── │ 1 find the conversation's session    │ ◄──────── │ (model)  │
  └────────┘   reply   │ 2 record the turns it has not seen   │   reply   └──────────┘
-                      │ 3 send [recap] + recent turns        │
+                      │ 3 switch a prepared collection in,   │
+                      │   if now is cheap or needed          │
+                      │ 4 send [recap] + recent turns        │
                       └───────┬──────────────────▲───────────┘
                               │ after the reply  │ reads the current snapshot
  ═════════════════════════════╪══════════════════╪═══════════════════════════════════
@@ -121,20 +123,20 @@ The system has five major parts. This section gives the conceptual map; each par
  │  draft spans                (grouping)  │   │ old        spans, each at a level  │
  │  score, plan levels  (scorer, planner)  │   │ permanent  facts, and what         │
  │  read facts, summarise   (model calls)  │   │            replaced them           │
- │  commit ────────────────────────────────┼──►│                                    │
+ │  stage it ──────────────────────────────┼──►│ staged     a prepared collection   │
  └───────────────┬─────────────────────────┘   └────────────────────────────────────┘
-                 │ events, after the commit
+                 │ events, after each pass and each switch
                  ▼
-   EVENT BUS ──► HEALTH MONITOR ──► DASHBOARD ◄── reads the session too, never writes
+   EVENT BUS ──► HEALTH MONITOR ──► DASHBOARD ◄── reads the session too
 ```
 
-The double line is the rule the design is built around: **nothing above it waits for anything below it.** A request reads whatever snapshot is current and is forwarded at once; a collection, with its model calls, runs after the reply and commits a new snapshot when it is done. The next request simply finds it there.
+The double line is the rule the design is built around: **nothing above it waits for anything below it.** A collection, with its model calls, is prepared after the reply and staged in the session. A later request switches it in when that is cheap or needed: when the provider's cache has expired anyway, when the saving repays caching the prompt again, when the model carries too much that has gone quiet, or when the developer asks. Switching in is one step with no model call, so the request is still forwarded at once. Until then, requests keep the current snapshot, so the start of the prompt does not change and the provider's cache stays valid.
 
 **The Engine** is where context-management decisions happen. When older turns have aged out of the recent tail, the engine groups them into spans, one per exchange, scores every span by how much it matters now, plans each span's detail level, and builds the recap the model receives. The measure of relevance, the importance scorers and the compactor are each pluggable — an embedding relevance, a different summariser — and can be swapped without changing how the engine is called.
 
 **Generational Memory** is where context lives across the lifecycle of a conversation. Recent turns sit in the *young generation* in full detail. As they age past their useful window, they move to the *old generation* as **spans** — one exchange each: something the user said, and the replies to it. A span keeps its turns and is shown at a detail level re-decided at every collection: quoted whole, summarised, or archived to an opening line and its facts. The facts read from every span, and what later replaced them, form the *permanent generation*, which is not discarded as the conversation grows. This separation lets the system apply different rules to context in different stages of its life.
 
-**The Events Bus** is the cross-cutting channel every component publishes to. When a collection makes a span, lowers one to less detail, or files a fact that replaces an older one — each emits a structured event. The events bus is what makes the system observable. The visibility layer below consumes it today; a logger, the benchmarks and post-session analysis are planned consumers of the same stream.
+**The Event Bus** is the cross-cutting channel every component publishes to. When a collection makes a span, lowers one to less detail, or files a fact that replaces an older one — each emits a structured event. The event bus is what makes the system observable. The visibility layer below, the proxy's count of collections and the decision-survival check read it today; a logger and post-session reports are planned.
 
 **The Visibility Layer** is where the human gets what they need to judge. It is the *Health Monitor*, which follows each conversation continuously, not only when a collection runs, and the *dashboard* (the Visualizer), which shows that state live. Post-session reports are planned. Without this layer the system would manage context invisibly, which would miss the point entirely.
 
@@ -145,7 +147,7 @@ The layer answers two different questions, for two different readers, and keepin
 
 Both are served from the same data; the difference is which question a surface is built to answer. A view reporting level counts and generation sizes is describing the collector. A view reporting *"the decision you made at turn 5 is no longer in verbatim context — it survives as its exchange's opening line and an extracted fact"* is describing the conversation. The second is what the developer acts on, so it leads. The first stays one level down, for when something needs explaining. The dashboard is built the same way: one view for the conversation, which opens first, and one for LLM-GC at work.
 
-**The Proxy** is how the system is most often used in practice. It sits as a small HTTP server between an application (such as Claude Code) and an LLM provider. It intercepts each request, sends the provider the session's current recap in place of the turns it condenses, and lets the engine collect after the reply. The proxy is intentionally thin: it contains no GC logic of its own, only the glue that connects the engine to a real conversation flow.
+**The Proxy** is how the system is most often used in practice. It sits as an HTTP server between an application (such as Claude Code) and an LLM provider. It intercepts each request, sends the provider the session's current recap in place of the turns it condenses, and lets the engine collect after the reply. It makes no GC decisions of its own: what to condense, and when to switch a collection in, are the engine's. Meeting real traffic is still most of the work. The proxy finds which conversation each request belongs to, translates the provider's format into the engine's turns and back, reads the provider's cache state from each reply for the engine's switch decision, counts what each request sends the way the provider bills it, and sends a request as the client wrote it if the provider refuses LLM-GC's version.
 
 Session state has its own design doc. Persistent storage and embedding relevance are planned, and their docs describe where they will plug in.
 
@@ -153,7 +155,7 @@ Session state has its own design doc. Persistent storage and embedding relevance
 
 ## Where to look next
 
-Every doc under `design/` is a living description of one area, and each carries a **Why this shape** section: the rationale, and the credible alternatives that were rejected. Read those to understand *why* the system is built the way it is, not just what it does.
+Every doc under `design/` is a living description of one area, and each carries a **Why this shape** section: the rationale, and the credible alternatives that were rejected. Read those to understand *why* the system is built the way it is, not just what it does. The [glossary](glossary.md) defines each term in one line and links to the doc that explains it.
 
 **The engine**
 
@@ -164,9 +166,10 @@ Every doc under `design/` is a living description of one area, and each carries 
 **Memory and state**
 
 - **[design/generational-memory/overview.md](design/generational-memory/overview.md)** — the young / old / permanent generations, spans, and supersession.
-- **[design/generational-memory/the-cut.md](design/generational-memory/the-cut.md)** — a collection: when one happens, and why it is the one moment the conversation the model receives is changed.
+- **[design/generational-memory/the-cut.md](design/generational-memory/the-cut.md)** — a collection: what it changes, and why it is the one moment the conversation the model receives is changed.
+- **[design/generational-memory/when-to-collect.md](design/generational-memory/when-to-collect.md)** — when a collection is prepared, and when it is switched in so that the provider's cache is not thrown away for nothing.
 - **[design/session/overview.md](design/session/overview.md)** — how one conversation's state persists across turns, and the concurrency contract that protects it.
-- **[design/storage.md](design/storage.md)** — how persisted records survive an upgrade of the system that wrote them.
+- **[design/storage.md](design/storage.md)** — not built yet: how stored records will survive an upgrade, once sessions outlive a restart.
 
 **Meeting real traffic**
 

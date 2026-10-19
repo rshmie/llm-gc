@@ -4,7 +4,7 @@
 
 If you've spent 50+ turns in a Claude Code session, you've probably watched the model start forgetting things: the database you agreed on, the approach you picked, the thing you said *not* to do. It's all still in the conversation, buried under 130K tokens of old file reads, stale command output and settled debates. Every request re-sends all of it, so you pay for the noise on every call, and the model answers in the same confident tone whether the decision is still in view or not.
 
-LLM-GC sits between your app and the provider and manages the conversation the way a generational garbage collector manages memory. Recent turns stay word for word. Each older exchange is quoted whole, summarised, or archived to its opening line and the facts it established, depending on how much it matters now, and it gets its detail back when the conversation returns to it. Nothing is deleted. The next request carries one compact recap instead of the whole history.
+LLM-GC sits between your app and the provider and manages the conversation the way a generational garbage collector manages memory. Recent turns stay word for word. Each older exchange is quoted whole, summarised, or archived to its opening line and the facts it established, depending on how much it matters now. Nothing is deleted: when the conversation returns to an exchange, a later collection gives it its detail back. Each request carries one compact recap of the older exchanges instead of the whole history.
 
 **And it never does this silently:** a live dashboard shows, for every turn, exactly what the model still receives, so you can see when its grounding has gone.
 
@@ -27,6 +27,8 @@ To run it with Claude Code, follow [Get started](#get-started): five steps, abou
 - [Documentation](#documentation)
 
 ## How it works
+
+*The words LLM-GC uses for its parts, such as span, recap and collection, are each defined in one line in the [glossary](doc/glossary.md).*
 
 LLM-GC runs as a proxy in front of the model's API. It forwards every request at once, with the conversation as it is currently condensed. The condensing itself happens after the reply, in the background, so no request ever waits for it:
 
@@ -88,7 +90,13 @@ Every span in the old generation is shown at one of four levels, and each level 
  out of view   [Out of view]     one line for a run of the oldest spans   ▼ fewer tokens
 ```
 
-**The score decides the level, and one budget caps the total.** A span scoring 0.7 or more is kept, 0.3 or more summarised, and below that archived. Levels are decided again at every collection, so a span the conversation returns to rises again, from its own words. The recap may spend 30% of the model's window; over that, the coldest spans lose detail first. **Out of view** is only the floor under that budget: when even one archived line per exchange no longer fits, around two thousand exchanges at the default budget, the oldest are folded behind one line saying they exist, and each still keeps its words. When a later turn replaces a decision ("we moved from Google Cloud to AWS"), the older span carries a note saying so, so the model does not read the old decision as current.
+**The score decides the level, and one budget caps the total:**
+
+- A span scoring 0.7 or more is kept, 0.3 or more summarised, and below that archived.
+- Levels are decided again at every collection, so a span the conversation returns to rises again, from its own words.
+- The recap may spend 30% of the model's window. Over that, the coldest spans lose detail first.
+- **Out of view** is only the floor under that budget. When even one archived line per exchange no longer fits (around two thousand exchanges at the default budget), the oldest are folded behind one line saying they exist. Each still keeps its words.
+- When a later turn replaces a decision ("we moved from Google Cloud to AWS"), the older span carries a note saying so, so the model does not read the old decision as current.
 
 How the pieces fit together, with every component on the request path and in the background, is in the [architecture overview](doc/overview.md#how-the-system-is-structured).
 
@@ -97,7 +105,7 @@ How the pieces fit together, with every component on the request path and in the
 A model has no reliable sense of when its grounding has gone weak, so it cannot be relied on to say so. A person can judge whether to trust an answer, but only with the data to judge from. The dashboard is that data, live, for each conversation:
 
 - **Conversation** opens with three answers: what the model remembers, what it has forgotten, and whether you should worry. Below them: every fact the model is told, with who stated it, the message it came from, how it reaches the model and what replaced it; a map of the whole conversation by how much of each message the model has; and every exchange beside exactly what the model reads for it.
-- **Requests** traces a Claude Code session turn by turn, with what each request cost by the provider's own count.
+- **Requests** traces a Claude Code session turn by turn, with the tokens the provider counted for each request.
 - **Engine** shows LLM-GC at work: the three generations, how each exchange scores against the level lines, every check and collection, anything a collection could not do and what the model got instead, and what the next collection is waiting for.
 
 ![Every fact the model is told, split by who stated it, with a decision the user later replaced: Elasticsearch, then OpenSearch](doc/images/dashboard-facts.png)
@@ -446,14 +454,16 @@ A file you asked for in 1 or 2 that doesn't exist is an error, not a silent fall
 | `GCConfig` | Flag | Default | What it decides |
 |---|---|---|---|
 | `min_cut_tokens` | `--min-cut-tokens` | 1000 | tokens of older turns to summarise or archive before a collection is prepared |
-| `min_saving_share` | | 1.0 | with the provider's cache warm, how many times what switching a collection in makes it cache again the collection must save; 0 switches it in as soon as it saves anything |
-| `max_stale_ratio` | | 0.1 | share of the window the model may carry that a prepared collection would condense; at it, the collection is switched in whatever the cache costs. The window is converted to LLM-GC's count first, at the rate the conversation's replies measure |
+| `min_saving_share` | | 1.0 | when the provider's cache is warm, a collection is switched in only if the tokens it saves are at least this many times the tokens the provider must cache again; 0 switches it in as soon as it saves anything |
+| `max_stale_ratio` | | 0.1 | once what a prepared collection would condense reaches this share of the window, it is switched in whatever the cache costs |
 | `last_n_messages_to_keep` | `--keep-last` | 5 | newest messages always sent word for word |
 | `context_window` | `--context-window` | 128,000 (proxy: 200,000) | the model's window; the recap budget is a share of it |
 | `keep_threshold` | | 0.7 | score at or above which a span is quoted whole |
 | `archive_threshold` | | 0.3 | score below which a span is archived; between the two, summarised |
 | `level_margin` | | 0.05 | how far past a line a score must move before a span changes level, so a score near a line does not flip it back and forth |
-| `max_recap_ratio` | | 0.3 | share of the window the recap may spend, the window converted to LLM-GC's count at the rate the conversation's replies measure; over it, the coldest spans lose detail, then the oldest fold out of view |
+| `max_recap_ratio` | | 0.3 | share of the window the recap may use; over it, the coldest spans lose detail first, then the oldest fold out of view |
+
+LLM-GC counts tokens with its own tokenizer, which differs from the provider's. So both ratios first convert the window into LLM-GC's count, at the rate measured from the conversation's own replies.
 
 The proxy's default window is 200,000, the smallest of the current models'. Raise it only if every model you proxy has a larger one: a window set too large lets a recap outgrow the model's, and requests fail.
 
@@ -480,7 +490,7 @@ Benchmarks on real sessions are not published yet; they will come with their dat
 
 Read it with its limits: one run, on scripted conversations, with `claude-sonnet-5-5` answering. Every exchange LLM-GC condensed in them was summarised, so the check covers one of the four detail levels. Its scripted turns report no cache use, so every collection was switched in as if the cache had expired, and the rules for a warm cache, which Claude Code meets, are not exercised. The [evidence file](evals/decision_survival/evidence/when-to-collect-2026-10-19.json) holds every answer, and the check's README lists the earlier runs and what each change won back.
 
-Savings will be judged against **cached-token pricing**, not raw token counts: rewriting the start of the prompt invalidates the provider's prompt cache, so a real reduction in tokens can still be an increase in cost. A savings number that ignores that isn't an honest number.
+Savings will be judged against **what the provider bills**, not raw token counts. Rewriting the start of the prompt makes the provider cache it again, and LLM-GC's own summary and fact calls cost tokens too, so a smaller prompt can still mean a bigger bill. A savings number that ignores either isn't an honest number.
 
 ## Why it is built this way
 
@@ -488,7 +498,7 @@ Savings will be judged against **cached-token pricing**, not raw token counts: r
 
 Two things go wrong in a long conversation, and only one of them is about cost.
 
-**Context loss.** The decision from turn 5 is still technically present at turn 50, as one short message inside 100K tokens of less relevant material. Liu et al. (2023), [*Lost in the Middle*](https://arxiv.org/abs/2307.03172), showed that information buried in the middle of a long context is recalled less reliably than information at either end, so a decision can be *in* the window and still not be used. The naive fix makes it worse: in an early profiling of 7 of the author's own Claude Code sessions, a sliding window that kept the last 10 turns lost **7.6 of 8 early decisions**.
+**Context loss.** The decision from turn 5 is still technically present at turn 50, as one short message inside 100K tokens of less relevant material. Liu et al. (2023), [*Lost in the Middle*](https://arxiv.org/abs/2307.03172), showed that information buried in the middle of a long context is recalled less reliably than information at either end, so a decision can be *in* the window and still not be used. The naive fix makes it worse: in an early profiling of 7 of the author's own Claude Code sessions, a sliding window that kept the last 10 turns lost **7.6 of 8 early decisions** on average.
 
 **Context waste.** The same sessions averaged 132,579 input tokens at their peak, re-sent on every call, and about 84% of that was stale: old file reads, command output, resolved debugging. *(That profiling predates this repository's benchmarks and its method is not published here, so treat these figures as motivation, not measurement.)*
 
@@ -540,6 +550,7 @@ The check runs its own engine and proxy in-process, so neither needs `llm-gc sta
 ## Documentation
 
 - [Overview](doc/overview.md): why the project exists, its principles, and the architecture diagram. Start here.
+- [Glossary](doc/glossary.md): every term the docs and the dashboard use, in one line each.
 - [Design docs](doc/README.md): one per area, each covering how it works, why it exists, and the alternatives that were rejected.
 - [Your data](doc/data.md): what LLM-GC keeps of your conversations, and how to delete it.
 - [Roadmap](ROADMAP.md): what is left before the first release.
