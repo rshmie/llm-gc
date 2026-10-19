@@ -23,9 +23,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Typing :: Typed",
 ]
-# What the library needs to run in someone else's program. Each floor is the version uv.lock tests;
-# each ceiling is below the next major, which may break us. The web server, the command line and
-# the settings loader are the "proxy" extra below.
+
 dependencies = [
     "pydantic>=2.13.4,<3",
     "tiktoken>=0.13.0,<1",
