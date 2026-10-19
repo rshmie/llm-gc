@@ -172,17 +172,49 @@ class LLMContextOverflowError(LLMError):
         self.limit_tokens = limit_tokens
 
 
+class LLMRequestRefusedError(LLMError):
+    """The provider refused the request without running it, for a reason no retry fixes.
+
+    A client error that the classes above do not name: an account out of credit or
+    past a spend limit, a model the account cannot use, a request the provider judged
+    invalid. Separate from `LLMResponseError` because nothing was generated, so
+    nothing was wrong with a response, and because the caller's options differ: the
+    same request will be refused until a person changes the account or the settings.
+
+    Attributes:
+        status_code: The HTTP status the provider refused with.
+        error_type: The provider's own machine-readable name for the error, such as
+            `"billing_error"`, when it gave one. Stable where the message is not, so
+            it is what a caller should branch on.
+    """
+
+    code = "LLM_REQUEST_REFUSED"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str | None = None,
+        status_code: int,
+        error_type: str | None = None,
+    ) -> None:
+        super().__init__(message, provider=provider)
+        self.status_code = status_code
+        self.error_type = error_type
+
+
 class LLMResponseError(LLMError):
     """The provider answered, but not with a usable completion.
 
-    Covers a failing status, a body that is not the expected JSON, a missing field,
-    and output failing validation — one category because the caller's options are
-    identical: retry or degrade visibly.
+    Covers a failing status that no other class names, a body that is not the
+    expected JSON, a missing field, and output failing validation — one category
+    because the caller's options are identical: retry or degrade visibly.
 
     Attributes:
         status_code: The HTTP status, when the failure came from one.
-        retryable: Set per-instance, because this category spans both: 503 is worth
-            repeating and 400 never will be, and only the adapter saw the status.
+        retryable: Set per-instance, because this category spans both: a 503 or a
+            body cut short is worth repeating, an answer that failed validation is
+            not, and only the raise site saw which it was.
     """
 
     code = "LLM_BAD_RESPONSE"

@@ -10,6 +10,7 @@ from llm_gc.exceptions import (
     LLMError,
     LLMGCError,
     LLMRateLimitError,
+    LLMRequestRefusedError,
     LLMResponseError,
     LLMTimeoutError,
 )
@@ -48,7 +49,14 @@ class TestTheCatchAllContract:
         """`LLMError` is the useful middle rung: 'the model call failed' without
         caring how. Config problems are deliberately outside it — they are fixed
         by an operator, not by retrying or degrading."""
-        for cls in (LLMTimeoutError, LLMRateLimitError, LLMAuthError, LLMContextOverflowError, LLMResponseError):
+        for cls in (
+            LLMTimeoutError,
+            LLMRateLimitError,
+            LLMAuthError,
+            LLMContextOverflowError,
+            LLMRequestRefusedError,
+            LLMResponseError,
+        ):
             assert issubclass(cls, LLMError)
         assert not issubclass(ConfigError, LLMError)
 
@@ -92,6 +100,11 @@ class TestRetryability:
         """The same key will be rejected three more times. Retrying spends the
         budget to reach a certainty and delays the error an operator can act on."""
         assert LLMAuthError("bad key").retryable is False
+
+    def test_a_refused_request_is_never_retryable(self):
+        """The provider refused it before running it: an account out of credit is refused
+        again until someone adds credit."""
+        assert LLMRequestRefusedError("out of credit", status_code=400).retryable is False
 
     def test_context_overflow_is_not_retryable(self):
         """Repeating an identical oversized request cannot succeed. The caller's
@@ -154,6 +167,12 @@ class TestFailuresCarryTheirContext:
         err = LLMContextOverflowError("too long", requested_tokens=210_000, limit_tokens=200_000)
         assert err.requested_tokens == 210_000
         assert err.limit_tokens == 200_000
+
+    def test_a_refused_request_carries_the_status_and_the_providers_error_type(self):
+        """The type is the provider's stable name for the error, which a caller can branch on."""
+        err = LLMRequestRefusedError("out of credit", status_code=402, error_type="billing_error")
+        assert (err.status_code, err.error_type) == (402, "billing_error")
+        assert LLMRequestRefusedError("refused", status_code=404).error_type is None
 
     def test_response_error_carries_the_status_code(self):
         assert LLMResponseError("upstream 500", status_code=500).status_code == 500

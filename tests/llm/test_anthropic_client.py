@@ -10,11 +10,13 @@ from llm_gc.exceptions import (
     LLMConnectionError,
     LLMContextOverflowError,
     LLMRateLimitError,
+    LLMRequestRefusedError,
     LLMResponseError,
     LLMTimeoutError,
 )
 from llm_gc.llm import StopReason
 from llm_gc.llm.anthropic_client import ANTHROPIC_API_VERSION, AnthropicClient
+from llm_gc.llm.provider import MAX_QUOTED_ERROR_CHARS
 from llm_gc.models import Message
 
 # A minimal valid Messages API success envelope. Tests override the parts they care
@@ -316,12 +318,55 @@ class TestErrorMapping:
         """Substring matching is fragile, so it is kept narrow. Mislabelling a plain
         400 would send the compactor off splitting a run that was never too long."""
         body = {"type": "error", "error": {"message": "messages: unexpected role 'bot'"}}
-        with pytest.raises(LLMResponseError) as excinfo:
+        with pytest.raises(LLMRequestRefusedError) as excinfo:
             _call(_client(_respond(status=400, body=body)))
 
         assert not isinstance(excinfo.value, LLMContextOverflowError)
         assert excinfo.value.retryable is False
         assert excinfo.value.status_code == 400
+
+    @pytest.mark.parametrize(
+        ("status", "error_type"), [(400, "invalid_request_error"), (402, "billing_error"), (404, "not_found_error")]
+    )
+    def test_a_request_refused_before_it_ran_is_a_refusal_not_a_bad_response(self, status, error_type):
+        """The 10-19 live run: an account out of credit was reported as a bad response, though the
+        provider generated nothing. A refusal waits for a person; a bad response may be retried."""
+        body = {"type": "error", "error": {"type": error_type, "message": "Your credit balance is too low."}}
+        with pytest.raises(LLMRequestRefusedError) as excinfo:
+            _call(_client(_respond(status=status, body=body)))
+
+        refusal = excinfo.value
+        assert not isinstance(refusal, LLMResponseError)
+        assert (refusal.code, refusal.status_code, refusal.error_type) == ("LLM_REQUEST_REFUSED", status, error_type)
+        assert refusal.retryable is False
+        assert f"({status} {error_type}): Your credit balance is too low." in str(refusal)
+
+    def test_a_refusal_without_an_error_type_names_only_its_status(self):
+        body = {"type": "error", "error": {"message": "no such model"}}
+        with pytest.raises(LLMRequestRefusedError) as excinfo:
+            _call(_client(_respond(status=404, body=body)))
+
+        assert excinfo.value.error_type is None
+        assert "refused the request (404): no such model" in str(excinfo.value)
+
+    @pytest.mark.parametrize("status", [408, 409])
+    def test_a_client_error_worth_repeating_is_not_a_refusal(self, status):
+        """Checked before the refusal: a 409 taken for a refusal would pause LLM-GC's model
+        calls for ten minutes over a conflict the next attempt clears."""
+        body = {"type": "error", "error": {"type": "conflict_error", "message": "try again"}}
+        with pytest.raises(LLMResponseError) as excinfo:
+            _call(_client(_respond(status=status, body=body)))
+        assert excinfo.value.retryable is True
+
+    def test_a_long_provider_message_is_quoted_on_one_line_and_cut(self):
+        """The message reaches logs, events and the dashboard, whatever the provider sent."""
+        body = {"type": "error", "error": {"type": "invalid_request_error", "message": "too\nlow " * 100}}
+        with pytest.raises(LLMRequestRefusedError) as excinfo:
+            _call(_client(_respond(status=400, body=body)))
+
+        quote = str(excinfo.value).split(": ", 1)[1]
+        assert "\n" not in quote
+        assert quote.endswith("…") and len(quote) == MAX_QUOTED_ERROR_CHARS + 1
 
     @pytest.mark.parametrize("status", [500, 502, 503, 529])
     def test_server_errors_are_retryable(self, status):
@@ -332,7 +377,7 @@ class TestErrorMapping:
 
     def test_a_404_is_not_retryable(self):
         body = {"type": "error", "error": {"message": "model not found"}}
-        with pytest.raises(LLMResponseError) as excinfo:
+        with pytest.raises(LLMRequestRefusedError) as excinfo:
             _call(_client(_respond(status=404, body=body)))
         assert excinfo.value.retryable is False
 
@@ -352,7 +397,7 @@ class TestErrorMapping:
     def test_the_message_does_not_echo_the_prompt(self):
         """Exception strings reach logs, and conversation content is user data."""
         body = {"type": "error", "error": {"message": "bad request"}}
-        with pytest.raises(LLMResponseError) as excinfo:
+        with pytest.raises(LLMRequestRefusedError) as excinfo:
             _call(
                 _client(_respond(status=400, body=body)),
                 messages=[Message(role="user", content="my secret passphrase is hunter2")],
@@ -544,5 +589,5 @@ class TestCountTokens:
             400, json={"type": "error", "error": {"type": "invalid_request_error", "message": "url sources"}}
         )
 
-        with pytest.raises(LLMResponseError):
+        with pytest.raises(LLMRequestRefusedError):
             asyncio.run(_client(handler).count_tokens("claude-opus-5-5", [self.SCREENSHOT], timeout_s=5.0))

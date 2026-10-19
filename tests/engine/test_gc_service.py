@@ -17,7 +17,7 @@ from llm_gc.engine.gc_result import CutOutcome
 from llm_gc.engine.gc_status import GCStatus
 from llm_gc.engine.pause import ModelCallPause
 from llm_gc.events import EventBus, EventType
-from llm_gc.exceptions import ConfigError, LLMAuthError, LLMRateLimitError, LLMResponseError
+from llm_gc.exceptions import ConfigError, LLMAuthError, LLMRateLimitError, LLMRequestRefusedError, LLMResponseError
 from llm_gc.llm import FakeProvider
 from llm_gc.engine.switch_policy import CacheState
 from llm_gc.extraction import PatternFactReader
@@ -761,12 +761,14 @@ class TestLlmGcYieldsToTheUpstreamsRateLimit:
 
 
 # What the provider answered when the account LLM-GC summarises with ran out of credit.
-NO_CREDIT = LLMResponseError(
-    "anthropic returned 400: Your credit balance is too low to access the Anthropic API.",
+NO_CREDIT = LLMRequestRefusedError(
+    "anthropic refused the request (400 invalid_request_error): Your credit balance is too low.",
     provider="anthropic",
     status_code=400,
-    retryable=False,
+    error_type="invalid_request_error",
 )
+# What OpenAI answers when the account's quota is spent: a 429 that no wait clears.
+SPENT_QUOTA = LLMRateLimitError("openai rate limited us (429): You exceeded your current quota.", retryable=False)
 
 
 class _Refusing:
@@ -800,7 +802,9 @@ class TestLlmGcPausesWhenItsOwnCallsCannotSucceed:
         )
         return service
 
-    @pytest.mark.parametrize("error", [NO_CREDIT, LLMAuthError("anthropic rejected our credentials (401)")])
+    @pytest.mark.parametrize(
+        "error", [NO_CREDIT, SPENT_QUOTA, LLMAuthError("anthropic rejected our credentials (401)")]
+    )
     def test_every_call_failing_for_a_lasting_reason_pauses_collection_and_says_why(self, error):
         service = self._service(error, error)
 
@@ -809,6 +813,15 @@ class TestLlmGcPausesWhenItsOwnCallsCannotSucceed:
         pause = service.model_calls.current()
         assert pause is not None and pause.lasting and str(error) in pause.reason
         assert results[-1].status is GCStatus.BYPASSED_PAUSED, "no more calls that would fail the same way"
+
+    def test_a_refused_request_is_reported_as_refused_not_as_a_bad_response(self):
+        """The 10-19 live run: the dashboard's API labelled an account out of credit a bad response."""
+        service = self._service(NO_CREDIT, NO_CREDIT)
+
+        results = _converse(service, 4)
+
+        codes = {d.error_code for result in results for d in result.degradations}
+        assert codes == {"LLM_REQUEST_REFUSED"}
 
     def test_a_pass_in_which_a_call_worked_does_not_pause(self):
         service = self._service(NO_CREDIT, None)

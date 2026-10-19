@@ -26,7 +26,13 @@ from llm_gc.engine.inspection import CutPreview, SessionInspection, SwitchPrevie
 from llm_gc.events import Event, EventBus, EventType
 from llm_gc.engine.pause import MAX_PAUSE, ModelCallPause
 from llm_gc.engine.switch_policy import CacheState, SwitchReason, decide_switch
-from llm_gc.exceptions import CompactionRefused, LLMAuthError, LLMGCError, LLMRateLimitError, LLMResponseError
+from llm_gc.exceptions import (
+    CompactionRefused,
+    LLMAuthError,
+    LLMGCError,
+    LLMRateLimitError,
+    LLMRequestRefusedError,
+)
 from llm_gc.llm.metering import measure_model_usage
 from llm_gc.models import KnowledgeEntry, Message
 from llm_gc.models.knowledge_entry import KnowledgeStatus
@@ -1042,9 +1048,9 @@ class GcService:
 def _failure_needing_a_person(condensed: Sequence[Condensed]) -> LLMGCError | None:
     """The error every model call of a pass failed with, when only a person can fix it; None otherwise.
 
-    That is a refused key, or a request refused for a reason other than its rate or its size,
-    such as an account out of credit. A pass in which any call worked, or any failure was
-    one that retrying can fix, returns None.
+    That is a refused key, a refused request such as an account out of credit, or a rate
+    limit the provider says will not lift, such as a spent quota. A pass in which any call
+    worked, or any failure was one that retrying can fix, returns None.
     """
     errors = [error for draft in condensed for error in (draft.summary_error, draft.facts_error) if error is not None]
     worked = any(draft.summary is not None or draft.facts_error is None for draft in condensed)
@@ -1055,10 +1061,9 @@ def _failure_needing_a_person(condensed: Sequence[Condensed]) -> LLMGCError | No
 
 
 def _needs_a_person(error: Exception) -> bool:
-    if isinstance(error, LLMAuthError):
-        return True
-    status = error.status_code if isinstance(error, LLMResponseError) else None
-    return isinstance(error, LLMResponseError) and not error.retryable and status is not None and 400 <= status < 500
+    if isinstance(error, LLMRateLimitError):
+        return not error.retryable
+    return isinstance(error, (LLMAuthError, LLMRequestRefusedError))
 
 
 def _in_order(messages: Sequence[Message]) -> list[Message]:

@@ -12,6 +12,7 @@ the response envelope, the stop-reason vocabulary, and the error taxonomy.
 
 import logging
 import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Self
 from urllib.parse import quote
 
@@ -24,10 +25,11 @@ from llm_gc.exceptions import (
     LLMConnectionError,
     LLMContextOverflowError,
     LLMRateLimitError,
+    LLMRequestRefusedError,
     LLMResponseError,
     LLMTimeoutError,
 )
-from llm_gc.llm.provider import LLMProvider, LLMResponse, StopReason, validate_generate_request
+from llm_gc.llm.provider import LLMProvider, LLMResponse, StopReason, quote_error_text, validate_generate_request
 from llm_gc.models import Message
 
 logger = logging.getLogger(__name__)
@@ -68,6 +70,14 @@ _OVERFLOW_MARKERS = ("prompt is too long", "exceeds the maximum", "context windo
 _OVERFLOW_NUMBERS = re.compile(r"(\d[\d,]*)\s*tokens?\D+(\d[\d,]*)")
 
 _RETRYABLE_STATUSES = frozenset({408, 409, 500, 502, 503, 504, 529})
+
+
+@dataclass(frozen=True)
+class _ErrorDetail:
+    """What an Anthropic error body says: its message, and its machine-readable type when it gives one."""
+
+    message: str
+    type: str | None
 
 
 class _Usage(BaseModel):
@@ -345,60 +355,74 @@ class AnthropicClient:
         nothing from the request is echoed back.
         """
         status = http_response.status_code
-        detail = self._error_message(http_response)
+        detail = self._error_detail(http_response)
 
         if status in (401, 403):
-            return LLMAuthError(f"anthropic rejected our credentials ({status}): {detail}", provider=self.name)
+            return LLMAuthError(f"anthropic rejected our credentials ({status}): {detail.message}", provider=self.name)
 
         if status == 429:
             return LLMRateLimitError(
-                f"anthropic rate limited us (429): {detail}",
+                f"anthropic rate limited us (429): {detail.message}",
                 provider=self.name,
                 retry_after_s=self._retry_after(http_response),
             )
 
-        if status == 400 and any(marker in detail.lower() for marker in _OVERFLOW_MARKERS):
-            requested, limit = self._overflow_numbers(detail)
+        if status == 400 and any(marker in detail.message.lower() for marker in _OVERFLOW_MARKERS):
+            requested, limit = self._overflow_numbers(detail.message)
             return LLMContextOverflowError(
-                f"anthropic refused the request as too long: {detail}",
+                f"anthropic refused the request as too long: {detail.message}",
                 provider=self.name,
                 requested_tokens=requested,
                 limit_tokens=limit,
             )
 
+        # Any other client error not worth repeating was refused before it ran, such as an
+        # account out of credit (a 400 or a 402). Nothing was generated, so it is not a bad response.
+        if 400 <= status < 500 and status not in _RETRYABLE_STATUSES:
+            named = f"{status} {detail.type}" if detail.type else str(status)
+            return LLMRequestRefusedError(
+                f"anthropic refused the request ({named}): {detail.message}",
+                provider=self.name,
+                status_code=status,
+                error_type=detail.type,
+            )
+
         return LLMResponseError(
-            f"anthropic returned {status}: {detail}",
+            f"anthropic returned {status}: {detail.message}",
             provider=self.name,
             status_code=status,
             # Only the adapter knows which statuses are worth repeating. A 503 is; a
-            # 400 never will be, and retrying it spends the budget on a certainty.
+            # 501 never will be, and retrying it spends the budget on a certainty.
             retryable=status in _RETRYABLE_STATUSES,
         )
 
     @staticmethod
-    def _error_message(http_response: httpx2.Response) -> str:
-        """Pull the human-readable detail out of an error body, defensively.
+    def _error_detail(http_response: httpx2.Response) -> _ErrorDetail:
+        """Pull the message and the error type out of an error body, defensively.
 
         An error response is the least reliable thing a provider sends — it can come
         from a load balancer as HTML, or be empty. Every failure here degrades to a
         short placeholder, because an exception raised while building an exception
-        loses the original status entirely.
+        loses the original status entirely. The message is a bounded quote.
         """
         try:
             body = http_response.json()
         except ValueError:
-            return http_response.text[:200] or "<empty body>"
+            return _ErrorDetail(message=quote_error_text(http_response.text) or "<empty body>", type=None)
 
         if isinstance(body, dict):
             error = body.get("error")
             if isinstance(error, dict):
-                # Bound to a local and narrowed here rather than indexed twice:
-                # `json()` is typed Any, so an isinstance check on the dict says
+                # Each value is bound to a local and narrowed here rather than indexed
+                # twice: `json()` is typed Any, so an isinstance check on the dict says
                 # nothing about the type of what comes out of it.
                 message = error.get("message")
-                if isinstance(message, str):
-                    return message
-        return str(body)[:200]
+                error_type = error.get("type")
+                return _ErrorDetail(
+                    message=quote_error_text(message if isinstance(message, str) else str(body)),
+                    type=error_type if isinstance(error_type, str) and error_type else None,
+                )
+        return _ErrorDetail(message=quote_error_text(str(body)), type=None)
 
     @staticmethod
     def _retry_after(http_response: httpx2.Response) -> float | None:

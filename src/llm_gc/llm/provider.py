@@ -11,6 +11,10 @@ from pydantic import BaseModel, Field
 from llm_gc.exceptions import ConfigError
 from llm_gc.models import Message
 
+# The most of a provider's error text an adapter quotes in its exception: enough for the
+# provider's reason, bounded so a gateway's HTML page cannot fill a log line or the dashboard.
+MAX_QUOTED_ERROR_CHARS = 200
+
 
 class StopReason(Enum):
     """Why generation stopped, normalised across providers.
@@ -98,8 +102,8 @@ class LLMProvider(Protocol):
 
         Raises:
             LLMTimeoutError, LLMConnectionError, LLMRateLimitError, LLMAuthError,
-            LLMContextOverflowError, LLMResponseError: Adapters raise from this set
-            and nothing outside it.
+            LLMContextOverflowError, LLMRequestRefusedError, LLMResponseError:
+            Adapters raise from this set and nothing outside it.
         """
         ...
 
@@ -129,3 +133,15 @@ def validate_generate_request(messages: list[Message], max_output_tokens: int, t
 
     if timeout_s <= 0:
         raise ConfigError(f"timeout_s must be positive, got {timeout_s}")
+
+
+def quote_error_text(text: str) -> str:
+    """Return a provider's error text as one line, cut to `MAX_QUOTED_ERROR_CHARS` and marked where it was cut.
+
+    Adapters quote the provider's reason because, for a refused request, it is often
+    the only thing that names the cause, such as an account out of credit. The
+    exception's message reaches logs, events and the dashboard, so the quote is kept
+    short and on one line whatever the provider sent.
+    """
+    line = " ".join(text.split())
+    return line if len(line) <= MAX_QUOTED_ERROR_CHARS else f"{line[:MAX_QUOTED_ERROR_CHARS]}…"

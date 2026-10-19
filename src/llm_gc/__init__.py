@@ -18,6 +18,7 @@ from llm_gc.exceptions import (
     LLMError,
     LLMGCError,
     LLMRateLimitError,
+    LLMRequestRefusedError,
     LLMResponseError,
     LLMTimeoutError,
 )
@@ -52,6 +53,7 @@ __all__ = [
     "LLMError",
     "LLMGCError",
     "LLMRateLimitError",
+    "LLMRequestRefusedError",
     "LLMResponseError",
     "LLMTimeoutError",
     "__version__",

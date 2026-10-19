@@ -1,6 +1,6 @@
 """What the proxy checks before it serves: settings that would otherwise fail at every collection."""
 
-from llm_gc.exceptions import ConfigError, LLMAuthError, LLMError, LLMResponseError
+from llm_gc.exceptions import ConfigError, LLMAuthError, LLMError, LLMRequestRefusedError, LLMResponseError
 from llm_gc.llm import LLMProvider
 from llm_gc.models import Message
 from llm_gc.utils import count_tokens
@@ -23,13 +23,16 @@ async def check_summariser(provider: LLMProvider, *, timeout_s: float = CHECK_TI
 
     Raises:
         ConfigError: The upstream refused the credential or the request itself, which no
-            retry fixes: most often a model it does not offer. Chained to the provider's error.
+            retry fixes: most often a model it does not offer, or an account out of credit.
+            Chained to the provider's error.
     """
     message = Message(role="user", content=_CHECK_PROMPT, token_count=count_tokens(_CHECK_PROMPT), turn_index=0)
     try:
         await provider.generate(messages=[message], max_output_tokens=CHECK_OUTPUT_TOKENS, timeout_s=timeout_s)
     except LLMAuthError as err:
         raise ConfigError(f"the upstream refused LLM-GC's credential: {err}") from err
+    except LLMRequestRefusedError as err:
+        raise ConfigError(f"the upstream refused LLM-GC's summary request: {err}") from err
     except LLMResponseError as err:
         if err.retryable:
             return f"the upstream could not answer the summariser check, so it is unchecked: {err}"

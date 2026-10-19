@@ -27,10 +27,11 @@ from llm_gc.exceptions import (
     LLMConnectionError,
     LLMContextOverflowError,
     LLMRateLimitError,
+    LLMRequestRefusedError,
     LLMResponseError,
     LLMTimeoutError,
 )
-from llm_gc.llm.provider import LLMProvider, LLMResponse, StopReason, validate_generate_request
+from llm_gc.llm.provider import LLMProvider, LLMResponse, StopReason, quote_error_text, validate_generate_request
 from llm_gc.models import Message
 
 logger = logging.getLogger(__name__)
@@ -383,12 +384,23 @@ class OpenAIClient:
                 retryable=not permanent,
             )
 
+        # Any other client error not worth repeating was refused before it ran, such as a
+        # model the account cannot use. Nothing was generated, so it is not a bad response.
+        if 400 <= status < 500 and status not in _RETRYABLE_STATUSES:
+            named = f"{status} {detail.type}" if detail.type else str(status)
+            return LLMRequestRefusedError(
+                f"openai refused the request ({named}): {detail.message}",
+                provider=self.name,
+                status_code=status,
+                error_type=detail.type or None,
+            )
+
         return LLMResponseError(
             f"openai returned {status}: {detail.message}",
             provider=self.name,
             status_code=status,
             # Only the adapter knows which statuses are worth repeating. A 503 is; a
-            # 400 never will be, and retrying it spends the budget on a certainty.
+            # 501 never will be, and retrying it spends the budget on a certainty.
             retryable=status in _RETRYABLE_STATUSES,
         )
 
@@ -399,7 +411,7 @@ class OpenAIClient:
         An error response is the least reliable thing a provider sends — it can
         arrive as HTML from a load balancer, or be empty. Every failure path here
         degrades to a placeholder, because an exception raised while building an
-        exception loses the original status entirely.
+        exception loses the original status entirely. The message is a bounded quote.
 
         `type` and `code` default to `""` rather than None so the caller can test
         membership in a frozenset without a None check first; `""` is in no set.
@@ -407,7 +419,7 @@ class OpenAIClient:
         try:
             body = http_response.json()
         except ValueError:
-            return _ErrorDetail(message=http_response.text[:200] or "<empty body>", type="", code="")
+            return _ErrorDetail(message=quote_error_text(http_response.text) or "<empty body>", type="", code="")
 
         if isinstance(body, dict):
             error = body.get("error")
@@ -419,11 +431,11 @@ class OpenAIClient:
                 error_type = error.get("type")
                 error_code = error.get("code")
                 return _ErrorDetail(
-                    message=message if isinstance(message, str) else str(body)[:200],
+                    message=quote_error_text(message if isinstance(message, str) else str(body)),
                     type=error_type if isinstance(error_type, str) else "",
                     code=error_code if isinstance(error_code, str) else "",
                 )
-        return _ErrorDetail(message=str(body)[:200], type="", code="")
+        return _ErrorDetail(message=quote_error_text(str(body)), type="", code="")
 
     @staticmethod
     def _retry_after(http_response: httpx2.Response) -> float | None:

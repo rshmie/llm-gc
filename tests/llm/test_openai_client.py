@@ -9,6 +9,7 @@ from llm_gc.exceptions import (
     LLMConnectionError,
     LLMContextOverflowError,
     LLMRateLimitError,
+    LLMRequestRefusedError,
     LLMResponseError,
     LLMTimeoutError,
 )
@@ -395,12 +396,28 @@ class TestErrorMapping:
         """Over-matching here is the expensive direction: the compactor would start
         splitting a run that was never too long, and keep failing in halves."""
         handler = _respond(400, body=_error_body("Invalid value for 'model'", code="model_not_found"))
-        with pytest.raises(LLMResponseError) as excinfo:
+        with pytest.raises(LLMRequestRefusedError) as excinfo:
             _call(_client(handler))
 
         assert not isinstance(excinfo.value, LLMContextOverflowError)
         assert excinfo.value.retryable is False
         assert excinfo.value.status_code == 400
+
+    def test_a_request_refused_before_it_ran_is_a_refusal_not_a_bad_response(self):
+        """Nothing was generated, so nothing was wrong with a response: it waits for a person."""
+        handler = _respond(400, body=_error_body("Invalid value for 'model'", code="model_not_found"))
+        with pytest.raises(LLMRequestRefusedError) as excinfo:
+            _call(_client(handler))
+
+        assert not isinstance(excinfo.value, LLMResponseError)
+        assert (excinfo.value.code, excinfo.value.error_type) == ("LLM_REQUEST_REFUSED", "invalid_request_error")
+        assert "(400 invalid_request_error): Invalid value for 'model'" in str(excinfo.value)
+
+    def test_a_client_error_worth_repeating_is_not_a_refusal(self):
+        handler = _respond(409, body=_error_body("try again"))
+        with pytest.raises(LLMResponseError) as excinfo:
+            _call(_client(handler))
+        assert excinfo.value.retryable is True
 
     @pytest.mark.parametrize("status", [500, 502, 503, 504])
     def test_server_errors_are_retryable(self, status):
@@ -412,7 +429,7 @@ class TestErrorMapping:
 
     def test_a_404_is_not_retryable(self):
         handler = _respond(404, body=_error_body("The model does not exist", code="model_not_found"))
-        with pytest.raises(LLMResponseError) as excinfo:
+        with pytest.raises(LLMRequestRefusedError) as excinfo:
             _call(_client(handler))
 
         assert excinfo.value.retryable is False

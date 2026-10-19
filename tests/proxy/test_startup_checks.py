@@ -6,7 +6,7 @@ import json
 import httpx2
 import pytest
 
-from llm_gc.exceptions import ConfigError, LLMAuthError, LLMResponseError
+from llm_gc.exceptions import ConfigError, LLMAuthError, LLMRequestRefusedError
 from llm_gc.llm import AnthropicClient
 from llm_gc.proxy.startup_checks import CHECK_OUTPUT_TOKENS, check_summariser
 
@@ -51,7 +51,15 @@ def test_a_model_the_upstream_does_not_offer_stops_startup_with_its_own_words():
     """The case that failed silently at every collection: a gateway that names models its own way."""
     with pytest.raises(ConfigError, match="invalid model specified") as excinfo:
         _check(_status(400, "invalid model specified: claude-sonnet-5"))
-    assert isinstance(excinfo.value.__cause__, LLMResponseError)
+    assert isinstance(excinfo.value.__cause__, LLMRequestRefusedError)
+
+
+def test_an_account_out_of_credit_stops_startup_with_its_own_words():
+    """Else every collection fails for the same reason, and only the dashboard says so."""
+    body = {"type": "error", "error": {"type": "billing_error", "message": "Your credit balance is too low."}}
+    with pytest.raises(ConfigError, match="credit balance is too low") as excinfo:
+        _check(lambda request: httpx2.Response(402, json=body))
+    assert isinstance(excinfo.value.__cause__, LLMRequestRefusedError)
 
 
 def test_a_refused_credential_stops_startup():
