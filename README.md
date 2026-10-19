@@ -4,12 +4,91 @@
 
 If you've spent 50+ turns in a Claude Code session, you've probably watched the model start forgetting things: the database you agreed on, the approach you picked, the thing you said *not* to do. It's all still in the conversation, buried under 130K tokens of old file reads, stale command output and settled debates. Every request re-sends all of it, so you pay for the noise on every call, and the model answers in the same confident tone whether the decision is still in view or not.
 
-LLM-GC sits between your app and the provider and manages the conversation the way a generational garbage collector manages memory. Recent turns stay word for word. Older exchanges are shown at a level of detail — quoted whole, summarised, or archived to their opening line and the facts they established — chosen by how much each matters now, chosen again at every collection, and raised back when the conversation returns to them. The next request carries one compact recap instead of the whole history.
+LLM-GC sits between your app and the provider and manages the conversation the way a generational garbage collector manages memory. Recent turns stay word for word. Each older exchange is quoted whole, summarised, or archived to its opening line and the facts it established, depending on how much it matters now, and it gets its detail back when the conversation returns to it. Nothing is deleted. The next request carries one compact recap instead of the whole history.
+
 **And it never does this silently:** a live dashboard shows, for every turn, exactly what the model still receives, so you can see when its grounding has gone.
 
 To run it with Claude Code, follow [Get started](#get-started): five steps, about ten minutes.
 
-> **Status: work in progress, not yet pip-installable.** The engine, an Anthropic-compatible proxy (streaming included), the `llm-gc` command and the dashboard are built and tested, and Claude Code runs through the proxy. A [decision-survival check](evals/decision_survival/README.md) measures what the model can still answer once LLM-GC has condensed a conversation: on its latest run all 37 answers survived, with prompts 12–17% smaller on the short conversations and 42–43% smaller on the long ones — one run, on scripted conversations. Not done yet: benchmarks on real sessions with a post-session report, recall (restoring a condensed exchange on the request that asks about it), and the OpenAI-compatible endpoint.
+> **Status: work in progress.** What is left before the first release is in [ROADMAP.md](ROADMAP.md).
+
+**Contents:** [How it works](#how-it-works) · [What the dashboard shows](#what-the-dashboard-shows) · [Get started](#get-started) · [Other ways to run it](#other-ways-to-run-it) · [Configuration](#configuration) · [Results so far](#results-so-far) · [Why it is built this way](#why-it-is-built-this-way) · [Developing](#developing-llm-gc) · [Documentation](#documentation)
+
+## How it works
+
+LLM-GC is a proxy. It forwards every request at once, with the conversation as it is currently condensed. The condensing itself happens after the reply, in the background, so no request ever waits for it:
+
+```
+              every request: forwarded at once, no model call
+ your app ─────────────────────────►  LLM-GC  ─────────────────────────►  provider
+          ◄─────────────────────────    │     ◄─────────────────────────
+                                        │ after each reply, in the background
+                                        ▼
+                         GC pass: is a collection worth making?
+                         if so, prepare one: group → score → plan → condense
+                         and switch it in at a later request, when that is cheap
+```
+
+Most passes find too little to collect and change nothing. Once enough older turns have gone quiet, a pass prepares a **collection**:
+
+1. **Group.** The turns that have aged out of the newest messages become **spans**, one per exchange: a user's message and everything up to their next one.
+2. **Score.** Every span, new and old, is scored by how much it matters *now*: recent, or about what the user is discussing, lifted by the decisions and specifics it states.
+3. **Plan.** Each span gets a **detail level** from its score: quoted whole, summarised, or archived to its opening line and facts.
+4. **Condense.** Each new span is summarised, one model call each, and further calls read the facts its turns settled and file them under the topic they change.
+
+The model then receives one **recap** of every span at its level, followed by the newest messages exactly as sent:
+
+```
+ What your app sends:   t0 t1 … t5 "we'll use Postgres" … t28 [30k tokens of logs] … t57
+
+ What the model gets:   ┌ RECAP: one message ───────────────────────────────────────┐
+                        │ [Archived]        turns 0–1     opening line · facts      │
+                        │ [Quoted exactly]  turns 5–6     every word                │ ← discussed now
+                        │ [Summarised]      turns 28–31   opening line · facts · …  │ ← gone quiet
+                        └───────────────────────────────────────────────────────────┘
+                        t53 t54 t55 t56 t57   ← the newest messages, as sent
+```
+
+**What is condensed, and what is not.** An agent's tool calls and their results are part of the conversation: they are scored, summarised and quoted like words, so old file reads and command output are condensed too. The client's own instructions are not: its system prompt, its tools, and the instructions it writes into messages (Claude Code's CLAUDE.md, memory and `<system-reminder>` blocks) reach the model word for word with every request. With Claude Code, LLM-GC also passes its other calls, such as token counting, through untouched; it records and shows Claude Code's subagents but sends them as written, unless `collect_subagents` is on.
+
+**When a collection takes effect.** Rewriting the start of the prompt makes the provider cache it again, which costs money. So a prepared collection is switched in only when that is cheap or needed: when the provider's cache has expired anyway, when the saving repays caching the prompt again, or when the model carries too much that has gone quiet. Between collections the start of the prompt does not change, so the cache stays valid. The details are in [when to collect](doc/design/generational-memory/when-to-collect.md).
+
+### Generations and detail levels
+
+Context is held in three generations, as in a generational garbage collector:
+
+| Generation | What it holds | Analogy |
+|---|---|---|
+| **Young** | The newest messages, sent word for word | Java's young (eden) space |
+| **Old** | Older exchanges as spans, each keeping its original turns and shown at a detail level | Java's tenured generation |
+| **Permanent** | Facts read from every span, and what later replaced them; never discarded | Java's permanent generation |
+
+Every span in the old generation is shown at one of four levels, and each level shows everything the one below it shows:
+
+```
+ level         what the model reads in the recap
+ ───────────   ─────────────────────────────────────────────────────
+ kept          [Quoted exactly]  every word of the exchange               ▲ more detail
+ summarised    [Summarised]      its opening line · its facts, a summary  │
+ archived      [Archived]        its opening line · its facts             │
+ out of view   [Out of view]     one line for a run of the oldest spans   ▼ fewer tokens
+```
+
+**The score decides the level, and one budget caps the total.** A span scoring 0.7 or more is kept, 0.3 or more summarised, and below that archived. Levels are decided again at every collection, so a span the conversation returns to rises again, from its own words. The recap may spend 30% of the model's window; over that, the coldest spans lose detail first. **Out of view** is only the floor under that budget: when even one archived line per exchange no longer fits, around two thousand exchanges at the default budget, the oldest are folded behind one line saying they exist, and each still keeps its words. When a later turn replaces a decision ("we moved from Google Cloud to AWS"), the older span carries a note saying so, so the model does not read the old decision as current.
+
+How the pieces fit together, with every component on the request path and in the background, is in the [architecture overview](doc/overview.md#how-the-system-is-structured).
+
+## What the dashboard shows
+
+A model has no reliable sense of when its grounding has gone weak, so it cannot be relied on to say so. A person can judge whether to trust an answer, but only with the data to judge from. The dashboard is that data, live, for each conversation:
+
+- **Conversation** opens with three answers: what the model remembers, what it has forgotten, and whether you should worry. Below them: every fact the model is told, with who stated it, the message it came from, how it reaches the model and what replaced it; a map of the whole conversation by how much of each message the model has; and every exchange beside exactly what the model reads for it.
+- **Requests** traces a Claude Code session turn by turn, with what each request cost by the provider's own count.
+- **Engine** shows LLM-GC at work: the three generations, how each exchange scores against the level lines, every check and collection, anything a collection could not do and what the model got instead, and what the next collection is waiting for.
+
+Hover any ⓘ for a short meaning, and click it, or **?**, for the full explanation. **Run GC now** makes a collection for the selected conversation at once.
+
+There is deliberately **no single "health score" or "hallucination risk" number.** A number labelled "risk" claims an accuracy no heuristic can back without real hallucination labels, and a misleading number would be one more black box. Each signal is named for what it measures, and a collection that failed or was skipped is shown, never hidden. The reasoning is in [visibility](doc/design/visibility/overview.md).
 
 ## Get started
 
@@ -23,8 +102,7 @@ LLM-GC is a small server that runs on your machine. You point Claude Code at it,
                                     └──►  dashboard :9901, in your browser
 ```
 
-Each arrow is set in its own place. `upstream` is where LLM-GC sends requests on: Anthropic by default, or your gateway, set in step 2. `ANTHROPIC_BASE_URL` is where Claude Code sends them, and step 4 sets it to LLM-GC. 
-Until then, in either setup, Claude Code doesn't know LLM-GC exists.
+Each arrow is set in its own place. `upstream` is where LLM-GC sends requests on: Anthropic by default, or your gateway, set in step 2. `ANTHROPIC_BASE_URL` is where Claude Code sends them, and step 4 sets it to LLM-GC. Until then, in either setup, Claude Code doesn't know LLM-GC exists.
 
 **Two credentials, two jobs:**
 
@@ -33,8 +111,7 @@ Until then, in either setup, Claude Code doesn't know LLM-GC exists.
 | **Claude Code's login** | Your conversation. Passed on untouched, never stored | In Claude Code, as now. You change nothing |
 | **LLM-GC's own key** | Only LLM-GC's own short calls: summarising old exchanges and reading their facts. Never your conversation. Billed to that key | LLM-GC's `.env` file, set up in step 2 |
 
-LLM-GC can't borrow Claude Code's login, so you give it a key of its own. Behind a company gateway, it can be the same token Claude Code uses. The model LLM-GC calls is its own choice too, separate 
-from the one you talk to: `model` under `[summary]` in `llm-gc.toml` (see [Configuration](#configuration)).
+LLM-GC can't borrow Claude Code's login, so you give it a key of its own. Behind a company gateway, it can be the same token Claude Code uses. The model LLM-GC calls is its own choice too, separate from the one you talk to: `model` under `[summary]` in `llm-gc.toml` (see [Configuration](#configuration)).
 
 > **Just want to look first?** [Without a key](#without-a-key) runs the dashboard on scripted conversations, with no key and no Claude Code.
 
@@ -48,8 +125,7 @@ grep ANTHROPIC_BASE_URL ~/.claude/settings.json
 
 | It prints | Your setup | What LLM-GC needs |
 |---|---|---|
-| Nothing, or *No such file* | **Direct.** Claude Code talks to Anthropic, with a Claude Pro or Max login or with an API key | An Anthropic API key from [console.anthropic.com](https://console.anthropic.com). 
-A Pro or Max subscription doesn't include one: the Console bills it separately |
+| Nothing, or *No such file* | **Direct.** Claude Code talks to Anthropic, with a Claude Pro or Max login or with an API key | An Anthropic API key from [console.anthropic.com](https://console.anthropic.com). A Pro or Max subscription doesn't include one: the Console bills it separately |
 | A line with a URL | **Gateway.** Your company routes Claude through its own address | That address, a model name and a token, all copied from `~/.claude/settings.json` in step 2 |
 
 If Claude Code runs on Amazon Bedrock or Google Vertex AI, LLM-GC can't sit in front of it yet.
@@ -213,9 +289,14 @@ Send Claude a message. LLM-GC's terminal prints a line for each request it passe
 
 Open the dashboard at http://127.0.0.1:9901. A conversation appears there from its second message: the first has no history yet for LLM-GC to recognise it by.
 
-At first every message is sent whole, so the line says `(100%)`. Once older turns that LLM-GC could condense add up (1,000 tokens' worth, by default), it prepares a *collection* in the background. The collection takes effect at the request where it costs least: at once when the provider's prompt cache has expired (after five idle minutes, by default) or is not used; while the cache is warm, only once it saves at least as much as it makes the provider cache again, or once the model carries too much that has gone quiet. Then the dashboard says *Last collection …* and the percentage drops. The Engine tab's *Next collection* card says which of these it is waiting for. To see one now, press **Run GC now** on the dashboard.
+At first every message is sent whole, so the line says `(100%)`. Once about 1,000 tokens of older turns could be condensed, LLM-GC prepares a collection and switches it in when that is cheap (see [When a collection takes effect](#how-it-works)). Then the dashboard says *Last collection …* and the percentage drops. The Engine tab's *Next collection* card says what it is waiting for, and **Run GC now** makes one at once.
 
 `llm-gc stats`, in a terminal with the environment activated, prints the totals so far, what the provider reported, and each Claude Code session's conversations with what each sent and saved.
+
+Two things to know:
+
+- **The first collection of a long conversation can take a couple of minutes.** Requests meanwhile go whole, never worse than without LLM-GC.
+- **Sessions live in memory.** Restarting LLM-GC starts each conversation again from what Claude Code sends, at the cost of one request sent whole and one collection.
 
 ### If something is wrong
 
@@ -244,152 +325,12 @@ At first every message is sent whole, so the line says `(100%)`. Once older turn
 
 | What you see | Why, and what to do |
 |---|---|
-| *The upstream is refusing LLM-GC's credential* | The upstream accepted LLM-GC's key at startup and refuses it now, for example because it was revoked or expired. Collections are skipped, and what was already condensed stays in use. Fix the key in `.env`, then restart LLM-GC |
+| *The provider refuses LLM-GC's credential.* | The upstream accepted LLM-GC's key at startup and refuses it now, for example because it was revoked or expired. Collections stop, and what was already condensed stays in use. Fix the key in `.env`, then restart LLM-GC |
 | *Summary request failed*, on the Engine tab, without that message | The upstream refused a summary for another reason, shown on the Engine tab. A gateway may need headers LLM-GC doesn't send yet |
 
 **To stop using LLM-GC**, press Ctrl-C in its terminal and delete the `env` entry you added in step 4. Otherwise Claude Code keeps sending requests to an address where nothing answers.
 
-## The problem
-
-Two distinct things go wrong, and only one of them is about money.
-
-**Context loss.** The decision from turn 5 is still technically present at turn 50 — it's just one short message inside 100K tokens of less relevant material. Liu et al. (2023), [*Lost in the Middle*](https://arxiv.org/abs/2307.03172), showed that information buried in the middle of a long context is recalled less reliably than information at either end. So the decision can be *in* the window and still not usable. And the naive fix makes it worse: in an early profiling of 7 of the author's own Claude Code sessions, a sliding window that kept the last 10 turns lost **7.6 of 8 early decisions**.
-
-**Context waste.** The same sessions averaged 132,579 input tokens at their peak, re-sent on every call, and about 84% of that was stale material: old file reads, command output, resolved debugging. You pay, on every call, to resend material that crowds out the material you need. *(That profiling predates this repository's benchmarks; its method is not yet published here, so treat these figures as motivation, not measurement.)*
-
-This is recognisably a memory-management problem, and memory management has decades of prior art. Java, Go and C# all identify what is still needed, discard what is not, and compact what remains.
-
-LLM-GC applies that shape to the context window. It scores each exchange by how much it matters now, condenses what has gone quiet without deleting anything, and files decisions in a permanent store along with whatever later replaced them. **The goal is preserving what the model needs to remember — not saving tokens.** Savings are a byproduct of removing waste.
-
-But cleaning context is only half of it. The other half is **transparency**. Today you have no signal that the model has lost your database decision, no indicator that context quality is degrading, and no warning before the wrong answer arrives. The model answers in exactly the same confident tone whether its context is clean or 84% noise. LLM-GC surfaces what is happening to your context so that *you* can judge when to trust the output — the system provides the data, the human provides the judgment.
-
-## How it works
-
-LLM-GC sits between your app and the provider as a proxy. Every request is forwarded at once; after each reply, in the background, it runs a check, a GC pass. Most checks find too little to collect and change nothing. When enough older turns have gone quiet, the check makes a **collection**:
-
-1. **Group** — the turns that have aged out of the recent tail become **spans**, one per exchange: a user's message and everything up to their next one
-2. **Score** — every span, new and old, is scored by how much it matters *now*: recent, or about what the user is discussing, lifted by the decisions and specifics it states
-3. **Plan** — each span gets a **detail level** from its score: quoted whole, summarised, or archived to its opening line and facts
-4. **Condense** — each new span is summarised (one model call each), and one more call per collection reads the facts its turns settled, filed under the topic they change; the next request carries one **recap** of every span at its level, then the recent turns word for word
-
-```
- what the client sends:     t0  t1  t2  …  t39  t40 … t57
- what the model receives:   [RECAP]  t40 … t57
-                             └ t0–t39 as spans, each at its level, in one message
-```
-
-An agent's tool calls and their results are part of the conversation: they are sized, scored, summarised and quoted like words, so old file reads and command output are condensed too. The client's own instructions are not: its system prompt, its tools, and the instructions it writes into messages (Claude Code's CLAUDE.md, memory and notes) reach the model word for word with every request.
-
-A collection is prepared in the background, and decides whether it is worth making before it pays for a single summary. It changes the prompt only when that is cheap or needed: when the provider's cache has expired anyway, when the saving repays caching the prompt again, or when the model carries too much that has gone quiet. None of it runs while a request waits.
-
-### Generational memory
-
-Context is managed in three generations, inspired by generational garbage collection:
-
-| Generation | What it holds | Analogy |
-|---|---|---|
-| **Young** | Recent turns, sent word for word | Java's young/eden space |
-| **Old** | Older exchanges as spans, each keeping its original turns and shown at a detail level | Java's tenured generation |
-| **Permanent** | Facts read from every span, and what later replaced them; never discarded | Java's permanent generation |
-
-Every span in the old generation is shown at one of four levels, and each level shows everything the one below it shows:
-
-```
- level         what the model reads in the recap                          
- ───────────   ──────────────────────────────────────────────────────    
- kept          [Quoted exactly]  every word of the exchange               ▲ more detail
- summarised    [Summarised]      its opening line · its facts, a summary  │
- archived      [Archived]        its opening line · its facts             │
- out of view   [Out of view]     one line for a run of the oldest spans   ▼ fewer tokens
-```
-
-**The score decides the level; one budget caps the total.** A span scoring 0.7 or more is kept, 0.3 or more summarised, below that archived — re-decided at every collection, so a span the conversation returns to rises again from its own words. The recap may spend 30% of the model's window; over that, the coldest spans lose detail first. **Out of view** is the floor under all of that, not a judgement of the score: only when even one archived line per exchange no longer fits — around two thousand exchanges at the default budget — are the oldest folded behind one line saying they exist, and each still keeps its words. When a later turn replaces a decision ("we moved from Google Cloud to AWS"), the older span carries a note saying so, so the model does not read the old decision as current.
-
-### Context Visualizer — epistemic transparency
-
-AI models have no reliable internal sense of what they know and don't know. Getting a model to report its own uncertainty accurately is an open research problem (calibration), so you cannot lean on the model to tell you when its grounding is weak.
-
-Humans, by contrast, do this naturally — **when they have the data**. Evaluating whether a source should be trusted is a cognitive skill the research literature calls **epistemic vigilance** (Sperber et al., 2010). LLM-GC's premise is to stop trying to automate the judgment and instead give the human what their own vigilance needs to work on.
-
-Right now, developers have no data:
-- You can't see that the model has effectively "forgotten" a decision you made 40 turns ago
-- You can't see that the context is so bloated the model is statistically more likely to hallucinate
-- You can't see which parts of the conversation are still "alive" in the model's attention vs. buried noise
-- You have no signal telling you "this is the point where you should worry about answer quality"
-
-LLM-GC's Context Visualizer solves this. Every GC component already computes rich internal state — span scores, detail levels, which generation each turn is in, what each collection did. Instead of using that data only internally, the visualizer **exposes it to the developer** as a live dashboard:
-
-- **Named signals, no aggregate score** — token budget pressure, and what the last GC pass actually did (including when it was bypassed or failed — an unhealthy pass is visible, never hidden). Each signal is named for what it literally measures; nothing looks more authoritative than its math supports. The *transformation ratio* is computed but deliberately **not** displayed: it is honest arithmetic that would still be misread as a risk score if it sat on the page as the one number to glance at
-- **What the model is told, fact by fact** — every fact read so far under who stated it, you or the assistant, with the message it came from and how it reaches the model: sent as a fact beside its exchange's summary, sent word for word inside a kept exchange, or not sent. Every value replaced shows old and new, with both messages linked. The headline says which message the facts are as of, since a value changed in a newer message shows only once that message is collected, and which messages' facts could not be read. A fact that is stored but never sent is the case this view exists to expose
-- **What the model has of each message** — the whole conversation as a map, widths to scale: which messages go word for word, which are kept, compacted, archived or out of view, and what one request costs against the conversation as written
-- **What the model knows, exchange by exchange** — every exchange with exactly what the model reads for it: kept (quoted word for word), compacted (its summary), archived (its opening line and facts), or out of view (one shared line saying it exists) — beside what was said. The newest request and its reply are shown as they happen, marked as not in the conversation yet; tool calls and results are labelled as such, never as your words; the client's own instructions show as a tag with their size. A second view shows the prompt exactly as forwarded, and a search answers "does the model still receive these words?"
-- **What moved, and what fell short** — where every turn lives now (young / old / permanent), what each collection moved and when, a collection in progress, and every part of one that could not be done, with what the model gets instead
-- **The next collection, and why** — the messages it would take and the level each would get, the earlier exchanges it would show at another level, and every exchange's score against the keep and archive lines, with the reason it sits where it does
-- **Post-Session Analysis** *(planned)* — After a session ends: full timeline of when quality peaked, when it degraded, which decisions survived, where the danger zones were
-
-There is deliberately **no single "health score" or "hallucination risk" number**. A number labelled "risk" claims an accuracy no heuristic can back without ground-truth hallucination labels — and a dishonest number is a new black box, which is the opposite of the point. If a learned predictor can be defensibly grounded in real labels, an aggregate ships *alongside* the signals; until then, the signals do the part that can be done honestly, and you do the part that can't yet be automated honestly. **Aggregation is earned, not assumed.** Most tools optimize context silently. LLM-GC shows you what's happening and lets YOU decide if the AI's output is trustworthy right now.
-
-## The GC Analogy
-
-LLM-GC borrows principles from garbage collection — a concept pioneered in Lisp (1959) and refined across decades of language runtime design in Java, Go, C#, and others. The generational model, mark-sweep-compact algorithm, and concurrent pre-computation are adapted from these well-established systems and applied to a new domain: LLM context management.
-
-| GC Concept | LLM-GC Equivalent |
-|---|---|
-| Heap memory | Context window |
-| Objects | Conversation turns, grouped into exchanges (spans) |
-| Live objects | Relevant context (still needed) |
-| Dead objects | Stale context (safe to condense) |
-| GC roots | The next question, which has not been asked yet (see below) |
-| Reachability analysis | Liveness: recent, or reached by what the user is discussing now |
-| Mark phase | Score every span by how much it matters now |
-| Sweep phase | Plan every span's detail level: kept, summarised, archived |
-| Compaction | Rewrite the start of the prompt as one recap of every span at its level |
-| Minor collection | A collection: a batch of older turns leaves the young generation as spans |
-| Eden filling up | Turns that have gone quiet reaching `min_cut_tokens`: a cut is prepared |
-| Safepoint | The request a prepared cut is switched in at: where the provider's cache is cold, the cut repays caching the prompt again, or the stale bound is reached |
-| Young generation | Recent turns (full detail) |
-| Old generation | Older exchanges, each shown at a detail level |
-| Permanent generation | Facts, and what replaced them (never discarded) |
-| GC pause | None on the request: a cut is prepared after each reply, summaries included, and switching it in makes no model call |
-| Concurrent GC | Cuts are prepared between turns, while the user reads the reply |
-| GC tuning flags | Level lines, recap budget, batch size, newest messages kept, saving share and stale bound |
-
-### Where the analogy breaks — and why that matters more than where it holds
-
-A runtime garbage collector is **sound**. Reachability is decidable and exact: trace from the roots, and an object is either reachable or it is not. The collector never frees a live object. That guarantee is precisely why Java's GC can run silently — it has nothing to report, because it cannot be wrong.
-
-Relevance is not decidable. The root set for a conversation is the *next question*, and it hasn't been asked yet. A turn that looks dead at turn 10 can be the most important thing in the conversation at turn 12, and no analysis at turn 10 can determine that. Every relevance decision is a bet against a future that doesn't exist yet.
-
-Three things follow, and they shape the whole design:
-
-- **Cleanup cannot be silent.** A system making unsound, unverifiable decisions about what the model is allowed to see — and hiding them from the person who gets handed the answer — has replaced one opaque actor with two. Transparency here isn't a feature chosen because it's appealing. It's the only honest way to ship an operation that can't be proven correct.
-- **Removal has to be recoverable.** Because a bet can be wrong, nothing is deleted: every span keeps its original turns, so a span the conversation returns to is shown in more detail again, and its decisions survive as facts whatever its level. A wrong bet should cost fidelity for a while, not knowledge. The [decision-survival check](evals/decision_survival/README.md) measures whether that holds.
-- **Conservatism is calibration, not timidity.** Keeping an unneeded turn costs a bounded number of tokens. Removing a needed one costs an unpredictable amount and stays invisible until it surfaces as a wrong answer. Asymmetric costs demand an asymmetric policy.
-
-### Beyond the GC analogy
-
-| Concept | What LLM-GC Adds |
-|---|---|
-| Transparency | The developer sees what the model still knows, at what fidelity, and what it has lost — the system provides data, the human provides judgment. This is the point of the project |
-| Instrumented from the inside out | Every component emits structured events; visualizer, logger and benchmarks all consume the same bus. This is *observability* — it describes LLM-GC rather than your conversation, and it is the supporting surface, not the headline |
-| Signals, not scores | Named, individually-explainable signals (budget pressure, GC breakdown, generation lifecycle); an aggregated risk number ships only if it can be grounded in real hallucination labels |
-
-## Using it
-
-### What LLM-GC does with Claude Code
-
-With an agent's conversation, LLM-GC:
-
-- reads tool calls and results as text, so they are summarised and quoted like words;
-- sends Claude Code's instructions (its system prompt, its tools, and the `<system-reminder>` blocks that carry CLAUDE.md and memory) word for word with every request, never condensed;
-- passes its other calls, such as token counting, through untouched;
-- shows its side requests (after each reply it asks the model to suggest your next prompt) as the *newest request*, never as something you said.
-
-Sessions live in memory: restarting LLM-GC starts each conversation again from what Claude Code sends, at the cost of one request sent whole and one collection. The first collection of a long conversation can take a couple of minutes, and requests meanwhile go whole — never worse than without LLM-GC.
-
-### The dashboard
-
-The **Conversation** tab opens with three answers: what the model remembers, what it has forgotten, and whether to worry. Below them come each fact as the model is sent it, a map of the conversation, and every exchange, newest first unless you switch it, with what the model reads for it — recent, quoted, summarised, archived or out of view — beside what was said. The **Requests** tab traces a Claude Code session turn by turn, with what it cost by the provider's own count, and the **Engine** tab shows the three generations, how each exchange is scored, every check and collection, and the proxy's counters. Hover any ⓘ for a short meaning; click it, or **?**, for the full explanation. **Run GC now** prepares a cut for the selected conversation without waiting for the minimum and switches it in at once. With `min_saving_share` set to 0, every prepared cut is switched in as soon as it saves something; together with `llm-gc start --dashboard --min-cut-tokens 300`, collections happen within a short conversation.
+## Other ways to run it
 
 ### Without a key
 
@@ -433,70 +374,7 @@ async def on_turn(session_id: str, text: str, role: str, index: int) -> list[Mes
 
 The names `llm_gc` exports are its public API. Anything imported from a subpackage, such as `llm_gc.engine`, is internal and may change in any release.
 
-The library needs only `pydantic`, `tiktoken` and `httpx2`. The proxy, the dashboard and the `llm-gc` command are the `proxy` extra, so a program that imports `llm_gc` does not install a web server.
-
-## What LLM-GC does and doesn't do
-
-**In scope — built today:**
-- Span scoring: each exchange scored by liveness (recent, or about what is discussed now) and by the decisions and specifics it states
-- Detail levels — kept, summarised, archived, out of view — re-planned at every collection under one recap budget, so a span the conversation returns to rises again
-- Generational memory (young / old / permanent): every span keeps its original turns; facts are filed with supersession, and a span whose decision was later replaced says so
-- A summarising compactor that refuses any summary that does not shrink what it replaces
-- Facts read by a model once per collection, filed under the topic they change; only the user changes a decision the user made
-- Collections prepared in the background and switched in when the provider's cache is cold, when the saving repays caching the prompt again, or when stale material reaches its bound; the prompt changes only at its start, so between collections the cache and the model's thinking blocks stay valid
-- An Anthropic Messages proxy, streaming included, that finds each conversation by its content, passes the client's other calls through, and never makes a reply wait on GC
-- Agent conversations: tool rounds condensed like words, the client's instructions never condensed — verified with Claude Code
-- Per-session state that reads never wait for
-- A live dashboard: what the model has of every message and fact, the newest request and reply, and what LLM-GC did
-- Configurable level lines, margin, recap budget, batch size, saving share and stale bound
-- A decision-survival check: scripted conversations asked about their own facts, through LLM-GC and sent whole
-
-**In scope — not built yet:**
-- Benchmarks on real sessions: savings against cached-token pricing, latency, and decision survival
-- Post-session analysis (session timeline, decision survival, GC effectiveness report)
-- Tuning the defaults for larger savings, checked on the decision-survival check
-- Faster first collections: summaries written at the same time, not one after another
-- Recall: restoring a condensed exchange on the request that asks about it, rather than at the next collection
-- The OpenAI-compatible endpoint, and retries for summary and fact-reading calls
-
-**Does not handle (not our problem):**
-- Model routing (use LiteLLM or your proxy)
-- Semantic caching (separate concern)
-- Rate limiting / budget management
-- Authentication / API key management
-- Prompt engineering or fine-tuning
-- Cross-session memory (use Mem0/Zep for that)
-
-LLM-GC does one thing: keep the context window clean so the model remembers what matters. Token savings are a natural byproduct of removing what doesn't.
-
-### How this differs from what already exists
-
-Context management is not a new idea, and the honest framing is worth stating plainly.
-
-**[MemGPT / Letta](https://arxiv.org/abs/2310.08560)** paged LLM context against an operating-system memory hierarchy in 2023 — the closest relative to this project's framing. **[Mem0](https://github.com/mem0ai/mem0)** and **[Zep](https://www.getzep.com/)** extract facts and resolve contradictions; Zep's temporal edge invalidation is the same idea as supersession here. **LangChain** has summary-buffer memory. **Providers ship their own compaction**, summarising with a frontier model, as LLM-GC's compactor does.
-
-So LLM-GC doesn't claim a better summarizer. What it does differently is **govern and report** the operation rather than perform it silently:
-
-- **Per exchange and selective**, not summarize-everything-at-a-threshold
-- **Recoverable** — every exchange keeps its original, so a condensed one can be shown whole again; provider compaction is one-way
-- **Auditable** — a record of what happened to each turn and why
-- **Under your policy** — level lines, recap budget and batch size are yours, not the provider's
-- **Cross-client** — a proxy works for anything speaking the provider's API
-
-LLM-GC's compactor uses the *same mechanism* provider compaction uses: a model summarises. It is not an alternative to compaction; it is a governance and transparency layer around it.
-
-## Measured results
-
-Benchmarks on real sessions are not published yet; results from them will come with their dataset and method. What exists is the [decision-survival check](evals/decision_survival/README.md): five scripted conversations, 37 questions about facts they established, asked once through LLM-GC and once with the whole conversation sent, and graded. Its latest committed run:
-
-| | Short conversations (18 questions) | Long conversations (19 questions) |
-|---|---|---|
-| Through LLM-GC | 18/18, prompts 12–17% smaller | 19/19, prompts 42–43% smaller |
-| Whole conversation | 18/18 | 19/19 |
-
-One run, on scripted conversations, with `claude-sonnet-5-5` answering; the [evidence file](evals/decision_survival/evidence/facts-room-2026-10-06.json) holds every answer. It grades one of them wrong: asked for the shard count, the model answered "9 primaries", the user's value in words the grader did not accept until then. The stored answers regrade to 37/37. The check's README lists the earlier runs and what each change won back.
-
-Savings will also be judged against **cached-token pricing**, not raw token counts: rewriting the start of the prompt invalidates the provider's prompt cache, so a real reduction in tokens can still be an increase in cost. A savings number that ignores that isn't an honest number.
+The library needs only `pydantic`, `tiktoken` and `httpx2`. The proxy, the dashboard and the `llm-gc` command are the `proxy` extra, so a program that imports `llm_gc` does not install a web server. The library never reads files or the environment: it takes a `GCConfig` in code.
 
 ## Configuration
 
@@ -517,7 +395,11 @@ A flag you leave out changes nothing: the setting comes from the layer below, so
 3. `llm-gc.toml` in the directory you run it from
 4. `llm-gc/config.toml` under `~/.config` (or `$XDG_CONFIG_HOME`)
 
-A file you asked for in 1 or 2 that doesn't exist is an error, not a silent fallback. `llm-gc config init` writes a commented starter file, [`llm-gc.toml`](src/llm_gc/cli/config_template.toml), into the current directory (`--user` writes the per-user one instead, and it will not replace a file you already have without `--force`). It lists every setting with its default and what it decides, each one commented out: remove the `#` in front of a setting to change it. The file changes nothing until you do, and the settings you leave commented follow LLM-GC's defaults, including improved ones in later versions. `llm-gc config path` says which file `start` would use, and `llm-gc config show` prints every effective setting with the layer it came from (file, `.env`, environment or default), which is the quickest way to find out why a value isn't what you expected; credentials are only reported as set or not, never shown. An unknown or misspelt setting is an error that names it, so it never looks configured when it isn't.
+A file you asked for in 1 or 2 that doesn't exist is an error, not a silent fallback. An unknown or misspelt setting is an error that names it, so it never looks configured when it isn't.
+
+- `llm-gc config init` writes a commented starter file, [`llm-gc.toml`](src/llm_gc/cli/config_template.toml), into the current directory. `--user` writes the per-user one instead, and it will not replace a file you already have without `--force`. Every setting is listed with its default and what it decides, commented out: remove the `#` in front of one to change it. Settings you leave commented follow LLM-GC's defaults, including improved ones in later versions.
+- `llm-gc config path` says which file `start` would use.
+- `llm-gc config show` prints every effective setting with the layer it came from (file, `.env`, environment or default): the quickest way to find out why a value isn't what you expected. Credentials are only reported as set or not, never shown.
 
 **The proxy:**
 
@@ -527,6 +409,7 @@ A file you asked for in 1 or 2 that doesn't exist is an error, not a silent fall
 | Serve the dashboard (shows conversations) | `dashboard` | `--dashboard` | `LLM_GC_DASHBOARD` | off |
 | Where the dashboard listens | `dashboard_port` | `--dashboard-port` | `LLM_GC_DASHBOARD_PORT` | 9901 |
 | Where requests are forwarded, and where LLM-GC's own summary calls go | `upstream` | `--upstream` | `LLM_GC_UPSTREAM` | `https://api.anthropic.com` |
+| Condense Claude Code's subagent conversations too, not only record and show them | `collect_subagents` | | `LLM_GC_COLLECT_SUBAGENTS` | off |
 | `llm` summarises with a model; `noop` makes no model calls | `compactor` | `--compactor` | `LLM_GC_COMPACTOR` | `llm` |
 | The vendor LLM-GC summarises with: `anthropic` or `openai` | `[summary] provider` | `--summary-provider` | `LLM_GC_SUMMARY__PROVIDER` | `anthropic` |
 | The model it summarises and reads facts with, as that vendor (or a gateway) names it. Checked at startup | `[summary] model` | `--summary-model` | `LLM_GC_SUMMARY__MODEL` | the vendor's own |
@@ -534,15 +417,15 @@ A file you asked for in 1 or 2 that doesn't exist is an error, not a silent fall
 | Log level | `log_level` | `--log-level` | `LLM_GC_LOG_LEVEL` | `INFO` |
 | Log format: `text` to read in the terminal, `json` for a program that reads the log | `log_format` | `--log-format` | `LLM_GC_LOG_FORMAT` | `text` |
 
-**The summary model is LLM-GC's own,** separate from the model your client talks to: For instance, Claude Code can converse with Opus while LLM-GC summarises with Sonnet. A cheaper model lowers LLM-GC's own bill, but its summaries and facts are what the conversation model reads in place of the old turns, so a weaker one can leave the model remembering less well. The saving is also smaller than it looks, because LLM-GC calls its model only when it runs a collection, not on every request. Currently, [decision-survival check](evals/decision_survival/README.md) is measured with the default model that is configured.
+**The summary model is LLM-GC's own,** separate from the model your client talks to: Claude Code can converse with Opus while LLM-GC summarises with Sonnet. A cheaper model lowers LLM-GC's own bill, but its summaries and facts are what the conversation model reads in place of the old turns, so a weaker one can leave the model remembering less well. The saving is also smaller than it looks, because LLM-GC calls its model only when it prepares a collection, not on every request. The [decision-survival check](evals/decision_survival/README.md) has been run only with the default model.
 
 **The engine** is what the library takes as a `GCConfig`. These are the settings worth turning while you watch the dashboard; in the file they go under `[engine]`, and in the environment they take `LLM_GC_ENGINE__`:
 
 | `GCConfig` | Flag | Default | What it decides |
 |---|---|---|---|
-| `min_cut_tokens` | `--min-cut-tokens` | 1000 | tokens of older turns to summarise or archive before a cut is prepared |
-| `min_saving_share` | | 1.0 | with the provider's cache warm, how many times what switching a cut in makes it cache again the cut must save; 0 switches it in as soon as it saves anything |
-| `max_stale_ratio` | | 0.1 | share of the window the model may carry that a prepared cut would condense; at it, the cut is switched in whatever the cache costs. The window is converted to LLM-GC's count first, at the rate the conversation's replies measure |
+| `min_cut_tokens` | `--min-cut-tokens` | 1000 | tokens of older turns to summarise or archive before a collection is prepared |
+| `min_saving_share` | | 1.0 | with the provider's cache warm, how many times what switching a collection in makes it cache again the collection must save; 0 switches it in as soon as it saves anything |
+| `max_stale_ratio` | | 0.1 | share of the window the model may carry that a prepared collection would condense; at it, the collection is switched in whatever the cache costs. The window is converted to LLM-GC's count first, at the rate the conversation's replies measure |
 | `last_n_messages_to_keep` | `--keep-last` | 5 | newest messages always sent word for word |
 | `context_window` | `--context-window` | 128,000 (proxy: 200,000) | the model's window; the recap budget is a share of it |
 | `keep_threshold` | | 0.7 | score at or above which a span is quoted whole |
@@ -552,6 +435,8 @@ A file you asked for in 1 or 2 that doesn't exist is an error, not a silent fall
 
 The proxy's default window is 200,000, the smallest of the current models'. Raise it only if every model you proxy has a larger one: a window set too large lets a recap outgrow the model's, and requests fail.
 
+To watch collections happen within a short conversation, set `min_saving_share = 0` under `[engine]` and start with `llm-gc start --dashboard --min-cut-tokens 300`.
+
 **Credentials** are LLM-GC's own, for its summary and fact calls, never taken from a client's request. They come only from the environment or `.env` (copy [`.env.example`](.env.example)), never from flags, so they never land in shell history, and never from the config file, which is meant to be shared: a credential there is refused. `.env` is read from the directory you run `llm-gc` in, and an empty value in it, or in the environment, counts as not set.
 
 | Variable | What it is |
@@ -560,18 +445,58 @@ The proxy's default window is 200,000, the smallest of the current models'. Rais
 | `ANTHROPIC_AUTH_TOKEN` | a bearer token, sent as `Authorization`, as a gateway often takes; either or both |
 | `OPENAI_API_KEY` | only when `provider` is `openai` |
 
-Each vendor receives only its own credentials. Without one for the chosen vendor, `llm-gc start` stops and says so, rather than running on summaries that only look like compaction. `--compactor noop` runs with no credential and no model calls: exchanges are kept or archived and never condensed, which is also the baseline to measure against. To look around with no key at all, use `python scripts/run_proxy.py --serve --dashboard`.
+Each vendor receives only its own credentials. Without one for the chosen vendor, `llm-gc start` stops and says so, rather than running on summaries that only look like compaction. `--compactor noop` runs with no credential and no model calls: exchanges are kept or archived and never condensed, which is also the baseline to measure against.
 
-The library never reads files or the environment: it takes a `GCConfig` in code.
+## Results so far
 
-## GC strategies
+Benchmarks on real sessions are not published yet; they will come with their dataset and method. What exists is the [decision-survival check](evals/decision_survival/README.md): five scripted conversations, 37 questions about facts they established, each asked once through LLM-GC and once with the whole conversation sent, and graded. Its latest committed run, on 2026-10-06:
 
-LLM-GC has **one** strategy, generational: exchanges scored by how much they matter now, shown at detail levels re-planned at every collection, with facts and their replacements carried in the prompt. One well-specified strategy beats three half-specified ones.
+| | Short conversations (18 questions) | Long conversations (19 questions) |
+|---|---|---|
+| Through LLM-GC | 18/18, prompts 12–17% smaller | 19/19, prompts 42–43% smaller |
+| Whole conversation | 18/18 | 19/19 |
 
-Two others were considered and rejected, for different reasons:
+Read it with its limits: one run, on scripted conversations, with `claude-sonnet-5-5` answering. LLM-GC has changed since (how facts are read, and when a collection is switched in), and rerunning the check is the first item on the [roadmap](ROADMAP.md). The [evidence file](evals/decision_survival/evidence/facts-room-2026-10-06.json) holds every answer. It records one as wrong: asked for the shard count, the model answered "9 primaries", which the grader of the time did not accept; the stored answers regrade to 37/37. The check's README lists the earlier runs and what each change won back.
 
-- **`sliding_window`** (drop everything older than N turns) — rejected outright. It ignores content entirely, which is what lost 7.6 of 8 decisions in the early profiling described under [The problem](#the-problem). It remains useful as the baseline to beat, not as an option to offer.
-- **`summary`** (keep recent turns, roll everything older into one summary) — rejected on different grounds: it condenses what matters now as hard as what does not, cannot restore anything, and loses the per-exchange record that makes the transparency possible.
+Savings will be judged against **cached-token pricing**, not raw token counts: rewriting the start of the prompt invalidates the provider's prompt cache, so a real reduction in tokens can still be an increase in cost. A savings number that ignores that isn't an honest number.
+
+## Why it is built this way
+
+### The problem
+
+Two things go wrong in a long conversation, and only one of them is about money.
+
+**Context loss.** The decision from turn 5 is still technically present at turn 50, as one short message inside 100K tokens of less relevant material. Liu et al. (2023), [*Lost in the Middle*](https://arxiv.org/abs/2307.03172), showed that information buried in the middle of a long context is recalled less reliably than information at either end, so a decision can be *in* the window and still not be used. The naive fix makes it worse: in an early profiling of 7 of the author's own Claude Code sessions, a sliding window that kept the last 10 turns lost **7.6 of 8 early decisions**.
+
+**Context waste.** The same sessions averaged 132,579 input tokens at their peak, re-sent on every call, and about 84% of that was stale: old file reads, command output, resolved debugging. *(That profiling predates this repository's benchmarks and its method is not published here, so treat these figures as motivation, not measurement.)*
+
+**The goal is preserving what the model needs to remember, not saving tokens.** Savings are a byproduct of removing waste.
+
+### What it borrows from garbage collection
+
+| GC concept | LLM-GC equivalent |
+|---|---|
+| Heap memory | The context window |
+| Objects | Conversation turns, grouped into exchanges (spans) |
+| GC roots | The next question, which has not been asked yet |
+| Mark | Score every span by how much it matters now |
+| Sweep | Plan every span's detail level |
+| Compaction | Rewrite the start of the prompt as one recap of every span at its level |
+| Young, old, permanent generations | The newest messages, older spans, and facts with what replaced them |
+| Concurrent GC, no pause | Collections are prepared between turns, while you read the reply; switching one in makes no model call |
+| Safepoint | The request a prepared collection is switched in at |
+
+### Where the analogy breaks, and why that shapes everything
+
+A runtime garbage collector is **sound**: an object is either reachable from the roots or it is not, and the collector never frees a live object. That guarantee is why Java's GC can run silently. It has nothing to report, because it cannot be wrong.
+
+Relevance is not decidable. The root set for a conversation is the *next question*, and it hasn't been asked yet. A turn that looks dead at turn 10 can be the most important thing in the conversation at turn 12. Every relevance decision is a bet against a future that doesn't exist yet. Three things follow:
+
+- **Cleanup cannot be silent.** A system that makes unverifiable decisions about what the model sees, and hides them from the person handed the answer, has replaced one opaque actor with two. Transparency is the only honest way to ship an operation that can't be proven correct.
+- **Removal has to be recoverable.** Nothing is deleted: every span keeps its original turns, so a span the conversation returns to is shown in more detail again, and its decisions survive as facts whatever its level. A wrong bet costs fidelity for a while, not knowledge.
+- **Conservatism is calibration, not timidity.** Keeping an unneeded turn costs a bounded number of tokens. Removing a needed one costs an unpredictable amount and stays invisible until it surfaces as a wrong answer.
+
+The full reasoning, and the principles the project holds itself to, are in the [overview](doc/overview.md).
 
 ## Developing LLM-GC
 
@@ -592,26 +517,10 @@ The check runs its own engine and proxy in-process, so neither needs `llm-gc sta
 
 ## Documentation
 
-The design docs are the substantive part of this repository. Each one covers how a subsystem works, why it exists, and **why it has that shape — including the credible alternatives that were rejected and the reason.**
-
-- [Overview](doc/overview.md) — why this project exists, the core principles, how the pieces fit
-- [Scoring](doc/design/scoring/overview.md) — how much each span matters now: liveness, and the decisions and specifics it states
-- [Generational memory](doc/design/generational-memory/overview.md) — young / old / permanent, spans, and supersession
-- [Detail levels](doc/design/generational-memory/detail-levels.md) — kept, summarised, archived, out of view, and how the planner picks them
-- [The cut](doc/design/generational-memory/the-cut.md) — when a collection happens, and how it changes the prompt
-- [Compaction](doc/design/generational-memory/compaction.md) — how a span gets its summary, and refusing one that does not help
-- [The proxy](doc/design/proxy/overview.md) — reconciling with the client's history, finding the conversation, forwarding, and what it never condenses
-- [LLM providers](doc/design/llm-provider.md) — the model calls behind summaries and facts
-- [Configuration](doc/design/configuration.md) — where settings come from, which one wins, and why a bad one stops startup
-- [Session management](doc/design/session/overview.md) — per-conversation state and its concurrency contract
-- [Visibility](doc/design/visibility/overview.md) — transparency vs. observability, and why there is no aggregate risk score
-- [Events](doc/design/events/overview.md) — the pub/sub bus every component instruments through
-- [Storage](doc/design/storage.md) *(planned)* — schema versioning, so an upgrade never destroys retained knowledge
-- [Failure handling](doc/design/failure-handling.md) *(planned)* — the circuit breaker, and keeping degradation visible
-
-A full index is in [doc/README.md](doc/README.md).
-
-What LLM-GC keeps of your conversations, and how to delete it: [doc/data.md](doc/data.md).
+- [Overview](doc/overview.md): why the project exists, its principles, and the architecture diagram. Start here.
+- [Design docs](doc/README.md): one per area, each covering how it works, why it exists, and the alternatives that were rejected.
+- [Your data](doc/data.md): what LLM-GC keeps of your conversations, and how to delete it.
+- [Roadmap](ROADMAP.md): what is left before the first release.
 
 About the project: [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), [SECURITY.md](SECURITY.md) (how to report a vulnerability, privately) and [CHANGELOG.md](CHANGELOG.md).
 

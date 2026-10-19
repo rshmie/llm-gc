@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 [project]
 name = "llm-gc"
 version = "0.1.0"
-description = "Context-aware garbage collection for LLMs with built-in epistemic transparency — see what your model remembers, what it's forgotten, and when to worry."
+description = "Garbage collection for LLM conversations: a proxy that condenses stale context by relevance and shows what the model still sees."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
