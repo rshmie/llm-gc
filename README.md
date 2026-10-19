@@ -28,7 +28,7 @@ To run it with Claude Code, follow [Get started](#get-started): five steps, abou
 
 ## How it works
 
-LLM-GC is a proxy. It forwards every request at once, with the conversation as it is currently condensed. The condensing itself happens after the reply, in the background, so no request ever waits for it:
+LLM-GC runs as a proxy in front of the model's API. It forwards every request at once, with the conversation as it is currently condensed. The condensing itself happens after the reply, in the background, so no request ever waits for it:
 
 ```
               every request: forwarded at once, no model call
@@ -471,14 +471,14 @@ Each vendor receives only its own credentials. Without one for the chosen vendor
 
 ## Results so far
 
-Benchmarks on real sessions are not published yet; they will come with their dataset and method. What exists is the [decision-survival check](evals/decision_survival/README.md): five scripted conversations, 37 questions about facts they established, each asked once through LLM-GC and once with the whole conversation sent, and graded. Its latest committed run, on 2026-10-06:
+Benchmarks on real sessions are not published yet; they will come with their dataset and method. What exists is the [decision-survival check](evals/decision_survival/README.md): five scripted conversations, 37 questions about facts they established, each asked once through LLM-GC and once with the whole conversation sent, and graded. Its latest run, on 2026-10-19:
 
 | | Short conversations (18 questions) | Long conversations (19 questions) |
 |---|---|---|
-| Through LLM-GC | 18/18, prompts 12–17% smaller | 19/19, prompts 42–43% smaller |
+| Through LLM-GC | 18/18, prompts 11–16% smaller | 19/19, prompts 45% smaller |
 | Whole conversation | 18/18 | 19/19 |
 
-Read it with its limits: one run, on scripted conversations, with `claude-sonnet-5-5` answering. LLM-GC has changed since (how facts are read, and when a collection is switched in), and rerunning the check is the first item on the [roadmap](ROADMAP.md). The [evidence file](evals/decision_survival/evidence/facts-room-2026-10-06.json) holds every answer. It records one as wrong: asked for the shard count, the model answered "9 primaries", which the grader of the time did not accept; the stored answers regrade to 37/37. The check's README lists the earlier runs and what each change won back.
+Read it with its limits: one run, on scripted conversations, with `claude-sonnet-5-5` answering. Every exchange LLM-GC condensed in them was summarised, so the check covers one of the four detail levels. Its scripted turns report no cache use, so every collection was switched in as if the cache had expired, and the rules for a warm cache, which Claude Code meets, are not exercised. The [evidence file](evals/decision_survival/evidence/when-to-collect-2026-10-19.json) holds every answer, and the check's README lists the earlier runs and what each change won back.
 
 Savings will be judged against **cached-token pricing**, not raw token counts: rewriting the start of the prompt invalidates the provider's prompt cache, so a real reduction in tokens can still be an increase in cost. A savings number that ignores that isn't an honest number.
 
@@ -527,7 +527,7 @@ uv sync               # LLM-GC with the proxy extra, plus pytest, ruff, mypy, hy
 pytest                # the test suite: no network, no key
 ruff check .          # lint
 ruff format --check . # formatting: `ruff format .` fixes it
-mypy                  # type-check the library
+mypy                  # type-check the package, strictly
 pre-commit install    # run Ruff on each commit
 python -m evals.decision_survival.run --rehearse   # the decision-survival check, offline
 python -m evals.decision_survival.run              # the same check, live: needs ANTHROPIC_API_KEY, about five minutes

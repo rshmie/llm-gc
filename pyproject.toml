@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 [project]
 name = "llm-gc"
 version = "0.1.0"
-description = "Garbage collection for LLM conversations: a proxy that condenses stale context by relevance and shows what the model still sees."
+description = "Garbage collection for LLM conversations: an engine that condenses stale context by relevance and shows what the model still sees. Runs as a proxy or as a Python library."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
