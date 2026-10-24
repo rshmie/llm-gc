@@ -135,6 +135,24 @@ class TestWhatTheProviderReported:
         assert _conversation(ledger, "s_1")["traffic"]["provider"]["output_tokens"] == 33
         assert ledger.total.provider.output_tokens == 33
 
+    def test_cache_writes_are_added_up_by_lifetime_as_well_as_whole(self):
+        ledger = _ledger()
+        counted = _request(ledger, "s_1")
+        ledger.record_usage(
+            counted, ProviderUsage(replies=1, cache_creation_input_tokens=500, cache_creation_1h_input_tokens=500)
+        )
+        ledger.record_usage(
+            counted, ProviderUsage(replies=1, cache_creation_input_tokens=80, cache_creation_5m_input_tokens=80)
+        )
+
+        provider = _conversation(ledger, "s_1")["traffic"]["provider"]
+        assert (
+            provider["cache_creation_input_tokens"],
+            provider["cache_creation_5m_input_tokens"],
+            provider["cache_creation_1h_input_tokens"],
+        ) == (580, 80, 500)
+        assert ledger.total.provider.cache_creation_1h_input_tokens == 500
+
 
 class TestCollections:
     def test_a_collection_after_the_last_request_is_not_yet_sent_until_another_request_comes(self):
@@ -282,6 +300,75 @@ class TestReadingTheReplysOutline:
             for start in range(0, len(stream), size):
                 reader.feed(stream[start : start + size])
             assert reader.outline() == expected, size
+
+    def test_cache_writes_are_read_by_lifetime_when_the_provider_breaks_them_down(self):
+        raw = json.dumps(
+            {
+                "type": "message",
+                "content": [],
+                "usage": {
+                    "input_tokens": 3,
+                    "cache_creation_input_tokens": 700,
+                    "cache_creation": {"ephemeral_5m_input_tokens": 200, "ephemeral_1h_input_tokens": 500},
+                    "output_tokens": 9,
+                },
+            }
+        )
+        assert read_reply(200, raw.encode())[0].usage == ProviderUsage(
+            replies=1,
+            input_tokens=3,
+            cache_creation_input_tokens=700,
+            cache_creation_5m_input_tokens=200,
+            cache_creation_1h_input_tokens=500,
+            output_tokens=9,
+        )
+
+    @pytest.mark.parametrize(
+        "breakdown",
+        [{}, {"cache_creation": None}, {"cache_creation": []}, {"cache_creation": {"ephemeral_1h_input_tokens": None}}],
+    )
+    def test_writes_without_a_readable_breakdown_keep_their_whole_and_no_lifetime(self, breakdown):
+        """Guessing a lifetime would misprice the writes: a one-hour write costs 1.6 times a five-minute one."""
+        raw = json.dumps({"type": "message", "content": [], "usage": {"cache_creation_input_tokens": 700, **breakdown}})
+
+        usage = read_reply(200, raw.encode())[0].usage
+
+        assert usage is not None
+        assert usage.cache_creation_input_tokens == 700
+        assert (usage.cache_creation_5m_input_tokens, usage.cache_creation_1h_input_tokens) == (0, 0)
+
+    def test_a_streams_cache_writes_keep_their_lifetime_when_a_later_event_restates_the_whole(self):
+        """`message_delta` repeats the running totals without the breakdown; the one `message_start` gave must stay."""
+        events = [
+            {
+                "type": "message_start",
+                "message": {
+                    "usage": {
+                        "input_tokens": 4,
+                        "cache_creation_input_tokens": 300,
+                        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 300},
+                        "output_tokens": 1,
+                    }
+                },
+            },
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"},
+                "usage": {"cache_creation_input_tokens": 300, "output_tokens": 40},
+            },
+            {"type": "message_stop"},
+        ]
+        reader = StreamOutlineReader()
+        reader.feed("".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events).encode())
+
+        usage = reader.outline().usage
+
+        assert usage is not None
+        assert (usage.cache_creation_input_tokens, usage.cache_creation_1h_input_tokens, usage.output_tokens) == (
+            300,
+            300,
+            40,
+        )
 
     def test_a_stream_cut_short_is_unfinished_and_reports_the_prompt_it_was_billed_for(self):
         reader = StreamOutlineReader()

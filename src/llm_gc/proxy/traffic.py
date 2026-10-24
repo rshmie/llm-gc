@@ -33,28 +33,41 @@ def _now() -> datetime:
 
 @dataclass(slots=True)
 class ProviderUsage:
-    """The `usage` the provider reported on its replies: what it bills, by its own tokenizer."""
+    """The `usage` the provider reported on its replies: what it bills, by its own tokenizer.
+
+    Cache writes are kept whole and by lifetime, because the provider bills a five-minute
+    write and a one-hour write at different prices. An upstream that leaves the breakdown
+    out still reports the whole, so the two parts can add up to less than it: the rest is
+    writes whose lifetime was not reported, and it is left that way rather than guessed.
+    """
 
     replies: int = 0
     input_tokens: int = 0  # read at the full price
     cache_read_input_tokens: int = 0
-    cache_creation_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0  # every cache write, whatever its lifetime
+    cache_creation_5m_input_tokens: int = 0
+    cache_creation_1h_input_tokens: int = 0
     output_tokens: int = 0
 
     @classmethod
     def from_reported(cls, usage: Mapping[str, Any]) -> "ProviderUsage":
         """One reply's usage; a field the provider left out or sent as null counts as zero."""
 
-        def tokens(key: str) -> int:
-            value = usage.get(key)
+        def tokens(reported: Mapping[str, Any], key: str) -> int:
+            value = reported.get(key)
             return value if isinstance(value, int) and value >= 0 else 0
 
+        by_lifetime = usage.get("cache_creation")
+        if not isinstance(by_lifetime, Mapping):
+            by_lifetime = {}
         return cls(
             replies=1,
-            input_tokens=tokens("input_tokens"),
-            cache_read_input_tokens=tokens("cache_read_input_tokens"),
-            cache_creation_input_tokens=tokens("cache_creation_input_tokens"),
-            output_tokens=tokens("output_tokens"),
+            input_tokens=tokens(usage, "input_tokens"),
+            cache_read_input_tokens=tokens(usage, "cache_read_input_tokens"),
+            cache_creation_input_tokens=tokens(usage, "cache_creation_input_tokens"),
+            cache_creation_5m_input_tokens=tokens(by_lifetime, "ephemeral_5m_input_tokens"),
+            cache_creation_1h_input_tokens=tokens(by_lifetime, "ephemeral_1h_input_tokens"),
+            output_tokens=tokens(usage, "output_tokens"),
         )
 
     @property
@@ -67,6 +80,8 @@ class ProviderUsage:
         self.input_tokens += other.input_tokens
         self.cache_read_input_tokens += other.cache_read_input_tokens
         self.cache_creation_input_tokens += other.cache_creation_input_tokens
+        self.cache_creation_5m_input_tokens += other.cache_creation_5m_input_tokens
+        self.cache_creation_1h_input_tokens += other.cache_creation_1h_input_tokens
         self.output_tokens += other.output_tokens
 
 
