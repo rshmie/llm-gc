@@ -1,7 +1,14 @@
-# Keeps the commit-pinned actions in .github/workflows and the Python dependencies in uv.lock
-# current. A release is proposed only after it has been out for two weeks, long enough for a
-# compromised one to be noticed and pulled. A security update skips that wait: a known
-# vulnerability is the worse risk.
+# Keeps the commit-pinned actions in .github/workflows and the direct Python dependencies in
+# uv.lock current. A dependency of a dependency never gets a pull request from here: it moves when a
+# direct bump drags it along, or by hand with `uv lock --upgrade-package`, and the weekly audit
+# (.github/workflows/audit.yml) catches one that turns vulnerable.
+#
+# A release is proposed only after it has been out for two weeks, long enough for a compromised one
+# to be noticed and pulled. Security updates (a repository setting, not this file) skip that wait:
+# a known vulnerability is the worse risk.
+#
+# Tools that only reach CI and development arrive as one pull request a week. A runtime dependency
+# keeps a pull request of its own, because it reaches users and a failure then points at one package.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -10,6 +17,10 @@ updates:
       interval: weekly
     cooldown:
       default-days: 14
+    groups:
+      actions:
+        patterns:
+          - "*"
 
   # Reads pyproject.toml and updates uv.lock with it, so `uv sync --locked` in CI keeps passing.
   - package-ecosystem: uv
@@ -18,3 +29,16 @@ updates:
       interval: weekly
     cooldown:
       default-days: 14
+    groups:
+      # The `dev` group in pyproject.toml, listed by name. A dev tool missing from this list just gets
+      # a pull request of its own. Grouping everything except the runtime packages would instead
+      # quietly bundle a new runtime dependency in with the tools.
+      dev-tools:
+        patterns:
+          - "anthropic"
+          - "hypothesis"
+          - "mypy"
+          - "pip-audit"
+          - "pre-commit"
+          - "pytest*"
+          - "ruff"
